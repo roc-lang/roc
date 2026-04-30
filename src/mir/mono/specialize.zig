@@ -11,6 +11,7 @@ const check = @import("check");
 const Ast = @import("ast.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
+const debug = @import("../debug_verify.zig");
 
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
@@ -161,15 +162,11 @@ fn checkedTemplateForKey(
 
     for (input.imports) |imported| {
         if (!std.mem.eql(u8, &imported.key.bytes, &template_ref.artifact.bytes)) continue;
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("mono specialization invariant violated: imported template lowering requires an imported template closure", .{});
-        }
+        debug.invariant(false, "mono specialization invariant violated: imported template lowering requires an imported template closure");
         unreachable;
     }
 
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("mono specialization invariant violated: template artifact was not available to lowering", .{});
-    }
+    debug.invariant(false, "mono specialization invariant violated: template artifact was not available to lowering");
     unreachable;
 }
 
@@ -198,12 +195,11 @@ fn templateForRoot(
         .def => |def_idx| return artifact.checked_procedure_templates.lookupByDef(def_idx),
         .required_binding => |binding_id| {
             const binding = artifact.platform_required_bindings.lookupByBindingId(binding_id) orelse {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
-                        "mono specialization invariant violated: platform-required root {d} has no sealed binding",
-                        .{binding_id},
-                    );
-                }
+                debug.invariantFmt(
+                    false,
+                    "mono specialization invariant violated: platform-required root {d} has no sealed binding",
+                    .{binding_id},
+                );
                 unreachable;
             };
             return switch (binding.value_use) {
@@ -226,12 +222,7 @@ fn templateForProcedureUse(
         ),
         .platform_required => |required| {
             const bindings = topLevelProcedureBindingsForKey(input, required.artifact) orelse {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
-                        "mono specialization invariant violated: platform-required procedure binding references unavailable app artifact",
-                        .{},
-                    );
-                }
+                debug.invariant(false, "mono specialization invariant violated: platform-required procedure binding references unavailable app artifact");
                 unreachable;
             };
             return templateFromTopLevelBinding(
@@ -240,12 +231,7 @@ fn templateForProcedureUse(
             );
         },
         .imported, .hosted, .promoted => {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
-                    "mono specialization invariant violated: platform-required root resolved to unsupported procedure binding kind",
-                    .{},
-                );
-            }
+            debug.invariant(false, "mono specialization invariant violated: platform-required root resolved to unsupported procedure binding kind");
             unreachable;
         },
     };
@@ -260,22 +246,12 @@ fn templateFromTopLevelBinding(
         .direct_template => |direct| switch (direct.template) {
             .checked => |template| template,
             .lifted, .synthetic => {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
-                        "mono specialization invariant violated: root procedure binding must have a checked template before mono lowering",
-                        .{},
-                    );
-                }
+                debug.invariant(false, "mono specialization invariant violated: root procedure binding must have a checked template before mono lowering");
                 unreachable;
             },
         },
         .callable_eval_template => {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
-                    "mono specialization invariant violated: callable-eval platform-required roots need a sealed concrete callable binding instance before mono lowering",
-                    .{},
-                );
-            }
+            debug.invariant(false, "mono specialization invariant violated: callable-eval platform-required roots need a sealed concrete callable binding instance before mono lowering");
             unreachable;
         },
     };

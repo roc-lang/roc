@@ -98,14 +98,20 @@ pub const Store = struct {
     pub fn internRecordShapeFromType(self: *Store, types: *const MonoType.Store, ty: TypeId) Allocator.Error!RecordShapeId {
         return switch (types.getType(ty)) {
             .record => |record| try self.internRecordShape(record.fields),
-            else => std.debug.panic("mono_row expected record type for row finalization", .{}),
+            else => {
+                verify.invariant(false, "mono_row expected record type for row finalization");
+                unreachable;
+            },
         };
     }
 
     pub fn internTagUnionShapeFromType(self: *Store, types: *const MonoType.Store, ty: TypeId) Allocator.Error!TagUnionShapeId {
         return switch (types.getType(ty)) {
             .tag_union => |tag_union| try self.internTagUnionShape(tag_union.tags),
-            else => std.debug.panic("mono_row expected tag-union type for row finalization", .{}),
+            else => {
+                verify.invariant(false, "mono_row expected tag-union type for row finalization");
+                unreachable;
+            },
         };
     }
 
