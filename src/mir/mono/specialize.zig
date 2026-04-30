@@ -9,6 +9,7 @@ const std = @import("std");
 const check = @import("check");
 
 const Ast = @import("ast.zig");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
 const debug = @import("../debug_verify.zig");
@@ -34,7 +35,7 @@ pub const Input = struct {
 
 pub const MonoSpecializationRequest = struct {
     template: canonical.ProcedureTemplateRef,
-    requested_mono_fn_ty: canonical.CanonicalTypeKey,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
 };
 
@@ -47,6 +48,7 @@ pub const ReservedState = enum {
 pub const ReservedMonoProc = struct {
     proc: canonical.ProcedureValueRef,
     local_handle: MonoProcHandle,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     state: ReservedState,
 };
 
@@ -61,6 +63,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
+    concrete_source_types: ConcreteSourceType.Store,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -70,6 +73,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .root_artifact_key = .{},
+            .concrete_source_types = ConcreteSourceType.Store.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -82,6 +86,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.concrete_source_types.deinit();
         self.* = Program.init(self.allocator);
     }
 
@@ -114,13 +119,17 @@ pub fn run(
 
     for (roots) |root| {
         const template = templateForRoot(input, root) orelse continue;
-        const requested_mono_fn_ty = input.root.artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+        const requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(
+            input.root.artifact.key,
+            input.root.artifact.checked_types.view(),
+            root.checked_type,
+        );
         const request = MonoSpecializationRequest{
             .template = template,
-            .requested_mono_fn_ty = requested_mono_fn_ty,
+            .requested_fn_ty = requested_fn_ty,
             .reason = .{ .root = root },
         };
-        const reserved = try queue.reserve(request);
+        const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, reserved.proc);
     }
 
@@ -128,8 +137,8 @@ pub fn run(
         const key = queue.pending.orderedRemove(0);
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
-        const template = checkedTemplateForKey(input, key.template);
-        const fn_ty = try lowerTemplateFnType(allocator, &program, template.artifact, template.template);
+        _ = checkedTemplateForKey(input, key.template);
+        const fn_ty = try lowerConcreteFnType(allocator, input, &program, reserved.requested_fn_ty);
         try program.addProc(key, reserved, fn_ty);
         queue.markLowered(key);
     }
@@ -164,19 +173,38 @@ fn checkedTemplateForKey(
     unreachable;
 }
 
-fn lowerTemplateFnType(
+fn lowerConcreteFnType(
     allocator: Allocator,
+    input: Input,
     program: *Program,
-    artifact: *const checked_artifact.CheckedModuleArtifact,
-    template: *const checked_artifact.CheckedProcedureTemplate,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
 ) Allocator.Error!Type.TypeId {
+    const concrete = program.concrete_source_types.root(requested_fn_ty);
+    const checked_types = checkedTypesForKey(input, concrete.source.artifact) orelse {
+        debug.invariant(false, "mono specialization invariant violated: concrete source type payload references unavailable artifact");
+        unreachable;
+    };
     var lowerer = LowerType.Lowerer.init(
         allocator,
-        artifact.checked_types.view(),
+        checked_types,
         &program.types,
     );
     defer lowerer.deinit();
-    return try lowerer.lowerChecked(template.checked_fn_root);
+    return try lowerer.lowerChecked(concrete.source.ty);
+}
+
+fn checkedTypesForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.CheckedTypeStoreView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) return input.root.artifact.checked_types.view();
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.checked_types;
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.checked_types;
+    }
+    return null;
 }
 
 fn templateForRoot(
@@ -305,16 +333,28 @@ pub const Queue = struct {
         self.* = Queue.init(self.allocator);
     }
 
-    pub fn reserve(self: *Queue, request: MonoSpecializationRequest) Allocator.Error!ReservedMonoProc {
+    pub fn reserve(
+        self: *Queue,
+        concrete_source_types: *const ConcreteSourceType.Store,
+        request: MonoSpecializationRequest,
+    ) Allocator.Error!ReservedMonoProc {
+        const requested_mono_fn_ty = concrete_source_types.key(request.requested_fn_ty);
         const key = canonical.MonoSpecializationKey{
             .template = request.template,
-            .requested_mono_fn_ty = request.requested_mono_fn_ty,
+            .requested_mono_fn_ty = requested_mono_fn_ty,
         };
-        if (self.requested.get(key)) |existing| return existing;
+        if (self.requested.get(key)) |existing| {
+            if (existing.requested_fn_ty != request.requested_fn_ty) {
+                debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different concrete payload ref");
+                unreachable;
+            }
+            return existing;
+        }
 
         const reserved = ReservedMonoProc{
             .proc = .{ .artifact = request.template.artifact, .proc_base = request.template.proc_base },
             .local_handle = @enumFromInt(@as(u32, @intCast(self.requested.count()))),
+            .requested_fn_ty = request.requested_fn_ty,
             .state = .reserved,
         };
         try self.requested.put(key, reserved);
@@ -342,6 +382,19 @@ pub const Queue = struct {
 test "mono specialization queue reserves once" {
     var queue = Queue.init(std.testing.allocator);
     defer queue.deinit();
+    var concrete = ConcreteSourceType.Store.init(std.testing.allocator);
+    defer concrete.deinit();
+
+    const requested_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{1} ** 32 };
+    const owned_key = try std.testing.allocator.dupe(u8, requested_key.bytes[0..]);
+    try concrete.roots.append(std.testing.allocator, .{
+        .key = requested_key,
+        .source = .{
+            .artifact = .{},
+            .ty = @enumFromInt(0),
+        },
+    });
+    try concrete.by_key.put(owned_key, @enumFromInt(0));
 
     const template = canonical.ProcedureTemplateRef{
         .proc_base = @enumFromInt(0),
@@ -349,12 +402,12 @@ test "mono specialization queue reserves once" {
     };
     const request = MonoSpecializationRequest{
         .template = template,
-        .requested_mono_fn_ty = .{ .bytes = [_]u8{1} ** 32 },
+        .requested_fn_ty = @enumFromInt(0),
         .reason = .{ .comptime_dependency_summary = 0 },
     };
 
-    const first = try queue.reserve(request);
-    const second = try queue.reserve(request);
+    const first = try queue.reserve(&concrete, request);
+    const second = try queue.reserve(&concrete, request);
     try std.testing.expectEqual(first.local_handle, second.local_handle);
     try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
 }
