@@ -252,6 +252,14 @@ pub const PublishInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
+    explicit_roots: []const ExplicitRootRequestInput = &.{},
+};
+
+pub const ExplicitRootRequestInput = struct {
+    kind: RootRequestKind,
+    source: RootSource,
+    abi: RootAbi,
+    exposure: RootExposure,
 };
 
 pub const ExportTable = struct {
@@ -321,7 +329,7 @@ pub const RootRequest = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
-    checked_type: Var,
+    checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
 };
@@ -332,18 +340,38 @@ pub const RootRequestTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
         compile_time_roots: *const CompileTimeRootTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
+        explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+
+        for (explicit_roots) |root| {
+            try appendRoot(&requests, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = root.kind,
+                .source = root.source,
+                .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, root.source),
+                .abi = root.abi,
+                .exposure = root.exposure,
+            });
+        }
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .platform_required_binding,
                 .source = .{ .required_binding = @intCast(i) },
-                .checked_type = ModuleEnv.varFrom(module_env.requires_types.items.items[binding.requires_idx].type_anno),
+                .checked_type = try checkedTypeIdForVar(
+                    allocator,
+                    module,
+                    checked_types,
+                    ModuleEnv.varFrom(module_env.requires_types.items.items[binding.requires_idx].type_anno),
+                ),
                 .abi = .platform,
                 .exposure = .platform_required,
             });
@@ -358,7 +386,7 @@ pub const RootRequestTable = struct {
                     .expect => .test_expect,
                 },
                 .source = root.source,
-                .checked_type = root.checked_type,
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, root.checked_type),
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
                     .constant, .callable_binding => .compile_time,
@@ -376,11 +404,58 @@ pub const RootRequestTable = struct {
     }
 };
 
+fn checkedTypeIdForRootSource(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypeStore,
+    source: RootSource,
+) Allocator.Error!CheckedTypeId {
+    const var_ = switch (source) {
+        .def => |def_idx| module.defType(def_idx),
+        .expr => |expr_idx| module.exprType(expr_idx),
+        .statement => |statement_idx| ModuleEnv.varFrom(statement_idx),
+        .required_binding => |binding_idx| blk: {
+            const module_env = module.moduleEnvConst();
+            if (binding_idx >= module_env.requires_types.items.items.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: explicit required-binding root {d} is out of range",
+                        .{binding_idx},
+                    );
+                }
+                unreachable;
+            }
+            break :blk ModuleEnv.varFrom(module_env.requires_types.items.items[binding_idx].type_anno);
+        },
+    };
+    return checkedTypeIdForVar(allocator, module, checked_types, var_);
+}
+
+fn checkedTypeIdForVar(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypeStore,
+    var_: Var,
+) Allocator.Error!CheckedTypeId {
+    const key = try canonical_type_keys.fromVar(
+        allocator,
+        module.typeStoreConst(),
+        module.identStoreConst(),
+        var_,
+    );
+    return checked_types.rootForKey(key) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: root request type was not published", .{});
+        }
+        unreachable;
+    };
+}
+
 const RootRequestWithoutOrder = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
-    checked_type: Var,
+    checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
 };
@@ -443,8 +518,348 @@ fn isHostedProcedureExpr(expr: CIR.Expr) bool {
     };
 }
 
+pub const CheckedBodyId = enum(u32) { _ };
+pub const CheckedExprId = enum(u32) { _ };
+pub const CheckedPatternId = enum(u32) { _ };
+pub const CheckedStatementId = enum(u32) { _ };
+pub const CheckedTypeId = enum(u32) { _ };
+pub const CheckedTypeSchemeId = enum(u32) { _ };
+
+pub const CheckedTypeRoot = struct {
+    id: CheckedTypeId,
+    key: canonical.CanonicalTypeKey,
+};
+
+pub const CheckedTypeScheme = struct {
+    id: CheckedTypeSchemeId,
+    key: canonical.CanonicalTypeSchemeKey,
+    root: CheckedTypeId,
+    generalized_vars: []const CheckedTypeId = &.{},
+};
+
+pub const CheckedTypeStoreView = struct {
+    roots: []const CheckedTypeRoot = &.{},
+    schemes: []const CheckedTypeScheme = &.{},
+};
+
+pub const CheckedTypeStore = struct {
+    roots: []CheckedTypeRoot = &.{},
+    schemes: []CheckedTypeScheme = &.{},
+    artifact_vars: []Var = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+    ) Allocator.Error!CheckedTypeStore {
+        var roots = std.ArrayList(CheckedTypeRoot).empty;
+        errdefer roots.deinit(allocator);
+        var artifact_vars = std.ArrayList(Var).empty;
+        errdefer artifact_vars.deinit(allocator);
+        var schemes = std.ArrayList(CheckedTypeScheme).empty;
+        errdefer {
+            for (schemes.items) |scheme| allocator.free(scheme.generalized_vars);
+            schemes.deinit(allocator);
+        }
+
+        var node_idx: u32 = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const node: CIR.Node.Idx = @enumFromInt(node_idx);
+            const tag = module.nodeTag(node);
+            if (isExprNodeTag(tag)) {
+                _ = try appendCheckedTypeRoot(allocator, module, &roots, &artifact_vars, module.exprType(@enumFromInt(node_idx)));
+            } else if (isPatternNodeTag(tag)) {
+                _ = try appendCheckedTypeRoot(allocator, module, &roots, &artifact_vars, module.patternType(@enumFromInt(node_idx)));
+            }
+        }
+
+        for (module.allDefs()) |def_idx| {
+            const root = try appendCheckedTypeRoot(allocator, module, &roots, &artifact_vars, module.defType(def_idx));
+            const scheme_key = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                module.defType(def_idx),
+            );
+            if (findCheckedTypeScheme(schemes.items, scheme_key) == null) {
+                const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(schemes.items.len)));
+                try schemes.append(allocator, .{
+                    .id = scheme_id,
+                    .key = scheme_key,
+                    .root = root,
+                    .generalized_vars = &.{},
+                });
+            }
+        }
+
+        return .{
+            .roots = try roots.toOwnedSlice(allocator),
+            .schemes = try schemes.toOwnedSlice(allocator),
+            .artifact_vars = try artifact_vars.toOwnedSlice(allocator),
+        };
+    }
+
+    pub fn view(self: *const CheckedTypeStore) CheckedTypeStoreView {
+        return .{ .roots = self.roots, .schemes = self.schemes };
+    }
+
+    pub fn rootForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
+        for (self.roots) |root| {
+            if (std.mem.eql(u8, root.key.bytes[0..], key.bytes[0..])) return root.id;
+        }
+        return null;
+    }
+
+    pub fn schemeForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
+        for (self.schemes) |scheme| {
+            if (std.mem.eql(u8, scheme.key.bytes[0..], key.bytes[0..])) return scheme;
+        }
+        return null;
+    }
+
+    pub fn varForRoot(self: *const CheckedTypeStore, id: CheckedTypeId) Var {
+        return self.artifact_vars[@intFromEnum(id)];
+    }
+
+    pub fn deinit(self: *CheckedTypeStore, allocator: Allocator) void {
+        for (self.schemes) |scheme| allocator.free(scheme.generalized_vars);
+        allocator.free(self.artifact_vars);
+        allocator.free(self.schemes);
+        allocator.free(self.roots);
+        self.* = .{};
+    }
+};
+
+fn appendCheckedTypeRoot(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    roots: *std.ArrayList(CheckedTypeRoot),
+    artifact_vars: *std.ArrayList(Var),
+    var_: Var,
+) Allocator.Error!CheckedTypeId {
+    const key = try canonical_type_keys.fromVar(
+        allocator,
+        module.typeStoreConst(),
+        module.identStoreConst(),
+        var_,
+    );
+    if (findCheckedTypeRoot(roots.items, key)) |id| return id;
+    const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
+    try roots.append(allocator, .{ .id = id, .key = key });
+    try artifact_vars.append(allocator, var_);
+    return id;
+}
+
+fn findCheckedTypeRoot(roots: []const CheckedTypeRoot, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
+    for (roots) |root| {
+        if (std.mem.eql(u8, root.key.bytes[0..], key.bytes[0..])) return root.id;
+    }
+    return null;
+}
+
+fn findCheckedTypeScheme(schemes: []const CheckedTypeScheme, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeSchemeId {
+    for (schemes) |scheme| {
+        if (std.mem.eql(u8, scheme.key.bytes[0..], key.bytes[0..])) return scheme.id;
+    }
+    return null;
+}
+
+pub const CheckedBody = struct {
+    id: CheckedBodyId,
+    root_expr: CheckedExprId,
+    owner_template: canonical.ProcedureTemplateRef,
+};
+
+pub const CheckedExpr = struct {
+    id: CheckedExprId,
+    ty: CheckedTypeId,
+    source_region: base.Region,
+};
+
+pub const CheckedPattern = struct {
+    id: CheckedPatternId,
+    ty: CheckedTypeId,
+    source_region: base.Region,
+};
+
+pub const CheckedStatement = struct {
+    id: CheckedStatementId,
+    source_region: base.Region,
+};
+
+pub const CheckedBodyStoreView = struct {
+    bodies: []const CheckedBody = &.{},
+    exprs: []const CheckedExpr = &.{},
+    patterns: []const CheckedPattern = &.{},
+    statements: []const CheckedStatement = &.{},
+};
+
+pub const CheckedBodyStore = struct {
+    bodies: []CheckedBody = &.{},
+    exprs: []CheckedExpr = &.{},
+    patterns: []CheckedPattern = &.{},
+    statements: []CheckedStatement = &.{},
+    expr_by_node: []?CheckedExprId = &.{},
+    pattern_by_node: []?CheckedPatternId = &.{},
+    statement_by_node: []?CheckedStatementId = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
+    ) Allocator.Error!CheckedBodyStore {
+        var exprs = std.ArrayList(CheckedExpr).empty;
+        errdefer exprs.deinit(allocator);
+        var patterns = std.ArrayList(CheckedPattern).empty;
+        errdefer patterns.deinit(allocator);
+        var statements = std.ArrayList(CheckedStatement).empty;
+        errdefer statements.deinit(allocator);
+        var bodies = std.ArrayList(CheckedBody).empty;
+        errdefer bodies.deinit(allocator);
+        const expr_by_node = try allocator.alloc(?CheckedExprId, module.nodeCount());
+        errdefer allocator.free(expr_by_node);
+        const pattern_by_node = try allocator.alloc(?CheckedPatternId, module.nodeCount());
+        errdefer allocator.free(pattern_by_node);
+        const statement_by_node = try allocator.alloc(?CheckedStatementId, module.nodeCount());
+        errdefer allocator.free(statement_by_node);
+        @memset(expr_by_node, null);
+        @memset(pattern_by_node, null);
+        @memset(statement_by_node, null);
+
+        var node_idx: u32 = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const node: CIR.Node.Idx = @enumFromInt(node_idx);
+            const tag = module.nodeTag(node);
+            if (isExprNodeTag(tag)) {
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+                const key = try canonical_type_keys.fromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.identStoreConst(),
+                    module.exprType(expr_idx),
+                );
+                const ty = checked_types.rootForKey(key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("checked artifact invariant violated: checked expr type root was not published", .{});
+                    }
+                    unreachable;
+                };
+                const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(exprs.items.len)));
+                try exprs.append(allocator, .{
+                    .id = id,
+                    .ty = ty,
+                    .source_region = module.regionAt(node),
+                });
+                expr_by_node[node_idx] = id;
+            } else if (isPatternNodeTag(tag)) {
+                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
+                const key = try canonical_type_keys.fromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.identStoreConst(),
+                    module.patternType(pattern_idx),
+                );
+                const ty = checked_types.rootForKey(key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("checked artifact invariant violated: checked pattern type root was not published", .{});
+                    }
+                    unreachable;
+                };
+                const id: CheckedPatternId = @enumFromInt(@as(u32, @intCast(patterns.items.len)));
+                try patterns.append(allocator, .{
+                    .id = id,
+                    .ty = ty,
+                    .source_region = module.regionAt(node),
+                });
+                pattern_by_node[node_idx] = id;
+            } else if (isStatementNodeTag(tag)) {
+                const id: CheckedStatementId = @enumFromInt(@as(u32, @intCast(statements.items.len)));
+                try statements.append(allocator, .{
+                    .id = id,
+                    .source_region = module.regionAt(node),
+                });
+                statement_by_node[node_idx] = id;
+            }
+        }
+
+        return .{
+            .bodies = try bodies.toOwnedSlice(allocator),
+            .exprs = try exprs.toOwnedSlice(allocator),
+            .patterns = try patterns.toOwnedSlice(allocator),
+            .statements = try statements.toOwnedSlice(allocator),
+            .expr_by_node = expr_by_node,
+            .pattern_by_node = pattern_by_node,
+            .statement_by_node = statement_by_node,
+        };
+    }
+
+    pub fn view(self: *const CheckedBodyStore) CheckedBodyStoreView {
+        return .{
+            .bodies = self.bodies,
+            .exprs = self.exprs,
+            .patterns = self.patterns,
+            .statements = self.statements,
+        };
+    }
+
+    pub fn body(self: *const CheckedBodyStore, id: CheckedBodyId) CheckedBody {
+        return self.bodies[@intFromEnum(id)];
+    }
+
+    pub fn expr(self: *const CheckedBodyStore, id: CheckedExprId) CheckedExpr {
+        return self.exprs[@intFromEnum(id)];
+    }
+
+    pub fn exprIdForSource(self: *const CheckedBodyStore, expr: CIR.Expr.Idx) ?CheckedExprId {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.expr_by_node.len) return null;
+        return self.expr_by_node[raw];
+    }
+
+    pub fn appendBody(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        root_expr: CheckedExprId,
+        owner_template: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!CheckedBodyId {
+        const id: CheckedBodyId = @enumFromInt(@as(u32, @intCast(self.bodies.len)));
+        const next = try allocator.alloc(CheckedBody, self.bodies.len + 1);
+        @memcpy(next[0..self.bodies.len], self.bodies);
+        next[self.bodies.len] = .{
+            .id = id,
+            .root_expr = root_expr,
+            .owner_template = owner_template,
+        };
+        allocator.free(self.bodies);
+        self.bodies = next;
+        return id;
+    }
+
+    pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
+        allocator.free(self.statement_by_node);
+        allocator.free(self.pattern_by_node);
+        allocator.free(self.expr_by_node);
+        allocator.free(self.statements);
+        allocator.free(self.patterns);
+        allocator.free(self.exprs);
+        allocator.free(self.bodies);
+        self.* = .{};
+    }
+};
+
+fn isExprNodeTag(tag: CIR.Node.Tag) bool {
+    return std.mem.startsWith(u8, @tagName(tag), "expr_");
+}
+
+fn isPatternNodeTag(tag: CIR.Node.Tag) bool {
+    return std.mem.startsWith(u8, @tagName(tag), "pattern_");
+}
+
+fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
+    return std.mem.startsWith(u8, @tagName(tag), "statement_");
+}
+
 pub const CheckedProcedureBody = union(enum) {
-    source_expr: CIR.Expr.Idx,
+    checked_body: CheckedBodyId,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     hosted_wrapper: canonical.HostedWrapperId,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
@@ -1053,7 +1468,7 @@ fn sealCheckedProcedureTemplateRefs(
         dispatch_refs.clearRetainingCapacity();
 
         switch (template.body) {
-            .source_expr => |expr| try traversal.visitExpr(expr),
+            .checked_body => |_| {},
             .promoted_callable_wrapper,
             .hosted_wrapper,
             .intrinsic_wrapper,
@@ -1266,7 +1681,8 @@ pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
     template_id: canonical.CheckedProcedureTemplateId,
     body: CheckedProcedureBody,
-    checked_fn_var: Var,
+    checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+    checked_fn_root: CheckedTypeId,
     static_dispatch_plans: StaticDispatchPlanTableRef,
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
@@ -1283,6 +1699,8 @@ pub const CheckedProcedureTemplateTable = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
+        checked_types: *const CheckedTypeStore,
+        checked_bodies: *CheckedBodyStore,
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
@@ -1314,12 +1732,38 @@ pub const CheckedProcedureTemplateTable = struct {
                 .template = template_id,
             };
             by_def[@intFromEnum(def_idx)] = template_ref;
+            const checked_fn_key = try canonical_type_keys.fromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                module.defType(def_idx),
+            );
+            const checked_fn_root = checked_types.rootForKey(checked_fn_key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: checked procedure function root was not published", .{});
+                }
+                unreachable;
+            };
+            const checked_fn_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                module.defType(def_idx),
+            );
+            const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: checked procedure body root expression was not published", .{});
+                }
+                unreachable;
+            };
+            const body = try checked_bodies.appendBody(allocator, root_expr, template_ref);
 
             try templates.append(allocator, .{
                 .proc_base = proc_base,
                 .template_id = template_id,
-                .body = .{ .source_expr = def.expr.idx },
-                .checked_fn_var = module.defType(def_idx),
+                .body = .{ .checked_body = body },
+                .checked_fn_scheme = checked_fn_scheme,
+                .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
@@ -1366,34 +1810,100 @@ pub const HostedProc = struct {
 pub const HostedProcTable = struct {
     procs: []HostedProc = &.{},
 
+    const Candidate = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+        expr_idx: CIR.Expr.Idx,
+        external_symbol_name: canonical.ExternalSymbolNameId,
+        proc: canonical.ProcedureValueRef,
+        sort_key: []const u8,
+    };
+
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!HostedProcTable {
+        var candidates = std.ArrayList(Candidate).empty;
+        defer {
+            for (candidates.items) |candidate| allocator.free(candidate.sort_key);
+            candidates.deinit(allocator);
+        }
+
         var procs = std.ArrayList(HostedProc).empty;
         errdefer procs.deinit(allocator);
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
             switch (def.expr.data) {
-                .e_hosted_lambda => |hosted| try procs.append(allocator, .{
-                    .module_idx = module.moduleIndex(),
-                    .def_idx = def_idx,
-                    .expr_idx = def.expr.idx,
-                    .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
-                    .deterministic_index = @intCast(procs.items.len),
-                    .proc = .{
-                        .artifact = templates.lookupByDef(def_idx).?.artifact,
-                        .proc_base = templates.lookupByDef(def_idx).?.proc_base,
-                    },
-                }),
+                .e_hosted_lambda => |hosted| {
+                    const template_ref = templates.lookupByDef(def_idx) orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic("checked artifact invariant violated: hosted procedure def has no checked template", .{});
+                        }
+                        unreachable;
+                    };
+
+                    try candidates.append(allocator, .{
+                        .module_idx = module.moduleIndex(),
+                        .def_idx = def_idx,
+                        .expr_idx = def.expr.idx,
+                        .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
+                        .proc = .{
+                            .artifact = template_ref.artifact,
+                            .proc_base = template_ref.proc_base,
+                        },
+                        .sort_key = try hostedProcSortKey(allocator, module, hosted.symbol_name),
+                    });
+                },
                 else => {},
             }
         }
 
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: Candidate, b: Candidate) bool {
+                return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx),
+                };
+            }
+        };
+        std.mem.sort(Candidate, candidates.items, {}, SortContext.lessThan);
+
+        for (candidates.items, 0..) |candidate, index| {
+            try procs.append(allocator, .{
+                .module_idx = candidate.module_idx,
+                .def_idx = candidate.def_idx,
+                .expr_idx = candidate.expr_idx,
+                .external_symbol_name = candidate.external_symbol_name,
+                .deterministic_index = @intCast(index),
+                .proc = candidate.proc,
+            });
+        }
+
         return .{ .procs = try procs.toOwnedSlice(allocator) };
+    }
+
+    fn hostedProcSortKey(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        symbol_name: Ident.Idx,
+    ) Allocator.Error![]const u8 {
+        const module_env = module.moduleEnvConst();
+        var module_name = module_env.module_name;
+        if (std.mem.endsWith(u8, module_name, ".roc")) {
+            module_name = module_name[0 .. module_name.len - 4];
+        }
+
+        const local_name = module.getIdent(symbol_name);
+        const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
+        if (!std.mem.endsWith(u8, qualified_name, "!")) return qualified_name;
+
+        const stripped = try allocator.dupe(u8, qualified_name[0 .. qualified_name.len - 1]);
+        allocator.free(qualified_name);
+        return stripped;
     }
 
     pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
@@ -2456,6 +2966,8 @@ pub const CheckedModuleArtifact = struct {
     direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
     module_env: ModuleEnvStorage,
     exports: ExportTable,
+    checked_types: CheckedTypeStore = .{},
+    checked_bodies: CheckedBodyStore = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
@@ -2514,6 +3026,8 @@ pub const CheckedModuleArtifact = struct {
         self.exported_const_templates.deinit(allocator);
         self.exported_procedure_bindings.deinit(allocator);
         self.exported_procedure_templates.deinit(allocator);
+        self.checked_bodies.deinit(allocator);
+        self.checked_types.deinit(allocator);
         self.exports.deinit(allocator);
         allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
@@ -2545,6 +3059,42 @@ pub const CheckedModuleArtifact = struct {
         for (self.hosted_procs.procs, 0..) |proc, i| {
             std.debug.assert(proc.deterministic_index == i);
             std.debug.assert(proc.module_idx == self.module_identity.module_idx);
+        }
+
+        for (self.checked_types.roots, 0..) |root, i| {
+            std.debug.assert(@intFromEnum(root.id) == i);
+            std.debug.assert(self.checked_types.artifact_vars.len == self.checked_types.roots.len);
+        }
+
+        for (self.checked_bodies.exprs, 0..) |expr, i| {
+            std.debug.assert(@intFromEnum(expr.id) == i);
+            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
+        }
+
+        for (self.checked_bodies.patterns, 0..) |pattern, i| {
+            std.debug.assert(@intFromEnum(pattern.id) == i);
+            std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.len);
+        }
+
+        for (self.checked_procedure_templates.templates, 0..) |template, i| {
+            std.debug.assert(@intFromEnum(template.template_id) == i);
+            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
+            _ = self.checked_types.schemeForKey(template.checked_fn_scheme) orelse {
+                std.debug.panic("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
+            };
+            switch (template.body) {
+                .checked_body => |body| {
+                    const checked_body = self.checked_bodies.body(body);
+                    std.debug.assert(checked_body.owner_template.template == template.template_id);
+                    std.debug.assert(checked_body.owner_template.proc_base == template.proc_base);
+                    std.debug.assert(@intFromEnum(checked_body.root_expr) < self.checked_bodies.exprs.len);
+                },
+                .promoted_callable_wrapper,
+                .hosted_wrapper,
+                .intrinsic_wrapper,
+                .entry_wrapper,
+                => {},
+            }
         }
 
         for (self.platform_required_declarations.declarations, 0..) |declaration, i| {
@@ -2650,6 +3200,8 @@ pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
     exports: ExportTableView,
+    checked_types: CheckedTypeStoreView,
+    checked_bodies: CheckedBodyStoreView,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -2672,6 +3224,8 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .key = artifact.key,
         .module_identity = artifact.module_identity,
         .exports = artifact.exports.view(),
+        .checked_types = artifact.checked_types.view(),
+        .checked_bodies = artifact.checked_bodies.view(),
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
@@ -2963,7 +3517,20 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifactRef(artifact_key);
 
-    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, &canonical_names, owner_artifact);
+    var checked_types = try CheckedTypeStore.fromModule(allocator, module);
+    errdefer checked_types.deinit(allocator);
+
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &checked_types);
+    errdefer checked_bodies.deinit(allocator);
+
+    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &checked_types,
+        &checked_bodies,
+    );
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
@@ -2989,7 +3556,14 @@ pub fn publishFromTypedModule(
     var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module);
     errdefer compile_time_roots.deinit(allocator);
 
-    var root_requests = try RootRequestTable.fromModule(allocator, module, &compile_time_roots, &platform_required_bindings);
+    var root_requests = try RootRequestTable.fromModule(
+        allocator,
+        module,
+        &checked_types,
+        &compile_time_roots,
+        &platform_required_bindings,
+        inputs.explicit_roots,
+    );
     errdefer root_requests.deinit(allocator);
 
     var comptime_values = CompileTimeValueStore.init(allocator);
@@ -3059,6 +3633,8 @@ pub fn publishFromTypedModule(
         .direct_import_artifact_keys = direct_import_artifact_keys,
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
+        .checked_types = checked_types,
+        .checked_bodies = checked_bodies,
         .exported_procedure_templates = exported_procedure_templates,
         .exported_procedure_bindings = exported_procedure_bindings,
         .exported_const_templates = exported_const_templates,

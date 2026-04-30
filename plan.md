@@ -461,6 +461,19 @@ const MonoSpecializationKey = struct {
 // payloads. Every key consumed after publication must resolve through the owning
 // artifact's checked type store to a real checked type root or scheme.
 
+const ConcreteSourceTypeRef = enum(u32) { _ };
+
+const ConcreteSourceTypeRoot = struct {
+    key: CanonicalTypeKey,
+    root: CheckedTypeId,
+};
+
+const ConcreteSourceTypeStore = struct {
+    checked_types: CheckedTypeStore,
+    roots: Store(ConcreteSourceTypeRoot),
+    by_key: Map(CanonicalTypeKey, ConcreteSourceTypeRef),
+};
+
 const LiftedProcedureTemplateRef = struct {
     owner_mono_specialization: MonoSpecializationKey,
     site: NestedProcSiteId,
@@ -599,7 +612,7 @@ const ErasedPromotedWrapperBodyPlan = struct {
 
 const MonoSpecializationRequest = struct {
     template: ProcedureTemplateRef,
-    requested_mono_fn_ty: CanonicalTypeKey,
+    requested_fn_ty: ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
 };
 
@@ -630,6 +643,26 @@ as the template identity for another mono request. Recursive and mutually
 recursive requests reuse the reserved `MonoSpecializedProcRef` for the same
 `MonoSpecializationKey`.
 
+`MonoSpecializationRequest` carries the concrete requested function type payload
+separately from the specialization key. `requested_fn_ty` is a
+`ConcreteSourceTypeRef` into the current MIR-family lowering run's
+`ConcreteSourceTypeStore`; `MonoSpecializationKey.requested_mono_fn_ty` is the
+canonical identity key read from that payload. The queue may deduplicate by
+`MonoSpecializationKey`, but it must retain one canonical payload ref for that
+key. If a later request presents the same key with a non-equivalent payload, the
+artifact is invalid: debug builds assert immediately and release builds use
+`unreachable`.
+
+`ConcreteSourceTypeStore` stores target-independent checked source type payloads
+using the same checked type node shape as `CheckedTypeStore`. It is a
+construction input for mono/lambda-solved/executable requests, not a public cache
+key and not a layout decision. It may copy payload roots from the root artifact,
+an imported template closure, a platform/app relation artifact, or the current
+specialization-local checked source type graph. It must not contain raw
+`types.Var`, raw `Ident.Idx`, `ModuleEnv` pointers, `MonoTypeId`, layout ids, or
+source syntax. A canonical key never authorizes reconstruction; it only names
+the already-registered payload.
+
 Canonical type keys are stable identities, not serialized type payloads. A
 published artifact must contain the checked type graph needed to resolve every
 `CanonicalTypeKey` and `CanonicalTypeSchemeKey` it exports or lists in an
@@ -641,6 +674,11 @@ to reconstruct the type for an imported generic specialization.
 The specialization algorithm mirrors the part of Cor/LSS that is correct:
 clone-instantiating the checked type graph, unifying the cloned function root
 with the concrete requested function type, and lowering from the cloned graph.
+Cor/LSS stores the requested specialization type as the actual type graph
+`t_new` and separately uses a lowered monomorphic type as the specialization
+deduplication key. Roc must make that split explicit because checked artifacts,
+imports, and cache hits cross module boundaries. The requested type graph is
+`ConcreteSourceTypeRef`; the deduplication key is `CanonicalTypeKey`.
 The difference is that Roc's source graph crosses module/cache boundaries as
 explicit checked artifact data. Cor can keep the solved body and type graph in
 one process; Roc must not depend on that in-process pointer model for imports or
@@ -906,16 +944,22 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
   captures. It must not become `call_proc` before lifting.
 - `top_level_const` and `imported_const` carry a `ConstUseTemplate`. Mono MIR
   clone-instantiates `requested_source_ty_template` in the current specialization
-  and only then creates the concrete `ConstInstantiationKey` used by runnable
-  MIR. The checked artifact must not store a concrete `ConstInstantiationKey` for
-  a generic procedure body or generic constant template.
+  into the current run's `ConcreteSourceTypeStore`. The resulting
+  `ConcreteSourceTypeRef` is the construction payload for the concrete const
+  instance, and its canonical key is the identity portion of the
+  `ConstInstantiationKey` used by runnable MIR. The checked artifact must not
+  store a concrete `ConstInstantiationKey` for a generic procedure body or
+  generic constant template.
 - `top_level_proc`, `imported_proc`, `hosted_proc`,
   `platform_required_proc`, and `promoted_top_level_proc` carry
   `ProcedureUseTemplate`. In callee position,
-  mono MIR clone-instantiates `source_fn_ty_template`, resolves any static
-  dispatch required by the function type, resolves the named procedure binding at
-  that concrete function type, and then creates the concrete
-  `ProcedureCallableRef`/mono specialization request needed for `call_proc`.
+  mono MIR clone-instantiates `source_fn_ty_template` into the current run's
+  `ConcreteSourceTypeStore`, resolves any static dispatch required by that
+  function type payload, resolves the named procedure binding at that concrete
+  function type, and then creates the concrete `ProcedureCallableRef`/mono
+  specialization request needed for `call_proc`. The resulting
+  `ProcedureCallableRef.source_fn_ty` is the payload's canonical key; the mono
+  specialization request also carries the `ConcreteSourceTypeRef` payload.
 - `platform_required_const` carries `ConstUseTemplate`. Mono MIR treats it like
   an imported constant use owned by the app artifact and addressed through the
   platform/app relation; it must not synthesize a platform-local procedure.
@@ -929,6 +973,14 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
 - The same procedure cases in value position become `proc_value` with empty
   captures after mono specialization has resolved the binding to the exact
   callable procedure template and monomorphic source function type.
+
+`ConstUseTemplate.requested_source_ty_template` and
+`ProcedureUseTemplate.source_fn_ty_template` are template identities. They are
+not concrete payloads by themselves. In a generic checked procedure body, the
+same template may instantiate to different concrete payloads in different mono
+specializations. Mono MIR must store the concrete payload ref produced in the
+current specialization and must not enqueue a const/procedure/callable request
+from only the canonical key.
 
 `ProcedureUseTemplate` deliberately does not store a
 `CallableProcedureTemplateRef`. A function-valued top-level binding can be a
@@ -1014,8 +1066,10 @@ Exported checked artifacts may also contain generic callable binding templates.
 Those templates are `TopLevelProcedureBindingRef` entries whose body is
 `callable_eval_template`. They are checked artifact data, not mono MIR. A
 consumer turns one into a concrete callable value only by requesting a
-`CallableBindingInstantiationKey` at a fully resolved fixed-arity source function
-type.
+`CallableBindingInstantiationRequest` at a fully resolved fixed-arity source
+function type. The request carries both the `CallableBindingInstantiationKey`
+for identity and a `ConcreteSourceTypeRef` for the requested function type
+payload.
 
 ### Row-Finalized Mono MIR
 
@@ -4655,23 +4709,27 @@ or procedure binding must exist before the current root can be evaluated or
 published. `ConcreteValueUse` is for runnable lowering: it says which concrete
 `ConstInstantiationKey`, `CallableBindingInstantiationKey`, or
 `ProcedureCallableRef` is consumed after a generic use has been
-clone-instantiated.
+clone-instantiated. Concrete summaries may store keys because the concrete
+instances have already been reserved and sealed. Code that constructs a new
+concrete instance must use `ConstInstantiationRequest` or
+`CallableBindingInstantiationRequest`, not the key alone.
 
 Generic templates do not store concrete summaries. A `ConstEvalTemplate` or
 `CallableEvalTemplate` stores a `ComptimeDependencySummaryTemplate` containing
-only availability uses and use templates. A concrete `ConstInstantiationKey` or
-`CallableBindingInstantiationKey` instantiates that template in the requesting
-artifact's concrete mono context, resolves static dispatch, finite callable
-members, erased callable code, callable leaves, and promoted captures, and then
-stores a concrete `ComptimeDependencySummary` in the concrete instance. The
-template must not manufacture a concrete `ConstInstantiationKey`,
-`CallableBindingInstantiationKey`, `ProcedureCallableRef`, or executable
-specialization before the requested source type is fully resolved. This is
-required for generic constants such as `table = { f: id }`, where different
-consumers of the same exported constant instantiate callable leaves at different
-function types, and for generic callable roots such as
-`alsoId = choose(True, id, id)`, where different consumers instantiate the
-callable binding at different function types.
+only availability uses and use templates. A concrete
+`ConstInstantiationRequest` or `CallableBindingInstantiationRequest`
+instantiates that template in the requesting artifact's concrete mono context,
+resolves static dispatch, finite callable members, erased callable code,
+callable leaves, and promoted captures, and then stores a concrete
+`ComptimeDependencySummary` in the concrete instance. The template must not
+manufacture a concrete `ConstInstantiationKey`,
+`CallableBindingInstantiationKey`, `ProcedureCallableRef`, executable
+specialization, or concrete source type payload before the requested source type
+is fully resolved. This is required for generic constants such as
+`table = { f: id }`, where different consumers of the same exported constant
+instantiate callable leaves at different function types, and for generic
+callable roots such as `alsoId = choose(True, id, id)`, where different
+consumers instantiate the callable binding at different function types.
 
 - top-level values named directly by the root expression
 - imported top-level values named directly by the root expression
@@ -4748,9 +4806,10 @@ unfilled local root, and only before the checked artifact is published.
 
 After dependency ordering has evaluated a prerequisite root, real MIR lowering
 for any dependent root may turn `ConstUseTemplate` records into explicit
-`ConstInstantiationKey` values and `ProcedureUseTemplate` records into explicit
-`CallableBindingInstantiationKey` or `ProcedureCallableRef` values. If a runnable
-post-check lowering path sees an unfilled reserved constant template, a
+`ConstInstantiationRequest` values and `ProcedureUseTemplate` records into
+explicit `CallableBindingInstantiationRequest` or `ProcedureCallableRef` values.
+The sealed concrete summaries may later refer to the corresponding keys. If a
+runnable post-check lowering path sees an unfilled reserved constant template, a
 `pending_callable_root`, or a generic use template where a concrete use is
 required, that is a compiler invariant violation handled by debug-only assertion
 in debug builds and `unreachable` in release builds.
@@ -4839,6 +4898,11 @@ const CallableEvalTemplate = struct {
 const CallableBindingInstantiationKey = struct {
     binding: ProcedureBindingRef,
     requested_source_fn_ty: CanonicalTypeKey,
+};
+
+const CallableBindingInstantiationRequest = struct {
+    key: CallableBindingInstantiationKey,
+    requested_source_fn_ty_payload: ConcreteSourceTypeRef,
 };
 
 const CallableBindingInstantiationStoreRef = struct {
@@ -4955,8 +5019,8 @@ There are three source-level cases:
    template created from the declaration. If its body references top-level
    constants, those references are resolved through `TopLevelValueTable` after
    checking finalization: compile-time constants become `ConstUseTemplate` reads
-   that instantiate to concrete `ConstInstantiationKey` values only inside a
-   concrete lowering context, and function-valued bindings become
+   that instantiate through concrete `ConstInstantiationRequest` values only
+   inside a concrete lowering context, and function-valued bindings become
    `ProcedureUseTemplate` reads.
 2. A top-level binding with function source type whose expression is not already
    a function declaration or top-level lambda is a compile-time callable root.
@@ -4967,10 +5031,12 @@ There are three source-level cases:
    generalized and the expression cannot be represented as one already-sealed
    direct callable template, checking finalization publishes a
    `CallableEvalTemplate` instead. A consumer that needs a concrete use evaluates
-   that template at a concrete `CallableBindingInstantiationKey` during the
-   consuming artifact's checking finalization. A published artifact never
-   contains a `ProcedureUseTemplate` that requires post-check lowering to
-   evaluate a `CallableEvalTemplate`.
+   that template with a concrete `CallableBindingInstantiationRequest` during
+   the consuming artifact's checking finalization. The request's key supplies
+   stable identity; the request's `ConcreteSourceTypeRef` supplies the source
+   function type payload used to lower and promote the callable. A published
+   artifact never contains a `ProcedureUseTemplate` that requires post-check
+   lowering to evaluate a `CallableEvalTemplate`.
 3. A top-level binding with non-function source type is a compile-time
    constant. It is evaluated and reified into `CompileTimeValueStore` as a
    `ConstRef` template graph. That graph may contain callable leaves nested inside
@@ -5073,17 +5139,20 @@ useStr = alsoId("x")
 
 The published `alsoId` binding has one generalized `source_scheme` and one
 `CallableEvalTemplate`. `useInt` creates a
+`CallableBindingInstantiationRequest` whose key is
 `CallableBindingInstantiationKey(binding = alsoId, requested_source_fn_ty =
-I64 -> I64)`. `useStr` creates a second key at `Str -> Str`. Each key reserves a
-`CallableBindingInstance` in the artifact that requested the use. During that
-artifact's checking finalization, the compiler lowers the checked callable body
-through mono MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR,
-executable MIR, IR, and LIR at that concrete function type, computes a concrete
-dependency summary, builds the concrete `CallableResultPlan`, runs the LIR
-interpreter, reifies the `ComptimeCallable`, promotes it if needed, and seals the
-instance as a concrete `ProcedureCallableRef`. No generalized executable MIR,
-generalized `ComptimeCallable`, runtime top-level closure object, runtime thunk,
-or callable alias table is produced.
+I64 -> I64)` and whose payload is a `ConcreteSourceTypeRef` for the concrete
+`I64 -> I64` function type. `useStr` creates a second request at `Str -> Str`
+with a different payload. Each request reserves a `CallableBindingInstance` in
+the artifact that requested the use. During that artifact's checking
+finalization, the compiler lowers the checked callable body through mono MIR,
+row-finalized mono MIR, lifted MIR, lambda-solved MIR, executable MIR, IR, and
+LIR at that concrete function type payload, computes a concrete dependency
+summary, builds the concrete `CallableResultPlan`, runs the LIR interpreter,
+reifies the `ComptimeCallable`, promotes it if needed, and seals the instance as
+a concrete `ProcedureCallableRef`. No generalized executable MIR, generalized
+`ComptimeCallable`, runtime top-level closure object, runtime thunk, or callable
+alias table is produced.
 
 After checking finalization, `add5` must be represented exactly like a
 top-level function. Conceptually, later stages see the equivalent of:
@@ -5122,16 +5191,19 @@ alias side table to handle any of these examples.
 
 `CallableBindingInstantiationStore` has the same reserve/fill/seal discipline as
 procedure specialization and constant instantiation. When a concrete use of a
-function-valued top-level binding is requested, the compiler first
-clone-instantiates the binding's `source_scheme` at the requested fixed-arity
-function type and validates that the request is an instance of that scheme. A
-`direct_template` binding then produces a concrete `ProcedureCallableRef` from
-the direct callable template and the requested source function type. A
-`callable_eval_template` binding reserves a `CallableBindingInstanceRef`, lowers
-the checked callable body at the requested source function type, evaluates the
-private compile-time root through the LIR interpreter, reifies the
-`ComptimeCallable`, promotes captured callable results if needed, and fills the
-instance with a complete `CallableBindingInstance`.
+function-valued top-level binding is requested, the compiler receives a
+`CallableBindingInstantiationRequest`. It first clone-instantiates the binding's
+`source_scheme` and the request's `requested_source_fn_ty_payload` into one
+checking-finalization source type graph, validates that the request is an
+instance of that scheme, and debug-asserts that the payload's canonical key
+equals `key.requested_source_fn_ty`. A `direct_template` binding then produces a
+concrete `ProcedureCallableRef` from the direct callable template and the
+requested source function type payload. A `callable_eval_template` binding
+reserves a `CallableBindingInstanceRef`, lowers the checked callable body at the
+requested source function type payload, evaluates the private compile-time root
+through the LIR interpreter, reifies the `ComptimeCallable`, promotes captured
+callable results if needed, and fills the instance with a complete
+`CallableBindingInstance`.
 
 A `CallableBindingInstance` is the concrete evaluation product, not just a
 procedure pointer. It records the concrete instantiation key, concrete dependency
@@ -5240,13 +5312,14 @@ useStr = (table.f)("x")
 
 The exported `table` binding still publishes one `ConstRef`, but that `ConstRef`
 must point at a `ConstEvalTemplate`, not a pre-evaluated concrete value. The
-`I64` use and the `Str` use each create a `ConstInstantiationKey`, reserve a
-concrete `ConstInstanceRef`, evaluate the template through the MIR-family path
-and LIR interpreter for that concrete source type, and then reify the result into
-the requesting artifact's `ConstInstantiationStore` during that artifact's
-checking finalization. This is generic constant instantiation. It is not runtime
-thunking, not runtime global initialization, not post-check semantic work, and
-not imported-module LIR re-execution after checking.
+`I64` use and the `Str` use each create a `ConstInstantiationRequest`, reserve a
+concrete `ConstInstanceRef` under the request's key, evaluate the template
+through the MIR-family path and LIR interpreter for the request's concrete source
+type payload, and then reify the result into the requesting artifact's
+`ConstInstantiationStore` during that artifact's checking finalization. This is
+generic constant instantiation. It is not runtime thunking, not runtime global
+initialization, not post-check semantic work, and not imported-module LIR
+re-execution after checking.
 
 The template/instance split is mandatory:
 
@@ -5254,6 +5327,8 @@ The template/instance split is mandatory:
   its source type scheme.
 - `ConstInstantiationKey` identifies a concrete use of that template at a fully
   resolved source type.
+- `ConstInstantiationRequest` carries the `ConstInstantiationKey` plus the
+  `ConcreteSourceTypeRef` payload required to evaluate or reify that use.
 - `ConstEvalTemplate` identifies a checked expression template plus
   reification-template data that must be evaluated separately for each requested
   concrete source type.
@@ -5407,8 +5482,8 @@ publication. Promotion must:
   type of the top-level binding
 - rewrite every capture read in the callable body to an explicit private
   capture path whose serializable leaves are `ConstRef` reads with concrete
-  `ConstInstantiationKey` values and whose callable leaves are `procedure_value`
-  references
+  `ConstInstanceRef` values selected from sealed `ConstInstantiationRequest`
+  instances and whose callable leaves are `procedure_value` references
 - resolve callable leaves to sealed procedure values before the outer promoted
   procedure is published. Existing source/imported/hosted/platform-required
   procedure bindings remain existing procedure values; local closure leaves and
@@ -5902,10 +5977,11 @@ Checking finalization order:
    the constant source type is generic, including a generic non-function value
    that contains function-typed fields, the `ConstRef` stores the canonical
    source type scheme and the target-independent template. Concrete instances are
-   created through `ConstInstantiationKey` in the requesting artifact's
-   `ConstInstantiationStore` during that artifact's checking finalization;
-   checking finalization must not reject or thunk the constant merely because it
-   contains generalized callable leaves.
+   created through `ConstInstantiationRequest` in the requesting artifact's
+   `ConstInstantiationStore` during that artifact's checking finalization; the
+   request key identifies the instance and the request payload provides the
+   concrete source type graph. Checking finalization must not reject or thunk the
+   constant merely because it contains generalized callable leaves.
 12. Promote concrete compile-time callable results with a reserve/fill/seal
     lifecycle:
     reserve every promoted `ProcedureValueRef`, `ProcBaseKeyRef`,
@@ -5913,7 +5989,7 @@ Checking finalization order:
     graphs; fill every `PromotedCallableWrapper`; append the sealed promoted
     templates to `CheckedProcedureTemplateTable`; then insert each
     `PromotedProcedure` row. Generalized callable eval templates are promoted
-    only when a concrete `CallableBindingInstantiationKey` is requested while
+    only when a concrete `CallableBindingInstantiationRequest` is requested while
     building the artifact that owns that concrete instance.
 13. Replace promoted root `pending_callable_root` entries in the in-progress
     `TopLevelValueTable` with `procedure_binding` entries only after their
@@ -6047,10 +6123,12 @@ declarations. Those do not become runtime zero-argument thunks and do not become
 procedure value, an existing imported/source procedure binding, or a closed
 procedure value produced by compile-time callable promotion. If the binding is
 generic and its callable result must be computed at a concrete requested function
-type, the binding may instead point at a sealed `CallableEvalTemplate`; concrete
-uses instantiate it through `CallableBindingInstantiationKey`. There is no
-post-check top-level closure-value category: any concrete top-level callable
-result must be promoted before it can be consumed as a concrete procedure value.
+type, the binding may instead point at a sealed `CallableEvalTemplate`. Concrete
+uses instantiate it through `CallableBindingInstantiationRequest`, which carries
+both the stable `CallableBindingInstantiationKey` and the concrete source
+function type payload. There is no post-check top-level closure-value category:
+any concrete top-level callable result must be promoted before it can be
+consumed as a concrete procedure value.
 
 `TopLevelValueTable` is the only post-check lookup table for top-level values.
 Mono MIR, executable MIR, eval, REPL, tests, glue, and CLI helpers must consume
@@ -6126,6 +6204,13 @@ sealed `CallableProcedureTemplateRef` or `ProcedureValueRef`; they must not
 allocate a new checked procedure template while lowering, materializing, or
 running backend code.
 
+The `ConstInstantiationKey` and `CallableBindingInstantiationKey` fields inside
+`SemanticInstantiationProcedureKey` refer only to already-reserved and sealed
+instances. Creating those instances required the corresponding
+`ConstInstantiationRequest` or `CallableBindingInstantiationRequest` with a
+`ConcreteSourceTypeRef` payload. The semantic-instantiation procedure table must
+not be used as a backdoor to construct a new instance from a key alone.
+
 Conceptual constant handle:
 
 ```zig
@@ -6173,6 +6258,11 @@ const ConstInstantiationKey = struct {
     requested_source_ty: CanonicalTypeKey,
 };
 
+const ConstInstantiationRequest = struct {
+    key: ConstInstantiationKey,
+    requested_source_ty_payload: ConcreteSourceTypeRef,
+};
+
 const ConstInstantiationStoreRef = struct {
     owner: CheckedModuleArtifactKey,
 };
@@ -6218,11 +6308,14 @@ template forms are checked-artifact data. Neither is executable MIR, target
 bytes, a runtime initializer, or a request for later stages to inspect source
 syntax.
 
-`ConstInstantiationKey` selects one concrete use of the template at a fully
-resolved source type. A generic procedure body, generic constant template, or
-imported module view may refer to a `ConstUseTemplate`; it may not require a
-`ConstInstantiationKey` until the use has been clone-instantiated in a concrete
-lowering context.
+`ConstInstantiationKey` selects the identity of one concrete use of the template
+at a fully resolved source type. `ConstInstantiationRequest` is the construction
+input for that use and must carry `requested_source_ty_payload`, a
+`ConcreteSourceTypeRef` whose canonical key exactly equals
+`key.requested_source_ty`. A generic procedure body, generic constant template,
+or imported module view may refer to a `ConstUseTemplate`; it may not require a
+`ConstInstantiationRequest` until the use has been clone-instantiated in a
+concrete lowering context.
 
 `ConstInstanceRef` identifies a concrete instantiated logical node owned by a
 `ConstInstantiationStore`. The store owner is the checked artifact that requested
@@ -6234,13 +6327,14 @@ value store. Later stages must not reconstruct schemas from bytes, layout order,
 expression syntax, or display names.
 
 `ConstInstantiationStore` has a reserve/fill/seal lifecycle like procedure
-specialization. When a concrete `ConstInstantiationKey` is requested, checking
-finalization reserves the `ConstInstanceRef` before evaluating any dependencies.
-If the template is a value graph template, instantiation clones the graph through
-the requested source type, instantiates callable leaves, and fills the instance.
-If the template is an eval template, instantiation lowers the checked expression
-template through the MIR-family path at the requested source type, runs the LIR
-interpreter, and reifies the result through the recorded reification template.
+specialization. When a concrete `ConstInstantiationRequest` is requested,
+checking finalization reserves the `ConstInstanceRef` before evaluating any
+dependencies. If the template is a value graph template, instantiation clones the
+graph through `requested_source_ty_payload`, instantiates callable leaves, and
+fills the instance. If the template is an eval template, instantiation lowers the
+checked expression template through the MIR-family path at
+`requested_source_ty_payload`, runs the LIR interpreter, and reifies the result
+through the recorded reification template.
 For an eval template, the concrete instance stores the concrete dependency
 summary and concrete reification plan used for that requested type. If
 instantiating the constant creates synthetic checked procedure templates,
@@ -6426,8 +6520,10 @@ instances contain distinct finite callable leaf instances:
 The unannotated `table` constant publishes one `ConstRef` template whose callable
 leaf template stores `CallableProcedureTemplateRef.checked` for `id` plus a
 source function type template. Each use of `table` must supply a
-`ConstInstantiationKey` with a fully resolved requested record type before
-executable MIR or constant materialization can consume it.
+`ConstInstantiationRequest` with a fully resolved requested record type payload
+before executable MIR or constant materialization can consume it. The key inside
+that request is the stable identity of the use; the payload is what instantiates
+the callable leaf template.
 
 A bare `ProcedureValueRef { .proc_base = ... }` is insufficient as a finite
 callable leaf and is forbidden because it loses the occurrence-specific function
@@ -7047,6 +7143,87 @@ The exact Zig names may differ, but these invariants must not:
   incomplete; debug builds assert immediately and release builds use
   `unreachable`
 
+#### Concrete Source Type Payloads For Requests
+
+Every construction request that names a concrete source type must carry both:
+
+- a canonical key used for identity, deduplication, cache lookup, snapshot
+  comparison, and stable procedure naming
+- a concrete source type payload ref used for clone-instantiation, unification,
+  static-dispatch resolution, callable-leaf instantiation, constant
+  reification, and executable wrapper construction
+
+The key and payload are deliberately separate. A `CanonicalTypeKey` is a stable
+name for a type graph. It is not the graph. It cannot provide argument order,
+return type, row extension structure, nominal backing type, static-dispatch
+constraints, generalized variable identity, recursive edges, or alias structure.
+Any code path that has only a key may compare identity, but it may not construct
+or lower a type from that key.
+
+The shared request payload store is:
+
+```zig
+const ConcreteSourceTypeRef = enum(u32) { _ };
+
+const ConcreteSourceTypeRoot = struct {
+    key: CanonicalTypeKey,
+    root: CheckedTypeId,
+};
+
+const ConcreteSourceTypeStore = struct {
+    checked_types: CheckedTypeStore,
+    roots: Store(ConcreteSourceTypeRoot),
+    by_key: Map(CanonicalTypeKey, ConcreteSourceTypeRef),
+};
+
+const ConcreteSourceTypeArg = struct {
+    key: CanonicalTypeKey,
+    payload: ConcreteSourceTypeRef,
+};
+```
+
+The exact names may differ, but the split must not. `ConcreteSourceTypeStore` is
+owned by the current MIR-family lowering or checking-finalization instantiation
+run. It stores checked source type payloads in artifact-owned checked type node
+form. It is not `ModuleEnv`, not a checker `types.Store`, not mono MIR types,
+not lambda-solved types, not executable layouts, and not runtime data.
+
+Concrete source type payloads enter the store only from explicit earlier-stage
+data:
+
+- root requests register the artifact-owned checked type root named by
+  `RootRequest.checked_type`
+- resolved procedure uses register the cloned source function type produced from
+  `ProcedureUseTemplate.source_fn_ty_template` in the current specialization
+- resolved const uses register the cloned source value type produced from
+  `ConstUseTemplate.requested_source_ty_template` in the current specialization
+- static-dispatch targets register the unified callable/target source function
+  type that will be requested from the target procedure after the enclosing
+  template has been clone-instantiated; verifier-only dispatcher payloads may be
+  registered separately, but the mono specialization request payload is the
+  unified target function type
+- const and callable binding instantiation during checking finalization register
+  the requested concrete source type before evaluating or reifying the instance
+- imported artifacts and platform/app relation artifacts may contribute payloads
+  only through their published checked type stores and imported closure views
+
+Registration computes the canonical key from the explicit payload graph and
+stores `key -> payload`. If the same key is registered twice with structurally
+equivalent checked payloads, the existing `ConcreteSourceTypeRef` may be reused.
+If the same key is registered with a non-equivalent payload, that is a compiler
+bug: debug builds assert immediately and release builds use `unreachable`.
+Payload refs are construction-run-local handles. They must not be serialized as
+cache keys, written into stable checked artifacts, exposed as public semantic ids,
+or passed to a later independent compiler run. Sealed artifacts may retain the
+canonical key and the artifact-owned checked type graph; any later construction
+run creates its own `ConcreteSourceTypeRef` from that explicit payload.
+
+No post-check stage may recover a concrete source type payload from a key by
+hashing source text, resolving names, inspecting a foreign `ModuleEnv`, reading
+a raw checker `Var`, asking a type printer, converting a `MonoTypeId` back to a
+source type, or comparing expression syntax. The payload ref is the construction
+input. The key is only the stable identity of that input.
+
 Conceptual checked body payload:
 
 ```zig
@@ -7129,9 +7306,15 @@ cycle-safe:
    `CheckedTypeScheme` to one fresh specialization-local variable.
 3. Clone aliases, nominals, records, tag unions, tuples, functions, static
    dispatch constraints, and recursive refs through that map.
-4. Unify the cloned function root with the concrete requested
-   `CanonicalTypeKey` root in the same specialization-local type store.
-5. Lower mono MIR expressions using the cloned types attached to checked body
+4. Clone the concrete requested source type payload named by
+   `ConcreteSourceTypeRef` into the same specialization-local checked type
+   store.
+5. Debug-assert that the cloned requested payload's canonical key equals the
+   `MonoSpecializationKey.requested_mono_fn_ty` for this request; release builds
+   use `unreachable` for mismatch.
+6. Unify the cloned template function root with the cloned concrete requested
+   function root in the same specialization-local type store.
+7. Lower mono MIR expressions using the cloned types attached to checked body
    nodes.
 
 No post-check stage may recreate a missing checked type payload by hashing
@@ -7915,6 +8098,10 @@ MonoSpecializationKey {
     requested_mono_fn_ty: CanonicalTypeKey,
 }
 
+ConcreteSourceTypeRef {
+    local_id: u32,
+}
+
 MonoSpecializedProcRef {
     proc: ProcedureValueRef,
     specialization: MonoSpecializationKey,
@@ -7967,6 +8154,15 @@ output becomes a new template. Cor/LSS models this by using the original symbol
 plus requested type as the specialization key and then allocating a fresh output
 symbol for the specialized body. Roc must preserve that separation with explicit
 semantic ids instead of raw symbols.
+
+`MonoSpecializationKey.requested_mono_fn_ty` is the identity of the requested
+source function type, not the payload used to lower the body. The matching
+`MonoSpecializationRequest` and queue entry must retain a `ConcreteSourceTypeRef`
+whose canonical key is `requested_mono_fn_ty`. `ConcreteSourceTypeRef` is scoped
+to the current MIR-family lowering/checking-finalization construction run and is
+never serialized as a stable semantic id. Any API that can enqueue a mono
+specialization from only `ProcedureTemplateRef + CanonicalTypeKey` is incomplete
+and must be rejected during the plan audit.
 
 `ProcBaseKey` is the stable semantic origin of a source, lifted, or synthetic
 procedure. `nested_proc_site` is null for ordinary top-level source procedures.
@@ -9284,16 +9480,21 @@ lowering one concrete mono specialization:
 8. Unify the instantiated target procedure type with the instantiated callable
    type. The unified function type is the exact requested mono source function
    type for this call.
-9. Request or reserve the target mono specialization at that exact requested
-   function type.
-10. Emit `call_proc` with:
+9. Register that unified function type in the current
+   `ConcreteSourceTypeStore`. The returned `ConcreteSourceTypeRef` is the
+   request payload; its canonical key is the `requested_mono_fn_ty` portion of
+   the target `MonoSpecializationKey`.
+10. Request or reserve the target mono specialization with that exact payload.
+11. Emit `call_proc` with:
    - `proc` equal to the mono-specialized `ProcedureValueRef`
    - `args` equal to the lowered normalized args
-   - `requested_fn_ty` equal to the unified requested mono source function type
-11. If no target exists and `result_mode.equality.structural_allowed` is true,
+   - `requested_fn_ty` equal to the stage-local `TypeId` for the same unified
+     requested mono source function type whose `ConcreteSourceTypeRef` payload
+     was used to request the target specialization
+12. If no target exists and `result_mode.equality.structural_allowed` is true,
     emit `structural_eq` using the lowered normalized args and the instantiated
     equality argument types.
-12. If `result_mode.equality.negated` is true, emit `bool_not` after the custom
+13. If `result_mode.equality.negated` is true, emit `bool_not` after the custom
     call or structural equality operation.
 
 If lookup is missing for `result_mode.value`, or if lookup is missing for
@@ -9859,16 +10060,23 @@ The exact Zig names may differ, but the lifecycle must not:
    has sealed their wrapper bodies.
 2. Root binding, direct calls, static-dispatch targets, and first-class
    `proc_value` uses create concrete `MonoSpecializationRequest` values whose
-   `template` field is a checked `ProcedureTemplateRef`. First-class callable
-   values may also carry `CallableProcedureTemplateRef.lifted` or
+   `template` field is a checked `ProcedureTemplateRef` and whose
+   `requested_fn_ty` field is a `ConcreteSourceTypeRef`. The corresponding
+   `MonoSpecializationKey.requested_mono_fn_ty` is derived from that payload's
+   canonical key; it is not accepted as a substitute for the payload. First-class
+   callable values may also carry `CallableProcedureTemplateRef.lifted` or
    `CallableProcedureTemplateRef.synthetic`, but those are not ordinary
    checked-template mono requests; they follow the lifted or synthetic procedure
    identity path described above.
 3. The queue reserves the output `MonoSpecializedProcRef`, including its output
    `ProcedureValueRef` and implementation-local `MonoProcHandle`, for each
-   `MonoSpecializationKey` before lowering the body.
+   `MonoSpecializationKey` before lowering the body. The queue entry retains the
+   canonical `ConcreteSourceTypeRef` payload for that key.
 4. The body is clone-instantiated from artifact-owned checked type/body stores
-   into a specialization-local mono type store.
+   into a specialization-local checked source type graph and then mono type
+   store. The requested source function type payload is cloned into that same
+   source graph and unified with the cloned template root before mono type
+   lowering.
 5. Static dispatch is resolved inside that specialization-local lowering.
 6. Any new `call_proc` or top-level `proc_value` dependencies enqueue additional
    concrete mono specializations.
@@ -9959,8 +10167,9 @@ dispatcher type, resolve `MethodOwner` from that type, look up `(MethodOwner,
 method)` in the checked method registry, instantiate the target procedure
 type into the current mono type store, unify it with the instantiated callable
 type, use the unified argument and return slots as the call's requested mono
-source function type, and reserve the target mono specialization at exactly that
-type before exporting mono MIR.
+source function type, register that exact source function type in the current
+`ConcreteSourceTypeStore`, and reserve the target mono specialization with the
+resulting `ConcreteSourceTypeRef` before exporting mono MIR.
 
 For static-dispatch equality without a custom target, mono may emit
 `structural_eq` only when `StaticDispatchCallPlan.result_mode.equality`
@@ -9981,6 +10190,9 @@ Commit when mono MIR verification proves:
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the unified
   target-procedure type and `StaticDispatchCallPlan.callable_ty` type in the
   mono type store
+- every static-dispatch-produced mono specialization request carries a
+  `ConcreteSourceTypeRef` whose canonical key equals the
+  `call_proc.requested_fn_ty` key
 - `call_proc` targets only top-level mono-specialized procedures
 - mono `proc_value` captures are empty
 - mono `proc_value` targets for top-level procedure values are mono-specialized
@@ -10696,7 +10908,7 @@ environment lookup after lowering.
 Add the checking-finalization-only unfilled-root summary mode at the same time.
 While computing the dependency graph, a top-level lookup of an unfilled local
 constant template or pending callable root records `AvailabilityUse.local_root`;
-it does not lower to a concrete `ConstInstantiationKey`, does not lower to
+it does not lower to a concrete `ConstInstantiationRequest`, does not lower to
 `procedure_binding`, and does not emit runnable MIR. After the dependency graph
 is ordered, actual root lowering must happen only after every local-root
 dependency for that root has filled its reserved `ConstRef` template or published
@@ -10735,11 +10947,11 @@ after its checked procedure template is sealed. The promoted procedure must have
 no runtime capture environment. A generalized function-valued binding whose
 callable result cannot be represented as an already-sealed direct callable
 template must publish a sealed `CallableEvalTemplate`; concrete
-`CallableBindingInstantiationKey` requests evaluate that same callable-binding
+`CallableBindingInstantiationRequest` values evaluate that same callable-binding
 root path only during the checking finalization of the artifact that owns the
-concrete instance, at the requested function type. The published artifact must
-not contain a `ProcedureUseTemplate` that requires post-check lowering to finish
-the callable evaluation.
+concrete instance, at the requested function type payload. The published artifact
+must not contain a `ProcedureUseTemplate` that requires post-check lowering to
+finish the callable evaluation.
 This includes trivial references to existing procedures such as `alsoInc = inc`.
 Those bindings still run through compile-time callable evaluation. If the
 evaluated `ComptimeCallable` is a finite existing procedure with no captures,
@@ -10823,7 +11035,7 @@ valid compile-time constants. This includes callable slots inside `Box(T)`,
 records, tuples, tags, `List(T)`, transparent aliases, and nominals. Checking
 finalization must reify them into explicit `ConstRef` template graphs whose
 callable leaves are sealed callable leaf templates. Concrete uses instantiate
-those templates through `ConstInstantiationKey` before executable MIR or
+those templates through `ConstInstantiationRequest` before executable MIR or
 materialization. Private promoted-capture graphs use the same callable-leaf
 template/instance discipline, but they are never imported or exported by source
 name and never appear in `TopLevelValueTable`.
@@ -11189,7 +11401,7 @@ Checking finalization and compile-time constants:
   layouts, and sealed callable representation data
 - root function source types publish as `procedure_binding`; callable leaves
   nested under non-function constant roots stay inside explicit `ConstRef`
-  templates and instantiate through concrete `ConstInstantiationKey` values
+  templates and instantiate through concrete `ConstInstantiationRequest` values
 - function-valued top-level bindings that evaluate to closed callable values are
   promoted during checking finalization to closed procedure values
 - cached checked artifacts include serialized compile-time values and hit or
@@ -12054,7 +12266,7 @@ Compile-time constants:
   but different `capture_shape_key`.
 - promoted procedures have no runtime capture environment; serializable
   top-level captures are consumed through published `ConstRef` templates plus
-  concrete `ConstInstantiationKey` values, local captures are consumed through
+  sealed concrete `ConstInstanceRef` values, local captures are consumed through
   private structural promoted-capture nodes, serializable leaves are private
   capture `ConstRef` templates, and callable leaves are explicit
   `CallableLeafTemplate` records that instantiate to `CallableLeafInstance`
@@ -12125,7 +12337,8 @@ Compile-time constants:
   `{ f : Str -> Str }` instantiates
   `source_fn_ty = canonical("Str -> Str")`. The unannotated generic constant
   `table = { f: id }` remains one `ConstRef` template and is consumed through
-  separate `ConstInstantiationKey` values for those two requested record types.
+  separate `ConstInstantiationRequest` values for those two requested record
+  type payloads.
 - public generic constants whose values require computation publish
   `ConstEvalTemplate`, not a pre-evaluated generic value graph. A test must cover:
 

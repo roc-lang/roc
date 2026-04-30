@@ -13951,11 +13951,10 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     try self.env.store.scratch.?.patterns.append(arg_pattern_idx);
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
 
-    // Create e_hosted_lambda expression with index 0 (sole hosted function)
+    // Create e_hosted_lambda expression.
     const expr_idx = try self.env.addExpr(.{
         .e_hosted_lambda = .{
             .symbol_name = echo_ident,
-            .index = 0,
             .args = args_span,
         },
     }, synthetic_region);

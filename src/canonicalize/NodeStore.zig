@@ -882,7 +882,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = @bitCast(p.symbol_name),
-                .index = p.index,
                 .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },
@@ -2240,7 +2239,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_hosted_lambda = .{
                 .symbol_name = @bitCast(hosted.symbol_name),
-                .index = hosted.index,
                 .args_span2_idx = args_span2_idx,
             } });
         },

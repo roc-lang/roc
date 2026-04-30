@@ -93,7 +93,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const expr_idx = try env.addExpr(.{
                 .e_hosted_lambda = .{
                     .symbol_name = ident,
-                    .index = 0, // Placeholder; will be assigned during sorting pass
                     .args = args_span,
                 },
             }, def_region);

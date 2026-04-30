@@ -65,8 +65,6 @@ pub const ParsedResources = struct {
     typed_cir_modules: check.TypedCIR.Modules,
     checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
     import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
-    expr_idx: CIR.Expr.Idx,
-    entry_def_idx: CIR.Def.Idx,
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
@@ -256,16 +254,6 @@ pub fn parseAndCanonicalizeProgramWrapped(
     );
     errdefer cleanupCheckedModule(allocator, main_checked);
 
-    const defs = main_checked.module_env.store.sliceDefs(main_checked.module_env.all_defs);
-    if (defs.len == 0) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("eval helper invariant violated: temporary module has no entry definition", .{});
-        }
-        unreachable;
-    }
-    const entry_def_idx = defs[defs.len - 1];
-    const expr_idx = main_checked.module_env.store.getDef(entry_def_idx).expr;
-
     var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
     defer allocator.free(all_module_envs);
     all_module_envs[0] = main_checked.module_env;
@@ -303,6 +291,20 @@ pub fn parseAndCanonicalizeProgramWrapped(
     const publish_imports = try publishImportKeys(allocator, import_artifacts);
     defer allocator.free(publish_imports);
 
+    const root_name = evalRootName(source_kind, inspect_wrap);
+    const root_def_idx = findDefByAssignedName(main_checked.module_env, root_name) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
+        }
+        unreachable;
+    };
+    const explicit_roots = [_]check.CheckedArtifact.ExplicitRootRequestInput{.{
+        .kind = .dev_expr,
+        .source = .{ .def = root_def_idx },
+        .abi = .roc,
+        .exposure = .private,
+    }};
+
     var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
@@ -310,6 +312,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
         .{
             .module_env_storage = .{ .checked_source = main_checked.module_env },
             .imports = publish_imports,
+            .explicit_roots = &explicit_roots,
         },
     );
     errdefer checked_artifact.deinit(allocator);
@@ -324,8 +327,6 @@ pub fn parseAndCanonicalizeProgramWrapped(
         .typed_cir_modules = typed_cir_modules,
         .checked_artifact = checked_artifact,
         .import_artifacts = import_artifacts,
-        .expr_idx = expr_idx,
-        .entry_def_idx = entry_def_idx,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
@@ -413,12 +414,6 @@ pub fn parseCheckModule(
     if (hosted_transform) {
         var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
         defer modified_defs.deinit(module_env.gpa);
-        var hosted_fns = try can.HostedCompiler.collectAndSortHostedFunctions(module_env);
-        defer {
-            for (hosted_fns.items) |hosted_fn| allocator.free(hosted_fn.name_text);
-            hosted_fns.deinit(module_env.gpa);
-        }
-        try can.HostedCompiler.assignHostedIndices(module_env, hosted_fns.items);
     }
     const can_elapsed = can_timer.read();
 
@@ -478,16 +473,6 @@ fn lowerParsedProgramToLir(
         module_envs[i + 2] = module.module_env;
     }
 
-    var root_requests = [_]check.CheckedArtifact.RootRequest{.{
-        .order = 0,
-        .module_idx = 0,
-        .kind = .dev_expr,
-        .source = .{ .def = resources.entry_def_idx },
-        .checked_type = resources.typed_cir_modules.module(0).defType(resources.entry_def_idx),
-        .abi = .roc,
-        .exposure = .private,
-    }};
-
     const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
     defer allocator.free(import_views);
     for (resources.import_artifacts, 0..) |*artifact, i| {
@@ -500,12 +485,33 @@ fn lowerParsedProgramToLir(
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = &root_requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
         .{
             .module_envs = module_envs,
             .target_usize = target_usize,
         },
     );
+}
+
+fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
+    return switch (source_kind) {
+        .expr => "main",
+        .module => if (inspect_wrap) "codex_test_inspect_main" else "main",
+    };
+}
+
+fn findDefByAssignedName(module_env: *const ModuleEnv, name: []const u8) ?CIR.Def.Idx {
+    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        switch (pattern) {
+            .assign => |assign| {
+                if (std.mem.eql(u8, module_env.getIdent(assign.ident), name)) return def_idx;
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn publishImportArtifacts(

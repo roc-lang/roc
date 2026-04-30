@@ -183,7 +183,7 @@ fn lowerTemplateFnType(
         &program.types,
     );
     defer lowerer.deinit();
-    return try lowerer.lowerVar(template.checked_fn_var);
+    return try lowerer.lowerVar(artifact.checked_types.varForRoot(template.checked_fn_root));
 }
 
 fn templateForRoot(
