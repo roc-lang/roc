@@ -389,7 +389,7 @@ pub const RootRequestTable = struct {
                     .expect => .test_expect,
                 },
                 .source = root.source,
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, root.checked_type),
+                .checked_type = root.checked_type,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
                     .constant, .callable_binding => .compile_time,
@@ -2458,6 +2458,7 @@ pub const ResolvedValueRefTable = struct {
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
+                checked_bodies,
             );
             const checked_type_key = try canonical_type_keys.fromVar(
                 allocator,
@@ -2530,6 +2531,7 @@ fn classifyValueRef(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
+    checked_bodies: *const CheckedBodyStore,
 ) Allocator.Error!ResolvedValueRef {
     _ = templates;
     _ = allocator;
@@ -4182,7 +4184,6 @@ pub const TopLevelValueTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        checked_types: *const CheckedTypeStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
@@ -4237,7 +4238,7 @@ pub const TopLevelValueTable = struct {
                     module.identStoreConst(),
                     source_ty,
                 );
-                const checked_fn_root = try checkedTypeIdForVar(allocator, module, checked_types, root.checked_type);
+                const checked_fn_root = root.checked_type;
                 const callable_template = try callable_eval_templates.append(
                     allocator,
                     module.moduleIndex(),
@@ -5748,7 +5749,6 @@ pub fn publishFromTypedModule(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
-        &checked_types,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
