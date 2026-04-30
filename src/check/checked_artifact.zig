@@ -978,12 +978,88 @@ pub const TopLevelProcedureBindingTable = struct {
         return ref;
     }
 
+    pub fn appendCallableEval(
+        self: *TopLevelProcedureBindingTable,
+        allocator: Allocator,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        template: CallableEvalTemplateId,
+    ) Allocator.Error!TopLevelProcedureBindingRef {
+        const old = self.bindings;
+        const next = try allocator.alloc(TopLevelProcedureBinding, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) allocator.free(old);
+        self.bindings = next;
+        const ref: TopLevelProcedureBindingRef = @enumFromInt(@as(u32, @intCast(old.len)));
+        self.bindings[old.len] = .{
+            .source_scheme = source_scheme,
+            .body = .{ .callable_eval_template = template },
+        };
+        return ref;
+    }
+
     pub fn get(self: *const TopLevelProcedureBindingTable, ref: TopLevelProcedureBindingRef) TopLevelProcedureBinding {
         return self.bindings[@intFromEnum(ref)];
     }
 
     pub fn deinit(self: *TopLevelProcedureBindingTable, allocator: Allocator) void {
         if (self.bindings.len > 0) allocator.free(self.bindings);
+        self.* = .{};
+    }
+};
+
+pub const CallableEvalTemplate = struct {
+    id: CallableEvalTemplateId,
+    module_idx: u32,
+    pattern: CIR.Pattern.Idx,
+    root: ComptimeRootId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    checked_fn_root: CheckedTypeId,
+};
+
+pub const CallableEvalTemplateTableView = struct {
+    templates: []const CallableEvalTemplate = &.{},
+};
+
+pub const CallableEvalTemplateTable = struct {
+    templates: []CallableEvalTemplate = &.{},
+
+    pub fn append(
+        self: *CallableEvalTemplateTable,
+        allocator: Allocator,
+        module_idx: u32,
+        pattern: CIR.Pattern.Idx,
+        root: ComptimeRootId,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        checked_fn_root: CheckedTypeId,
+    ) Allocator.Error!CallableEvalTemplateId {
+        const old = self.templates;
+        const next = try allocator.alloc(CallableEvalTemplate, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) allocator.free(old);
+        self.templates = next;
+
+        const id: CallableEvalTemplateId = @enumFromInt(@as(u32, @intCast(old.len)));
+        self.templates[old.len] = .{
+            .id = id,
+            .module_idx = module_idx,
+            .pattern = pattern,
+            .root = root,
+            .source_scheme = source_scheme,
+            .checked_fn_root = checked_fn_root,
+        };
+        return id;
+    }
+
+    pub fn get(self: *const CallableEvalTemplateTable, id: CallableEvalTemplateId) CallableEvalTemplate {
+        return self.templates[@intFromEnum(id)];
+    }
+
+    pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
+        return .{ .templates = self.templates };
+    }
+
+    pub fn deinit(self: *CallableEvalTemplateTable, allocator: Allocator) void {
+        if (self.templates.len > 0) allocator.free(self.templates);
         self.* = .{};
     }
 };
@@ -1233,15 +1309,6 @@ fn classifyLocalValueRef(
                     .binding = .{ .top_level = binding },
                     .source_fn_ty_template = .{},
                 } };
-            },
-            .pending_callable_root => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: callable top-level binding {d} was not sealed before publication",
-                        .{@intFromEnum(pattern)},
-                    );
-                }
-                unreachable;
             },
         }
     }
@@ -2336,7 +2403,6 @@ pub const ConstRef = struct {
 pub const TopLevelValueKind = union(enum) {
     const_ref: ConstRef,
     procedure_binding: TopLevelProcedureBindingRef,
-    pending_callable_root: ComptimeRootId,
 };
 
 pub const TopLevelValueEntry = struct {
@@ -2352,7 +2418,9 @@ pub const TopLevelValueTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
         templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
         artifact_key: CheckedModuleArtifactKey,
         compile_time_roots: *const CompileTimeRootTable,
@@ -2399,7 +2467,27 @@ pub const TopLevelValueTable = struct {
                     }
                     unreachable;
                 }
-                break :blk .{ .pending_callable_root = root_id };
+                const source_scheme = try canonical_type_keys.schemeFromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.identStoreConst(),
+                    source_ty,
+                );
+                const checked_fn_root = try checkedTypeIdForVar(allocator, module, checked_types, root.checked_type);
+                const callable_template = try callable_eval_templates.append(
+                    allocator,
+                    module.moduleIndex(),
+                    def.pattern.idx,
+                    root_id,
+                    source_scheme,
+                    checked_fn_root,
+                );
+                const binding = try procedure_bindings.appendCallableEval(
+                    allocator,
+                    source_scheme,
+                    callable_template,
+                );
+                break :blk .{ .procedure_binding = binding };
             } else .{ .const_ref = try comptime_values.reserveConst(
                 artifact_key,
                 module.moduleIndex(),
@@ -2881,7 +2969,7 @@ pub const ExportedProcedureBindingTable = struct {
             const top_level = top_level_values.lookupByPattern(def.pattern.idx) orelse continue;
             const binding_ref = switch (top_level.value) {
                 .procedure_binding => |binding| binding,
-                .const_ref, .pending_callable_root => continue,
+                .const_ref => continue,
             };
             const binding = procedure_bindings.get(binding_ref);
             const body: ImportedProcedureBindingBody = switch (binding.body) {
@@ -2977,6 +3065,7 @@ pub const CheckedModuleArtifact = struct {
     resolved_value_refs: ResolvedValueRefTable,
     checked_procedure_templates: CheckedProcedureTemplateTable,
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
+    callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_declarations: PlatformRequiredDeclarationTable,
@@ -3017,6 +3106,7 @@ pub const CheckedModuleArtifact = struct {
         self.platform_required_declarations.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
+        self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
         self.resolved_value_refs.deinit(allocator);
@@ -3115,6 +3205,19 @@ pub const CheckedModuleArtifact = struct {
             verifyPlatformRequiredValueUse(binding);
         }
 
+        for (self.callable_eval_templates.templates, 0..) |template, i| {
+            std.debug.assert(@intFromEnum(template.id) == i);
+            std.debug.assert(template.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(template.root) < self.compile_time_roots.roots.len);
+            const root = self.compile_time_roots.root(template.root);
+            std.debug.assert(root.kind == .callable_binding);
+            std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
+            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
+            _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
+                std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
+            };
+        }
+
         for (self.top_level_values.entries) |entry| {
             switch (entry.value) {
                 .const_ref => |const_ref| std.debug.assert(const_ref.module_idx == self.module_identity.module_idx),
@@ -3134,13 +3237,11 @@ pub const CheckedModuleArtifact = struct {
                                 ),
                             }
                         },
-                        .callable_eval_template => {},
+                        .callable_eval_template => |template| {
+                            std.debug.assert(@intFromEnum(template) < self.callable_eval_templates.templates.len);
+                        },
                     }
                 },
-                .pending_callable_root => std.debug.panic(
-                    "checked artifact invariant violated: published top-level value table contains pending callable root",
-                    .{},
-                ),
             }
         }
 
@@ -3205,6 +3306,7 @@ pub const ImportedModuleView = struct {
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
+    callable_eval_templates: CallableEvalTemplateTableView,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     comptime_values: *const CompileTimeValueStore,
@@ -3229,6 +3331,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
+        .callable_eval_templates = artifact.callable_eval_templates.view(),
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
         .comptime_values = &artifact.comptime_values,
@@ -3572,10 +3675,15 @@ pub fn publishFromTypedModule(
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);
 
+    var callable_eval_templates = CallableEvalTemplateTable{};
+    errdefer callable_eval_templates.deinit(allocator);
+
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
+        &checked_types,
         &checked_procedure_templates,
+        &callable_eval_templates,
         &top_level_procedure_bindings,
         artifact_key,
         &compile_time_roots,
@@ -3647,6 +3755,7 @@ pub fn publishFromTypedModule(
         .resolved_value_refs = resolved_value_refs,
         .checked_procedure_templates = checked_procedure_templates,
         .top_level_procedure_bindings = top_level_procedure_bindings,
+        .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .platform_required_declarations = platform_required_declarations,

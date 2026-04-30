@@ -16,7 +16,6 @@ const debug = @import("../debug_verify.zig");
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
-const canonical_type_keys = check.CanonicalTypeKeys;
 
 pub const MonoProcHandle = enum(u32) { _ };
 
@@ -115,12 +114,7 @@ pub fn run(
 
     for (roots) |root| {
         const template = templateForRoot(input, root) orelse continue;
-        const requested_mono_fn_ty = try canonical_type_keys.fromVar(
-            allocator,
-            &input.root.artifact.moduleEnvConst().types,
-            input.root.artifact.moduleEnvConst().getIdentStoreConst(),
-            root.checked_type,
-        );
+        const requested_mono_fn_ty = input.root.artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
         const request = MonoSpecializationRequest{
             .template = template,
             .requested_mono_fn_ty = requested_mono_fn_ty,
