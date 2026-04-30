@@ -286,6 +286,30 @@ pub const CanonicalNameStore = struct {
         return self.export_names.items[@intFromEnum(id)];
     }
 
+    pub fn moduleNameText(self: *const CanonicalNameStore, id: ModuleNameId) []const u8 {
+        return self.module_names.items[@intFromEnum(id)];
+    }
+
+    pub fn typeNameText(self: *const CanonicalNameStore, id: TypeNameId) []const u8 {
+        return self.type_names.items[@intFromEnum(id)];
+    }
+
+    pub fn methodNameText(self: *const CanonicalNameStore, id: MethodNameId) []const u8 {
+        return self.method_names.items[@intFromEnum(id)];
+    }
+
+    pub fn recordFieldLabelText(self: *const CanonicalNameStore, id: RecordFieldLabelId) []const u8 {
+        return self.record_field_labels.items[@intFromEnum(id)];
+    }
+
+    pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
+        return self.tag_labels.items[@intFromEnum(id)];
+    }
+
+    pub fn externalSymbolNameText(self: *const CanonicalNameStore, id: ExternalSymbolNameId) []const u8 {
+        return self.external_symbol_names.items[@intFromEnum(id)];
+    }
+
     fn freeTextList(self: *CanonicalNameStore, values: []const []const u8) void {
         for (values) |value| self.allocator.free(value);
     }
