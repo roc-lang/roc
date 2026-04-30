@@ -1370,6 +1370,7 @@ pub const PackageEnv = struct {
         try imported_artifacts.append(self.gpa, .{
             .module_idx = 0,
             .key = self.builtin_modules.checked_artifact.key,
+            .view = CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
         });
         env.imports.clearResolvedModules();
 
@@ -1405,6 +1406,7 @@ pub const PackageEnv = struct {
                         try imported_artifacts.append(self.gpa, .{
                             .module_idx = resolved_module_idx,
                             .key = artifact.key,
+                            .view = CheckedArtifact.importedView(artifact),
                         });
                     }
                     // External env not ready; skip (tryUnblock should have prevented this)
@@ -1429,6 +1431,7 @@ pub const PackageEnv = struct {
                 try imported_artifacts.append(self.gpa, .{
                     .module_idx = resolved_module_idx,
                     .key = artifact.key,
+                    .view = CheckedArtifact.importedView(artifact),
                 });
             }
         }

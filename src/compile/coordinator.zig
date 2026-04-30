@@ -1922,6 +1922,7 @@ pub const Coordinator = struct {
                 try imports.append(self.gpa, .{
                     .module_idx = resolved_module_idx,
                     .key = self.builtin_modules.checked_artifact.key,
+                    .view = check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
                 });
                 continue;
             }
@@ -1940,6 +1941,7 @@ pub const Coordinator = struct {
                 try imports.append(self.gpa, .{
                     .module_idx = resolved_module_idx,
                     .key = artifact.key,
+                    .view = check.CheckedArtifact.importedView(artifact),
                 });
                 continue;
             }
@@ -1956,6 +1958,7 @@ pub const Coordinator = struct {
             try imports.append(self.gpa, .{
                 .module_idx = resolved_module_idx,
                 .key = artifact.key,
+                .view = check.CheckedArtifact.importedView(artifact),
             });
         }
 

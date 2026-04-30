@@ -248,6 +248,7 @@ pub const CheckingContextIdentity = struct {
 pub const PublishImportArtifact = struct {
     module_idx: u32,
     key: CheckedModuleArtifactKey,
+    view: ImportedModuleView,
 };
 
 pub const PublishInputs = struct {
@@ -2449,7 +2450,6 @@ pub const ResolvedValueRefTable = struct {
             };
             var resolved_ref = try classifyValueRef(
                 allocator,
-                modules,
                 module,
                 expr_idx,
                 imports,
@@ -2522,7 +2522,6 @@ pub const ResolvedValueRefTable = struct {
 
 fn classifyValueRef(
     allocator: Allocator,
-    modules: *const TypedCIR.Modules,
     module: TypedCIR.Module,
     expr_idx: CIR.Expr.Idx,
     imports: []const PublishImportArtifact,
@@ -2545,7 +2544,6 @@ fn classifyValueRef(
                 checked_bodies,
             ),
         .e_lookup_external => |external| classifyImportedValueRef(
-            modules,
             module,
             external.module_idx,
             external.target_node_idx,
@@ -2671,7 +2669,6 @@ fn classifyLocalValueRef(
 }
 
 fn classifyImportedValueRef(
-    modules: *const TypedCIR.Modules,
     module: TypedCIR.Module,
     import_idx: CIR.Import.Idx,
     target_node_idx: u16,
@@ -2686,7 +2683,7 @@ fn classifyImportedValueRef(
         }
         unreachable;
     };
-    const import_key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
+    const import_artifact = publishImportForModule(imports, resolved_module_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
@@ -2696,40 +2693,49 @@ fn classifyImportedValueRef(
         unreachable;
     };
 
-    const imported_module = modules.module(resolved_module_idx);
     const target_def: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(target_node_idx)));
-    if (imported_module.nodeTag(@enumFromInt(@as(u32, @intCast(target_node_idx)))) != .def) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "checked artifact invariant violated: external value lookup target {d} in module {d} is not a definition",
-                .{ target_node_idx, resolved_module_idx },
-            );
-        }
-        unreachable;
-    }
-    const def = imported_module.def(target_def);
-    if (sourceTypeIsFunction(imported_module, imported_module.defType(target_def))) {
+    if (importedProcedureBindingForDef(import_artifact.view, target_def)) |binding| {
         return .{ .imported_proc = .{
-            .binding = .{ .imported = .{
-                .artifact = import_key,
-                .module_idx = resolved_module_idx,
-                .def = target_def,
-                .pattern = def.pattern.idx,
-            } },
+            .binding = .{ .imported = binding.binding },
             .source_fn_ty_template = .{},
         } };
     }
 
-    return .{ .imported_const = .{
-        .const_ref = .{
-            .artifact = import_key,
-            .module_idx = resolved_module_idx,
-            .pattern = def.pattern.idx,
-            .schema = @enumFromInt(@intFromEnum(target_def)),
-            .value = @enumFromInt(@intFromEnum(target_def)),
-        },
-        .requested_source_ty_template = .{},
-    } };
+    if (importedConstTemplateForDef(import_artifact.view, target_def)) |const_template| {
+        return .{ .imported_const = .{
+            .const_ref = const_template.const_ref,
+            .requested_source_ty_template = .{},
+        } };
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "checked artifact invariant violated: external lookup target {d} in module {d} was not exported by the imported checked artifact",
+            .{ target_node_idx, resolved_module_idx },
+        );
+    }
+    unreachable;
+}
+
+fn importedProcedureBindingForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
+    for (view.exported_procedure_bindings.bindings) |binding| {
+        if (binding.binding.def == def) return binding;
+    }
+    return null;
+}
+
+fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedConstTemplateView {
+    for (view.exported_const_templates.templates) |template| {
+        if (template.def == def) return template;
+    }
+    return null;
+}
+
+fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u32) ?PublishImportArtifact {
+    for (imports) |import_artifact| {
+        if (import_artifact.module_idx == module_idx) return import_artifact;
+    }
+    return null;
 }
 
 fn classifyRequiredValueRef(
@@ -4161,10 +4167,24 @@ pub const CompileTimeRootTable = struct {
 
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
+    owner: ConstOwner,
+    template: ConstTemplateId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+};
+
+pub const ConstOwner = union(enum) {
+    top_level_binding: ConstTopLevelOwner,
+    promoted_capture: PromotedCaptureId,
+};
+
+pub const ConstTopLevelOwner = struct {
     module_idx: u32,
     pattern: CIR.Pattern.Idx,
-    schema: ComptimeSchemaId,
-    value: ComptimeValueId,
+};
+
+pub const PromotedCaptureId = struct {
+    promoted_proc: PromotedProcedureRef,
+    capture_index: u32,
 };
 
 pub const TopLevelValueKind = union(enum) {
@@ -4175,6 +4195,7 @@ pub const TopLevelValueKind = union(enum) {
 pub const TopLevelValueEntry = struct {
     module_idx: u32,
     pattern: CIR.Pattern.Idx,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
     value: TopLevelValueKind,
 };
 
@@ -4187,9 +4208,9 @@ pub const TopLevelValueTable = struct {
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
+        const_templates: *ConstTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
         compile_time_roots: *const CompileTimeRootTable,
-        comptime_values: *CompileTimeValueStore,
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
@@ -4197,14 +4218,14 @@ pub const TopLevelValueTable = struct {
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
             const source_ty = module.defType(def_idx);
+            const source_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                source_ty,
+            );
             const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
                 const template = templates.lookupByDef(def_idx) orelse unreachable;
-                const source_scheme = try canonical_type_keys.schemeFromVar(
-                    allocator,
-                    module.typeStoreConst(),
-                    module.identStoreConst(),
-                    source_ty,
-                );
                 const binding = try procedure_bindings.appendDirect(
                     allocator,
                     source_scheme,
@@ -4232,12 +4253,6 @@ pub const TopLevelValueTable = struct {
                     }
                     unreachable;
                 }
-                const source_scheme = try canonical_type_keys.schemeFromVar(
-                    allocator,
-                    module.typeStoreConst(),
-                    module.identStoreConst(),
-                    source_ty,
-                );
                 const checked_fn_root = root.checked_type;
                 const callable_template = try callable_eval_templates.append(
                     allocator,
@@ -4253,15 +4268,18 @@ pub const TopLevelValueTable = struct {
                     callable_template,
                 );
                 break :blk .{ .procedure_binding = binding };
-            } else .{ .const_ref = try comptime_values.reserveConst(
+            } else .{ .const_ref = try const_templates.reserveTopLevel(
+                allocator,
                 artifact_key,
                 module.moduleIndex(),
                 def.pattern.idx,
+                source_scheme,
             ) };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .pattern = def.pattern.idx,
+                .source_scheme = source_scheme,
                 .value = value,
             });
         }
@@ -4369,24 +4387,6 @@ pub const CompileTimeValueStore = struct {
             .allocator = allocator,
             .schemas = .empty,
             .values = .empty,
-        };
-    }
-
-    pub fn reserveConst(
-        self: *CompileTimeValueStore,
-        artifact_key: CheckedModuleArtifactKey,
-        module_idx: u32,
-        pattern: CIR.Pattern.Idx,
-    ) Allocator.Error!ConstRef {
-        const schema = try self.addSchema(.pending);
-        const value = try self.addValue(.pending);
-        try self.bind(pattern, schema, value);
-        return .{
-            .artifact = artifact_key,
-            .module_idx = module_idx,
-            .pattern = pattern,
-            .schema = schema,
-            .value = value,
         };
     }
 
@@ -5008,7 +5008,7 @@ fn buildProcedureBindingClosure(
     };
 }
 
-pub const ConstTemplate = struct {
+pub const ConstEvalTemplate = struct {
     body: CheckedConstBodyRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     resolved_value_refs: ResolvedValueRefTableRef = .{},
@@ -5017,7 +5017,134 @@ pub const ConstTemplate = struct {
     dependency_template: ComptimeDependencySummaryTemplateId,
 };
 
+pub const ConstValueGraphTemplate = struct {
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+};
+
+pub const ConstTemplateState = union(enum) {
+    reserved,
+    eval_template: ConstEvalTemplate,
+    value_graph_template: ConstValueGraphTemplate,
+};
+
+pub const ConstTemplate = struct {
+    id: ConstTemplateId,
+    owner: ConstOwner,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    state: ConstTemplateState,
+};
+
+pub const ConstTemplateTable = struct {
+    templates: std.ArrayList(ConstTemplate) = .empty,
+
+    pub fn reserveTopLevel(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        pattern: CIR.Pattern.Idx,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+    ) Allocator.Error!ConstRef {
+        const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+        const owner: ConstOwner = .{ .top_level_binding = .{
+            .module_idx = module_idx,
+            .pattern = pattern,
+        } };
+        try self.templates.append(allocator, .{
+            .id = id,
+            .owner = owner,
+            .source_scheme = source_scheme,
+            .state = .reserved,
+        });
+        return .{
+            .artifact = artifact_key,
+            .owner = owner,
+            .template = id,
+            .source_scheme = source_scheme,
+        };
+    }
+
+    pub fn fillEval(
+        self: *ConstTemplateTable,
+        ref: ConstRef,
+        template: ConstEvalTemplate,
+    ) void {
+        const record = self.recordForRef(ref);
+        if (!std.mem.eql(u8, &record.source_scheme.bytes, &template.source_scheme.bytes)) {
+            checkedArtifactInvariant("constant eval template source scheme does not match reserved ConstRef", .{});
+        }
+        switch (record.state) {
+            .reserved => record.state = .{ .eval_template = template },
+            .eval_template, .value_graph_template => checkedArtifactInvariant("constant template was filled twice", .{}),
+        }
+    }
+
+    pub fn fillValueGraph(
+        self: *ConstTemplateTable,
+        ref: ConstRef,
+        template: ConstValueGraphTemplate,
+    ) void {
+        const record = self.recordForRef(ref);
+        switch (record.state) {
+            .reserved => record.state = .{ .value_graph_template = template },
+            .eval_template, .value_graph_template => checkedArtifactInvariant("constant template was filled twice", .{}),
+        }
+    }
+
+    pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
+        const idx = @intFromEnum(ref.template);
+        if (idx >= self.templates.items.len) {
+            checkedArtifactInvariant("ConstRef template id is out of range", .{});
+        }
+        const template = self.templates.items[idx];
+        if (!constOwnerEql(template.owner, ref.owner) or
+            !std.mem.eql(u8, &template.source_scheme.bytes, &ref.source_scheme.bytes))
+        {
+            checkedArtifactInvariant("ConstRef does not match constant template row", .{});
+        }
+        return template;
+    }
+
+    pub fn verifySealed(self: *const ConstTemplateTable) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.templates.items, 0..) |template, i| {
+            std.debug.assert(@intFromEnum(template.id) == i);
+            switch (template.state) {
+                .eval_template, .value_graph_template => {},
+                .reserved => std.debug.panic(
+                    "checked artifact invariant violated: constant template {d} was not sealed before publication",
+                    .{i},
+                ),
+            }
+        }
+    }
+
+    fn recordForRef(self: *ConstTemplateTable, ref: ConstRef) *ConstTemplate {
+        const idx = @intFromEnum(ref.template);
+        if (idx >= self.templates.items.len) {
+            checkedArtifactInvariant("ConstRef template id is out of range", .{});
+        }
+        const record = &self.templates.items[idx];
+        if (!constOwnerEql(record.owner, ref.owner) or
+            !std.mem.eql(u8, &record.source_scheme.bytes, &ref.source_scheme.bytes))
+        {
+            checkedArtifactInvariant("ConstRef does not match constant template row", .{});
+        }
+        return record;
+    }
+
+    pub fn deinit(self: *ConstTemplateTable, allocator: Allocator) void {
+        self.templates.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 pub const ImportedConstTemplateView = struct {
+    module_idx: u32,
+    def: CIR.Def.Idx,
+    pattern: CIR.Pattern.Idx,
     const_ref: ConstRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     template: ConstTemplate,
@@ -5031,7 +5158,39 @@ pub const ExportedConstTemplateView = struct {
 pub const ExportedConstTemplateTable = struct {
     templates: []ImportedConstTemplateView = &.{},
 
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        top_level_values: *const TopLevelValueTable,
+        const_templates: *const ConstTemplateTable,
+    ) Allocator.Error!ExportedConstTemplateTable {
+        var templates = std.ArrayList(ImportedConstTemplateView).empty;
+        errdefer templates.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+            const def = module.def(def_idx);
+            const top_level = top_level_values.lookupByPattern(def.pattern.idx) orelse continue;
+            const const_ref = switch (top_level.value) {
+                .const_ref => |ref| ref,
+                .procedure_binding => continue,
+            };
+            const template = const_templates.get(const_ref);
+            try templates.append(allocator, .{
+                .module_idx = module.moduleIndex(),
+                .def = def_idx,
+                .pattern = def.pattern.idx,
+                .const_ref = const_ref,
+                .source_scheme = top_level.source_scheme,
+                .template = template,
+            });
+        }
+
+        return .{ .templates = try templates.toOwnedSlice(allocator) };
+    }
+
     pub fn deinit(self: *ExportedConstTemplateTable, allocator: Allocator) void {
+        for (self.templates) |*template| deinitImportedTemplateClosure(allocator, &template.template_closure);
         allocator.free(self.templates);
         self.* = .{};
     }
@@ -5619,6 +5778,25 @@ fn hashPromotedProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: PromotedP
     hashProcedureValueRef(hasher, ref.proc);
 }
 
+fn hashPromotedCaptureId(hasher: *std.crypto.hash.sha2.Sha256, capture: PromotedCaptureId) void {
+    hashPromotedProcedureRef(hasher, capture.promoted_proc);
+    hashU32(hasher, capture.capture_index);
+}
+
+fn hashConstOwner(hasher: *std.crypto.hash.sha2.Sha256, owner: ConstOwner) void {
+    switch (owner) {
+        .top_level_binding => |top_level| {
+            hasher.update(&[_]u8{0});
+            hashU32(hasher, top_level.module_idx);
+            hashEnumValue(hasher, top_level.pattern);
+        },
+        .promoted_capture => |capture| {
+            hasher.update(&[_]u8{1});
+            hashPromotedCaptureId(hasher, capture);
+        },
+    }
+}
+
 fn hashProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ProcedureBindingRef) void {
     switch (ref) {
         .top_level => |binding| {
@@ -5646,10 +5824,9 @@ fn hashProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ProcedureB
 
 fn hashConstRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ConstRef) void {
     hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashU32(hasher, ref.module_idx);
-    hashEnumValue(hasher, ref.pattern);
-    hashEnumValue(hasher, ref.schema);
-    hashEnumValue(hasher, ref.value);
+    hashConstOwner(hasher, ref.owner);
+    hashEnumValue(hasher, ref.template);
+    hashCanonicalTypeSchemeKey(hasher, ref.source_scheme);
 }
 
 fn hashConstInstantiationKey(key: ConstInstantiationKey) [32]u8 {
@@ -5695,10 +5872,9 @@ fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey)
 
 fn constRefEql(a: ConstRef, b: ConstRef) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
-        a.module_idx == b.module_idx and
-        a.pattern == b.pattern and
-        a.schema == b.schema and
-        a.value == b.value;
+        constOwnerEql(a.owner, b.owner) and
+        a.template == b.template and
+        std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
 }
 
 fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
@@ -5731,6 +5907,28 @@ fn requiredAppProcedureRefEql(a: RequiredAppProcedureRef, b: RequiredAppProcedur
 
 fn promotedProcedureRefEql(a: PromotedProcedureRef, b: PromotedProcedureRef) bool {
     return a.module_idx == b.module_idx and canonical.procedureValueRefEql(a.proc, b.proc);
+}
+
+fn promotedCaptureIdEql(a: PromotedCaptureId, b: PromotedCaptureId) bool {
+    return promotedProcedureRefEql(a.promoted_proc, b.promoted_proc) and a.capture_index == b.capture_index;
+}
+
+fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level_binding => |left| blk: {
+            const right = b.top_level_binding;
+            break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
+        },
+        .promoted_capture => |left| promotedCaptureIdEql(left, b.promoted_capture),
+    };
+}
+
+fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
+    return switch (ref.owner) {
+        .top_level_binding => |owner| owner,
+        .promoted_capture => null,
+    };
 }
 
 fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
@@ -5802,6 +6000,7 @@ pub const CheckedModuleArtifact = struct {
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
     promoted_procedures: PromotedProcedureTable,
+    const_templates: ConstTemplateTable,
     comptime_values: CompileTimeValueStore,
     const_instances: ConstInstantiationStore,
     callable_binding_instances: CallableBindingInstantiationStore,
@@ -5827,6 +6026,7 @@ pub const CheckedModuleArtifact = struct {
         self.semantic_instantiation_procedures.deinit(allocator);
         self.callable_binding_instances.deinit(allocator);
         self.const_instances.deinit(allocator);
+        self.const_templates.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
@@ -6013,7 +6213,14 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.top_level_values.entries) |entry| {
             switch (entry.value) {
-                .const_ref => |const_ref| std.debug.assert(const_ref.module_idx == self.module_identity.module_idx),
+                .const_ref => |const_ref| {
+                    const owner = constRefTopLevelOwner(const_ref) orelse {
+                        std.debug.panic("checked artifact invariant violated: top-level value table referenced a non-top-level ConstRef", .{});
+                    };
+                    std.debug.assert(owner.module_idx == self.module_identity.module_idx);
+                    std.debug.assert(owner.pattern == entry.pattern);
+                    std.debug.assert(std.mem.eql(u8, &const_ref.source_scheme.bytes, &entry.source_scheme.bytes));
+                },
                 .procedure_binding => |binding_ref| {
                     const binding = self.top_level_procedure_bindings.get(binding_ref);
                     switch (binding.body) {
@@ -6038,6 +6245,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
+        self.const_templates.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
         self.callable_binding_instances.verifySealed();
@@ -6070,7 +6278,10 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
                 &const_use.const_ref.artifact.bytes,
                 &binding.app_value.artifact.bytes,
             ));
-            std.debug.assert(const_use.const_ref.pattern == binding.app_value.pattern);
+            const owner = constRefTopLevelOwner(const_use.const_ref) orelse {
+                std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
+            };
+            std.debug.assert(owner.pattern == binding.app_value.pattern);
         },
         .procedure_value => |proc_use| switch (proc_use.binding) {
             .platform_required => |required| {
@@ -6105,6 +6316,7 @@ pub const ImportedModuleView = struct {
     exported_const_templates: ExportedConstTemplateView,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
+    const_templates: *const ConstTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     comptime_values: *const CompileTimeValueStore,
@@ -6132,6 +6344,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_const_templates = artifact.exported_const_templates.view(),
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
+        .const_templates = &artifact.const_templates,
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
         .comptime_values = &artifact.comptime_values,
@@ -6488,15 +6701,18 @@ pub fn publishFromTypedModule(
     var callable_eval_templates = CallableEvalTemplateTable{};
     errdefer callable_eval_templates.deinit(allocator);
 
+    var const_templates = ConstTemplateTable{};
+    errdefer const_templates.deinit(allocator);
+
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
+        &const_templates,
         artifact_key,
         &compile_time_roots,
-        &comptime_values,
     );
     errdefer top_level_values.deinit(allocator);
     try comptime_values.sealBindings();
@@ -6550,7 +6766,12 @@ pub fn publishFromTypedModule(
     );
     errdefer exported_procedure_bindings.deinit(allocator);
 
-    var exported_const_templates = ExportedConstTemplateTable{};
+    var exported_const_templates = try ExportedConstTemplateTable.fromModule(
+        allocator,
+        module,
+        &top_level_values,
+        &const_templates,
+    );
     errdefer exported_const_templates.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
@@ -6585,6 +6806,7 @@ pub fn publishFromTypedModule(
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
+        .const_templates = const_templates,
         .comptime_values = comptime_values,
         .const_instances = const_instances,
         .callable_binding_instances = callable_binding_instances,
@@ -6630,6 +6852,7 @@ test "artifact views are read-only projections" {
         .compile_time_roots = .{},
         .top_level_values = .{},
         .promoted_procedures = .{},
+        .const_templates = .{},
         .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
         .const_instances = ConstInstantiationStore.init(.{}),
         .callable_binding_instances = CallableBindingInstantiationStore.init(.{}),
@@ -6639,6 +6862,7 @@ test "artifact views are read-only projections" {
         artifact.semantic_instantiation_procedures.deinit(std.testing.allocator);
         artifact.callable_binding_instances.deinit(std.testing.allocator);
         artifact.const_instances.deinit(std.testing.allocator);
+        artifact.const_templates.deinit(std.testing.allocator);
         artifact.comptime_values.deinit(std.testing.allocator);
         artifact.canonical_names.deinit();
     }

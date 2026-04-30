@@ -546,6 +546,7 @@ fn publishImportArtifacts(
     published_keys.append(allocator, .{
         .module_idx = 1,
         .key = builtin_artifact.key,
+        .view = check.CheckedArtifact.importedView(&builtin_artifact),
     }) catch |err| {
         builtin_artifact.deinit(allocator);
         return err;
@@ -587,6 +588,7 @@ fn publishImportArtifacts(
             published_keys.append(allocator, .{
                 .module_idx = module_idx,
                 .key = artifact.key,
+                .view = check.CheckedArtifact.importedView(&artifact),
             }) catch |err| {
                 artifact.deinit(allocator);
                 return err;
@@ -642,6 +644,7 @@ fn publishImportKeys(
         imports[i] = .{
             .module_idx = artifact.module_identity.module_idx,
             .key = artifact.key,
+            .view = check.CheckedArtifact.importedView(&artifacts[i]),
         };
     }
     return imports;
