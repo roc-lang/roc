@@ -3905,7 +3905,7 @@ const PatternTest = union(enum) {
     int_literal: IntPatternLiteralId,
     float_literal: FloatPatternLiteralId,
     decimal_literal: DecimalPatternLiteralId,
-    str_literal: StringLiteralId,
+    str_literal: ProgramLiteralId,
     list_len_exact: u32,
     list_len_at_least: u32,
     guard: GuardPlanId,
@@ -3924,6 +3924,12 @@ head/tail/rest probes, bool/byte union tests, numeric literals, string
 literals, and guards. Pattern tests are keyed by finalized row and literal ids,
 not by names, source text, physical layout indexes, or syntax-derived singleton
 tag shapes.
+
+String literal tests use `ProgramLiteralId` from the lowered program literal
+pool. The decision-plan builder must intern checked string-pattern bytes into
+that pool while lowering the owning checked artifact. It must not compare raw
+`base.StringLiteral.Idx` values, raw `CheckedStringLiteralId` values, or string
+text from a `ModuleEnv`.
 
 Decision construction follows these rules:
 
@@ -4242,7 +4248,7 @@ IR lowering may consume:
 - executable MIR layouts
 - executable MIR symbols
 - executable MIR root defs
-- strings
+- the executable MIR program literal pool
 
 IR lowering must not import:
 
@@ -4261,6 +4267,11 @@ call_low_level
 ```
 
 IR must not gain method or dispatch variants.
+
+IR literal, crash, and string-pattern payloads must use `ProgramLiteralId` into
+the IR program literal pool. IR must not store `base.StringLiteral.Idx`,
+`CheckedStringLiteralId`, raw string bytes in each literal node, or a pointer to
+any checked artifact string table.
 
 Executable MIR `match` and `callable_match` lower to IR branch/switch control
 flow.
@@ -4369,6 +4380,12 @@ Release builds use `unreachable` for equivalent compiler-invariant paths.
 LIR consumes IR.
 
 Reference counting is inserted before backends, as explicit LIR statements.
+
+IR-to-LIR lowering interns every used `ProgramLiteralId` into `LirStore.strings`
+and rewrites LIR literal and crash payloads to the resulting
+`base.StringLiteral.Idx`. This is the only post-check transition that may
+produce `base.StringLiteral.Idx` for lowered program literals. Backends and the
+interpreter read literal bytes only from `LirStore.getString`.
 
 Backends consume LIR only. They must not import MIR, IR builder internals,
 checked CIR, method registries, or reference-counting analysis.
@@ -7051,6 +7068,8 @@ const CheckedBodyId = enum(u32) { _ };
 const CheckedExprId = enum(u32) { _ };
 const CheckedPatternId = enum(u32) { _ };
 const CheckedStatementId = enum(u32) { _ };
+const CheckedStringLiteralId = enum(u32) { _ };
+const StringBytes = []const u8;
 
 const CheckedTypeStore = struct {
     nodes: Store(CheckedTypeNode),
@@ -7232,6 +7251,7 @@ const CheckedBodyStore = struct {
     exprs: Store(CheckedExpr),
     patterns: Store(CheckedPattern),
     statements: Store(CheckedStatement),
+    string_literals: Span(StringBytes),
 };
 
 const CheckedBody = struct {
@@ -7262,6 +7282,15 @@ raw `Ident.Idx`, source-name lookup handles, or pointers into another module's
 checked store as semantic payload. Source regions may be retained for
 diagnostics and debugging, but source regions are never lookup keys for lowering.
 
+Checked body string literal ids are also artifact-local payload ids, not final
+program ids. `CheckedStringLiteralId` values index
+`CheckedBodyStore.string_literals` in the checked artifact that owns the
+checked body. They may be used only inside checked artifacts and inside the
+artifact-local lowering
+context that is currently reading that checked body. They must never be exported
+as MIR, IR, LIR, cache-key, backend, or interpreter payloads without first being
+resolved to bytes from the owning artifact.
+
 Local templates inside the root artifact may be built by copying from checked
 CIR into `CheckedBodyStore` and `CheckedTypeStore` during checking
 finalization. Imported templates must be consumed from the exporter artifact's
@@ -7271,6 +7300,83 @@ read-only checked body/type stores through exported views and
 solution to imported generic specialization, because it would make importers
 reconstruct semantic payload from exporter-local state instead of consuming the
 published artifact data.
+
+#### Artifact-Owned Strings And The Program Literal Pool
+
+String literals have three distinct lifetimes, and the implementation must not
+collapse them:
+
+1. Source/parser lifetime: `base.StringLiteral.Idx` is valid only in the
+   `ModuleEnv` or `CommonEnv` string store that created it.
+2. Checked-artifact lifetime: `CheckedStringLiteralId` is valid only in one
+   `CheckedModuleArtifact` and indexes that artifact's checked string bytes.
+3. Lowered-program lifetime: `ProgramLiteralId` is valid only in one lowered
+   MIR/IR program and indexes the program-owned literal pool carried by that
+   program.
+
+The final architecture must introduce an explicit lowered-program literal pool:
+
+```zig
+const ProgramLiteralId = enum(u32) { _ };
+
+const ProgramLiteral = struct {
+    bytes: []const u8,
+};
+
+const ProgramLiteralPool = struct {
+    literals: Store(ProgramLiteral),
+    by_bytes: Map(BytesHash, ProgramLiteralId),
+};
+```
+
+The exact storage representation may differ, but the ownership boundary must
+not. The pool owns or references bytes that remain valid for the whole lowered
+program. It deduplicates by exact byte contents within the lowered program and
+returns stable dense `ProgramLiteralId` values. It must not use
+`base.StringLiteral.Idx`, `CheckedStringLiteralId`, source regions, expression
+ids, artifact-local dense ids, or `ModuleEnv` pointers as cross-stage literal
+identity.
+
+Mono MIR creates the initial `ProgramLiteralPool`. When mono MIR lowers a
+checked expression, checked pattern, or checked statement that contains a
+`CheckedStringLiteralId`, it must resolve that id through the checked body store
+of the artifact that owns the currently lowered template, copy or retain the
+literal bytes in the program literal pool, and store only `ProgramLiteralId` in
+mono MIR. Imported template lowering therefore reads imported literal bytes from
+the imported `CheckedBodyStore.string_literals` view. It must not read the
+exporter's `ModuleEnv`, the importer's `ModuleEnv`, or any `base.StringLiteral`
+store.
+
+The program literal pool covers every source literal byte payload that survives
+checking:
+
+- string expression literals and string interpolation segments
+- bytes literal payloads
+- string literal patterns in source `match`
+- user-written `crash` expression and statement messages
+- compile-time constant reification of `Str` and byte-list values into runtime
+  values
+- debug verifier payloads that need to validate lowered source literal bytes
+
+`runtime_error` is not a source literal. It carries no `ProgramLiteralId`.
+Backends may synthesize backend-owned diagnostic text for runtime errors, but
+that text is not source-literal payload and must not be represented as a checked
+artifact literal or MIR program literal.
+
+Row-finalized mono MIR, lifted MIR, lambda-solved MIR, executable MIR, and IR
+must move the same literal pool forward with the program and must store
+`ProgramLiteralId` for all literal-bearing nodes. They may copy, compact, or
+remap the pool only as an explicit whole-program transform that rewrites every
+referencing `ProgramLiteralId` in the same type-state transition. They must not
+re-resolve checked string ids, inspect `ModuleEnv`, or carry artifact-local
+literal ids after mono MIR lowering.
+
+IR-to-LIR lowering is the only place where program literal ids become
+`base.StringLiteral.Idx` again. It resolves `ProgramLiteralId` to bytes from the
+IR program literal pool, interns those bytes into `LirStore.strings`, and stores
+the resulting `base.StringLiteral.Idx` in LIR. Backends and the interpreter
+continue to use only `LirStore.getString`; they must never reach back into MIR,
+IR, checked artifacts, or source module string stores.
 
 #### Imported Canonical Name Remapping
 
@@ -9764,6 +9870,12 @@ Mono MIR:
 - assigns monomorphic function types to expressions
 - preserves Roc fixed arity on every function type and call
 - consumes checked `ResolvedValueRef` records for every value-like reference
+- resolves artifact-local `CheckedStringLiteralId` values to bytes while
+  lowering the owning checked artifact and interns those bytes into the
+  program-owned `ProgramLiteralPool`
+- stores `ProgramLiteralId`, never `base.StringLiteral.Idx` or bare
+  `CheckedStringLiteralId`, for string literals, string interpolation segments,
+  bytes literal payloads, string pattern tests, and user-written crash messages
 - lowers top-level/imported constants only as `const_ref`
 - lowers top-level/imported/hosted/platform-required/promoted procedure calls only as
   `call_proc`
@@ -9785,6 +9897,8 @@ Row-finalized mono MIR:
 
 - interns logical record and tag-union row shapes once per unique shape
 - rewrites record and tag operations to finalized row IDs
+- preserves the program literal pool and rewrites no literal id unless it is
+  doing an explicit whole-program literal-pool compaction/remap
 - preserves the mono type for every expression, field edge, and payload edge
 - deletes name-only row lookup before lifting
 - exports no API for later stages to compute logical row indexes from names
@@ -9792,6 +9906,8 @@ Row-finalized mono MIR:
 Lifted MIR:
 
 - lifts local functions and closures
+- preserves the program literal pool without re-reading checked artifacts or
+  source module string stores
 - computes captures only over local runtime references and local procedure refs
 - computes recursive local-function captures by least fixed point
 - assigns `CaptureSlot.index` values and stores captures in lifted procedure
@@ -9811,6 +9927,8 @@ Lifted MIR:
 Lambda-solved MIR:
 
 - determines exact callable sets
+- preserves the program literal pool and stores `ProgramLiteralId` on every
+  literal-bearing node
 - associates capture types with callable members
 - propagates erasure requirements
 - reserves procedure instances, public value roots, value stores, and solve
@@ -9845,6 +9963,9 @@ Lambda-solved MIR:
 Executable MIR:
 
 - builds capture records
+- preserves the program literal pool and emits executable string literal,
+  string-pattern, bytes-literal, and crash-message references only as
+  `ProgramLiteralId`
 - emits callable-set values for non-erased callable values
 - synthesizes erased adapters when a finite callable-set value crosses an
   erased `Box(T)` boundary
@@ -9919,7 +10040,21 @@ post-check hosted-index mutation in checked CIR
 post-check platform-required lookup-target mutation
 imported representation recovery from private bodies or opaque backing syntax
 imported compile-time constant re-evaluation after artifact publication
+raw base.StringLiteral.Idx in MIR or IR AST nodes
+bare CheckedStringLiteralId outside checked artifact bodies and artifact-local
+  mono lowering context
+raw ModuleEnv/CommonEnv string-store lookup while lowering imported checked
+  templates
 ```
+
+Allowed remaining locations for `base.StringLiteral.Idx` are source/parser
+storage, checked-artifact construction internals that are copying from source
+stores, and final LIR storage after IR-to-LIR lowering has interned program
+literal bytes into `LirStore`. Allowed remaining locations for
+`CheckedStringLiteralId` are checked artifact records, checked-artifact
+verification, and the mono lowering code path that resolves the current owning
+artifact's checked string bytes into `ProgramLiteralPool`. All MIR type-states
+and IR must expose only `ProgramLiteralId` for lowered source literal payloads.
 
 Delete exported dispatch variants after checked CIR:
 
@@ -10230,10 +10365,15 @@ The exact Zig names may differ, but the lifecycle must not:
    store. The requested source function type payload is cloned into that same
    source graph and unified with the cloned template root before mono type
    lowering.
-5. Static dispatch is resolved inside that specialization-local lowering.
-6. Any new `call_proc` or top-level `proc_value` dependencies enqueue additional
+5. Every checked string literal, bytes literal, string-pattern literal, and
+   user-written crash message reached while lowering that checked body is
+   resolved from the owning artifact's `CheckedBodyStore.string_literals` and
+   interned into the specialization program's `ProgramLiteralPool`. The lowered
+   MIR body stores only `ProgramLiteralId`.
+6. Static dispatch is resolved inside that specialization-local lowering.
+7. Any new `call_proc` or top-level `proc_value` dependencies enqueue additional
    concrete mono specializations.
-7. The queue drains before row-finalized mono MIR consumes the output.
+8. The queue drains before row-finalized mono MIR consumes the output.
 
 Delete `lowerAllTopLevelFunctions` and every equivalent eager lowering path
 before static dispatch nodes are removed. There must be no code path whose
@@ -10272,6 +10412,10 @@ Commit when mono verification and deletion audits prove:
 - recursive or mutually recursive specializations reuse reserved procedure values
   and handles
 - every exported mono procedure was produced by the specialization queue
+- every literal-bearing mono MIR node uses `ProgramLiteralId`; no mono MIR node
+  uses raw `base.StringLiteral.Idx` or bare `CheckedStringLiteralId`
+- imported generic specialization tests prove that string literals are read from
+  the imported checked artifact's literal table, not from any `ModuleEnv`
 - static dispatch target lookup runs only while lowering one concrete
   `MonoSpecializationKey`
 - no exported mono MIR `call` node uses a bare `var_` target to stand in for a
@@ -11464,6 +11608,9 @@ Replacement expectations:
   lowering, packed erased functions, bridges, and no source-expression side
   tables
 - IR/LIR contain direct/erased calls only
+- mono MIR through IR carry source literal payloads as `ProgramLiteralId`, not
+  raw `base.StringLiteral.Idx`, raw `CheckedStringLiteralId`, per-node byte
+  slices, or artifact string-table pointers
 
 ## Required Structural Tests
 
@@ -11507,6 +11654,11 @@ Checking finalization and compile-time constants:
 - artifact verification rejects any exported/imported `CanonicalTypeKey` or
   `CanonicalTypeSchemeKey` without a checked type payload, and any checked body
   node without a checked type id
+- artifact verification rejects any checked body string literal id outside the
+  owning checked artifact's `CheckedBodyStore.string_literals` table
+- checked artifact tests prove that source `base.StringLiteral.Idx` values are
+  copied to artifact-owned checked string bytes during publication and are not
+  retained as exported checked body payload
 - artifact views exposed to importers and lowering are read-only
 - a cache hit does not patch module identity after deserialization
 - hosted procedure ordering is stored in `HostedProcTable`, not by mutating
@@ -11529,6 +11681,10 @@ Checking finalization and compile-time constants:
   syntax, exporter `ModuleEnv`, raw checked expression ids, or exporter checker
   type stores to rebuild representation capability data, checked body payloads,
   or checked type payloads
+- importing modules do not inspect exporter `ModuleEnv` or exporter
+  `base.StringLiteral.Store` to lower imported string literals; they consume the
+  imported checked artifact's checked string bytes and intern them into the
+  lowered program literal pool
 - checked artifact verification rejects any value-like reference that lacks a
   `ResolvedValueRefRecord`
 - checked artifact verification distinguishes local shadowing from top-level or
@@ -11618,10 +11774,18 @@ Mono MIR:
   empty-capture `proc_value`
 - local bindings that shadow top-level or imported names still lower as local
   value refs and may be captured later
+- string literals, string interpolation segments, bytes literal payloads, string
+  pattern tests, and user-written crash messages are interned into the
+  program-owned literal pool and represented in mono MIR as `ProgramLiteralId`
+- imported checked procedure templates with literal payloads read bytes from the
+  imported checked artifact's string table, never from exporter or importer
+  `ModuleEnv`
 
 Row-finalized mono MIR:
 
 - every row-finalized mono MIR expression still has a mono type
+- every literal-bearing node still references the same program literal pool, or
+  an explicitly remapped pool whose remap rewrote all references in the same pass
 - no name-only record construction, access, update, or destructuring node exists
 - no name-only tag construction, pattern, or payload projection node exists
 - every record operation carries `RecordShapeId` and `RecordFieldId` values
@@ -11649,6 +11813,8 @@ Row-finalized mono MIR:
 Lifted MIR:
 
 - every lifted procedure target exists
+- lifted MIR keeps literal ids as `ProgramLiteralId` and does not re-resolve
+  checked artifact string ids
 - every procedure capture is an explicit `CaptureSlot`
 - every captured value reference is an explicit `capture_ref`
 - recursive local-function groups compute captures to a fixed point
@@ -11675,6 +11841,8 @@ Lifted MIR:
 Lambda-solved MIR:
 
 - callable sets are explicit
+- lambda-solved MIR keeps literal ids as `ProgramLiteralId` and does not attach
+  literal payloads through expression-indexed maps
 - captures are attached to callable members
 - callable-set members are canonical ordered finite maps
 - repeated callable member instances have identical capture slots inside the same
@@ -11801,6 +11969,12 @@ Lambda-solved MIR:
 Executable MIR:
 
 - every direct call target exists
+- executable MIR owns or forwards a complete program literal pool and every
+  literal-bearing executable node references it with `ProgramLiteralId`
+- executable MIR verifier rejects `base.StringLiteral.Idx`,
+  `CheckedStringLiteralId`, raw byte slices, or checked-artifact string table
+  pointers in executable literal, bytes, source-match string test, or crash
+  payload fields
 - every `call_proc` lowers through `CallProcExecutablePlan` before becoming
   `call_direct`
 - direct call arg/result types match signatures
@@ -11940,6 +12114,13 @@ IR/LIR:
 
 - public checked-artifact-to-LIR lowering APIs return only resource errors such
   as `Allocator.Error`
+- IR owns or forwards the program literal pool from executable MIR and represents
+  literal and crash payloads with `ProgramLiteralId`
+- IR-to-LIR lowering interns each used `ProgramLiteralId` into `LirStore.strings`
+  exactly once per distinct literal byte payload and rewrites LIR payloads to
+  `base.StringLiteral.Idx`
+- no MIR or IR AST type contains `base.StringLiteral.Idx`, and no LIR/backend
+  code reads strings from checked artifacts or source module string stores
 - public semantic lowering APIs do not return `NoRootProc`, `NoRootDefinition`,
   `MissingRoot`, `MethodNotFound`, `UnsupportedSourceType`,
   `UnsupportedLayout`, `SchemaLayoutMismatch`, or `MissingInterfaceCapability`
@@ -11964,6 +12145,41 @@ IR/LIR:
   analysis
 
 ## Required Behavioral Tests
+
+Cross-artifact literals:
+
+- imported string constant:
+
+  ```roc
+  # A.roc
+  foo = "from A"
+
+  # Main.roc
+  import A
+  main = A.foo
+  ```
+
+  must lower by reading `"from A"` from `A`'s checked artifact string table,
+  interning it into the lowered program literal pool, and finally interning it
+  into `LirStore`; no stage may read `A`'s `ModuleEnv` string store after
+  artifact publication.
+- imported generic function specialization containing a string literal must
+  produce the same runtime bytes at every concrete instantiation, and the mono
+  specialization must not carry raw `base.StringLiteral.Idx` from the exporter.
+- imported function containing `crash "boom from A"` must report the imported
+  crash message through LIR/backends by way of the lowered program literal pool
+  and `LirStore`, not by preserving a checked artifact string id.
+- source `match` with string literal patterns must build `PatternTest.str_literal`
+  from `ProgramLiteralId` values and must compare by literal bytes after lowering,
+  not by source string-store index.
+- compile-time constants containing strings, byte literals, lists of strings,
+  records with strings, tags with strings, and callable-containing constants with
+  string captures must reify through the program literal pool when materialized
+  as runtime values.
+- two modules with different source string-store indexes for the same literal
+  bytes must lower to one program literal id after deduplication within one
+  lowered program; two different byte payloads must never alias even if their
+  artifact-local ids are numerically equal.
 
 Static dispatch:
 
@@ -12726,6 +12942,9 @@ The cutover is complete only when all of these are true:
   procedure template tables, compile-time value stores, constant instantiation
   stores, callable binding instantiation stores, and semantic-instantiation
   procedure tables
+- checked artifact string literals are artifact-owned checked bytes addressed by
+  `CheckedStringLiteralId`; no checked artifact exports raw
+  `base.StringLiteral.Idx` as lowering payload
 - published checked artifacts are consumed through read-only views and are not
   patched after cache load or publication
 - no post-check stage mutates checked CIR or `ModuleEnv` to assign hosted
@@ -12745,6 +12964,9 @@ The cutover is complete only when all of these are true:
   imported template closures, sealed const instantiation stores, sealed callable
   binding instantiation stores, and sealed semantic-instantiation procedure
   tables
+- imported checked template literals lower from imported checked artifact string
+  bytes into the lowered program literal pool; no post-check imported template
+  lowering path reads exporter or importer `ModuleEnv` string stores
 - public post-check semantic lowering APIs return resource errors only; semantic
   missing-data conditions are checking diagnostics before publication or
   compiler invariant violations after publication
@@ -12792,6 +13014,8 @@ The cutover is complete only when all of these are true:
 - mono MIR is produced only through the `MonoSpecializationQueue`; no
   `lowerAllTopLevelFunctions`, lower-every-export, or equivalent eager lowering
   path remains
+- mono MIR creates the program literal pool and stores lowered source literals
+  only as `ProgramLiteralId`
 - mono MIR consumes checked `StaticDispatchCallPlan` values plus the checked
   method registry and never chooses the dispatcher variable from receiver
   expressions, result positions, method names, or environment lookup
@@ -12804,6 +13028,9 @@ The cutover is complete only when all of these are true:
 - mono MIR output uses `call_proc`, not `call(var_(proc), args)`, for every
   resolved direct procedure call, resolved static dispatch call, and resolved
   custom equality call
+- row-finalized mono MIR, lifted MIR, lambda-solved MIR, executable MIR, and IR
+  forward the program literal pool and contain no raw `base.StringLiteral.Idx` or
+  bare `CheckedStringLiteralId`
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the mono-store
   unification of `StaticDispatchCallPlan.callable_ty` and the instantiated
   target procedure type
@@ -12972,6 +13199,10 @@ The cutover is complete only when all of these are true:
 - checked static dispatch exports only normalized `StaticDispatchCallPlan`
   values; mono MIR consumes those plans and the checked method registry
 - IR lowering consumes executable MIR only
+- IR owns or forwards the program literal pool from executable MIR and stores
+  literal/crash/string-pattern payloads only as `ProgramLiteralId`
+- IR-to-LIR lowering interns all `ProgramLiteralId` payloads into `LirStore`, and
+  LIR/backends/interpreter read literal bytes only through `LirStore`
 - IR lowering preserves explicit values, ABI shapes, RC-effect records, and
   runtime-uniqueness mutation sites for LIR
 - LIR ARC insertion computes explicit RC statements from LIR values and control
