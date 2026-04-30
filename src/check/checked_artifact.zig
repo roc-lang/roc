@@ -4127,6 +4127,21 @@ pub const PrivateCaptureId = enum(u32) { _ };
 pub const PrivateCaptureNodeId = enum(u32) { _ };
 pub const MethodRegistryEntryRef = enum(u32) { _ };
 
+pub const ArtifactCheckedBodyRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    body: CheckedBodyId,
+};
+
+pub const ArtifactCheckedTypeRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    ty: CheckedTypeId,
+};
+
+pub const ArtifactCheckedTypeSchemeRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    scheme: CheckedTypeSchemeId,
+};
+
 pub const ArtifactCheckedCallableBodyRef = struct {
     artifact: CheckedModuleArtifactKey,
     body: CheckedCallableBodyRef,
@@ -4185,6 +4200,9 @@ pub const ArtifactPrivateCaptureNodeRef = struct {
 };
 
 pub const ImportedTemplateClosureView = struct {
+    checked_bodies: []const ArtifactCheckedBodyRef = &.{},
+    checked_type_roots: []const ArtifactCheckedTypeRef = &.{},
+    checked_type_schemes: []const ArtifactCheckedTypeSchemeRef = &.{},
     checked_callable_bodies: []const ArtifactCheckedCallableBodyRef = &.{},
     checked_const_bodies: []const ArtifactCheckedConstBodyRef = &.{},
     checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
