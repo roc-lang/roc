@@ -4672,10 +4672,15 @@ pub const ExportedProcedureTemplateTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        artifact_key: CheckedModuleArtifactKey,
+        checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!ExportedProcedureTemplateTable {
         var templates = std.ArrayList(ExportedProcedureTemplate).empty;
-        errdefer templates.deinit(allocator);
+        errdefer {
+            for (templates.items) |*template| deinitImportedTemplateClosure(allocator, &template.template_closure);
+            templates.deinit(allocator);
+        }
 
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
@@ -4691,13 +4696,25 @@ pub const ExportedProcedureTemplateTable = struct {
                 module.identStoreConst(),
                 module.defType(def_idx),
             );
+            const template_data = checked_templates.get(template.template);
+            var template_closure = try buildImportedTemplateClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                template,
+                template_data,
+            );
+            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+
             try templates.append(allocator, .{
                 .export_name = export_name,
                 .def = def_idx,
                 .source_scheme = source_scheme,
                 .template = template,
-                .template_data = checked_templates.get(template.template),
+                .template_data = template_data,
+                .template_closure = template_closure,
             });
+            template_closure = .{};
         }
 
         return .{ .templates = try templates.toOwnedSlice(allocator) };
@@ -4708,10 +4725,132 @@ pub const ExportedProcedureTemplateTable = struct {
     }
 
     pub fn deinit(self: *ExportedProcedureTemplateTable, allocator: Allocator) void {
+        for (self.templates) |*template| deinitImportedTemplateClosure(allocator, &template.template_closure);
         allocator.free(self.templates);
         self.* = .{};
     }
 };
+
+fn buildImportedTemplateClosure(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    template_ref: canonical.ProcedureTemplateRef,
+    template: CheckedProcedureTemplate,
+) Allocator.Error!ImportedTemplateClosureView {
+    const checked_bodies: []const ArtifactCheckedBodyRef = switch (template.body) {
+        .checked_body => |body| try singleton(allocator, ArtifactCheckedBodyRef, .{
+            .artifact = artifact_key,
+            .body = body,
+        }),
+        .promoted_callable_wrapper,
+        .hosted_wrapper,
+        .intrinsic_wrapper,
+        .entry_wrapper,
+        => &.{},
+    };
+    errdefer freeConstSlice(allocator, checked_bodies);
+
+    const checked_type_roots = try singleton(allocator, ArtifactCheckedTypeRef, .{
+        .artifact = artifact_key,
+        .ty = template.checked_fn_root,
+    });
+    errdefer freeConstSlice(allocator, checked_type_roots);
+
+    const scheme = checked_types.schemeForKey(template.checked_fn_scheme) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: exported template references missing checked type scheme", .{});
+        }
+        unreachable;
+    };
+    const checked_type_schemes = try singleton(allocator, ArtifactCheckedTypeSchemeRef, .{
+        .artifact = artifact_key,
+        .scheme = scheme.id,
+    });
+    errdefer freeConstSlice(allocator, checked_type_schemes);
+
+    const checked_procedure_templates = try singleton(allocator, ArtifactProcedureTemplateRef, template_ref);
+    errdefer freeConstSlice(allocator, checked_procedure_templates);
+
+    const nested_proc_sites: []const ArtifactNestedProcSiteTableRef = if (template.nested_proc_sites.len == 0)
+        &.{}
+    else
+        try singleton(allocator, ArtifactNestedProcSiteTableRef, .{
+            .artifact = artifact_key,
+            .table = template.nested_proc_sites,
+        });
+    errdefer freeConstSlice(allocator, nested_proc_sites);
+
+    const resolved_value_refs: []const ArtifactResolvedValueRefTableRef = if (template.resolved_value_refs.len == 0)
+        &.{}
+    else
+        try singleton(allocator, ArtifactResolvedValueRefTableRef, .{
+            .artifact = artifact_key,
+            .table = template.resolved_value_refs,
+        });
+    errdefer freeConstSlice(allocator, resolved_value_refs);
+
+    const static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = if (template.static_dispatch_plans.len == 0)
+        &.{}
+    else
+        try singleton(allocator, ArtifactStaticDispatchPlanTableRef, .{
+            .artifact = artifact_key,
+            .table = template.static_dispatch_plans,
+        });
+    errdefer freeConstSlice(allocator, static_dispatch_plans);
+
+    return .{
+        .checked_bodies = checked_bodies,
+        .checked_type_roots = checked_type_roots,
+        .checked_type_schemes = checked_type_schemes,
+        .checked_procedure_templates = checked_procedure_templates,
+        .nested_proc_sites = nested_proc_sites,
+        .resolved_value_refs = resolved_value_refs,
+        .static_dispatch_plans = static_dispatch_plans,
+    };
+}
+
+fn singleton(
+    allocator: Allocator,
+    comptime T: type,
+    value: T,
+) Allocator.Error![]const T {
+    const out = try allocator.alloc(T, 1);
+    out[0] = value;
+    return out;
+}
+
+fn freeConstSlice(allocator: Allocator, slice: anytype) void {
+    if (slice.len > 0) allocator.free(slice);
+}
+
+fn deinitImportedTemplateClosure(
+    allocator: Allocator,
+    closure: *ImportedTemplateClosureView,
+) void {
+    freeConstSlice(allocator, closure.checked_bodies);
+    freeConstSlice(allocator, closure.checked_type_roots);
+    freeConstSlice(allocator, closure.checked_type_schemes);
+    freeConstSlice(allocator, closure.checked_callable_bodies);
+    freeConstSlice(allocator, closure.checked_const_bodies);
+    freeConstSlice(allocator, closure.checked_procedure_templates);
+    freeConstSlice(allocator, closure.callable_eval_templates);
+    freeConstSlice(allocator, closure.const_templates);
+    freeConstSlice(allocator, closure.promoted_procedures);
+    freeConstSlice(allocator, closure.semantic_instantiation_procedures);
+    freeConstSlice(allocator, closure.private_capture_roots);
+    freeConstSlice(allocator, closure.private_capture_nodes);
+    freeConstSlice(allocator, closure.private_capture_const_templates);
+    freeConstSlice(allocator, closure.callable_result_plans);
+    freeConstSlice(allocator, closure.callable_promotion_plans);
+    freeConstSlice(allocator, closure.const_reification_plans);
+    freeConstSlice(allocator, closure.dependency_summary_templates);
+    freeConstSlice(allocator, closure.nested_proc_sites);
+    freeConstSlice(allocator, closure.resolved_value_refs);
+    freeConstSlice(allocator, closure.static_dispatch_plans);
+    freeConstSlice(allocator, closure.method_registry_entries);
+    closure.* = .{};
+}
 
 pub const ImportedProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
@@ -4995,6 +5134,26 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(site.owner_template.template) < self.checked_procedure_templates.templates.len);
             if (site.checked_expr) |expr| std.debug.assert(@intFromEnum(expr) < self.checked_bodies.exprs.len);
             if (site.checked_pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
+        }
+
+        for (self.exported_procedure_templates.templates) |exported| {
+            std.debug.assert(std.mem.eql(u8, &exported.template.artifact.bytes, &self.key.bytes));
+            std.debug.assert(@intFromEnum(exported.template.template) < self.checked_procedure_templates.templates.len);
+            std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
+            std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+            std.debug.assert(exported.template_closure.checked_type_schemes.len > 0);
+            for (exported.template_closure.checked_bodies) |body_ref| {
+                std.debug.assert(std.mem.eql(u8, &body_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(body_ref.body) < self.checked_bodies.bodies.len);
+            }
+            for (exported.template_closure.checked_type_roots) |type_ref| {
+                std.debug.assert(std.mem.eql(u8, &type_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.len);
+            }
+            for (exported.template_closure.checked_type_schemes) |scheme_ref| {
+                std.debug.assert(std.mem.eql(u8, &scheme_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
+            }
         }
 
         for (self.platform_required_declarations.declarations, 0..) |declaration, i| {
@@ -5538,6 +5697,8 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         &canonical_names,
+        artifact_key,
+        &checked_types,
         &checked_procedure_templates,
     );
     errdefer exported_procedure_templates.deinit(allocator);
