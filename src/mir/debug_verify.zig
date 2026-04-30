@@ -17,6 +17,19 @@ pub fn assertFmt(condition: bool, comptime fmt: []const u8, args: anytype) void 
     if (!condition) std.debug.panic(fmt, args);
 }
 
+pub fn invariant(condition: bool, comptime message: []const u8) void {
+    if (condition) return;
+    if (builtin.mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
+}
+
+pub fn invariantFmt(condition: bool, comptime fmt: []const u8, args: anytype) void {
+    if (condition) return;
+    if (builtin.mode == .Debug) std.debug.panic(fmt, args);
+    unreachable;
+}
+
 test "debug verification helpers compile out of release callers" {
     assert(true, "unreachable");
+    invariant(true, "unreachable");
 }

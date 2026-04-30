@@ -395,11 +395,19 @@ lambda-set shape
 ```
 
 Checked procedure bodies are registered before mono MIR as templates. A checked
-procedure template is the post-check body source plus its checked type, checked
-static-dispatch plans, checked resolved value-reference records, checked
-top-level use summaries, checked nested procedure-site table, and checked
-procedure metadata. It is not mono MIR and it is not a mono-specialized output
-procedure.
+procedure template is an artifact-owned checked body plus artifact-owned checked
+type roots, checked static-dispatch plans, checked resolved value-reference
+records, checked top-level use summaries, checked nested procedure-site table,
+and checked procedure metadata. It is not mono MIR and it is not a
+mono-specialized output procedure.
+
+The published template must not depend on a raw `CIR.Expr.Idx`, `types.Var`,
+`Ident.Idx`, unchecked syntax pointer, checked-module expression pointer, or
+exporter-local `ModuleEnv` lookup to be lowered. Those handles are allowed only
+inside checking finalization while constructing the checked artifact. Before the
+artifact is published, checking finalization must copy the required checked
+expression bodies and checked type graph roots into artifact-owned stores whose
+ids are stable inside the artifact and usable through imported views.
 
 The body source may be a user-written checked expression or a compiler-created
 checked wrapper. Promoted compile-time callable results must become
@@ -413,9 +421,13 @@ Conceptual shape:
 ```zig
 const CheckedProcedureTemplateId = enum(u32) { _ };
 const NestedProcSiteId = enum(u32) { _ };
+const CheckedBodyId = enum(u32) { _ };
+const CheckedExprId = enum(u32) { _ };
+const CheckedPatternId = enum(u32) { _ };
+const CheckedTypeId = enum(u32) { _ };
 
 const CheckedProcedureBody = union(enum) {
-    source_expr: CIR.Expr.Idx,
+    checked_body: CheckedBodyId,
     promoted_callable_wrapper: PromotedCallableWrapperId,
     hosted_wrapper: HostedWrapperId,
     intrinsic_wrapper: IntrinsicWrapperId,
@@ -426,7 +438,8 @@ const CheckedProcedureTemplate = struct {
     proc_base: ProcBaseKeyRef,
     template_id: CheckedProcedureTemplateId,
     body: CheckedProcedureBody,
-    checked_fn_var: Var,
+    checked_fn_scheme: CanonicalTypeSchemeKey,
+    checked_fn_root: CheckedTypeId,
     static_dispatch_plans: StaticDispatchPlanTableRef,
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
@@ -443,6 +456,10 @@ const MonoSpecializationKey = struct {
     template: ProcedureTemplateRef,
     requested_mono_fn_ty: CanonicalTypeKey,
 };
+
+// `CanonicalTypeKey` and `CanonicalTypeSchemeKey` are identity keys, not type
+// payloads. Every key consumed after publication must resolve through the owning
+// artifact's checked type store to a real checked type root or scheme.
 
 const LiftedProcedureTemplateRef = struct {
     owner_mono_specialization: MonoSpecializationKey,
@@ -508,8 +525,8 @@ const NestedProcSite = struct {
     site: NestedProcSiteId,
     site_path: Span(NestedProcPathComponent),
     kind: NestedProcKind,
-    source_expr: ?CIR.Expr.Idx,
-    source_pattern: ?CIR.Pattern.Idx,
+    checked_expr: ?CheckedExprId,
+    checked_pattern: ?CheckedPatternId,
 };
 
 const NestedProcPathComponent = union(enum) {
@@ -524,7 +541,7 @@ const PromotedCallableWrapper = struct {
     proc_base_key: ProcBaseKeyRef,
     callable_node: PromotedCallableNodeId,
     source_binding: PatternId,
-    checked_fn_var: Var,
+    checked_fn_root: CheckedTypeId,
     body_plan: PromotedCallableBodyPlanId,
 };
 
@@ -590,7 +607,7 @@ const MonoSpecializationReason = union(enum) {
     root: RootRequestId,
     call_proc: ExprId,
     proc_value: ExprId,
-    static_dispatch_target: CIR.Expr.Idx,
+    static_dispatch_target: StaticDispatchPlanId,
     comptime_dependency_summary: ComptimeSummaryRequestId,
 };
 ```
@@ -612,6 +629,22 @@ not interchangeable: a mono-specialized output procedure must never be fed back
 as the template identity for another mono request. Recursive and mutually
 recursive requests reuse the reserved `MonoSpecializedProcRef` for the same
 `MonoSpecializationKey`.
+
+Canonical type keys are stable identities, not serialized type payloads. A
+published artifact must contain the checked type graph needed to resolve every
+`CanonicalTypeKey` and `CanonicalTypeSchemeKey` it exports or lists in an
+imported template closure. Mono specialization must clone-instantiate from that
+artifact-owned checked type graph. It must not ask for the exporter
+`ModuleEnv`, a checker `types.Store`, a raw `Var`, or a raw `Ident.Idx` in order
+to reconstruct the type for an imported generic specialization.
+
+The specialization algorithm mirrors the part of Cor/LSS that is correct:
+clone-instantiating the checked type graph, unifying the cloned function root
+with the concrete requested function type, and lowering from the cloned graph.
+The difference is that Roc's source graph crosses module/cache boundaries as
+explicit checked artifact data. Cor can keep the solved body and type graph in
+one process; Roc must not depend on that in-process pointer model for imports or
+cache hits.
 
 `NestedProcSite` gives local functions, closures, and compiler-created nested
 closure sites stable checked-template-local identity before mono lowering or
@@ -815,15 +848,15 @@ const ResolvedValueRef = union(enum) {
 };
 
 const ResolvedValueRefRecord = struct {
-    expr: CIR.Expr.Idx,
+    expr: CheckedExprId,
     ref: ResolvedValueRef,
-    checked_ty: Var,
+    checked_ty: CheckedTypeId,
     scope_depth: u32,
 };
 
 const ResolvedValueRefTable = struct {
     records: Store(ResolvedValueRefRecord),
-    by_expr: Map(CIR.Expr.Idx, ResolvedValueRefId),
+    by_expr: Map(CheckedExprId, ResolvedValueRefId),
 };
 ```
 
@@ -970,7 +1003,7 @@ concrete root request, direct call, static-dispatch target, first-class
 This is mandatory for generic procedures and for any procedure whose body
 contains static dispatch. Static dispatch can be eliminated only while lowering a
 concrete mono specialization, after the enclosing procedure's requested function
-type and the dispatch expression's `callable_var`, arguments, and result slot
+type and the dispatch expression's `callable_ty`, arguments, and result slot
 have been clone-instantiated into the same mono type store.
 
 Exported checked artifacts may contain generic procedure templates. Exported
@@ -1148,6 +1181,20 @@ The exact Zig field names may differ, but the graph responsibilities must not.
 `proc_value` for another group member. The graph stores procedure identity
 directly; it must not depend on generated alias names, environment lookup, or
 source-name reconstruction.
+
+`LiftedCaptureGraph` discovery must descend through every expression shape that
+can carry a procedure value. This includes records, tuples, tags, lists,
+`Box(T)`, transparent nominal wrappers, source `match` branch results, `if`
+branch results, aliases, returns, captures, and SSA mutable/loop joins. A
+reference to a self, sibling, local function, or closure anywhere inside those
+structures creates a `CaptureProcValueEdge`. Any external value needed to build
+that nested `proc_value` capture payload creates a `CaptureValueEdge`.
+
+This nested scan is mandatory. A recursive local group is incorrect if it only
+records direct body references like `loop(...)` and misses a procedure value
+hidden inside `{ f: loop }`, `Ok(loop)`, `[loop]`, a branch result, or a value
+captured by another local procedure. The fixed point is over the full nested edge
+set, not over syntactically direct calls.
 
 For each recursive local-function group, lifted MIR must:
 
@@ -2001,6 +2048,7 @@ const CallableValueInfo = struct {
     callable_root: RepVarId,
     source: CallableValueSource,
     emission_plan: CallableValueEmissionPlanId,
+    construction_plan: ?CallableSetConstructionPlanId,
 };
 
 const CallableValueSource = union(enum) {
@@ -2013,6 +2061,16 @@ const CallableValueSource = union(enum) {
     finite_set: CanonicalCallableSetKey,
     already_erased: ErasedFnSigKey,
     erased_adapter: ErasedAdapterKey,
+};
+
+const CallableSetConstructionPlanId = enum(u32) { _ };
+
+const CallableSetConstructionPlan = struct {
+    result: ValueInfoId,
+    source_fn_ty: CanonicalTypeKey,
+    callable_set_key: CanonicalCallableSetKey,
+    selected_member: CallableSetMemberId,
+    capture_values: Span(ValueInfoId),
 };
 
 const BoxedValueInfo = struct {
@@ -2061,6 +2119,88 @@ child root so executable MIR can lower the occurrence without inspecting the
 callee expression or the surrounding source shape. It also records the
 occurrence-specific `CallableValueEmissionPlanId`; an erased plan is valid only
 when its underlying plan carries non-empty `BoxBoundaryId` provenance.
+
+`CallableValueInfo.construction_plan` is present only for a value occurrence that
+constructs one selected finite callable-set member. It is not present for
+branch joins, parameters, returns, variables, projections, captures, constants,
+or aggregate fields that merely carry an already-constructed callable value.
+Those carried values still have `CallableValueInfo` and an emission plan, but
+they do not invent a selected member.
+
+`CallableValueInfo.construction_plan` and `CallableValueInfo.emission_plan` must
+agree for the same value occurrence. If `construction_plan` is present, then:
+
+```text
+construction.result == this ValueInfoId
+emission_plan == finite_callable_set(construction.callable_set_key)
+construction.selected_member exists in descriptor(construction.callable_set_key)
+```
+
+The construction plan is owned by that one `CallableValueInfo`. It may not be
+shared with another occurrence, retargeted to another `ValueInfoId`, or used as a
+generic recipe for rebuilding callable-set values later. This is the explicit
+replacement for Cor/LSS's local "lower `Var fn` into a callable-set tag now"
+behavior: the lambda-solved record says exactly which occurrence constructs
+which selected member, and executable MIR consumes that record directly.
+
+If a procedure-value occurrence solves to a non-erased finite callable-set
+representation and executable MIR must emit that occurrence as a value, the
+occurrence must have a `CallableSetConstructionPlan`. If a value merely carries
+an already-constructed finite callable-set value from a parameter, variable,
+projection, branch join, call result, return, capture, aggregate field, bridge,
+or constant, `construction_plan` must be absent; executable MIR must use the
+existing value handle. If an occurrence solves to erased callable representation,
+`construction_plan` must be absent unless the occurrence is first explicitly
+emitted as a finite callable-set value and then consumed by a separate erased
+adapter plan at an explicit `Box(T)` boundary.
+
+`CallableSetConstructionPlan` is the lambda-solved record consumed by executable
+MIR when it must emit a finite callable-set value. `result` is the value
+occurrence being constructed. `source_fn_ty` is the exact canonical fixed-arity
+function type at which the procedure value occurs. `callable_set_key` is the
+canonical finite callable-set representation selected by representation solving.
+`selected_member` is the member inside that set. `capture_values` are the
+already-solved value occurrences captured by that selected member, in canonical
+`CaptureSlot.index` order. The plan must not contain executable procedure ids,
+layout ids, generated symbol text, runtime capture pointers, runtime function
+pointers, or backend ABI handles.
+
+The selected descriptor member and the construction plan must agree exactly:
+
+```text
+descriptor(construction.callable_set_key)
+    .member(construction.selected_member)
+    .proc_value.source_fn_ty
+    == construction.source_fn_ty
+
+descriptor(construction.callable_set_key)
+    .member(construction.selected_member)
+    .capture_slots.len
+    == construction.capture_values.len
+
+for every i:
+    descriptor(...).capture_slots[i].slot.index == i
+    canonical(value_info(construction.capture_values[i]).logical_ty)
+        == descriptor(...).capture_slots[i].source_ty
+    executable_value_type(construction.capture_values[i])
+        == descriptor(...).capture_slots[i].exec_value_ty
+```
+
+The `source_fn_ty` equality is canonical fixed-arity Roc function type equality,
+not display-name equality, raw type-store-id equality, arity inference from
+syntax, or executable-layout equality. This is what prevents a generic procedure
+template from sharing one callable-set member instance across distinct concrete
+uses such as `I64 -> I64` and `Str -> Str`.
+
+Constructing a callable-set value is separate from reserving executable code.
+Executable MIR may lower a `CallableSetConstructionPlan` to a
+`callable_set_value` without immediately creating every member body. Member
+executable specializations are reserved only when code emission requires them:
+`callable_match`, erased adapter generation, constant materialization, promoted
+wrapper emission, backend/root boundary emission, or another explicit
+executable consumer. This preserves Cor/LSS's correctness for finite callable
+sets without adopting its eager "specialize as soon as a procedure value is
+seen" prototype behavior.
 
 `CallableValueSource.proc_value` is occurrence-local. It names the exact
 procedure value occurrence and the `ValueInfoId` values for the explicit
@@ -3260,15 +3400,58 @@ const CaptureValueRef = struct {
 ```
 
 The exact Zig names may differ, but the representation responsibilities must
-not. A non-erased `proc_value` lowers to `CallableSetValue`. The member is
+not. A non-erased value occurrence with a
+`CallableSetConstructionPlan` lowers to `CallableSetValue`. The member is
 identified by `callable_set_key + member_index`; that pair derives the
 `ProcedureCallableRef`, member tag/discriminant order, capture-slot schema, and
 capture shape. An implementation may cache those derived values beside the
-member, but only as debug-verified accelerators. A member with no captures has no
-payload. A member with captures assembles one capture record in
-`CaptureSlot.index` order and stores that record as the member payload. Runtime
-byte size is not the source of truth for payload presence; a zero-sized capture
-still follows the explicit capture-slot metadata.
+member, but only as debug-verified accelerators.
+
+Executable MIR must validate the lambda-solved consistency unit before emitting
+the value. For a value occurrence `v`, the executable builder must see:
+
+```text
+value_info(v).callable.construction_plan == construction_id
+construction.result == v
+value_info(v).callable.emission_plan
+    == finite_callable_set(construction.callable_set_key)
+descriptor(construction.callable_set_key)
+    contains construction.selected_member
+descriptor member proc_value.source_fn_ty == construction.source_fn_ty
+```
+
+These checks are compiler invariants. Debug builds assert immediately; release
+builds use `unreachable`. Executable MIR must not repair a missing or mismatched
+construction plan by inspecting the expression, consulting checked CIR, looking
+up the current lexical symbol, or comparing executable shapes.
+
+Executable MIR constructs a `CallableSetValue` by consuming the lambda-solved
+`CallableSetConstructionPlan` for that exact occurrence:
+
+1. Resolve each `construction_plan.capture_values[i]` to an
+   `ExecutableValueRef` exactly once.
+2. Resolve captures in canonical `CaptureSlot.index` order.
+3. Build at most one `CallableCaptureRecord` for the selected member.
+4. Store that capture record as the member payload.
+5. Use the resulting callable-set value handle for later storage, return,
+   aggregate construction, bridge input, `callable_match`, or erased packing.
+
+A member with no captures has no payload. A member with captures assembles one
+capture record in `CaptureSlot.index` order and stores that record as the member
+payload. Runtime byte size is not the source of truth for payload presence; a
+zero-sized capture still follows the explicit capture-slot metadata.
+
+The capture operands must match the selected descriptor member exactly. The
+number of operands must equal the number of `CallableSetCaptureSlot` entries,
+the slot indexes must be dense and canonical, and each operand's executable
+value type must equal the slot's `exec_value_ty` after canonical executable type
+lowering. A mismatch is a compiler invariant violation, not a cue to reorder
+captures, look up names, or synthesize a different capture record.
+
+Capture operands are evaluated when the callable-set value is constructed, not
+when it is later called. `callable_match` destructures the stored member payload;
+it must not rebuild captures, re-read source variables, replay field accesses, or
+re-evaluate expressions that produced the captured values.
 
 Callable-set values produced by `match`, `if`, blocks, loops, constants, or
 bridges join through the same executable result-join rules as any other value.
@@ -3396,6 +3579,7 @@ Concrete shape:
 CallableMatch {
     id: CallableMatchId,
     callable_set_key: CanonicalCallableSetKey,
+    requested_source_fn_ty: CanonicalTypeKey,
     func_expr: ExprId,
     arg_exprs: Span(ExprId),
     func_tmp: TempId,
@@ -3406,13 +3590,15 @@ CallableMatch {
 }
 ```
 
-`func_expr` and `arg_exprs` are the expressions evaluated exactly once by the
-node. `func_tmp` and `arg_temps` are the temporaries produced by those
-evaluations and consumed by every branch. `arg_temps.len` must equal the fixed
-Roc arity of the requested callable type. No branch may re-evaluate `func_expr`
-or any original argument expression. `result_ty` is the executable result type
-required by the original call expression. `result_tmp` is the single join value
-produced by the whole `callable_match`.
+`requested_source_fn_ty` is the exact canonical fixed-arity source function type
+from the original `call_value.requested_fn_ty`. `func_expr` and `arg_exprs` are
+the expressions evaluated exactly once by the node. `func_tmp` and `arg_temps`
+are the temporaries produced by those evaluations and consumed by every branch.
+`arg_temps.len` must equal the fixed Roc arity of
+`requested_source_fn_ty`. No branch may re-evaluate `func_expr` or any original
+argument expression. `result_ty` is the executable result type required by the
+original call expression. `result_tmp` is the single join value produced by the
+whole `callable_match`.
 
 Every `callable_match` branch must store:
 
@@ -3436,6 +3622,26 @@ member executable specialization. `executable_proc` is the executable procedure
 allocated for that key and used by the branch body. These values are related by
 the executable specialization queue, not by name lookup, generated symbol text,
 or environment lookup.
+
+For every branch, the descriptor member's concrete procedure value type must
+match the call's requested function type exactly:
+
+```text
+descriptor(callable_match.callable_set_key)
+    .member(branch.member)
+    .proc_value.source_fn_ty
+    == callable_match.requested_source_fn_ty
+
+branch.executable_specialization_key.requested_fn_ty
+    == callable_match.requested_source_fn_ty
+```
+
+This equality is checked after canonical type normalization. It is not enough
+for the member to come from the same source procedure template, have the same
+display name, have the same argument count, or lower to an executable procedure
+whose layout happens to be compatible. This is the finite-callable-set analogue
+of Cor/LSS's specialization key `(source function, requested concrete function
+type)`, expressed without raw symbols.
 
 The executable calling convention for a callable-set member is:
 
@@ -5612,6 +5818,8 @@ const CheckedModuleArtifact = struct {
     checking_context_identity: CheckingContextIdentity,
     env: ModuleEnv,
     exports: ExportTable,
+    checked_types: CheckedTypeStore,
+    checked_bodies: CheckedBodyStore,
     provides_requires: ProvidesRequiresMetadata,
     method_registry: MethodRegistry,
     static_dispatch_plans: StaticDispatchPlanTable,
@@ -5641,39 +5849,52 @@ or mutate raw checked modules to rebuild missing semantic data.
 Checking finalization order:
 
 1. Finish type solving and collect all user-facing diagnostics.
-2. Build the checked method registry, normalized static dispatch plans, and the
-   builder-form resolved value-reference table.
-3. Build checked procedure templates for direct source procedures, hosted
+2. Copy every lowering-visible checked type root and checked body into
+   artifact-owned `CheckedTypeStore` and `CheckedBodyStore` records. This copy is
+   where raw `types.Var`, raw `CIR.Expr.Idx`, raw `CIR.Pattern.Idx`, and
+   `Ident.Idx` handles are converted to checked type ids, checked body ids, and
+   canonical names. The copied stores must include direct source bodies, hosted
+   wrappers, intrinsic wrappers, entry wrappers, compile-time root bodies,
+   callable-eval template bodies, constant-eval template bodies, nested
+   procedure-site bodies, static-dispatch type roots, resolved-value-reference
+   type roots, and all public/exported type schemes.
+3. Build the checked method registry, normalized static dispatch plans, and the
+   builder-form resolved value-reference table. These records must point at the
+   artifact-owned checked type/body stores, not raw checker vars or raw checked
+   expression ids.
+4. Build checked procedure templates for direct source procedures, hosted
    wrappers, intrinsic wrappers, entry wrappers, and any other compiler-created
    checked procedure bodies whose bodies do not depend on compile-time callable
    results. Promoted callable templates are not built here because their bodies
-   depend on evaluated callable roots.
-4. Build root requests for concrete runtime, tool, test, REPL, development, and
+   depend on evaluated callable roots. Each template stores a `CheckedBodyId`,
+   `CheckedTypeId`, and `CanonicalTypeSchemeKey`, not a raw source expression or
+   checker var.
+5. Build root requests for concrete runtime, tool, test, REPL, development, and
    compile-time entrypoints. Generic exports are not root requests merely because
    they are exported.
-5. Build hosted procedure tables and platform-required declaration tables.
+6. Build hosted procedure tables and platform-required declaration tables.
    Platform-required binding tables are built only for an executable
    app/platform co-finalization group, after the app's top-level values and
    callable promotions have been sealed. Standalone platform checking and glue
    contexts may publish platform-required declarations without app-specific
    bindings, but executable lowering may not consume such an artifact.
-6. Build public exports, provides/requires metadata, and interface capability
+7. Build public exports, provides/requires metadata, and interface capability
    records.
-7. Reserve `ConstRef` identities for every non-function top-level constant,
+8. Reserve `ConstRef` identities for every non-function top-level constant,
    allocate direct procedure values, create `TopLevelProcedureBindingRef` rows for
    every direct top-level function declaration and already-procedure top-level
    lambda, and initialize the in-progress `TopLevelValueTable` with
    `const_template`, `procedure_binding`, or `pending_callable_root` entries.
-8. Build the callable-aware summary-only lowering records and the
+9. Build the callable-aware summary-only lowering records and the
    `CompileTimeRootDependencyGraph` for compile-time constants, callable
    binding roots, and expect roots.
-9. Evaluate concrete compile-time constants and concrete compile-time callable
+10. Evaluate concrete compile-time constants and concrete compile-time callable
    roots through the MIR-family path and LIR interpreter in dependency order.
    For generalized compile-time callable roots that require a concrete requested
    function type before they can be evaluated, build and seal
    `CallableEvalTemplate` records instead of attempting to produce generalized
    executable MIR or a generalized interpreter value.
-10. Fill each evaluated non-function compile-time constant into the
+11. Fill each evaluated non-function compile-time constant into the
    already-reserved `ConstRef`. The filled template is either a
    `ConstValueGraphTemplate` or a `ConstEvalTemplate`. The template may contain
    callable leaf templates; those leaves must reference sealed checked, lifted,
@@ -5685,7 +5906,7 @@ Checking finalization order:
    `ConstInstantiationStore` during that artifact's checking finalization;
    checking finalization must not reject or thunk the constant merely because it
    contains generalized callable leaves.
-11. Promote concrete compile-time callable results with a reserve/fill/seal
+12. Promote concrete compile-time callable results with a reserve/fill/seal
     lifecycle:
     reserve every promoted `ProcedureValueRef`, `ProcBaseKeyRef`,
     `PromotedCallableNodeId`, and checked template slot; build private capture
@@ -5694,10 +5915,10 @@ Checking finalization order:
     `PromotedProcedure` row. Generalized callable eval templates are promoted
     only when a concrete `CallableBindingInstantiationKey` is requested while
     building the artifact that owns that concrete instance.
-12. Replace promoted root `pending_callable_root` entries in the in-progress
+13. Replace promoted root `pending_callable_root` entries in the in-progress
     `TopLevelValueTable` with `procedure_binding` entries only after their
     promoted procedure values have sealed checked procedure templates.
-13. If this module is the app root of an executable app/platform group, use the
+14. If this module is the app root of an executable app/platform group, use the
     sealed app `TopLevelValueTable`, `CompileTimeValueStore`,
     `ConstInstantiationStore`, `CallableBindingInstantiationStore`,
     `SemanticInstantiationProcedureTable`, and promoted procedure table to build
@@ -5711,17 +5932,33 @@ Checking finalization order:
     by the platform's requested function type. No binding may be created from a
     raw app name, pattern lookup, generated wrapper name, or unsealed
     `pending_callable_root`.
-14. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
+15. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
     that every referenced top-level binding maps to either a `ConstRef`-backed
     constant template or `procedure_binding`.
-15. Seal the resolved value-reference table by replacing every builder-only
+16. Seal the resolved value-reference table by replacing every builder-only
     top-level binding reference with `ConstUseTemplate` or `ProcedureUseTemplate`
     data from the completed `TopLevelValueTable` and imported artifact views.
-16. Store the complete checked procedure template table, sealed resolved
-    value-reference table, `CompileTimeValueStore`, `ConstInstantiationStore`,
+17. Build exported procedure-template, procedure-binding, and const-template
+    views. For every exported generic template, build the deterministic
+    `ImportedTemplateClosureView` containing the checked bodies, checked type
+    roots/schemes, private checked procedure templates, resolved value-reference
+    spans, static-dispatch plan spans, nested procedure-site spans, method
+    registry entries, private capture nodes, and compile-time template records
+    required to instantiate that export without inspecting source or exporter
+    `ModuleEnv`.
+18. Store the complete checked type store, checked body store, checked procedure
+    template table, sealed resolved value-reference table,
+    `CompileTimeValueStore`, `ConstInstantiationStore`,
     `CallableBindingInstantiationStore`, `SemanticInstantiationProcedureTable`,
-    promoted procedure table, and top-level value table in the artifact.
-17. Run debug-only artifact verification. This verification must assert that
+    promoted procedure table, exported views, imported template closures, and
+    top-level value table in the artifact.
+19. Run debug-only artifact verification. This verification must assert that
+    every exported or imported `CanonicalTypeKey` and `CanonicalTypeSchemeKey`
+    has a checked type payload in the artifact or imported closure; every checked
+    procedure template body points at a sealed checked body; no checked procedure
+    template body is a raw `CIR.Expr.Idx`; every checked body node points at a
+    sealed checked type id; every imported closure lists all private checked
+    bodies and checked type roots reachable from the exported template;
     every published `ConstRef` has a complete constant template and source type
     scheme; every callable leaf template points at a sealed
     `CallableProcedureTemplateRef`; every
@@ -5735,15 +5972,18 @@ Checking finalization order:
     `SemanticInstantiationProcedureTable`;
     and no generalized type or callable variable appears in an executable-stage
     input without an explicit concrete instantiation key.
-18. Publish the immutable checked artifact.
+20. Publish the immutable checked artifact.
 
-If any user-facing problem is found in steps 1 through 14, checking reports it
+If any user-facing problem is found in steps 1 through 15, checking reports it
 and no artifact is published for that module. Later compiler stages never see a
 partial checked artifact.
 
 After publication:
 
 - `ModuleEnv` identity must not be patched.
+- imported generic specialization must not inspect another artifact's
+  `ModuleEnv`, checker type store, raw checked expression ids, or private
+  definitions to recover a missing checked body or checked type payload.
 - hosted indices must not be assigned by mutating checked CIR.
 - platform-required lookup targets must not be populated by mutating checked
   modules.
@@ -6427,6 +6667,12 @@ importing modules consume, including:
 - method registry
 - normalized static dispatch call plans
 - sealed resolved value-reference table
+- artifact-owned checked type store, including canonical key-to-root and
+  key-to-scheme maps
+- artifact-owned checked body store, including every checked expression,
+  pattern, and statement body reachable from exported templates, compile-time
+  templates, callable-eval templates, nested procedure sites, and platform
+  relation roots
 - checked procedure template table
 - promoted procedure table
 - root request table
@@ -6654,6 +6900,11 @@ Before publication, these conditions are cache misses:
 - invalid serialized bytes
 - mismatched `compiler_artifact_hash`
 - missing required artifact component
+- missing checked type store payload for an exported/imported
+  `CanonicalTypeKey` or `CanonicalTypeSchemeKey`
+- missing checked body store payload for an exported/imported checked procedure,
+  constant eval template, callable eval template, nested procedure site, or
+  promoted callable wrapper
 - missing `CompileTimeValueStore` for an artifact with compile-time bindings
 - missing required `ConstInstantiationStore` entries for concrete constant
   instances recorded by the artifact
@@ -6677,6 +6928,216 @@ assertion in debug builds and `unreachable` in release builds.
 Every post-check public pipeline consumes checked artifacts, not loose checked
 modules plus optional side stores.
 
+#### Artifact-Owned Checked Bodies And Types
+
+Published checked artifacts must contain the complete checked body and checked
+type payloads needed by downstream checking finalization, mono MIR
+specialization, compile-time constant instantiation, callable binding
+instantiation, and platform/app relation lowering. `ModuleEnv` may still be
+stored in the artifact for diagnostics, type printing, source locations, cache
+round-tripping, or checking-only services, but it is not the payload used to
+lower imported generic procedure templates. Imported specialization must work
+from artifact-owned checked stores and imported template closures alone.
+
+This is mandatory because `CanonicalTypeKey` and `CanonicalTypeSchemeKey` are
+stable identities, not type payloads. A hash key can say "this is the requested
+type," but it cannot by itself provide the argument list, return type, row
+labels, static-dispatch constraints, nominal backing type, recursive edges, or
+generalized variable structure needed to clone-instantiate and lower a generic
+body. The payload lives in `CheckedTypeStore`.
+
+Conceptual checked type payload:
+
+```zig
+const CheckedTypeId = enum(u32) { _ };
+const CheckedTypeSchemeId = enum(u32) { _ };
+const CheckedBodyId = enum(u32) { _ };
+const CheckedExprId = enum(u32) { _ };
+const CheckedPatternId = enum(u32) { _ };
+const CheckedStatementId = enum(u32) { _ };
+
+const CheckedTypeStore = struct {
+    nodes: Store(CheckedTypeNode),
+    concrete_roots: Map(CanonicalTypeKey, CheckedTypeId),
+    schemes: Map(CanonicalTypeSchemeKey, CheckedTypeScheme),
+};
+
+const CheckedTypeScheme = struct {
+    root: CheckedTypeId,
+    generalized_vars: Span(CheckedTypeId),
+};
+
+const CheckedTypeNode = union(enum) {
+    generalized_var: CheckedGeneralizedVar,
+    flex_var: CheckedOpenVar,
+    rigid_var: CheckedOpenVar,
+    alias: CheckedAliasType,
+    nominal: CheckedNominalType,
+    func: CheckedFuncType,
+    record: CheckedRecordType,
+    record_empty,
+    tag_union: CheckedTagUnionType,
+    tag_union_empty,
+    tuple: Span(CheckedTypeId),
+    primitive: PrimitiveType,
+    recursive_ref: CheckedTypeId,
+};
+
+const CheckedOpenVar = struct {
+    name: ?CanonicalTypeVarName,
+    constraints: Span(StaticDispatchConstraintTemplate),
+};
+
+const CheckedFuncType = struct {
+    args: Span(CheckedTypeId),
+    ret: CheckedTypeId,
+    effect: CheckedFunctionEffect,
+    needs_instantiation: bool,
+};
+
+const CheckedRecordType = struct {
+    fields: Span(CheckedRecordField),
+    ext: CheckedTypeId,
+};
+
+const CheckedRecordField = struct {
+    label: RecordFieldLabelId,
+    ty: CheckedTypeId,
+};
+
+const CheckedTagUnionType = struct {
+    tags: Span(CheckedTag),
+    ext: CheckedTypeId,
+};
+
+const CheckedTag = struct {
+    label: TagLabelId,
+    payloads: Span(CheckedTypeId),
+};
+
+const CheckedAliasType = struct {
+    alias: NominalOrAliasTypeKey,
+    args: Span(CheckedTypeId),
+    backing: CheckedTypeId,
+};
+
+const CheckedNominalType = struct {
+    nominal: NominalTypeKey,
+    is_opaque: bool,
+    args: Span(CheckedTypeId),
+    backing: CheckedTypeId,
+};
+```
+
+The exact Zig names may differ, but these invariants must not:
+
+- every `CanonicalTypeKey` exported from or consumed inside a checked artifact
+  resolves to a `CheckedTypeId` in that artifact's `CheckedTypeStore`
+- every `CanonicalTypeSchemeKey` resolves to a `CheckedTypeScheme` whose root
+  and generalized variables are in that same store
+- checked type nodes use canonical type, field, tag, method, module, and export
+  identities; they do not contain `Ident.Idx`
+- recursive type graphs are represented by explicit graph edges, not by pointer
+  identity or stack recursion
+- generalized variables are explicit nodes in the checked type graph, not raw
+  checker vars that later stages reinterpret
+- static-dispatch constraints attached to open variables use canonical method
+  names and checked type roots for their function types
+- if a key is present without its checked type payload, that artifact is
+  incomplete; debug builds assert immediately and release builds use
+  `unreachable`
+
+Conceptual checked body payload:
+
+```zig
+const CheckedBodyStore = struct {
+    bodies: Store(CheckedBody),
+    exprs: Store(CheckedExpr),
+    patterns: Store(CheckedPattern),
+    statements: Store(CheckedStatement),
+};
+
+const CheckedBody = struct {
+    root_expr: CheckedExprId,
+    owner_template: ProcedureTemplateRef,
+};
+
+const CheckedExpr = struct {
+    ty: CheckedTypeId,
+    source_region: SourceRegion,
+    data: CheckedExprData,
+};
+
+const CheckedPattern = struct {
+    ty: CheckedTypeId,
+    source_region: SourceRegion,
+    data: CheckedPatternData,
+};
+```
+
+`CheckedExprData`, `CheckedPatternData`, and `CheckedStatement` may remain
+CIR-like in shape, but they are artifact-owned checked records. They must store
+canonical labels, checked body ids, checked expression ids, checked pattern ids,
+checked type ids, and ids into sealed artifact tables such as
+`ResolvedValueRefTable`, `StaticDispatchPlanTable`, and `NestedProcSiteTable`.
+They must not store raw `CIR.Expr.Idx`, raw `CIR.Pattern.Idx`, raw `types.Var`,
+raw `Ident.Idx`, source-name lookup handles, or pointers into another module's
+checked store as semantic payload. Source regions may be retained for
+diagnostics and debugging, but source regions are never lookup keys for lowering.
+
+Local templates inside the root artifact may be built by copying from checked
+CIR into `CheckedBodyStore` and `CheckedTypeStore` during checking
+finalization. Imported templates must be consumed from the exporter artifact's
+read-only checked body/type stores through exported views and
+`ImportedTemplateClosureView`. Adding `module_env: *const ModuleEnv` or
+`types_store: *const types.Store` to `ImportedModuleView` is forbidden as a
+solution to imported generic specialization, because it would make importers
+reconstruct semantic payload from exporter-local state instead of consuming the
+published artifact data.
+
+Mono specialization uses an `ArtifactTemplateResolver`-style service:
+
+```zig
+const ArtifactTemplateResolver = struct {
+    root: LoweringModuleView,
+    imports: Span(ImportedModuleView),
+    relations: Span(RelationModuleView),
+
+    fn procedureTemplate(ref: ProcedureTemplateRef) CheckedProcedureTemplateView;
+    fn checkedBody(ref: ArtifactCheckedBodyRef) CheckedBodyView;
+    fn checkedType(ref: ArtifactCheckedTypeRef) CheckedTypeView;
+    fn typeScheme(ref: ArtifactCheckedTypeSchemeRef) CheckedTypeSchemeView;
+};
+```
+
+The resolver is not a lookup heuristic. It enforces artifact visibility:
+
+- root artifact refs may resolve to the root artifact's own checked stores
+- ordinary imported refs may resolve only exported entries and private entries
+  listed in the exported entry's `ImportedTemplateClosureView`
+- platform/app relation refs may resolve only explicitly named
+  platform-required values and relation artifacts
+- missing entries are compiler invariant violations, not triggers to inspect
+  source declarations, scan exports, or lower every imported template
+
+Clone-instantiation from checked type payloads must be deterministic and
+cycle-safe:
+
+1. Reserve a fresh destination type node for each source `CheckedTypeId` before
+   cloning that node's children.
+2. Map every generalized source variable in the selected
+   `CheckedTypeScheme` to one fresh specialization-local variable.
+3. Clone aliases, nominals, records, tag unions, tuples, functions, static
+   dispatch constraints, and recursive refs through that map.
+4. Unify the cloned function root with the concrete requested
+   `CanonicalTypeKey` root in the same specialization-local type store.
+5. Lower mono MIR expressions using the cloned types attached to checked body
+   nodes.
+
+No post-check stage may recreate a missing checked type payload by hashing
+source text, resolving an import name, looking at a display name, inspecting a
+foreign `ModuleEnv`, reading a raw checker `Var`, or comparing source syntax.
+
 The compiler may expose restricted views for specific consumers:
 
 ```zig
@@ -6685,6 +7146,9 @@ const ArtifactRef = struct {
     local_id: u32,
 };
 
+const ArtifactCheckedBodyRef = ArtifactRef;
+const ArtifactCheckedTypeRef = ArtifactRef;
+const ArtifactCheckedTypeSchemeRef = ArtifactRef;
 const ArtifactCheckedCallableBodyRef = ArtifactRef;
 const ArtifactCheckedConstBodyRef = ArtifactRef;
 const ArtifactProcedureTemplateRef = ArtifactRef;
@@ -6702,6 +7166,8 @@ const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
     exports: ExportTableView,
+    checked_types: CheckedTypeStoreView,
+    checked_bodies: CheckedBodyStoreView,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -6733,6 +7199,9 @@ const ImportedConstTemplateView = struct {
 };
 
 const ImportedTemplateClosureView = struct {
+    checked_bodies: Span(ArtifactCheckedBodyRef),
+    checked_type_roots: Span(ArtifactCheckedTypeRef),
+    checked_type_schemes: Span(ArtifactCheckedTypeSchemeRef),
     checked_callable_bodies: Span(ArtifactCheckedCallableBodyRef),
     checked_const_bodies: Span(ArtifactCheckedConstBodyRef),
     checked_procedure_templates: Span(ArtifactProcedureTemplateRef),
@@ -6799,18 +7268,28 @@ instance during post-check lowering, or discover private dependencies by looking
 through source declarations.
 
 `ImportedTemplateClosureView` is a serialized semantic closure, not a source
-module. It contains only the checked callable bodies, checked constant bodies,
-checked procedure templates, callable eval templates, constant templates,
-promoted procedures, semantic-instantiation procedures, private promoted-capture
-roots and nodes, private capture constant templates, callable-result plans,
-callable-promotion plans, constant reification plans, dependency-summary
-templates, nested procedure-site tables, resolved value references, static
-dispatch plans, method-registry entries, and interface capabilities required to
-instantiate the exported binding or constant at a concrete requested type. The
-closure must be deterministic and complete. If an imported callable or constant
-template needs an entry that is absent from the closure after the imported
-artifact has been accepted, that is a compiler invariant violation: debug builds
-assert immediately and release builds use `unreachable`.
+module. It contains only the checked bodies, checked type roots, checked type
+schemes, checked callable bodies, checked constant bodies, checked procedure
+templates, callable eval templates, constant templates, promoted procedures,
+semantic-instantiation procedures, private promoted-capture roots and nodes,
+private capture constant templates, callable-result plans, callable-promotion
+plans, constant reification plans, dependency-summary templates, nested
+procedure-site tables, resolved value references, static dispatch plans,
+method-registry entries, and interface capabilities required to instantiate the
+exported binding or constant at a concrete requested type. The closure must be
+deterministic and complete. If an imported callable or constant template needs an
+entry that is absent from the closure after the imported artifact has been
+accepted, that is a compiler invariant violation: debug builds assert
+immediately and release builds use `unreachable`.
+
+For example, if an exported generic function `id` calls a private helper `go`,
+the exported `id` template closure must include `go`'s checked procedure
+template, checked body, checked type roots and schemes, resolved value-reference
+records, static-dispatch plans, nested procedure sites, and method-registry
+entries needed by `go`. The importer may specialize `go` only because `id`'s
+closure explicitly exposes that private dependency as artifact data. It must not
+scan the exporting module's private definitions, ask the exporter `ModuleEnv`
+for `go`, or lower every exported/private template to find the dependency.
 
 Every private reference in an imported closure is either artifact-qualified by
 `CheckedModuleArtifactKey` or explicitly remapped into an importer-owned closure
@@ -6819,6 +7298,12 @@ used as a semantic key inside an importing artifact. Debug verification must
 assert that every artifact-qualified private ref reachable from an imported
 template is either public/exported or listed in that template's
 `ImportedTemplateClosureView`; release builds use `unreachable` for violations.
+
+Every imported closure must also verify that each `CanonicalTypeKey` and
+`CanonicalTypeSchemeKey` reachable from the closure has a corresponding checked
+type root or scheme in the closure or in the public checked type view of the
+imported artifact. Missing type payload is the same class of invariant violation
+as a missing body or missing resolved value-reference table.
 
 The executable pipeline consumes `LoweringModuleView` values. It may lower only
 roots named by `RootRequestSet`. It must not discover additional roots by
@@ -6873,7 +7358,7 @@ const RootProcedureRequest = struct {
     kind: RootKind,
     module: ModuleId,
     source: RootSource,
-    checked_type: Var,
+    checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
     order: RootOrderKey,
@@ -7510,8 +7995,8 @@ const NestedProcSite = struct {
     site: NestedProcSiteId,
     site_path: Span(NestedProcPathComponent),
     kind: NestedProcKind,
-    source_expr: ?CIR.Expr.Idx,
-    source_pattern: ?CIR.Pattern.Idx,
+    checked_expr: ?CheckedExprId,
+    checked_pattern: ?CheckedPatternId,
 };
 
 const NestedProcKind = enum {
@@ -7579,15 +8064,63 @@ must not recover promoted-procedure identity from `TopLevelValueTable`, symbol
 spelling, private capture graph shape, or callable body syntax.
 
 All key-like fields above are canonical keys, not handles into mutable stores.
-`CanonicalCallableSetKey` is the canonical ordered finite member map plus capture
-slot shape and capture types. Each member entry in the canonical map identifies
-the member procedure value occurrence, equivalent to `ProcedureCallableRef`, and
-the member's capture-slot schema. Therefore `callable_set_key + member` is
-enough to derive the member procedure, tag/discriminant order key, capture
-shape, and capture slot types. Later records may cache those derived values only
-as debug-verified accelerators; they must not treat them as separate semantic
-sources. `ErasedFnSigKey` is the canonical fixed-arity erased function argument
-and return signature plus canonical hidden capture type and `ErasedFnAbiKey`.
+`CanonicalCallableSetKey` is the key for an interned
+`CanonicalCallableSetDescriptor`:
+
+```zig
+const CanonicalCallableSetDescriptor = struct {
+    members: Span(CanonicalCallableSetMember),
+};
+
+const CanonicalCallableSetMember = struct {
+    member: CallableSetMemberId,
+    proc_value: ProcedureCallableRef,
+    capture_slots: Span(CallableSetCaptureSlot),
+    capture_shape_key: CaptureShapeKey,
+};
+
+const CallableSetCaptureSlot = struct {
+    slot: CaptureSlot.Index,
+    source_ty: CanonicalTypeKey,
+    exec_value_ty: CanonicalExecValueTypeKey,
+};
+```
+
+The exact Zig names may differ, but this descriptor is the canonical ordered
+finite member map plus capture-slot shape and capture types. Each member entry
+identifies the selected procedure value occurrence and the member's capture-slot
+schema. Therefore `callable_set_key + member` is enough to derive the member
+procedure, tag/discriminant order key, capture shape, and capture slot types.
+Later records may cache those derived values only as debug-verified
+accelerators; they must not treat them as separate semantic sources.
+
+`CanonicalCallableSetMember.proc_value.source_fn_ty` is part of member identity.
+Two entries with the same callable procedure template but different canonical
+source function types are different finite callable-set members. This is
+required for generic procedures: a single checked template can produce a finite
+callable leaf at `I64 -> I64` and another at `Str -> Str`, and those leaves must
+reserve different mono/executable specializations even though their source
+template is the same. Descriptor interning must therefore include both the
+procedure-template identity and the canonical `source_fn_ty`.
+
+Any occurrence-local construction plan and any `callable_match` branch that
+names a descriptor member must carry the same canonical `source_fn_ty` as the
+member's `ProcedureCallableRef`. This equality is debug-verified at the boundary
+where the construction plan or branch consumes the descriptor. Later stages must
+not infer the requested function type from the member body, from the callee
+syntax, from argument count, from generated procedure names, or from executable
+layout compatibility.
+
+The descriptor must not contain `ExecutableSpecializationKey`, executable
+procedure ids, layout ids, generated symbol text, expression ids, side-table ids,
+LIR temporaries, runtime function pointers, runtime capture pointers, ARC
+placement data, or backend ABI handles. Those belong to later executable, IR,
+LIR, ARC, or backend stages. If a later stage needs executable code for a member,
+it derives or reserves that code from the descriptor plus the requested
+executable call/adapter/materialization context.
+
+`ErasedFnSigKey` is the canonical fixed-arity erased function argument and return
+signature plus canonical hidden capture type and `ErasedFnAbiKey`.
 `CaptureShapeKey` is the canonical `CaptureSlot.index` ordered capture layout
 and capture representation. Each capture slot in the key stores a
 `CanonicalExecValueTypeKey` for that captured value, or the canonical erased
@@ -8141,12 +8674,12 @@ resolveTargetFromExpr
 ```
 
 Chained dispatch works by lowering the receiver expression first and using the
-`StaticDispatchCallPlan.callable_var` result type for the already-lowered call.
+`StaticDispatchCallPlan.callable_ty` result type for the already-lowered call.
 
 The next dispatch in a chain has its own `StaticDispatchCallPlan`. That plan's
-`dispatcher_var` must be the checked type variable selected by the checker for
-that dispatch site. If that variable is the result of an earlier call, mono MIR
-gets the value by instantiating the plan's type variable in the current mono
+`dispatcher_ty` must be the checked type root selected by the checker for that
+dispatch site. If that type root is the result of an earlier call, mono MIR gets
+the value by instantiating the plan's checked type root in the current mono
 specialization, not by inspecting the earlier expression's syntax.
 
 ### Mono Type Store
@@ -8615,11 +9148,11 @@ expression must export exactly one normalized plan:
 
 ```zig
 StaticDispatchCallPlan {
-    expr: CIR.Expr.Idx,
+    expr: CheckedExprId,
     method: MethodNameId,
-    dispatcher_var: Var,
-    callable_var: Var,
-    args: Span(CIR.Expr.Idx),
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    args: Span(CheckedExprId),
     result_mode: StaticDispatchResultMode,
 }
 
@@ -8640,21 +9173,21 @@ procedure, no separate owner-selection field, and no separate downstream
 representation for ordinary method syntax, type-variable qualified syntax, or
 equality syntax.
 
-`dispatcher_var` is the checked type variable whose fully resolved monomorphic type determines
-method lookup. It may come from any part of the checked constraint: the first
-argument, a later argument, the return value, or a variable that appears only in
-the `where` constraint. Mono MIR must consume this explicit variable. It must
-not rediscover it from argument order, result position, receiver syntax, a
-qualified-name prefix, a method name, a module environment lookup, or
-display-name sorting.
+`dispatcher_ty` is the artifact-owned checked type root whose instantiated and
+fully resolved monomorphic type determines method lookup. It may come from any
+part of the checked constraint: the first argument, a later argument, the return
+value, or a type root that appears only in the `where` constraint. Mono MIR must
+consume this explicit checked type root. It must not rediscover it from argument
+order, result position, receiver syntax, a qualified-name prefix, a method name,
+a module environment lookup, or display-name sorting.
 
 "Appears only in the `where` constraint" is a source-syntax statement, not
 permission for an unconstrained post-check owner. A valid checked dispatch plan
 must be determinate for every concrete mono specialization that can reach it.
 After the enclosing checked procedure template is clone-instantiated at its
-requested mono function type, and after the dispatch plan's `callable_var`, all
+requested mono function type, and after the dispatch plan's `callable_ty`, all
 normalized arguments, and the dispatch expression result slot are connected in
-that same mono type store, `dispatcher_var` must fully resolve to exactly one
+that same mono type store, `dispatcher_ty` must fully resolve to exactly one
 allowed method owner.
 
 If two different method owners can satisfy the same
@@ -8662,21 +9195,21 @@ If two different method owners can satisfy the same
 specialization key is missing required semantic input or checking accepted an
 ambiguous dispatch. Both are forbidden. The design chooses the simpler invariant:
 checking may export a `StaticDispatchCallPlan` only when the selected
-`dispatcher_var` is functionally determined by the checked callable type, the
+`dispatcher_ty` is functionally determined by the checked callable type, the
 enclosing expression type, and the concrete mono specialization request. If that
 cannot be proven during checking finalization, checking reports the dispatch as
 ambiguous before publishing the artifact.
 
 For example, a dispatcher selected from a return type is valid when the call
 result is constrained by the enclosing expression or by the requested procedure
-return type. A dispatcher selected from a type variable that is mentioned only in
-a `where` clause and not connected to any argument, return, result, annotation,
-or enclosing requested function type is not a post-check problem; checking must
-reject it before artifact publication.
+return type. A dispatcher selected from a checked type root that is mentioned
+only in a `where` clause and not connected to any argument, return, result,
+annotation, or enclosing requested function type is not a post-check problem;
+checking must reject it before artifact publication.
 
-`callable_var` is the checked fixed-arity function type for the operation. Roc
+`callable_ty` is the checked fixed-arity function type for the operation. Roc
 functions have fixed arity and are not automatically curried. Therefore the
-arity of `callable_var` and the number of normalized `args` must match exactly.
+arity of `callable_ty` and the number of normalized `args` must match exactly.
 
 `args` are the actual value arguments in final call order:
 
@@ -8728,7 +9261,7 @@ only by `negated = true`, and mono emits the same equality operation followed by
 A concrete equality expression that checking proves is always structural may be
 rewritten directly to `structural_eq`. A generic equality expression must keep a
 `StaticDispatchCallPlan` with `result_mode.equality.structural_allowed = true`
-so mono decides per specialization after `dispatcher_var` has been instantiated
+so mono decides per specialization after `dispatcher_ty` has been instantiated
 and fully resolved.
 
 ### Method Lookup In Mono
@@ -8736,11 +9269,11 @@ and fully resolved.
 Mono MIR lowering uses one algorithm for every `StaticDispatchCallPlan` while
 lowering one concrete mono specialization:
 
-1. Instantiate `dispatcher_var` and `callable_var` into the same mono type store
+1. Instantiate `dispatcher_ty` and `callable_ty` into the same mono type store
    with the same clone-instantiation mapping as the expression.
 2. Connect the instantiated callable return slot to this expression's
    instantiated mono result type. This must happen before method lookup because
-   `dispatcher_var` may be selected from the return position.
+   `dispatcher_ty` may be selected from the return position.
 3. Lower all `args` in the normalized order, using the instantiated callable
    argument slots as expected types.
 4. Fully resolve the instantiated dispatcher type.
@@ -8769,7 +9302,7 @@ invariant violation. Checking must have reported invalid dispatch before mono
 MIR begins. Mono debug verification must assert rather than inventing a target;
 the equivalent release-build path is `unreachable`.
 
-If `dispatcher_var` does not fully resolve to one allowed `MethodOwner` after the
+If `dispatcher_ty` does not fully resolve to one allowed `MethodOwner` after the
 callable arguments and return slot have been connected, that is also a compiler
 invariant violation. A dispatch site whose controlling type cannot be
 determined from the checked callable type and enclosing expression type is
@@ -8779,7 +9312,7 @@ release builds.
 
 This invariant is checked only at concrete specialization time. A checked
 procedure template may still contain `StaticDispatchCallPlan` records whose
-`dispatcher_var` is generic. That template is not exported mono MIR. Exported
+`dispatcher_ty` is generic. That template is not exported mono MIR. Exported
 mono MIR must contain only the resolved `call_proc`, `structural_eq`, and
 `bool_not` results produced after clone-instantiating the template for one exact
 `MonoSpecializationKey`.
@@ -8796,7 +9329,7 @@ x.foo().bar()
 the `bar` expression has its own `StaticDispatchCallPlan`. Mono lowers
 `x.foo()` first, unifies the target procedure type with `foo`'s callable type,
 and uses that unified return slot as the receiver expression type for the
-surrounding expression. The `bar` plan still supplies its own `dispatcher_var`.
+surrounding expression. The `bar` plan still supplies its own `dispatcher_ty`.
 Mono must not use the pre-target constraint approximation from `foo` as the
 dispatcher for `bar`.
 
@@ -8823,7 +9356,7 @@ A dotted expression without arguments is checked field access. It is not an
 unresolved static method value and must not be treated as one later.
 
 The registry is only a target table. It does not choose which type controls a
-particular call. `StaticDispatchCallPlan.dispatcher_var` chooses that.
+particular call. `StaticDispatchCallPlan.dispatcher_ty` chooses that.
 
 ## Tags And Constructors
 
@@ -9182,20 +9715,20 @@ before mono consumes the registry.
 
 Use the registry only as the target table for mono lookup. The registry must not
 choose the dispatcher type for a call. The checked dispatch plan chooses that
-with `dispatcher_var`.
+with `dispatcher_ty`.
 
 Each checked dispatch expression that remains after type checking must store:
 
 ```text
 StaticDispatchCallPlan.expr
 StaticDispatchCallPlan.method
-StaticDispatchCallPlan.dispatcher_var
-StaticDispatchCallPlan.callable_var
+StaticDispatchCallPlan.dispatcher_ty
+StaticDispatchCallPlan.callable_ty
 StaticDispatchCallPlan.args
 StaticDispatchCallPlan.result_mode
 ```
 
-`dispatcher_var` must be selected by checked name resolution and type checking
+`dispatcher_ty` must be selected by checked name resolution and type checking
 from the operation's semantic constraint. It must not be inferred later from
 syntax. The same representation is used whether the dispatcher type appears in
 the first argument, a later argument, the return value, or only in the `where`
@@ -9205,7 +9738,7 @@ A concrete equality expression that checking proves is always structural may be
 rewritten to `structural_eq`. A generic equality expression must keep
 `StaticDispatchCallPlan.result_mode.equality.structural_allowed = true` so mono
 can decide per specialization after instantiation and full type-link resolution of
-`dispatcher_var`.
+`dispatcher_ty`.
 
 Then remove downstream `attached_method_index` threading.
 
@@ -9223,14 +9756,17 @@ LoweringModuleView
 ```
 
 The artifact must contain `ModuleEnv`, exports, provides/requires metadata,
-method registry, static dispatch plans, checked procedure templates, root
-requests, hosted procedure table, platform-required binding table, interface
-capabilities, compile-time roots if retained, and `CompileTimeValueStore`.
+checked type store, checked body store, method registry, static dispatch plans,
+checked procedure templates, root requests, hosted procedure table,
+platform-required binding table, interface capabilities, compile-time roots if
+retained, and `CompileTimeValueStore`.
 
 This step must also introduce explicit table shapes for:
 
 ```text
 RootRequestTable
+CheckedTypeStore
+CheckedBodyStore
 CheckedProcedureTemplateTable
 HostedProcTable
 PlatformRequiredBindingTable
@@ -9261,6 +9797,13 @@ Interface capabilities must be published in `ModuleInterfaceCapabilities`.
 Importers must consume these records through `ImportedModuleView`; they must not
 inspect imported private definitions or recreate representation capability data.
 
+Checked type and body stores must be published before checked procedure
+templates are visible to mono MIR or importers. `CheckedProcedureTemplate` rows,
+`StaticDispatchCallPlan` rows, `ResolvedValueRefRecord` rows,
+`CallableEvalTemplate` rows, and `ConstEvalTemplate` rows must point at checked
+type/body store ids instead of raw `types.Var`, raw `CIR.Expr.Idx`, raw
+`CIR.Pattern.Idx`, or exporter-local `ModuleEnv` data.
+
 Commit when checked artifacts can be constructed with these records and debug
 verification proves:
 
@@ -9269,13 +9812,17 @@ verification proves:
   explicit non-procedure top-level value entry
 - every exported promoted procedure has a `PromotedProcedureTable` row whose
   template points at a sealed promoted callable wrapper body
-- every checked procedure template has checked type identity, body identity,
-  static-dispatch plan coverage, and top-level-use summaries
+- every checked procedure template has checked type identity, checked type
+  payload, checked body identity, checked body payload, static-dispatch plan
+  coverage, and top-level-use summaries
 - artifact views are read-only
 - no post-publication code path patches module identity
 - no post-publication code path writes hosted indices into checked CIR
 - no post-publication code path populates platform-required lookup targets by
   mutating checked modules
+- no imported generic specialization path reads the exporter `ModuleEnv`, raw
+  checked expression ids, or checker type store to recover checked type/body
+  payload
 - root requests exist before MIR lowering starts
 - missing root requests are reported before artifact publication or asserted as
   compiler bugs after publication
@@ -9320,7 +9867,8 @@ The exact Zig names may differ, but the lifecycle must not:
 3. The queue reserves the output `MonoSpecializedProcRef`, including its output
    `ProcedureValueRef` and implementation-local `MonoProcHandle`, for each
    `MonoSpecializationKey` before lowering the body.
-4. The body is clone-instantiated into a specialization-local mono type store.
+4. The body is clone-instantiated from artifact-owned checked type/body stores
+   into a specialization-local mono type store.
 5. Static dispatch is resolved inside that specialization-local lowering.
 6. Any new `call_proc` or top-level `proc_value` dependencies enqueue additional
    concrete mono specializations.
@@ -9334,7 +9882,7 @@ public generic function export remains a checked procedure template until a
 concrete consumer requests a concrete mono function type.
 
 This deletion is not cosmetic. Eager lowering can force static dispatch lookup
-inside a generic template before `dispatcher_var` has a concrete method owner.
+inside a generic template before `dispatcher_ty` has a concrete method owner.
 That produces either an invariant violation or a temptation to reintroduce
 owner reconstruction. The queue-based model is the correctness mechanism.
 
@@ -9404,7 +9952,7 @@ choose the dispatcher variable from expression shape, receiver position, result
 position, method name, or module environment lookup.
 
 For every static-dispatch-produced `call_proc`, mono MIR must instantiate the
-plan's `dispatcher_var` and `callable_var` into the current mono type store,
+plan's `dispatcher_ty` and `callable_ty` into the current mono type store,
 connect the callable return slot to the expression's instantiated mono result
 type, lower normalized args through the callable arg slots, fully resolve the
 dispatcher type, resolve `MethodOwner` from that type, look up `(MethodOwner,
@@ -9431,7 +9979,7 @@ Commit when mono MIR verification proves:
 - every dispatcher's mono type fully resolves to exactly one allowed `MethodOwner`
   after callable args and return slot have been connected
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the unified
-  target-procedure type and `StaticDispatchCallPlan.callable_var` type in the
+  target-procedure type and `StaticDispatchCallPlan.callable_ty` type in the
   mono type store
 - `call_proc` targets only top-level mono-specialized procedures
 - mono `proc_value` captures are empty
@@ -10552,8 +11100,9 @@ Checking finalization and compile-time constants:
 
 - checking finalization publishes a complete `CheckedModuleArtifact` or no
   artifact
-- published artifacts include method registry, static dispatch plans, checked
-  procedure template table, root request table, hosted procedure table,
+- published artifacts include checked type store, checked body store, method
+  registry, static dispatch plans, checked procedure template table, root request
+  table, hosted procedure table,
   platform-required binding table, resolved value-reference table, interface
   capabilities, and compile-time value store
 - published artifacts, imported artifact views, checked-artifact cache keys,
@@ -10568,14 +11117,23 @@ Checking finalization and compile-time constants:
   root procedure identity, promoted procedure identity, erased code ref, or cache
   key must fail debug verification immediately; release builds use `unreachable`
   for the equivalent compiler-invariant path and do not retain verifier metadata
+- test-only callable-set descriptors with a corrupted `CallableSetMemberId`,
+  missing `ProcedureCallableRef`, wrong `ProcedureCallableRef.source_fn_ty`,
+  reordered `CaptureSlot.index`, mismatched `CaptureShapeKey`, or capture slot
+  whose `CanonicalExecValueTypeKey` disagrees with the member descriptor must fail
+  debug verification immediately; release builds use `unreachable` for the
+  equivalent compiler-invariant path and do not retain verifier metadata
 - every promoted callable `procedure_binding` published in `TopLevelValueTable`
   has a `PromotedProcedureTable` row, a stable `ProcBaseKeyRef`, a
   `PromotedCallableNodeId`, a sealed `CheckedProcedureTemplate`, and a concrete
   `ProcedureValueRef`
-- `CheckedProcedureTemplate.body` distinguishes source expressions from
-  promoted callable wrappers, hosted wrappers, intrinsic wrappers, and entry
-  wrappers; mono MIR consumes the template body variant instead of searching for
-  bodies through symbol names
+- `CheckedProcedureTemplate.body` points at a sealed `CheckedBodyId` or an
+  explicit compiler-created wrapper variant. It never points at a raw
+  `CIR.Expr.Idx`, and mono MIR consumes the template body variant instead of
+  searching for bodies through symbol names.
+- artifact verification rejects any exported/imported `CanonicalTypeKey` or
+  `CanonicalTypeSchemeKey` without a checked type payload, and any checked body
+  node without a checked type id
 - artifact views exposed to importers and lowering are read-only
 - a cache hit does not patch module identity after deserialization
 - hosted procedure ordering is stored in `HostedProcTable`, not by mutating
@@ -10594,8 +11152,10 @@ Checking finalization and compile-time constants:
 - imported modules expose representation capabilities through
   `ModuleInterfaceCapabilities` and exported checked procedure templates through
   `ImportedModuleView`
-- importing modules do not inspect imported private definitions or opaque
-  backing syntax to rebuild representation capability data
+- importing modules do not inspect imported private definitions, opaque backing
+  syntax, exporter `ModuleEnv`, raw checked expression ids, or exporter checker
+  type stores to rebuild representation capability data, checked body payloads,
+  or checked type payloads
 - checked artifact verification rejects any value-like reference that lacks a
   `ResolvedValueRefRecord`
 - checked artifact verification distinguishes local shadowing from top-level or
@@ -10657,11 +11217,11 @@ Mono MIR:
 - static dispatch consumes checked `StaticDispatchCallPlan` values and the
   checked method registry, never syntax-derived method lookup in mono MIR
 - static-dispatch plans consumed by mono MIR carry canonical `MethodNameId` and
-  `dispatcher_var`; mono tests must prove identical method spellings from
+  `dispatcher_ty`; mono tests must prove identical method spellings from
   different identifier stores resolve through the same canonical method name and
   never through raw `Ident.Idx`
 - static-dispatch `call_proc.requested_fn_ty` is the mono-store unification of
-  `StaticDispatchCallPlan.callable_var` and the target procedure type
+  `StaticDispatchCallPlan.callable_ty` and the target procedure type
 - every `call_proc.proc` and `proc_value.proc` is a `ProcedureValueRef`, never a
   raw `Symbol`; implementation-local procedure handles are allowed only inside
   the live mono procedure store and cannot appear in exported mono MIR snapshots
@@ -10873,14 +11433,53 @@ Executable MIR:
 - direct call arg/result types match signatures
 - direct, erased, and callable-set calls preserve fixed Roc arity
 - every finite callable-set call lowers to an explicit `callable_match`
+- every finite callable-set value construction consumes a
+  `CallableSetConstructionPlan` for that exact value occurrence
+- every present `CallableSetConstructionPlan` is owned by exactly one
+  `CallableValueInfo`, has `construction.result` equal to that occurrence's
+  `ValueInfoId`, and the occurrence's `CallableValueEmissionPlan` is
+  `finite_callable_set(construction.callable_set_key)`
+- no finite non-erased `proc_value` occurrence that must be emitted as a value
+  reaches executable MIR without a `CallableSetConstructionPlan`, and no carried
+  finite callable-set value from a parameter, projection, branch join, call
+  result, return, capture, aggregate field, bridge, or constant incorrectly
+  carries a construction plan
+- every `CallableSetConstructionPlan` points at a valid
+  `CanonicalCallableSetDescriptor` member, and its `capture_values` count and
+  order match that member's `CaptureSlot.index` ordered capture schema
+- every `CallableSetConstructionPlan.source_fn_ty` exactly equals the selected
+  descriptor member's `ProcedureCallableRef.source_fn_ty` after canonical type
+  normalization
+- debug-only invalid executable-MIR verifier tests corrupt
+  `CallableSetConstructionPlan.result`, corrupt the owning
+  `CallableValueInfo.emission_plan`, remove the construction plan from a
+  finite-emitted `proc_value`, add a construction plan to an already-carried
+  finite callable-set value, and change `construction.source_fn_ty`; each
+  corruption must panic at the first executable boundary that consumes the
+  record
+- executable MIR evaluates callable-set construction captures exactly once and
+  stores them in one member payload before any later `callable_match` can
+  destructure them
 - every `callable_match` binds the callable expression and original call
   arguments once, before member branching
+- every `callable_match.requested_source_fn_ty` exactly equals the original
+  `call_value.requested_fn_ty` after canonical type normalization
 - every `callable_match` branch corresponds to exactly one callable-set member
 - every `callable_match` branch names its member through
   `CallableSetMemberRef { callable_set_key, member_index }`, and derives the
   member procedure value, discriminant/tag order, capture-slot schema, and capture
   shape from that key under debug verification; it must not store raw `Symbol` as
   member identity
+- every `callable_match` branch's descriptor member
+  `ProcedureCallableRef.source_fn_ty` and
+  `ExecutableSpecializationKey.requested_fn_ty` exactly equal
+  `callable_match.requested_source_fn_ty`; same-template/different-type members
+  must not share one executable specialization
+- debug-only invalid executable-MIR verifier tests corrupt
+  `callable_match.requested_source_fn_ty`, corrupt one branch's descriptor-member
+  source function type, and corrupt one branch's
+  `ExecutableSpecializationKey.requested_fn_ty`; each corruption must panic
+  before IR lowering
 - every `callable_match` branch has a reserved executable specialization
 - every `callable_match` branch stores exact `direct_args` as
   `ExecutableValueRef` handles, never as arbitrary expressions
@@ -11004,14 +11603,14 @@ Static dispatch:
 - generic exported procedures containing static dispatch remain export-table
   templates until imported at concrete types; exporting the module alone must not
   perform method-owner lookup
-- ambiguous static dispatch whose `dispatcher_var` is not determined by the
+- ambiguous static dispatch whose `dispatcher_ty` is not determined by the
   checked callable type, enclosing expression type, and requested mono function
   type is reported before artifact publication
 - chained dispatch uses each dispatch site's own `StaticDispatchCallPlan` and
   the earlier call's unified return slot
 - chained dispatch does not call any expression-based method resolver
 - type-var alias dispatch resolves from the specialized dispatcher type selected
-  by `StaticDispatchCallPlan.dispatcher_var`
+  by `StaticDispatchCallPlan.dispatcher_ty`
 - primitive methods resolve through builtin primitive owners
 - list methods resolve through the builtin `List` owner
 - box methods resolve through the builtin `Box` owner
@@ -11069,6 +11668,11 @@ Callable/capture behavior:
 - recursive local functions that capture values containing self/sibling
   procedure values solve through one shared recursive specialization
   `RepresentationSolveSession`
+- recursive local functions that return or capture aggregates containing
+  self/sibling procedure values, such as records, tuples, tags, lists, boxes, and
+  source `match` branch results, create `CaptureProcValueEdge` records during
+  lifted MIR graph construction and converge through the same fixed point as
+  direct self/sibling procedure-value references
 - closure returned from a function
 - closure passed as an argument
 - `call_proc` with exact executable argument and result representations lowers
@@ -11078,8 +11682,19 @@ Callable/capture behavior:
   direct call
 - singleton `call_value(proc_value(...))` lowers to `callable_match`
 - captured local function calls lower through explicit `proc_value` captures
+- a source `match` whose branches return different closures constructs finite
+  callable-set values in the branch bodies, joins them as ordinary values, allows
+  the joined callable to be stored in a record/tag/list or returned from the
+  function, and later calls it through `callable_match`
+- a callable value stored in an aggregate before being called preserves the
+  original `CallableSetConstructionPlan`, canonical callable-set member, and
+  evaluated capture payload; the later call must not recover the member from
+  source syntax or rebuild captures from source variables
 - finite callable-set calls evaluate callable and arguments exactly once before
   branch dispatch
+- finite callable-set construction evaluates captured values exactly once before
+  constructing the member payload, and later `callable_match` branches consume
+  only the stored payload
 - finite callable-set branch direct calls receive source args plus optional
   trailing capture record
 - finite callable-set branch results bridge into one shared callable-match
@@ -11154,6 +11769,20 @@ objects.
   captures. The MIR-family assertion is that the two executable specializations
   have distinct recursive `CanonicalExecValueTypeKey` argument keys, distinct
   callable-set keys, and no raw type-store ids in their keys.
+- extend that generic higher-order shape with the same source procedure template
+  used at two concrete function types, such as `I64 -> I64` and
+  `Str -> Str`. The expected lambda-solved output must contain two finite
+  callable leaves whose descriptor members differ by
+  `ProcedureCallableRef.source_fn_ty`, and the expected executable output must
+  reserve separate `ExecutableSpecializationKey` rows. A test that only compares
+  procedure template identity is insufficient.
+- add a finite callable construction/call round-trip test where a source
+  `match` branch constructs a selected callable member, a later branch join
+  carries the already-constructed callable-set value, and the later call lowers
+  through `callable_match`. The expected records must show that only the branch
+  construction occurrence has a `CallableSetConstructionPlan`; the join value
+  and final callee value carry finite callable-set emission metadata without
+  inventing a selected member.
 - add a same-source-function-type test with two unrelated local values of type
   `I64 -> I64`, one captureless and one capturing an `I64`. The expected
   lambda-solved output must allocate distinct callable variables at import, and
@@ -11572,10 +12201,11 @@ Compile-time constants:
 - debug-only artifact verifier tests must reject generalized executable MIR
   inputs that came from a `CallableEvalTemplate` without a concrete
   `CallableBindingInstantiationKey`; imported procedure binding views whose
-  template closure omits a required checked callable body, checked constant body,
-  checked procedure template, callable eval template, const template, static
-  dispatch plan, resolved value-reference table, method-registry entry, or
-  interface capability; generic value graphs whose callable leaf stores a lifted
+  template closure omits a required checked body, checked type root, checked type
+  scheme, checked callable body, checked constant body, checked procedure
+  template, callable eval template, const template, static dispatch plan,
+  resolved value-reference table, method-registry entry, or interface capability;
+  generic value graphs whose callable leaf stores a lifted
   template with no real owner mono specialization; concrete
   `CallableBindingInstance` rows missing their concrete dependency summary,
   executable root, callable result plan, promotion plan when promotion occurred,
@@ -11589,12 +12219,14 @@ Compile-time constants:
 - debug-only imported-closure verifier tests must reject an imported template
   closure that uses exporter-local private ids without artifact qualification or
   explicit remapping into the importer-owned closure namespace. Separate corrupt
-  fixtures must omit a reachable private capture node, private capture constant
-  template, semantic-instantiation procedure row, callable result plan, callable
-  promotion plan, constant reification plan, dependency summary template, or
-  checked procedure template needed by an imported `ConstEvalTemplate` or
-  `CallableEvalTemplate`. The verifier must panic at import/checking
-  finalization time, before executable MIR can see the template.
+  fixtures must omit a reachable checked body, checked type root, checked type
+  scheme, private capture node, private capture constant template,
+  semantic-instantiation procedure row, callable result plan, callable promotion
+  plan, constant reification plan, dependency summary template, or checked
+  procedure template needed by an imported `ConstEvalTemplate`,
+  `CallableEvalTemplate`, or exported generic procedure template. The verifier
+  must panic at import/checking finalization time, before executable MIR can see
+  the template.
 - concrete instantiation ownership tests must put `table = { f: |x| x }` in one
   module, import it in another module, and use it at both `{ f : I64 -> I64 }`
   and `{ f : Str -> Str }`. The importer must own two sealed concrete
@@ -11716,9 +12348,10 @@ The cutover is complete only when all of these are true:
   artifacts
 - checked artifacts contain root requests, hosted procedure tables,
   platform-required binding tables, interface capabilities, method registries,
-  static dispatch plans, checked procedure template tables, compile-time value
-  stores, constant instantiation stores, callable binding instantiation stores,
-  and semantic-instantiation procedure tables
+  static dispatch plans, checked type stores, checked body stores, checked
+  procedure template tables, compile-time value stores, constant instantiation
+  stores, callable binding instantiation stores, and semantic-instantiation
+  procedure tables
 - published checked artifacts are consumed through read-only views and are not
   patched after cache load or publication
 - no post-check stage mutates checked CIR or `ModuleEnv` to assign hosted
@@ -11733,10 +12366,11 @@ The cutover is complete only when all of these are true:
   explicit roots
 - imported modules expose representation capabilities, compile-time constants,
   exported checked procedure templates, and exported callable binding templates
-  only through their checked artifacts, imported procedure-binding views,
-  imported const-template views, artifact-qualified imported template closures,
-  sealed const instantiation stores, sealed callable binding instantiation
-  stores, and sealed semantic-instantiation procedure tables
+  only through their checked artifacts, checked type/body store views, imported
+  procedure-binding views, imported const-template views, artifact-qualified
+  imported template closures, sealed const instantiation stores, sealed callable
+  binding instantiation stores, and sealed semantic-instantiation procedure
+  tables
 - public post-check semantic lowering APIs return resource errors only; semantic
   missing-data conditions are checking diagnostics before publication or
   compiler invariant violations after publication
@@ -11797,7 +12431,7 @@ The cutover is complete only when all of these are true:
   resolved direct procedure call, resolved static dispatch call, and resolved
   custom equality call
 - every static-dispatch-produced `call_proc.requested_fn_ty` is the mono-store
-  unification of `StaticDispatchCallPlan.callable_var` and the instantiated
+  unification of `StaticDispatchCallPlan.callable_ty` and the instantiated
   target procedure type
 - mono MIR `call_proc` targets only top-level mono-specialized procedures
 - mono MIR top-level `proc_value` targets are mono-specialized at the exact
@@ -11893,6 +12527,18 @@ The cutover is complete only when all of these are true:
   emitting `call_direct`
 - executable MIR lowers every finite non-erased callable-set call to explicit
   `callable_match`
+- executable MIR lowers finite callable-set value construction only from
+  `CallableSetConstructionPlan` records attached to the exact value occurrence
+- executable MIR verifies that every finite callable-set construction plan's
+  owning `CallableValueInfo`, finite emission plan, selected descriptor member,
+  capture schema, and canonical `source_fn_ty` agree before emitting
+  `callable_set_value`
+- callable-set construction evaluates capture operands exactly once, stores them
+  in a member payload in `CaptureSlot.index` order, and later calls consume that
+  payload instead of rebuilding captures
+- executable MIR verifies that every `callable_match` branch uses the same
+  canonical requested source function type as the call site, the descriptor
+  member, and the reserved `ExecutableSpecializationKey`
 - executable MIR synthesizes erased adapters for finite callable-set values
   crossing erased `Box(T)` boundaries
 - executable MIR records exact branch `direct_args` as `ExecutableValueRef`
@@ -11914,6 +12560,9 @@ The cutover is complete only when all of these are true:
 - packed erased function values carry typed capture metadata that distinguishes
   no capture, zero-sized typed capture, and boxed runtime capture payload
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
+- callable-set member identity resolves through
+  `CanonicalCallableSetDescriptor`; cached member procedure refs, capture shapes,
+  and capture-slot schemas are debug-verified accelerators only
 - executable specialization keys use semantic base/type/representation keys,
   not `ProcOrderKey`, raw type ids, expression ids, or side-table ids
 - executable MIR consumes `BoxPayloadRepresentationPlan` instead of making

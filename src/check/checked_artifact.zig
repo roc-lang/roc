@@ -257,10 +257,18 @@ pub const PublishInputs = struct {
 pub const ExportTable = struct {
     defs: []CIR.Def.Idx = &.{},
 
+    pub fn view(self: *const ExportTable) ExportTableView {
+        return .{ .defs = self.defs };
+    }
+
     pub fn deinit(self: *ExportTable, allocator: Allocator) void {
         allocator.free(self.defs);
         self.* = .{};
     }
+};
+
+pub const ExportTableView = struct {
+    defs: []const CIR.Def.Idx = &.{},
 };
 
 pub const ProvidesRequiresMetadata = struct {
@@ -329,19 +337,6 @@ pub const RootRequestTable = struct {
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
-
-        const module_env = module.moduleEnvConst();
-        const exports = module_env.store.sliceDefs(module_env.exports);
-        for (exports) |def_idx| {
-            try appendRoot(&requests, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .provided_export,
-                .source = .{ .def = def_idx },
-                .checked_type = module.defType(def_idx),
-                .abi = .roc,
-                .exposure = .exported,
-            });
-        }
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
@@ -1913,6 +1908,13 @@ pub const TopLevelValueTable = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 
+    pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
+        for (self.entries) |entry| {
+            if (entry.pattern == pattern) return entry;
+        }
+        return null;
+    }
+
     pub fn deinit(self: *TopLevelValueTable, allocator: Allocator) void {
         allocator.free(self.entries);
         self.* = .{};
@@ -2177,6 +2179,275 @@ pub const CompileTimeValueStore = struct {
     }
 };
 
+pub const CheckedCallableBodyRef = enum(u32) { _ };
+pub const CheckedConstBodyRef = enum(u32) { _ };
+pub const ConstTemplateId = enum(u32) { _ };
+pub const ConstInstanceId = enum(u32) { _ };
+pub const CallableBindingInstanceId = enum(u32) { _ };
+pub const SemanticInstantiationProcedureId = enum(u32) { _ };
+pub const CallableResultPlanId = enum(u32) { _ };
+pub const CallablePromotionPlanId = enum(u32) { _ };
+pub const ConstReificationPlanId = enum(u32) { _ };
+pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
+pub const PrivateCaptureId = enum(u32) { _ };
+pub const PrivateCaptureNodeId = enum(u32) { _ };
+pub const MethodRegistryEntryRef = enum(u32) { _ };
+
+pub const ArtifactCheckedCallableBodyRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    body: CheckedCallableBodyRef,
+};
+
+pub const ArtifactCheckedConstBodyRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    body: CheckedConstBodyRef,
+};
+
+pub const ArtifactProcedureTemplateRef = canonical.ProcedureTemplateRef;
+
+pub const ArtifactCallableEvalTemplateRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    template: CallableEvalTemplateId,
+};
+
+pub const ArtifactResolvedValueRefTableRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    table: ResolvedValueRefTableRef,
+};
+
+pub const ArtifactStaticDispatchPlanTableRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    table: StaticDispatchPlanTableRef,
+};
+
+pub const ArtifactNestedProcSiteTableRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    table: NestedProcSiteTableRef,
+};
+
+pub const ArtifactCallableResultPlanRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    plan: CallableResultPlanId,
+};
+
+pub const ArtifactCallablePromotionPlanRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    plan: CallablePromotionPlanId,
+};
+
+pub const ArtifactConstGraphReificationPlanRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    plan: ConstReificationPlanId,
+};
+
+pub const ArtifactComptimeDependencySummaryTemplateRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    template: ComptimeDependencySummaryTemplateId,
+};
+
+pub const ArtifactPrivateCaptureNodeRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    node: PrivateCaptureNodeId,
+};
+
+pub const ImportedTemplateClosureView = struct {
+    checked_callable_bodies: []const ArtifactCheckedCallableBodyRef = &.{},
+    checked_const_bodies: []const ArtifactCheckedConstBodyRef = &.{},
+    checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
+    callable_eval_templates: []const ArtifactCallableEvalTemplateRef = &.{},
+    const_templates: []const ConstRef = &.{},
+    promoted_procedures: []const PromotedProcedureRef = &.{},
+    semantic_instantiation_procedures: []const SemanticInstantiationProcedureId = &.{},
+    private_capture_roots: []const PrivateCaptureId = &.{},
+    private_capture_nodes: []const ArtifactPrivateCaptureNodeRef = &.{},
+    private_capture_const_templates: []const ConstRef = &.{},
+    callable_result_plans: []const ArtifactCallableResultPlanRef = &.{},
+    callable_promotion_plans: []const ArtifactCallablePromotionPlanRef = &.{},
+    const_reification_plans: []const ArtifactConstGraphReificationPlanRef = &.{},
+    dependency_summary_templates: []const ArtifactComptimeDependencySummaryTemplateRef = &.{},
+    nested_proc_sites: []const ArtifactNestedProcSiteTableRef = &.{},
+    resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
+    static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
+    method_registry_entries: []const MethodRegistryEntryRef = &.{},
+    interface_capabilities: ModuleInterfaceCapabilities = .{
+        .exported_def_count = 0,
+        .method_count = 0,
+        .provides_count = 0,
+        .requires_count = 0,
+    },
+};
+
+pub const ExportedProcedureTemplate = struct {
+    export_name: ?canonical.ExportNameId,
+    def: CIR.Def.Idx,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    template: canonical.ProcedureTemplateRef,
+    template_closure: ImportedTemplateClosureView = .{},
+};
+
+pub const ExportedProcedureTemplateView = struct {
+    templates: []const ExportedProcedureTemplate = &.{},
+};
+
+pub const ExportedProcedureTemplateTable = struct {
+    templates: []ExportedProcedureTemplate = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        checked_templates: *const CheckedProcedureTemplateTable,
+    ) Allocator.Error!ExportedProcedureTemplateTable {
+        var templates = std.ArrayList(ExportedProcedureTemplate).empty;
+        errdefer templates.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+            const template = checked_templates.lookupByDef(def_idx) orelse continue;
+            const def = module.def(def_idx);
+            const export_name = if (def.patternName()) |name|
+                try names.internExportIdent(module.identStoreConst(), name)
+            else
+                null;
+            const source_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                module.defType(def_idx),
+            );
+            try templates.append(allocator, .{
+                .export_name = export_name,
+                .def = def_idx,
+                .source_scheme = source_scheme,
+                .template = template,
+            });
+        }
+
+        return .{ .templates = try templates.toOwnedSlice(allocator) };
+    }
+
+    pub fn view(self: *const ExportedProcedureTemplateTable) ExportedProcedureTemplateView {
+        return .{ .templates = self.templates };
+    }
+
+    pub fn deinit(self: *ExportedProcedureTemplateTable, allocator: Allocator) void {
+        allocator.free(self.templates);
+        self.* = .{};
+    }
+};
+
+pub const ImportedProcedureBindingBody = union(enum) {
+    direct_template: DirectProcedureBinding,
+    callable_eval_template: CallableEvalTemplateId,
+};
+
+pub const ImportedProcedureBindingView = struct {
+    binding: ImportedProcedureBindingRef,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    body: ImportedProcedureBindingBody,
+    template_closure: ImportedTemplateClosureView = .{},
+};
+
+pub const ExportedProcedureBindingView = struct {
+    bindings: []const ImportedProcedureBindingView = &.{},
+};
+
+pub const ExportedProcedureBindingTable = struct {
+    bindings: []ImportedProcedureBindingView = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        top_level_values: *const TopLevelValueTable,
+        procedure_bindings: *const TopLevelProcedureBindingTable,
+        artifact_key: CheckedModuleArtifactKey,
+    ) Allocator.Error!ExportedProcedureBindingTable {
+        var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
+        errdefer bindings.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+            const def = module.def(def_idx);
+            const top_level = top_level_values.lookupByPattern(def.pattern.idx) orelse continue;
+            const binding_ref = switch (top_level.value) {
+                .procedure_binding => |binding| binding,
+                .const_ref, .pending_callable_root => continue,
+            };
+            const binding = procedure_bindings.get(binding_ref);
+            const body: ImportedProcedureBindingBody = switch (binding.body) {
+                .direct_template => |direct| .{ .direct_template = direct },
+                .callable_eval_template => |template| .{ .callable_eval_template = template },
+            };
+            try bindings.append(allocator, .{
+                .binding = .{
+                    .artifact = artifact_key,
+                    .module_idx = module.moduleIndex(),
+                    .def = def_idx,
+                    .pattern = def.pattern.idx,
+                },
+                .source_scheme = binding.source_scheme,
+                .body = body,
+            });
+        }
+
+        return .{ .bindings = try bindings.toOwnedSlice(allocator) };
+    }
+
+    pub fn view(self: *const ExportedProcedureBindingTable) ExportedProcedureBindingView {
+        return .{ .bindings = self.bindings };
+    }
+
+    pub fn deinit(self: *ExportedProcedureBindingTable, allocator: Allocator) void {
+        allocator.free(self.bindings);
+        self.* = .{};
+    }
+};
+
+pub const ConstTemplate = struct {
+    body: CheckedConstBodyRef,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    resolved_value_refs: ResolvedValueRefTableRef = .{},
+    static_dispatch_plans: StaticDispatchPlanTableRef = .{},
+    nested_proc_sites: NestedProcSiteTableRef = .{},
+    dependency_template: ComptimeDependencySummaryTemplateId,
+};
+
+pub const ImportedConstTemplateView = struct {
+    const_ref: ConstRef,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    template: ConstTemplate,
+    template_closure: ImportedTemplateClosureView = .{},
+};
+
+pub const ExportedConstTemplateView = struct {
+    templates: []const ImportedConstTemplateView = &.{},
+};
+
+pub const ExportedConstTemplateTable = struct {
+    templates: []ImportedConstTemplateView = &.{},
+
+    pub fn deinit(self: *ExportedConstTemplateTable, allocator: Allocator) void {
+        allocator.free(self.templates);
+        self.* = .{};
+    }
+
+    pub fn view(self: *const ExportedConstTemplateTable) ExportedConstTemplateView {
+        return .{ .templates = self.templates };
+    }
+};
+
+pub const ConstInstantiationStoreView = struct {
+    instances: []const ConstInstanceId = &.{},
+};
+
+pub const CallableBindingInstantiationStoreView = struct {
+    instances: []const CallableBindingInstanceId = &.{},
+};
+
+pub const SemanticInstantiationProcedureTableView = struct {
+    procedures: []const SemanticInstantiationProcedureId = &.{},
+};
+
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     canonical_names: canonical.CanonicalNameStore,
@@ -2185,6 +2456,9 @@ pub const CheckedModuleArtifact = struct {
     direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
     module_env: ModuleEnvStorage,
     exports: ExportTable,
+    exported_procedure_templates: ExportedProcedureTemplateTable = .{},
+    exported_procedure_bindings: ExportedProcedureBindingTable = .{},
+    exported_const_templates: ExportedConstTemplateTable = .{},
     provides_requires: ProvidesRequiresMetadata,
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
@@ -2200,6 +2474,9 @@ pub const CheckedModuleArtifact = struct {
     top_level_values: TopLevelValueTable,
     promoted_procedures: PromotedProcedureTable,
     comptime_values: CompileTimeValueStore,
+    const_instances: ConstInstantiationStoreView = .{},
+    callable_binding_instances: CallableBindingInstantiationStoreView = .{},
+    semantic_instantiation_procedures: SemanticInstantiationProcedureTableView = .{},
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -2218,6 +2495,9 @@ pub const CheckedModuleArtifact = struct {
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
+        _ = self.semantic_instantiation_procedures;
+        _ = self.callable_binding_instances;
+        _ = self.const_instances;
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
@@ -2231,6 +2511,9 @@ pub const CheckedModuleArtifact = struct {
         self.static_dispatch_plans.deinit(allocator);
         self.method_registry.deinit(allocator);
         self.provides_requires.deinit(allocator);
+        self.exported_const_templates.deinit(allocator);
+        self.exported_procedure_bindings.deinit(allocator);
+        self.exported_procedure_templates.deinit(allocator);
         self.exports.deinit(allocator);
         allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
@@ -2366,18 +2649,16 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
-    canonical_names: *const canonical.CanonicalNameStore,
-    exports: *const ExportTable,
-    checked_procedure_templates: *const CheckedProcedureTemplateTable,
-    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    exports: ExportTableView,
+    exported_procedure_templates: ExportedProcedureTemplateView,
+    exported_procedure_bindings: ExportedProcedureBindingView,
+    exported_const_templates: ExportedConstTemplateView,
     method_registry: *const static_dispatch.MethodRegistry,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    platform_required_declarations: *const PlatformRequiredDeclarationTable,
-    platform_required_bindings: *const PlatformRequiredBindingTable,
     interface_capabilities: *const ModuleInterfaceCapabilities,
-    compile_time_roots: *const CompileTimeRootTable,
-    top_level_values: *const TopLevelValueTable,
     comptime_values: *const CompileTimeValueStore,
+    const_instances: ConstInstantiationStoreView,
+    callable_binding_instances: CallableBindingInstantiationStoreView,
+    semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
 };
 
 pub const LoweringModuleView = struct {
@@ -2390,18 +2671,16 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .key = artifact.key,
         .module_identity = artifact.module_identity,
-        .canonical_names = &artifact.canonical_names,
-        .exports = &artifact.exports,
-        .checked_procedure_templates = &artifact.checked_procedure_templates,
-        .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .exports = artifact.exports.view(),
+        .exported_procedure_templates = artifact.exported_procedure_templates.view(),
+        .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
+        .exported_const_templates = artifact.exported_const_templates.view(),
         .method_registry = &artifact.method_registry,
-        .resolved_value_refs = &artifact.resolved_value_refs,
-        .platform_required_declarations = &artifact.platform_required_declarations,
-        .platform_required_bindings = &artifact.platform_required_bindings,
         .interface_capabilities = &artifact.interface_capabilities,
-        .compile_time_roots = &artifact.compile_time_roots,
-        .top_level_values = &artifact.top_level_values,
         .comptime_values = &artifact.comptime_values,
+        .const_instances = artifact.const_instances,
+        .callable_binding_instances = artifact.callable_binding_instances,
+        .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures,
     };
 }
 
@@ -2731,6 +3010,26 @@ pub fn publishFromTypedModule(
     errdefer top_level_values.deinit(allocator);
     try comptime_values.sealBindings();
 
+    var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_procedure_templates,
+    );
+    errdefer exported_procedure_templates.deinit(allocator);
+
+    var exported_procedure_bindings = try ExportedProcedureBindingTable.fromModule(
+        allocator,
+        module,
+        &top_level_values,
+        &top_level_procedure_bindings,
+        artifact_key,
+    );
+    errdefer exported_procedure_bindings.deinit(allocator);
+
+    var exported_const_templates = ExportedConstTemplateTable{};
+    errdefer exported_const_templates.deinit(allocator);
+
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         modules,
@@ -2760,6 +3059,9 @@ pub fn publishFromTypedModule(
         .direct_import_artifact_keys = direct_import_artifact_keys,
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
+        .exported_procedure_templates = exported_procedure_templates,
+        .exported_procedure_bindings = exported_procedure_bindings,
+        .exported_const_templates = exported_const_templates,
         .provides_requires = .{
             .provides = provides,
             .requires = requires,
@@ -2828,6 +3130,6 @@ test "artifact views are read-only projections" {
 
     const imported = importedView(&artifact);
     const lowering = loweringView(&artifact);
-    try std.testing.expect(imported.exports == &artifact.exports);
+    try std.testing.expect(imported.exports.defs.ptr == artifact.exports.defs.ptr);
     try std.testing.expect(lowering.roots == &artifact.root_requests);
 }

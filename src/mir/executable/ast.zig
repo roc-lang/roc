@@ -64,7 +64,7 @@ pub const DirectCallArg = struct {
 
 pub const CallDirectPlan = struct {
     source: canonical.ProcedureValueRef,
-    executable_specialization_key: canonical.CanonicalTypeKey,
+    executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
     result_bridge: ?BridgeId = null,
@@ -72,9 +72,29 @@ pub const CallDirectPlan = struct {
 
 pub const CallableSetMemberRef = repr.CallableSetMemberRef;
 
+pub const CaptureValueRef = struct {
+    slot: u32,
+    value: ExecutableValueRef,
+    exec_ty: TypeId,
+};
+
+pub const CallableCaptureRecord = struct {
+    capture_shape_key: repr.CaptureShapeKey,
+    values: Span(CaptureValueRef),
+    record_tmp: ExecutableValueRef,
+};
+
+pub const CallableSetValue = struct {
+    construction_plan: repr.CallableSetConstructionPlanId,
+    callable_set_key: repr.CanonicalCallableSetKey,
+    member: CallableSetMemberRef,
+    capture_record: ?CallableCaptureRecord = null,
+};
+
 pub const CallableMatchBranch = struct {
     member: CallableSetMemberRef,
-    executable_specialization_key: canonical.CanonicalTypeKey,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
     result_bridge: ?BridgeId = null,
@@ -130,14 +150,15 @@ pub const Expr = struct {
             args: Span(ExecutableValueRef),
             sig_key: repr.ErasedFnSigKey,
         },
-        callable_set_value: struct {
-            key: repr.CanonicalCallableSetKey,
-            members: Span(CallableSetMemberRef),
-        },
+        callable_set_value: CallableSetValue,
         callable_match: struct {
+            callable_set_key: repr.CanonicalCallableSetKey,
+            requested_source_fn_ty: canonical.CanonicalTypeKey,
             callee: ExecutableValueRef,
             args: Span(ExecutableValueRef),
             branches: Span(CallableMatchBranch),
+            result_ty: TypeId,
+            result_value: ExecutableValueRef,
         },
         packed_erased_fn: PackedErasedFn,
         low_level: struct {
@@ -194,7 +215,7 @@ pub const FnDef = struct {
 pub const Def = struct {
     proc: ExecutableProcId,
     source_proc: canonical.ProcedureValueRef,
-    specialization_key: canonical.CanonicalTypeKey,
+    specialization_key: repr.ExecutableSpecializationKey,
     value: FnDef,
 };
 
@@ -207,6 +228,7 @@ pub const Store = struct {
     defs: std.ArrayList(Def),
     expr_ids: std.ArrayList(ExprId),
     value_refs: std.ArrayList(ExecutableValueRef),
+    capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
     typed_values: std.ArrayList(TypedValue),
@@ -221,6 +243,7 @@ pub const Store = struct {
             .defs = .empty,
             .expr_ids = .empty,
             .value_refs = .empty,
+            .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
             .typed_values = .empty,
@@ -231,6 +254,7 @@ pub const Store = struct {
         self.typed_values.deinit(self.allocator);
         self.callable_match_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
+        self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
         self.expr_ids.deinit(self.allocator);
         self.defs.deinit(self.allocator);
