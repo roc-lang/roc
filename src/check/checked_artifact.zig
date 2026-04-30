@@ -4547,6 +4547,16 @@ pub const CallableResultPlanId = enum(u32) { _ };
 pub const CallablePromotionPlanId = enum(u32) { _ };
 pub const ConstReificationPlanId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
+pub const ComptimeDependencySummaryId = enum(u32) { _ };
+pub const ComptimeValuePathKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+pub const PromotedCallablePathKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+pub const PrivateCapturePathKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
 pub const PrivateCaptureId = enum(u32) { _ };
 pub const PrivateCaptureNodeId = enum(u32) { _ };
 pub const MethodRegistryEntryRef = enum(u32) { _ };
@@ -5032,16 +5042,736 @@ pub const ExportedConstTemplateTable = struct {
 };
 
 pub const ConstInstantiationStoreView = struct {
-    instances: []const ConstInstanceId = &.{},
+    owner: CheckedModuleArtifactKey = .{},
+    instances: []const ConstInstantiationRecord = &.{},
 };
 
 pub const CallableBindingInstantiationStoreView = struct {
-    instances: []const CallableBindingInstanceId = &.{},
+    owner: CheckedModuleArtifactKey = .{},
+    instances: []const CallableBindingInstantiationRecord = &.{},
 };
 
 pub const SemanticInstantiationProcedureTableView = struct {
-    procedures: []const SemanticInstantiationProcedureId = &.{},
+    owner: CheckedModuleArtifactKey = .{},
+    procedures: []const SemanticInstantiationProcedureRecord = &.{},
 };
+
+pub const ConstInstantiationKey = struct {
+    const_ref: ConstRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+};
+
+pub const ConstInstanceRef = struct {
+    owner: CheckedModuleArtifactKey,
+    key: ConstInstantiationKey,
+    instance: ConstInstanceId,
+};
+
+pub const ConstInstance = struct {
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+    dependency_summary: ?ComptimeDependencySummaryId = null,
+    reification_plan: ?ConstReificationPlanId = null,
+    generated_procedures: []const SemanticInstantiationProcedureId = &.{},
+};
+
+pub const ConstInstantiationState = union(enum) {
+    reserved,
+    evaluating,
+    evaluated: ConstInstance,
+};
+
+pub const ConstInstantiationRecord = struct {
+    id: ConstInstanceId,
+    key: ConstInstantiationKey,
+    state: ConstInstantiationState,
+};
+
+pub const ConstInstantiationStore = struct {
+    owner: CheckedModuleArtifactKey = .{},
+    instances: std.ArrayList(ConstInstantiationRecord) = .empty,
+    by_key: std.AutoHashMapUnmanaged([32]u8, ConstInstanceId) = .{},
+
+    pub fn init(owner: CheckedModuleArtifactKey) ConstInstantiationStore {
+        return .{ .owner = owner };
+    }
+
+    pub fn view(self: *const ConstInstantiationStore) ConstInstantiationStoreView {
+        return .{
+            .owner = self.owner,
+            .instances = self.instances.items,
+        };
+    }
+
+    pub fn reserve(
+        self: *ConstInstantiationStore,
+        allocator: Allocator,
+        key: ConstInstantiationKey,
+    ) Allocator.Error!ConstInstanceRef {
+        const key_hash = hashConstInstantiationKey(key);
+        if (self.by_key.get(key_hash)) |existing| {
+            return .{ .owner = self.owner, .key = key, .instance = existing };
+        }
+
+        const id: ConstInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
+        try self.instances.append(allocator, .{
+            .id = id,
+            .key = key,
+            .state = .reserved,
+        });
+        errdefer _ = self.instances.pop();
+        try self.by_key.put(allocator, key_hash, id);
+
+        return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn markEvaluating(self: *ConstInstantiationStore, ref: ConstInstanceRef) void {
+        const record = self.recordForRef(ref);
+        switch (record.state) {
+            .reserved => record.state = .evaluating,
+            .evaluating => {},
+            .evaluated => checkedArtifactInvariant("constant instance was evaluated twice", .{}),
+        }
+    }
+
+    pub fn fill(
+        self: *ConstInstantiationStore,
+        ref: ConstInstanceRef,
+        instance: ConstInstance,
+    ) void {
+        const record = self.recordForRef(ref);
+        switch (record.state) {
+            .reserved, .evaluating => record.state = .{ .evaluated = instance },
+            .evaluated => checkedArtifactInvariant("constant instance was filled twice", .{}),
+        }
+    }
+
+    pub fn lookup(self: *const ConstInstantiationStore, key: ConstInstantiationKey) ?ConstInstanceRef {
+        const id = self.by_key.get(hashConstInstantiationKey(key)) orelse return null;
+        return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn get(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstance {
+        const record = self.recordForConstRef(ref);
+        return switch (record.state) {
+            .evaluated => |instance| instance,
+            .reserved, .evaluating => checkedArtifactInvariant("constant instance was consumed before it was sealed", .{}),
+        };
+    }
+
+    pub fn verifySealed(self: *const ConstInstantiationStore) void {
+        if (builtin.mode != .Debug) return;
+
+        std.debug.assert(self.by_key.count() == self.instances.items.len);
+        for (self.instances.items, 0..) |record, i| {
+            std.debug.assert(@intFromEnum(record.id) == i);
+            const key_hash = hashConstInstantiationKey(record.key);
+            const indexed = self.by_key.get(key_hash) orelse {
+                std.debug.panic("checked artifact invariant violated: constant instance key was not indexed", .{});
+            };
+            std.debug.assert(indexed == record.id);
+            switch (record.state) {
+                .evaluated => {},
+                .reserved, .evaluating => std.debug.panic(
+                    "checked artifact invariant violated: constant instance {d} was not sealed before publication",
+                    .{i},
+                ),
+            }
+        }
+    }
+
+    fn recordForRef(self: *ConstInstantiationStore, ref: ConstInstanceRef) *ConstInstantiationRecord {
+        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+            checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
+        }
+        const idx = @intFromEnum(ref.instance);
+        if (idx >= self.instances.items.len) {
+            checkedArtifactInvariant("constant instance ref is out of range", .{});
+        }
+        const record = &self.instances.items[idx];
+        if (!constInstantiationKeyEql(record.key, ref.key)) {
+            checkedArtifactInvariant("constant instance ref key does not match reserved row", .{});
+        }
+        return record;
+    }
+
+    fn recordForConstRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) *const ConstInstantiationRecord {
+        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+            checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
+        }
+        const idx = @intFromEnum(ref.instance);
+        if (idx >= self.instances.items.len) {
+            checkedArtifactInvariant("constant instance ref is out of range", .{});
+        }
+        const record = &self.instances.items[idx];
+        if (!constInstantiationKeyEql(record.key, ref.key)) {
+            checkedArtifactInvariant("constant instance ref key does not match reserved row", .{});
+        }
+        return record;
+    }
+
+    pub fn deinit(self: *ConstInstantiationStore, allocator: Allocator) void {
+        for (self.instances.items) |*record| switch (record.state) {
+            .evaluated => |instance| allocator.free(instance.generated_procedures),
+            .reserved, .evaluating => {},
+        };
+        self.by_key.deinit(allocator);
+        self.instances.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+pub const CallableBindingInstantiationKey = struct {
+    binding: ProcedureBindingRef,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
+};
+
+pub const CallableBindingInstanceRef = struct {
+    owner: CheckedModuleArtifactKey,
+    key: CallableBindingInstantiationKey,
+    instance: CallableBindingInstanceId,
+};
+
+pub const CallablePromotionOutput = union(enum) {
+    existing_procedure: canonical.ProcedureCallableRef,
+    promoted_procedure: PromotedProcedureRef,
+};
+
+pub const CallableBindingInstance = struct {
+    key: CallableBindingInstantiationKey,
+    dependency_summary: ComptimeDependencySummaryId,
+    executable_root: ComptimeRootId,
+    result_plan: CallableResultPlanId,
+    promotion_plan: ?CallablePromotionPlanId = null,
+    promotion_output: CallablePromotionOutput,
+    proc_value: canonical.ProcedureCallableRef,
+};
+
+pub const CallableBindingInstantiationState = union(enum) {
+    reserved,
+    evaluating,
+    evaluated: CallableBindingInstance,
+};
+
+pub const CallableBindingInstantiationRecord = struct {
+    id: CallableBindingInstanceId,
+    key: CallableBindingInstantiationKey,
+    state: CallableBindingInstantiationState,
+};
+
+pub const CallableBindingInstantiationStore = struct {
+    owner: CheckedModuleArtifactKey = .{},
+    instances: std.ArrayList(CallableBindingInstantiationRecord) = .empty,
+    by_key: std.AutoHashMapUnmanaged([32]u8, CallableBindingInstanceId) = .{},
+
+    pub fn init(owner: CheckedModuleArtifactKey) CallableBindingInstantiationStore {
+        return .{ .owner = owner };
+    }
+
+    pub fn view(self: *const CallableBindingInstantiationStore) CallableBindingInstantiationStoreView {
+        return .{
+            .owner = self.owner,
+            .instances = self.instances.items,
+        };
+    }
+
+    pub fn reserve(
+        self: *CallableBindingInstantiationStore,
+        allocator: Allocator,
+        key: CallableBindingInstantiationKey,
+    ) Allocator.Error!CallableBindingInstanceRef {
+        const key_hash = hashCallableBindingInstantiationKey(key);
+        if (self.by_key.get(key_hash)) |existing| {
+            return .{ .owner = self.owner, .key = key, .instance = existing };
+        }
+
+        const id: CallableBindingInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
+        try self.instances.append(allocator, .{
+            .id = id,
+            .key = key,
+            .state = .reserved,
+        });
+        errdefer _ = self.instances.pop();
+        try self.by_key.put(allocator, key_hash, id);
+
+        return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn markEvaluating(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) void {
+        const record = self.recordForRef(ref);
+        switch (record.state) {
+            .reserved => record.state = .evaluating,
+            .evaluating => {},
+            .evaluated => checkedArtifactInvariant("callable binding instance was evaluated twice", .{}),
+        }
+    }
+
+    pub fn fill(
+        self: *CallableBindingInstantiationStore,
+        ref: CallableBindingInstanceRef,
+        instance: CallableBindingInstance,
+    ) void {
+        const record = self.recordForRef(ref);
+        if (!callableBindingInstantiationKeyEql(instance.key, ref.key)) {
+            checkedArtifactInvariant("callable binding instance payload key does not match reserved key", .{});
+        }
+        switch (record.state) {
+            .reserved, .evaluating => record.state = .{ .evaluated = instance },
+            .evaluated => checkedArtifactInvariant("callable binding instance was filled twice", .{}),
+        }
+    }
+
+    pub fn lookup(self: *const CallableBindingInstantiationStore, key: CallableBindingInstantiationKey) ?CallableBindingInstanceRef {
+        const id = self.by_key.get(hashCallableBindingInstantiationKey(key)) orelse return null;
+        return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn get(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstance {
+        const record = self.recordForConstRef(ref);
+        return switch (record.state) {
+            .evaluated => |instance| instance,
+            .reserved, .evaluating => checkedArtifactInvariant("callable binding instance was consumed before it was sealed", .{}),
+        };
+    }
+
+    pub fn verifySealed(self: *const CallableBindingInstantiationStore) void {
+        if (builtin.mode != .Debug) return;
+
+        std.debug.assert(self.by_key.count() == self.instances.items.len);
+        for (self.instances.items, 0..) |record, i| {
+            std.debug.assert(@intFromEnum(record.id) == i);
+            const key_hash = hashCallableBindingInstantiationKey(record.key);
+            const indexed = self.by_key.get(key_hash) orelse {
+                std.debug.panic("checked artifact invariant violated: callable binding instance key was not indexed", .{});
+            };
+            std.debug.assert(indexed == record.id);
+            switch (record.state) {
+                .evaluated => {},
+                .reserved, .evaluating => std.debug.panic(
+                    "checked artifact invariant violated: callable binding instance {d} was not sealed before publication",
+                    .{i},
+                ),
+            }
+        }
+    }
+
+    fn recordForRef(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *CallableBindingInstantiationRecord {
+        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+            checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
+        }
+        const idx = @intFromEnum(ref.instance);
+        if (idx >= self.instances.items.len) {
+            checkedArtifactInvariant("callable binding instance ref is out of range", .{});
+        }
+        const record = &self.instances.items[idx];
+        if (!callableBindingInstantiationKeyEql(record.key, ref.key)) {
+            checkedArtifactInvariant("callable binding instance ref key does not match reserved row", .{});
+        }
+        return record;
+    }
+
+    fn recordForConstRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *const CallableBindingInstantiationRecord {
+        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+            checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
+        }
+        const idx = @intFromEnum(ref.instance);
+        if (idx >= self.instances.items.len) {
+            checkedArtifactInvariant("callable binding instance ref is out of range", .{});
+        }
+        const record = &self.instances.items[idx];
+        if (!callableBindingInstantiationKeyEql(record.key, ref.key)) {
+            checkedArtifactInvariant("callable binding instance ref key does not match reserved row", .{});
+        }
+        return record;
+    }
+
+    pub fn deinit(self: *CallableBindingInstantiationStore, allocator: Allocator) void {
+        self.by_key.deinit(allocator);
+        self.instances.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+pub const SemanticInstantiationProcedureKey = union(enum) {
+    const_instance_callable_leaf: struct {
+        instance: ConstInstantiationKey,
+        value_path: ComptimeValuePathKey,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    },
+    callable_binding_promoted_leaf: struct {
+        instance: CallableBindingInstantiationKey,
+        callable_path: PromotedCallablePathKey,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    },
+    private_capture_callable_leaf: struct {
+        promoted_proc: PromotedProcedureRef,
+        capture_path: PrivateCapturePathKey,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    },
+};
+
+pub const SemanticInstantiationProcedure = struct {
+    template: canonical.CallableProcedureTemplateRef,
+    proc_value: canonical.ProcedureValueRef,
+    promoted: ?PromotedProcedureRef = null,
+};
+
+pub const SemanticInstantiationProcedureState = union(enum) {
+    reserved,
+    sealed: SemanticInstantiationProcedure,
+};
+
+pub const SemanticInstantiationProcedureRecord = struct {
+    id: SemanticInstantiationProcedureId,
+    key: SemanticInstantiationProcedureKey,
+    state: SemanticInstantiationProcedureState,
+};
+
+pub const SemanticInstantiationProcedureTable = struct {
+    owner: CheckedModuleArtifactKey = .{},
+    procedures: std.ArrayList(SemanticInstantiationProcedureRecord) = .empty,
+    by_key: std.AutoHashMapUnmanaged([32]u8, SemanticInstantiationProcedureId) = .{},
+
+    pub fn init(owner: CheckedModuleArtifactKey) SemanticInstantiationProcedureTable {
+        return .{ .owner = owner };
+    }
+
+    pub fn view(self: *const SemanticInstantiationProcedureTable) SemanticInstantiationProcedureTableView {
+        return .{
+            .owner = self.owner,
+            .procedures = self.procedures.items,
+        };
+    }
+
+    pub fn reserve(
+        self: *SemanticInstantiationProcedureTable,
+        allocator: Allocator,
+        key: SemanticInstantiationProcedureKey,
+    ) Allocator.Error!SemanticInstantiationProcedureId {
+        const key_hash = hashSemanticInstantiationProcedureKey(key);
+        if (self.by_key.get(key_hash)) |existing| return existing;
+
+        const id: SemanticInstantiationProcedureId = @enumFromInt(@as(u32, @intCast(self.procedures.items.len)));
+        try self.procedures.append(allocator, .{
+            .id = id,
+            .key = key,
+            .state = .reserved,
+        });
+        errdefer _ = self.procedures.pop();
+        try self.by_key.put(allocator, key_hash, id);
+        return id;
+    }
+
+    pub fn fill(
+        self: *SemanticInstantiationProcedureTable,
+        id: SemanticInstantiationProcedureId,
+        key: SemanticInstantiationProcedureKey,
+        procedure: SemanticInstantiationProcedure,
+    ) void {
+        const record = self.recordFor(id);
+        if (!semanticInstantiationProcedureKeyEql(record.key, key)) {
+            checkedArtifactInvariant("semantic instantiation procedure key does not match reserved row", .{});
+        }
+        switch (record.state) {
+            .reserved => record.state = .{ .sealed = procedure },
+            .sealed => checkedArtifactInvariant("semantic instantiation procedure was filled twice", .{}),
+        }
+    }
+
+    pub fn lookup(self: *const SemanticInstantiationProcedureTable, key: SemanticInstantiationProcedureKey) ?SemanticInstantiationProcedureId {
+        return self.by_key.get(hashSemanticInstantiationProcedureKey(key));
+    }
+
+    pub fn get(self: *const SemanticInstantiationProcedureTable, id: SemanticInstantiationProcedureId) SemanticInstantiationProcedure {
+        const idx = @intFromEnum(id);
+        if (idx >= self.procedures.items.len) {
+            checkedArtifactInvariant("semantic instantiation procedure id is out of range", .{});
+        }
+        return switch (self.procedures.items[idx].state) {
+            .sealed => |procedure| procedure,
+            .reserved => checkedArtifactInvariant("semantic instantiation procedure was consumed before it was sealed", .{}),
+        };
+    }
+
+    pub fn verifySealed(self: *const SemanticInstantiationProcedureTable) void {
+        if (builtin.mode != .Debug) return;
+
+        std.debug.assert(self.by_key.count() == self.procedures.items.len);
+        for (self.procedures.items, 0..) |record, i| {
+            std.debug.assert(@intFromEnum(record.id) == i);
+            const key_hash = hashSemanticInstantiationProcedureKey(record.key);
+            const indexed = self.by_key.get(key_hash) orelse {
+                std.debug.panic("checked artifact invariant violated: semantic instantiation procedure key was not indexed", .{});
+            };
+            std.debug.assert(indexed == record.id);
+            switch (record.state) {
+                .sealed => {},
+                .reserved => std.debug.panic(
+                    "checked artifact invariant violated: semantic instantiation procedure {d} was not sealed before publication",
+                    .{i},
+                ),
+            }
+        }
+    }
+
+    fn recordFor(self: *SemanticInstantiationProcedureTable, id: SemanticInstantiationProcedureId) *SemanticInstantiationProcedureRecord {
+        const idx = @intFromEnum(id);
+        if (idx >= self.procedures.items.len) {
+            checkedArtifactInvariant("semantic instantiation procedure id is out of range", .{});
+        }
+        return &self.procedures.items[idx];
+    }
+
+    pub fn deinit(self: *SemanticInstantiationProcedureTable, allocator: Allocator) void {
+        self.by_key.deinit(allocator);
+        self.procedures.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("checked artifact invariant violated: " ++ message, args);
+    }
+    unreachable;
+}
+
+fn hashEnumValue(hasher: *std.crypto.hash.sha2.Sha256, value: anytype) void {
+    hashU32(hasher, @as(u32, @intCast(@intFromEnum(value))));
+}
+
+fn hashCheckedModuleArtifactKey(hasher: *std.crypto.hash.sha2.Sha256, key: CheckedModuleArtifactKey) void {
+    hasher.update(&key.bytes);
+}
+
+fn hashArtifactRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ArtifactRef) void {
+    hasher.update(&ref.bytes);
+}
+
+fn hashCanonicalTypeKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.CanonicalTypeKey) void {
+    hasher.update(&key.bytes);
+}
+
+fn hashCanonicalTypeSchemeKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.CanonicalTypeSchemeKey) void {
+    hasher.update(&key.bytes);
+}
+
+fn hashProcedureValueRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ProcedureValueRef) void {
+    hashArtifactRef(hasher, ref.artifact);
+    hashEnumValue(hasher, ref.proc_base);
+}
+
+fn hashProcedureTemplateRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ProcedureTemplateRef) void {
+    hashArtifactRef(hasher, ref.artifact);
+    hashEnumValue(hasher, ref.proc_base);
+    hashEnumValue(hasher, ref.template);
+}
+
+fn hashMonoSpecializationKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.MonoSpecializationKey) void {
+    hashProcedureTemplateRef(hasher, key.template);
+    hashCanonicalTypeKey(hasher, key.requested_mono_fn_ty);
+}
+
+fn hashCallableProcedureTemplateRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.CallableProcedureTemplateRef) void {
+    switch (ref) {
+        .checked => |checked| {
+            hasher.update(&[_]u8{0});
+            hashProcedureTemplateRef(hasher, checked);
+        },
+        .lifted => |lifted| {
+            hasher.update(&[_]u8{1});
+            hashMonoSpecializationKey(hasher, lifted.owner_mono_specialization);
+            hashEnumValue(hasher, lifted.site);
+        },
+        .synthetic => |synthetic| {
+            hasher.update(&[_]u8{2});
+            hashProcedureTemplateRef(hasher, synthetic.template);
+        },
+    }
+}
+
+fn hashTopLevelValueRef(hasher: *std.crypto.hash.sha2.Sha256, ref: TopLevelValueRef) void {
+    hashCheckedModuleArtifactKey(hasher, ref.artifact);
+    hashEnumValue(hasher, ref.pattern);
+}
+
+fn hashHostedProcRef(hasher: *std.crypto.hash.sha2.Sha256, ref: HostedProcRef) void {
+    hashU32(hasher, ref.module_idx);
+    hashEnumValue(hasher, ref.def);
+    hashProcedureValueRef(hasher, ref.proc);
+}
+
+fn hashImportedProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ImportedProcedureBindingRef) void {
+    hashCheckedModuleArtifactKey(hasher, ref.artifact);
+    hashU32(hasher, ref.module_idx);
+    hashEnumValue(hasher, ref.def);
+    hashEnumValue(hasher, ref.pattern);
+}
+
+fn hashRequiredAppProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: RequiredAppProcedureRef) void {
+    hashCheckedModuleArtifactKey(hasher, ref.artifact);
+    hashTopLevelValueRef(hasher, ref.app_value);
+    hashEnumValue(hasher, ref.procedure_binding);
+}
+
+fn hashPromotedProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: PromotedProcedureRef) void {
+    hashU32(hasher, ref.module_idx);
+    hashProcedureValueRef(hasher, ref.proc);
+}
+
+fn hashProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ProcedureBindingRef) void {
+    switch (ref) {
+        .top_level => |binding| {
+            hasher.update(&[_]u8{0});
+            hashEnumValue(hasher, binding);
+        },
+        .imported => |imported| {
+            hasher.update(&[_]u8{1});
+            hashImportedProcedureBindingRef(hasher, imported);
+        },
+        .hosted => |hosted| {
+            hasher.update(&[_]u8{2});
+            hashHostedProcRef(hasher, hosted);
+        },
+        .platform_required => |required| {
+            hasher.update(&[_]u8{3});
+            hashRequiredAppProcedureRef(hasher, required);
+        },
+        .promoted => |promoted| {
+            hasher.update(&[_]u8{4});
+            hashPromotedProcedureRef(hasher, promoted);
+        },
+    }
+}
+
+fn hashConstRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ConstRef) void {
+    hashCheckedModuleArtifactKey(hasher, ref.artifact);
+    hashU32(hasher, ref.module_idx);
+    hashEnumValue(hasher, ref.pattern);
+    hashEnumValue(hasher, ref.schema);
+    hashEnumValue(hasher, ref.value);
+}
+
+fn hashConstInstantiationKey(key: ConstInstantiationKey) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashConstRef(&hasher, key.const_ref);
+    hashCanonicalTypeKey(&hasher, key.requested_source_ty);
+    return hasher.finalResult();
+}
+
+fn hashCallableBindingInstantiationKey(key: CallableBindingInstantiationKey) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashProcedureBindingRef(&hasher, key.binding);
+    hashCanonicalTypeKey(&hasher, key.requested_source_fn_ty);
+    return hasher.finalResult();
+}
+
+fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    switch (key) {
+        .const_instance_callable_leaf => |leaf| {
+            hasher.update(&[_]u8{0});
+            const instance_key = hashConstInstantiationKey(leaf.instance);
+            hasher.update(&instance_key);
+            hasher.update(&leaf.value_path.bytes);
+            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+        },
+        .callable_binding_promoted_leaf => |leaf| {
+            hasher.update(&[_]u8{1});
+            const instance_key = hashCallableBindingInstantiationKey(leaf.instance);
+            hasher.update(&instance_key);
+            hasher.update(&leaf.callable_path.bytes);
+            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+        },
+        .private_capture_callable_leaf => |leaf| {
+            hasher.update(&[_]u8{2});
+            hashPromotedProcedureRef(&hasher, leaf.promoted_proc);
+            hasher.update(&leaf.capture_path.bytes);
+            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+        },
+    }
+    return hasher.finalResult();
+}
+
+fn constRefEql(a: ConstRef, b: ConstRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.module_idx == b.module_idx and
+        a.pattern == b.pattern and
+        a.schema == b.schema and
+        a.value == b.value;
+}
+
+fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
+    return constRefEql(a.const_ref, b.const_ref) and
+        std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
+}
+
+fn importedProcedureBindingRefEql(a: ImportedProcedureBindingRef, b: ImportedProcedureBindingRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.module_idx == b.module_idx and
+        a.def == b.def and
+        a.pattern == b.pattern;
+}
+
+fn topLevelValueRefEql(a: TopLevelValueRef, b: TopLevelValueRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and a.pattern == b.pattern;
+}
+
+fn hostedProcRefEql(a: HostedProcRef, b: HostedProcRef) bool {
+    return a.module_idx == b.module_idx and
+        a.def == b.def and
+        canonical.procedureValueRefEql(a.proc, b.proc);
+}
+
+fn requiredAppProcedureRefEql(a: RequiredAppProcedureRef, b: RequiredAppProcedureRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        topLevelValueRefEql(a.app_value, b.app_value) and
+        a.procedure_binding == b.procedure_binding;
+}
+
+fn promotedProcedureRefEql(a: PromotedProcedureRef, b: PromotedProcedureRef) bool {
+    return a.module_idx == b.module_idx and canonical.procedureValueRefEql(a.proc, b.proc);
+}
+
+fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level => |left| left == b.top_level,
+        .imported => |left| importedProcedureBindingRefEql(left, b.imported),
+        .hosted => |left| hostedProcRefEql(left, b.hosted),
+        .platform_required => |left| requiredAppProcedureRefEql(left, b.platform_required),
+        .promoted => |left| promotedProcedureRefEql(left, b.promoted),
+    };
+}
+
+fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
+    return procedureBindingRefEql(a.binding, b.binding) and
+        std.mem.eql(u8, &a.requested_source_fn_ty.bytes, &b.requested_source_fn_ty.bytes);
+}
+
+fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b: SemanticInstantiationProcedureKey) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .const_instance_callable_leaf => |left| blk: {
+            const right = b.const_instance_callable_leaf;
+            break :blk constInstantiationKeyEql(left.instance, right.instance) and
+                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes) and
+                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+        },
+        .callable_binding_promoted_leaf => |left| blk: {
+            const right = b.callable_binding_promoted_leaf;
+            break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
+                std.mem.eql(u8, &left.callable_path.bytes, &right.callable_path.bytes) and
+                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+        },
+        .private_capture_callable_leaf => |left| blk: {
+            const right = b.private_capture_callable_leaf;
+            break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
+                std.mem.eql(u8, &left.capture_path.bytes, &right.capture_path.bytes) and
+                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+        },
+    };
+}
 
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
@@ -5073,9 +5803,9 @@ pub const CheckedModuleArtifact = struct {
     top_level_values: TopLevelValueTable,
     promoted_procedures: PromotedProcedureTable,
     comptime_values: CompileTimeValueStore,
-    const_instances: ConstInstantiationStoreView = .{},
-    callable_binding_instances: CallableBindingInstantiationStoreView = .{},
-    semantic_instantiation_procedures: SemanticInstantiationProcedureTableView = .{},
+    const_instances: ConstInstantiationStore,
+    callable_binding_instances: CallableBindingInstantiationStore,
+    semantic_instantiation_procedures: SemanticInstantiationProcedureTable,
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -5094,9 +5824,9 @@ pub const CheckedModuleArtifact = struct {
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
-        _ = self.semantic_instantiation_procedures;
-        _ = self.callable_binding_instances;
-        _ = self.const_instances;
+        self.semantic_instantiation_procedures.deinit(allocator);
+        self.callable_binding_instances.deinit(allocator);
+        self.const_instances.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
@@ -5309,6 +6039,9 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.comptime_values.verifySealed();
+        self.const_instances.verifySealed();
+        self.callable_binding_instances.verifySealed();
+        self.semantic_instantiation_procedures.verifySealed();
 
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
@@ -5402,9 +6135,9 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
         .comptime_values = &artifact.comptime_values,
-        .const_instances = artifact.const_instances,
-        .callable_binding_instances = artifact.callable_binding_instances,
-        .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures,
+        .const_instances = artifact.const_instances.view(),
+        .callable_binding_instances = artifact.callable_binding_instances.view(),
+        .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures.view(),
     };
 }
 
@@ -5740,6 +6473,15 @@ pub fn publishFromTypedModule(
     var comptime_values = CompileTimeValueStore.init(allocator);
     errdefer comptime_values.deinit(allocator);
 
+    var const_instances = ConstInstantiationStore.init(artifact_key);
+    errdefer const_instances.deinit(allocator);
+
+    var callable_binding_instances = CallableBindingInstantiationStore.init(artifact_key);
+    errdefer callable_binding_instances.deinit(allocator);
+
+    var semantic_instantiation_procedures = SemanticInstantiationProcedureTable.init(artifact_key);
+    errdefer semantic_instantiation_procedures.deinit(allocator);
+
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);
 
@@ -5844,6 +6586,9 @@ pub fn publishFromTypedModule(
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
         .comptime_values = comptime_values,
+        .const_instances = const_instances,
+        .callable_binding_instances = callable_binding_instances,
+        .semantic_instantiation_procedures = semantic_instantiation_procedures,
     };
     artifact.verifyPublished();
     return artifact;
@@ -5886,8 +6631,14 @@ test "artifact views are read-only projections" {
         .top_level_values = .{},
         .promoted_procedures = .{},
         .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
+        .const_instances = ConstInstantiationStore.init(.{}),
+        .callable_binding_instances = CallableBindingInstantiationStore.init(.{}),
+        .semantic_instantiation_procedures = SemanticInstantiationProcedureTable.init(.{}),
     };
     defer {
+        artifact.semantic_instantiation_procedures.deinit(std.testing.allocator);
+        artifact.callable_binding_instances.deinit(std.testing.allocator);
+        artifact.const_instances.deinit(std.testing.allocator);
         artifact.comptime_values.deinit(std.testing.allocator);
         artifact.canonical_names.deinit();
     }
