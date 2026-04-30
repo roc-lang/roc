@@ -1203,6 +1203,12 @@ pub const CheckedBodyStore = struct {
         return self.expr_by_node[raw];
     }
 
+    pub fn patternIdForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?CheckedPatternId {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.pattern_by_node.len) return null;
+        return self.pattern_by_node[raw];
+    }
+
     pub fn appendBody(
         self: *CheckedBodyStore,
         allocator: Allocator,
@@ -1267,7 +1273,7 @@ pub const ResolvedValueRefTableRef = struct {
 pub const ResolvedValueRefId = enum(u32) { _ };
 
 pub const LocalBindingRef = struct {
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const TopLevelBindingRef = struct {
@@ -1506,6 +1512,7 @@ pub const ResolvedValueRefTable = struct {
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
         checked_types: *const CheckedTypeStore,
+        checked_bodies: *const CheckedBodyStore,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
@@ -1618,11 +1625,12 @@ fn classifyValueRef(
     const expr = module.expr(expr_idx);
     return switch (expr.data) {
         .e_lookup_local => |local| classifyLocalValueRef(
-            module,
-            local.pattern_idx,
-            hosted_procs,
-            top_level_values,
-        ),
+                module,
+                local.pattern_idx,
+                hosted_procs,
+                top_level_values,
+                checked_bodies,
+            ),
         .e_lookup_external => |external| classifyImportedValueRef(
             modules,
             module,
@@ -1672,7 +1680,18 @@ fn classifyLocalValueRef(
     pattern: CIR.Pattern.Idx,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
+    checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
+    const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
+                .{@intFromEnum(pattern)},
+            );
+        }
+        unreachable;
+    };
+
     if (topLevelDefByPattern(module, pattern)) |def_idx| {
         const entry = topLevelValueForPattern(top_level_values, pattern) orelse {
             if (builtin.mode == .Debug) {
@@ -1709,24 +1728,24 @@ fn classifyLocalValueRef(
     }
 
     if (patternIsLambdaArg(module, pattern)) {
-        return .{ .local_param = .{ .pattern = pattern } };
+        return .{ .local_param = .{ .pattern = checked_pattern } };
     }
 
     if (localStatementForPattern(module, pattern)) |statement| {
         switch (statement) {
-            .s_var => return .{ .local_mutable_version = .{ .pattern = pattern } },
+            .s_var => return .{ .local_mutable_version = .{ .pattern = checked_pattern } },
             .s_decl => |decl| {
                 if (isLocalProcExpr(module, decl.expr)) {
-                    return .{ .local_proc = .{ .pattern = pattern } };
+                    return .{ .local_proc = .{ .pattern = checked_pattern } };
                 }
-                return .{ .local_value = .{ .pattern = pattern } };
+                return .{ .local_value = .{ .pattern = checked_pattern } };
             },
             else => {},
         }
     }
 
     if (patternIsBinder(module, pattern)) {
-        return .{ .pattern_binder = .{ .pattern = pattern } };
+        return .{ .pattern_binder = .{ .pattern = checked_pattern } };
     }
 
     if (builtin.mode == .Debug) {
@@ -4118,6 +4137,7 @@ pub fn publishFromTypedModule(
         &platform_required_bindings,
         &top_level_values,
         &checked_types,
+        &checked_bodies,
     );
     errdefer resolved_value_refs.deinit(allocator);
 
