@@ -109,6 +109,12 @@ pub const Store = struct {
         return id;
     }
 
+    pub fn reservePendingLocalRoot(
+        self: *Store,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        return try self.reserveLocalRoot(.{});
+    }
+
     pub fn fillLocalRoot(
         self: *Store,
         root: checked_artifact.CheckedTypeId,
@@ -120,6 +126,19 @@ pub const Store = struct {
         }
         deinitPayload(self.allocator, &self.local_payloads.items[raw]);
         self.local_payloads.items[raw] = payload;
+    }
+
+    pub fn sealLocalRoot(
+        self: *Store,
+        root: checked_artifact.CheckedTypeId,
+        key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!ConcreteSourceTypeRef {
+        const raw = @intFromEnum(root);
+        if (raw >= self.local_roots.items.len) {
+            invariantViolation("concrete source type store seal referenced an unknown local root");
+        }
+        self.local_roots.items[raw].key = key;
+        return try self.registerLocalRoot(root);
     }
 
     pub fn root(self: *const Store, ref: ConcreteSourceTypeRef) ConcreteSourceTypeRoot {

@@ -266,6 +266,9 @@ const TypeInstantiator = struct {
     template_artifact: checked_artifact.CheckedModuleArtifactKey,
     substitutions: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
     lowered_template: std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId),
+    materialized_template_roots: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId),
+    materialized_concrete_roots: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    concrete_template_refs: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
 
     fn init(
         allocator: Allocator,
@@ -284,10 +287,16 @@ const TypeInstantiator = struct {
             .template_artifact = template_artifact,
             .substitutions = std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
             .lowered_template = std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId).init(allocator),
+            .materialized_template_roots = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId).init(allocator),
+            .materialized_concrete_roots = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId).init(allocator),
+            .concrete_template_refs = std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiator) void {
+        self.concrete_template_refs.deinit();
+        self.materialized_concrete_roots.deinit();
+        self.materialized_template_roots.deinit();
         self.lowered_template.deinit();
         self.substitutions.deinit();
     }
@@ -312,6 +321,133 @@ const TypeInstantiator = struct {
         self.program.types.setType(placeholder, lowered);
         self.program.types.debugValidateTypeGraph(placeholder);
         return try self.program.types.internTypeId(placeholder);
+    }
+
+    fn concreteRefForTemplateType(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        if (self.substitutions.get(id)) |concrete| return concrete;
+        if (self.concrete_template_refs.get(id)) |existing| return existing;
+
+        const local_root = try self.materializeTemplateType(id);
+        var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+            self.allocator,
+            &self.program.canonical_names,
+            self.program.concrete_source_types.local_payloads.items,
+        );
+        defer key_builder.deinit();
+        const key = try key_builder.keyForRoot(local_root);
+        const concrete = try self.program.concrete_source_types.sealLocalRoot(local_root, key);
+        try self.concrete_template_refs.put(id, concrete);
+        return concrete;
+    }
+
+    fn materializeTemplateType(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        if (self.substitutions.get(id)) |concrete| return try self.materializeConcreteRef(concrete);
+        if (self.materialized_template_roots.get(id)) |existing| return existing;
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.materialized_template_roots.put(id, local_root);
+        errdefer _ = self.materialized_template_roots.remove(id);
+
+        const payload = try self.materializeTemplatePayload(self.templatePayload(id));
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        return local_root;
+    }
+
+    fn materializeTemplatePayload(
+        self: *TypeInstantiator,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
+            .flex, .rigid => invariantViolation("mono specialization reached an unmapped generic type variable while materializing a concrete source type"),
+            .alias => |alias| .{ .alias = .{
+                .name = try self.name_resolver.typeName(self.template_artifact, alias.name),
+                .origin_module = try self.name_resolver.moduleName(self.template_artifact, alias.origin_module),
+                .backing = try self.materializeTemplateType(alias.backing),
+                .args = try self.materializeTemplateTypeIds(alias.args),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.materializeTemplateRecordFields(fields) },
+            .record => |record| .{ .record = .{
+                .fields = try self.materializeTemplateRecordFields(record.fields),
+                .ext = try self.materializeTemplateType(record.ext),
+            } },
+            .tuple => |items| .{ .tuple = try self.materializeTemplateTypeIds(items) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
+                .origin_module = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.materializeTemplateType(nominal.backing),
+                .args = try self.materializeTemplateTypeIds(nominal.args),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = func.kind,
+                .args = try self.materializeTemplateTypeIds(func.args),
+                .ret = try self.materializeTemplateType(func.ret),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.materializeTemplateTags(tag_union.tags),
+                .ext = try self.materializeTemplateType(tag_union.ext),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn materializeTemplateTypeIds(
+        self: *TypeInstantiator,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.materializeTemplateType(id);
+        }
+        return out;
+    }
+
+    fn materializeTemplateRecordFields(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name),
+                .ty = try self.materializeTemplateType(field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn materializeTemplateTags(
+        self: *TypeInstantiator,
+        tags: []const checked_artifact.CheckedTag,
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.name_resolver.tagLabel(self.template_artifact, tag.name),
+                .args = try self.materializeTemplateTypeIds(tag.args),
+            };
+        }
+        return out;
     }
 
     fn lowerTemplatePayload(
@@ -835,6 +971,121 @@ const TypeInstantiator = struct {
             },
             .local => try self.program.concrete_source_types.registerLocalRoot(child),
         };
+    }
+
+    fn materializeConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const root = self.program.concrete_source_types.root(ref);
+        switch (root.source) {
+            .local => |local| return local,
+            .artifact => {},
+        }
+        if (self.materialized_concrete_roots.get(ref)) |existing| return existing;
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.materialized_concrete_roots.put(ref, local_root);
+        errdefer _ = self.materialized_concrete_roots.remove(ref);
+
+        const payload = try self.materializeConcretePayload(ref, self.concretePayload(ref));
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        return local_root;
+    }
+
+    fn materializeConcretePayload(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
+            .flex, .rigid => invariantViolation("mono specialization reached an unsolved generic variable in a concrete source type"),
+            .alias => |alias| .{ .alias = .{
+                .name = try self.typeNameForConcreteRef(ref, alias.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
+                .backing = try self.materializeConcreteRef(try self.concreteChildRef(ref, alias.backing)),
+                .args = try self.materializeConcreteTypeIds(ref, alias.args),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFields(ref, fields) },
+            .record => |record| .{ .record = .{
+                .fields = try self.materializeConcreteRecordFields(ref, record.fields),
+                .ext = try self.materializeConcreteRef(try self.concreteChildRef(ref, record.ext)),
+            } },
+            .tuple => |items| .{ .tuple = try self.materializeConcreteTypeIds(ref, items) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.typeNameForConcreteRef(ref, nominal.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.materializeConcreteRef(try self.concreteChildRef(ref, nominal.backing)),
+                .args = try self.materializeConcreteTypeIds(ref, nominal.args),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = func.kind,
+                .args = try self.materializeConcreteTypeIds(ref, func.args),
+                .ret = try self.materializeConcreteRef(try self.concreteChildRef(ref, func.ret)),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.materializeConcreteTags(ref, tag_union.tags),
+                .ext = try self.materializeConcreteRef(try self.concreteChildRef(ref, tag_union.ext)),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn materializeConcreteTypeIds(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.materializeConcreteRef(try self.concreteChildRef(parent, id));
+        }
+        return out;
+    }
+
+    fn materializeConcreteRecordFields(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.recordFieldNameForConcreteRef(parent, field.name),
+                .ty = try self.materializeConcreteRef(try self.concreteChildRef(parent, field.ty)),
+            };
+        }
+        return out;
+    }
+
+    fn materializeConcreteTags(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        tags: []const checked_artifact.CheckedTag,
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.tagNameForConcreteRef(parent, tag.name),
+                .args = try self.materializeConcreteTypeIds(parent, tag.args),
+            };
+        }
+        return out;
     }
 
     fn artifactPayload(self: *const TypeInstantiator, ref: checked_artifact.ArtifactCheckedTypeRef) checked_artifact.CheckedTypePayload {
