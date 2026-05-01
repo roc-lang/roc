@@ -5988,7 +5988,7 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     };
 }
 
-fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
+pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
         .top_level => |left| left == b.top_level,
@@ -5999,7 +5999,7 @@ fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
     };
 }
 
-fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
+pub fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
     return procedureBindingRefEql(a.binding, b.binding) and
         std.mem.eql(u8, &a.requested_source_fn_ty.bytes, &b.requested_source_fn_ty.bytes);
 }
