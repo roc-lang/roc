@@ -480,8 +480,19 @@ const Lowerer = struct {
                 .capture_layout = if (call.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
                 .next = next,
             } }),
+            .layout_size => |layout_ref| blk: {
+                const layout_idx = try self.lowerLayoutRef(layout_ref);
+                const size = self.layouts.layoutSize(self.layouts.getLayout(layout_idx));
+                break :blk try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i128_literal = .{
+                        .value = size,
+                        .layout_idx = self.store.getLocal(target).layout_idx,
+                    } },
+                    .next = next,
+                } });
+            },
             .bridge,
-            .layout_size,
             => lirInvariant("lir.lower_ir reached IR expression form whose LIR lowering is still missing"),
         };
     }
