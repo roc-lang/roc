@@ -6,7 +6,7 @@
 //!
 //! Pipeline position:
 //! ```
-//! CIR -> LIR -> LirCodeGen -> Machine Code
+//! checked artifacts -> MIR -> IR -> LIR -> LirCodeGen -> Machine Code
 //! ```
 //!
 //! Key properties:

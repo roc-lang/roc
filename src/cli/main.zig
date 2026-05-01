@@ -4,13 +4,13 @@
 //!
 //! ## Module Data Modes
 //!
-//! The CLI supports two modes for passing compiled Roc modules to the interpreter:
+//! The CLI supports two modes for passing compiled Roc programs to the interpreter:
 //!
 //! ### IPC Mode (`roc path/to/app.roc`)
-//! - Compiles Roc source to ModuleEnv in shared memory
+//! - Compiles Roc source through ARC-inserted LIR and writes a serialized LIR runtime image to shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `setupSharedMemoryWithCoordinator`, `rocRun`
+//! - See: `buildLirRuntimeImageWithCoordinator`, `rocRun`
 //!
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
@@ -1243,8 +1243,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
     }
 
-    // Set up shared memory with ModuleEnv using the Coordinator
-    const shm_result = try setupSharedMemoryWithCoordinator(ctx, args.path, args.allow_errors);
+    // Build the serialized LIR runtime image and place it in shared memory.
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
 
     // Check for errors - abort unless --allow-errors flag is set
     if (shm_result.error_count > 0 and !args.allow_errors) {
@@ -1592,8 +1592,8 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
     }
 
-    // Set up shared memory with ModuleEnv using the Coordinator
-    const shm_result = try setupSharedMemoryWithCoordinator(ctx, args.path, args.allow_errors);
+    // Build the serialized LIR runtime image and place it in shared memory.
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
 
     if (shm_result.error_count > 0 and !args.allow_errors) {
         return error.TypeCheckingFailed;
@@ -2150,381 +2150,17 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 }
 
-/// Set up shared memory with compiled ModuleEnvs from a Roc file and its platform modules.
-/// This parses, canonicalizes, and type-checks all modules using the Coordinator actor model,
-/// with the resulting ModuleEnvs ending up in shared memory.
+/// Build shared memory containing a serialized ARC-inserted LIR runtime image.
 ///
-/// Features:
-/// - Uses the Coordinator for compilation (same infrastructure as `roc check` and `roc build`)
-/// - Supports multi-threaded compilation (SharedMemoryAllocator is thread-safe)
-/// - Platform type modules have their e_anno_only expressions converted to e_hosted_lambda
-pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
-    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryWithFallback(page_size);
-    // Don't defer deinit here - we need to keep the shared memory alive
-
-    const shm_allocator = shm.allocator();
-
-    // Load builtin modules using gpa (not shared memory - builtins are shared read-only)
-    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
-    defer builtin_modules.deinit();
-
-    // If the roc file path has no directory component (e.g., "app.roc"), use current directory
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-
-    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
-
-    // Check for absolute paths and reject them early
-    try validatePlatformSpec(ctx, platform_spec);
-
-    // Resolve platform path based on type
-    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
-    else if (base.url.isSafeUrl(platform_spec)) blk: {
-        const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
-            error.CliError => break :blk null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        break :blk platform_paths.platform_source_path;
-    } else null;
-
-    // Get the platform directory from the resolved path
-    const platform_dir: ?[]const u8 = if (platform_main_path) |p|
-        std.fs.path.dirname(p) orelse return error.InvalidPlatformPath
-    else
-        null;
-
-    // Extract exposed modules from the platform header (if platform exists)
-    var exposed_modules = std.ArrayList([]const u8).empty;
-    defer exposed_modules.deinit(ctx.gpa);
-
-    var has_platform = false;
-    if (platform_main_path) |pmp| {
-        has_platform = true;
-        extractExposedModulesFromPlatform(ctx, pmp, &exposed_modules) catch {
-            has_platform = false;
-        };
-    }
-
-    var entrypoint_names = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-        return error.OutOfMemory;
-    };
-    defer entrypoint_names.deinit();
-    if (platform_main_path) |pmp| {
-        extractEntrypointDefNamesFromPlatform(ctx, pmp, &entrypoint_names) catch |err| {
-            return ctx.fail(.{ .entrypoint_extraction_failed = .{
-                .path = pmp,
-                .reason = @errorName(err),
-            } });
-        };
-    }
-
-    // IMPORTANT: Create header FIRST before any module compilation.
-    // The interpreter_shim expects the Header to be at FIRST_ALLOC_OFFSET (504).
-    const Header = struct {
-        parent_base_addr: u64,
-        module_count: u32,
-        entry_count: u32,
-        def_indices_offset: u64,
-        module_envs_offset: u64,
-        platform_main_env_offset: u64,
-        app_env_offset: u64,
-    };
-
-    const header_ptr = try shm_allocator.create(Header);
-    const shm_base_addr = @intFromPtr(shm.base_ptr);
-    header_ptr.parent_base_addr = shm_base_addr;
-
-    // Allocate module env offsets array (over-allocated, actual count set later)
-    const platform_module_count: u32 = @intCast(exposed_modules.items.len);
-    const max_sibling_modules: u32 = 64;
-    const max_package_modules: u32 = 64;
-    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules + max_package_modules;
-
-    const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
-    header_ptr.module_envs_offset = @intFromPtr(module_env_offsets_ptr.ptr) - shm_base_addr;
-
-    // Initialize Coordinator
-    var coord = try Coordinator.init(
-        ctx.gpa, // Use regular allocator for Coordinator internals
-        .single_threaded,
-        1,
-        RocTarget.detectNative(), // IPC runs on host
-        &builtin_modules,
-        build_options.compiler_version,
-        null, // no cache for IPC
-    );
-    defer coord.deinit();
-
-    // Inject shared memory allocator for module data (ModuleEnv, source)
-    coord.setModuleAllocator(shm_allocator);
-    coord.owns_module_data = false; // Don't free - shared memory will be unmapped
-    coord.enable_hosted_transform = true; // Enable hosted lambda conversion for platform modules
-
-    // Start worker threads
-    try coord.start();
-
-    // Set up app package
-    const app_pkg = try coord.ensurePackage("app", app_dir);
-    const app_module_name = base.module_path.getModuleName(roc_file_path);
-    const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
-    app_pkg.root_module_id = app_module_id;
-    app_pkg.modules.items[app_module_id].depth = 0;
-    app_pkg.remaining_modules += 1;
-    coord.total_remaining += 1;
-
-    // Extract the platform qualifier from the app header (e.g., "fx" from { fx: platform "..." })
-    const platform_qualifier = try extractPlatformQualifier(ctx, roc_file_path);
-
-    // Set up platform package and shorthands
-    if (platform_dir) |pf_dir| {
-        const pf_pkg = try coord.ensurePackage("pf", pf_dir);
-
-        // Add platform shorthand to app package
-        if (platform_qualifier) |qual| {
-            try app_pkg.shorthands.put(
-                try ctx.gpa.dupe(u8, qual),
-                try ctx.gpa.dupe(u8, "pf"),
-            );
-        }
-
-        // Queue platform main module only
-        // Don't pre-queue exposed modules - let the coordinator discover them
-        // through import resolution (like roc check does)
-        if (platform_main_path) |pmp| {
-            const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", pmp);
-            pf_pkg.root_module_id = pf_module_id;
-            pf_pkg.modules.items[pf_module_id].depth = 1;
-            pf_pkg.remaining_modules += 1;
-            coord.total_remaining += 1;
-            try coord.enqueueParseTask("pf", pf_module_id);
-        }
-    }
-
-    // Set up non-platform packages (e.g., { hlp: "./helper_pkg/main.roc" })
-    var non_platform_packages = try extractNonPlatformPackages(ctx, roc_file_path, platform_qualifier);
-    defer {
-        var iter = non_platform_packages.iterator();
-        while (iter.next()) |entry| {
-            ctx.gpa.free(entry.key_ptr.*);
-            ctx.gpa.free(entry.value_ptr.*);
-        }
-        non_platform_packages.deinit();
-    }
-
-    var pkg_iter = non_platform_packages.iterator();
-    while (pkg_iter.next()) |entry| {
-        const shorthand = entry.key_ptr.*;
-        const pkg_main_path = entry.value_ptr.*;
-
-        // Get the package directory from the main file path
-        const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
-
-        // Create an internal package name (use shorthand as the package name)
-        const pkg_name = try ctx.gpa.dupe(u8, shorthand);
-        defer ctx.gpa.free(pkg_name);
-
-        _ = try coord.ensurePackage(pkg_name, pkg_dir);
-
-        // Add shorthand mapping to app package
-        // The coordinator will automatically discover and queue modules from this package
-        // when the app imports them via scheduleExternalImport
-        try app_pkg.shorthands.put(
-            try ctx.gpa.dupe(u8, shorthand),
-            try ctx.gpa.dupe(u8, pkg_name),
-        );
-    }
-
-    // Queue app module
-    try coord.enqueueParseTask("app", app_module_id);
-
-    // Run coordinator loop
-    try coord.coordinatorLoop();
-
-    // Populate header with module offsets from coordinator
-    var module_idx: u32 = 0;
-    var app_env_offset: u64 = 0;
-    var platform_main_env_offset: u64 = 0;
-
-    // Collect platform modules first (excluding platform main, which goes in platform_main_env_offset)
-    // The interpreter expects module_env_offsets to contain only exposed platform modules,
-    // not the platform main module which is accessed separately.
-    if (coord.getPackage("pf")) |pf_pkg| {
-        for (pf_pkg.modules.items) |*mod| {
-            if (mod.env) |env| {
-                const env_offset = @intFromPtr(env) - shm_base_addr;
-
-                // Platform main goes in platform_main_env_offset, NOT in the array
-                if (std.mem.eql(u8, mod.name, "main") or std.mem.eql(u8, mod.name, "main.roc")) {
-                    platform_main_env_offset = env_offset;
-                } else {
-                    // Exposed platform modules go in the array
-                    module_env_offsets_ptr[module_idx] = env_offset;
-                    module_idx += 1;
-                }
-            }
-        }
-    }
-
-    // Collect modules from non-platform packages (e.g., hlp)
-    var all_pkg_iter = coord.packages.iterator();
-    while (all_pkg_iter.next()) |entry| {
-        const pkg_name = entry.key_ptr.*;
-        // Skip platform and app packages (already handled above/below)
-        if (std.mem.eql(u8, pkg_name, "pf") or std.mem.eql(u8, pkg_name, "app")) {
-            continue;
-        }
-        const pkg = entry.value_ptr.*;
-        for (pkg.modules.items) |*mod| {
-            if (mod.env) |env| {
-                const env_offset = @intFromPtr(env) - shm_base_addr;
-                module_env_offsets_ptr[module_idx] = env_offset;
-                module_idx += 1;
-            }
-        }
-    }
-
-    // Collect app package modules (sibling modules first, then the root app at the end)
-    // The interpreter expects the app module at the last index (module_count - 1)
-    if (coord.getPackage("app")) |app_pkg_result| {
-        const root_id = app_pkg_result.root_module_id;
-
-        // First pass: add sibling modules (non-root modules)
-        for (app_pkg_result.modules.items, 0..) |*mod, mod_idx| {
-            // Skip root app module - it goes at the end
-            if (root_id != null and mod_idx == root_id.?) {
-                continue;
-            }
-            if (mod.env) |env| {
-                const env_offset = @intFromPtr(env) - shm_base_addr;
-                module_env_offsets_ptr[module_idx] = env_offset;
-                module_idx += 1;
-            }
-        }
-
-        // Second pass: add root app module at the end
-        if (root_id) |rid| {
-            const root_mod = &app_pkg_result.modules.items[rid];
-            if (root_mod.env) |env| {
-                const env_offset = @intFromPtr(env) - shm_base_addr;
-                module_env_offsets_ptr[module_idx] = env_offset;
-                app_env_offset = env_offset;
-                module_idx += 1;
-            }
-        }
-    }
-
-    header_ptr.module_count = module_idx;
-    header_ptr.app_env_offset = app_env_offset;
-    header_ptr.platform_main_env_offset = platform_main_env_offset;
-
-    // Set up entry points from platform exports
-    var entry_count: u32 = 0;
-    var def_indices_offset: u64 = 0;
-    if (platform_main_env_offset != 0) {
-        const platform_env: *ModuleEnv = @ptrFromInt(@as(usize, @intCast(platform_main_env_offset + shm_base_addr)));
-        const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-        entry_count = @intCast(entrypoint_names.items.len);
-
-        if (entry_count > 0) {
-            const def_indices_ptr = try shm_allocator.alloc(u32, entrypoint_names.items.len);
-            def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - shm_base_addr;
-            for (entrypoint_names.items, 0..) |entry_name, i| {
-                var found_def: ?can.CIR.Def.Idx = null;
-                for (platform_defs) |def_idx| {
-                    const def = platform_env.store.getDef(def_idx);
-                    const pattern = platform_env.store.getPattern(def.pattern);
-                    switch (pattern) {
-                        .assign => |assign| {
-                            const ident_name = platform_env.getIdent(assign.ident);
-                            if (std.mem.eql(u8, ident_name, entry_name)) {
-                                found_def = def_idx;
-                                break;
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                const def_idx = found_def orelse {
-                    std.log.err("Entrypoint '{s}' not found in platform module", .{entry_name});
-                    return error.NoEntrypointsLowered;
-                };
-                def_indices_ptr[i] = @intFromEnum(def_idx);
-            }
-        }
-    }
-
-    header_ptr.entry_count = entry_count;
-    header_ptr.def_indices_offset = def_indices_offset;
-
-    // Count errors from all modules
-    var error_count: usize = 0;
-    var warning_count: usize = 0;
-
-    var pkg_it = coord.packages.iterator();
-    while (pkg_it.next()) |entry| {
-        const pkg = entry.value_ptr.*;
-        for (pkg.modules.items) |*mod| {
-            for (mod.reports.items) |*rep| {
-                if (rep.severity == .fatal or rep.severity == .runtime_error) {
-                    error_count += 1;
-                    // Render error to stderr
-                    if (!builtin.is_test) {
-                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
-                    }
-                } else if (rep.severity == .warning) {
-                    warning_count += 1;
-                    // Render warning to stderr
-                    if (!builtin.is_test) {
-                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
-                    }
-                }
-            }
-        }
-    }
-
-    // Print summary if there were any problems
-    if (error_count > 0 or warning_count > 0) {
-        const stderr = ctx.io.stderr();
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
-            error_count,
-            warning_count,
-            roc_file_path,
-        }) catch {};
-    }
-
-    // Flush stderr buffer to ensure errors are visible before execution
-    ctx.io.flush();
-
-    // Abort if errors and not allowed
-    if (error_count > 0 and !allow_errors) {
-        return SharedMemoryResult{
-            .handle = SharedMemoryHandle{
-                .fd = shm.handle,
-                .ptr = shm.base_ptr,
-                .size = shm.getUsedSize(),
-                .mapped_size = shm.total_size,
-            },
-            .error_count = error_count,
-            .warning_count = warning_count,
-        };
-    }
-
-    shm.updateHeader();
-
-    return SharedMemoryResult{
-        .handle = SharedMemoryHandle{
-            .fd = shm.handle,
-            .ptr = shm.base_ptr,
-            .size = shm.getUsedSize(),
-            .mapped_size = shm.total_size,
-        },
-        .error_count = error_count,
-        .warning_count = warning_count,
-    };
+/// The parent process owns parse, canonicalize, checking, checked-artifact
+/// publication, MIR lowering, IR lowering, LIR lowering, and ARC insertion.
+/// The child process receives only the serialized LIR runtime image and never
+/// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
+pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
+    _ = ctx;
+    _ = roc_file_path;
+    _ = allow_errors;
+    @compileError("Phase 2 must build and serialize an ARC-inserted LIR runtime image from checked artifacts");
 }
 
 /// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
@@ -3194,7 +2830,7 @@ fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []cons
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
-/// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
+/// This library contains the shim code that runs in child processes to read the LIR runtime image.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
 pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
@@ -3672,7 +3308,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
         .interpreter, .wasm => {
             // Use embedded interpreter build approach
-            // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
+            // This compiles the Roc app, serializes the LIR runtime image, and embeds it in the binary.
             try rocBuildEmbedded(ctx, args);
         },
     }

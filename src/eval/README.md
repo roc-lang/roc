@@ -7,11 +7,13 @@ navigate the code without prior context.
 
 ## High-Level Architecture
 
-The interpreter works by lowering Canonical IR (CIR) into LIR, then
-interpreting the resulting program directly:
+The interpreter works by consuming ARC-inserted LIR and interpreting that
+program directly. In the public post-check pipeline, CIR is never given to the
+interpreter or interpreter shim; the parent compiler lowers through checked
+artifacts, MIR, IR, LIR, and ARC first.
 
 ```
-CIR → LIR → RC → Interpret
+checked artifacts → MIR → IR → LIR → ARC → Interpret
 ```
 
 ### Core Modules
@@ -35,10 +37,10 @@ CIR → LIR → RC → Interpret
 
 ## Evaluation Flow
 
-1. **Canonical inputs** — Consumers (REPL, tests, CLI) parse and canonicalize
-   Roc source, producing a `ModuleEnv` and canonical expression index.
-2. **Lowering** — CIR is lowered into LIR plus explicit RC statements, producing
-   a `LirStore` and entry expression.
+1. **Published inputs** — Consumers (REPL, tests, CLI) type check source and
+   publish checked artifacts plus explicit roots.
+2. **Lowering** — The checked-artifact pipeline lowers through MIR, IR, LIR, and
+   ARC, producing a `LirStore`, committed layouts, and explicit root procedures.
 3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
    `eval()` or `evalEntrypoint()` runs the stack-safe engine.
 4. **Stack-safe engine** — `evalStackSafe()` is the main loop. It pops work
@@ -55,8 +57,9 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 ## Host Integrations
 
 - **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
-  C-callable entry point (`roc_entrypoint`) that receives a `ModuleEnv` via
-  shared memory or embedded data, lowers it, and evaluates via the interpreter.
+  C-callable entry point (`roc_entrypoint`) that receives a serialized
+  ARC-inserted LIR runtime image via shared memory or embedded data and
+  evaluates it via the interpreter.
 
 ## Tests
 

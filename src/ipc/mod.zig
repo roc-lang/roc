@@ -12,13 +12,16 @@ pub const Handle = platform.Handle;
 pub const FdInfo = coordination.FdInfo;
 pub const CoordinationError = coordination.CoordinationError;
 
-/// A properly aligned header structure for sending a serialized ModuleEnv over IPC.
-pub const ModuleEnvHeader = extern struct {
-    parent_base_addr: u64,
-    entry_count: u32,
-    _padding: u32, // Ensure 8-byte alignment
-    def_indices_offset: u64,
-    module_env_offset: u64,
+/// Shared-memory header for a serialized LIR runtime image.
+///
+/// The IPC layer is only a byte transport. Semantic compilation happens in the
+/// parent process before bytes are written, and the child process only receives
+/// a target-specific LIR runtime image.
+pub const LirRuntimeImageHeader = extern struct {
+    magic: u32,
+    format_version: u32,
+    payload_offset: u64,
+    payload_len: u64,
 };
 
 test "ipc tests" {
