@@ -8,6 +8,7 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const ir = @import("ir");
+const mir = @import("mir");
 const layout_mod = @import("layout");
 
 const LIR = @import("LIR.zig");
@@ -24,6 +25,7 @@ pub const ProcMapEntry = struct {
 };
 
 pub const Result = struct {
+    canonical_names: mir.Hosted.CanonicalNameStore,
     store: LirStore,
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
@@ -34,6 +36,7 @@ pub const Result = struct {
         self.root_procs.deinit(self.store.allocator);
         self.layouts.deinit();
         self.store.deinit();
+        self.canonical_names.deinit();
     }
 
     pub fn lirProcForExecutable(self: *const Result, proc: ir.Ast.ProcRef) ?LIR.LirProcSpecId {
@@ -57,6 +60,8 @@ pub fn run(
 
     var lowerer = try Lowerer.init(allocator, all_module_envs, builtin_str_ident, target_usize, &owned_input);
     errdefer lowerer.deinit();
+    lowerer.canonical_names = owned_input.canonical_names;
+    owned_input.canonical_names = mir.Hosted.CanonicalNameStore.init(allocator);
 
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllDefs();
@@ -68,6 +73,7 @@ pub fn run(
 
 const Lowerer = struct {
     allocator: Allocator,
+    canonical_names: mir.Hosted.CanonicalNameStore,
     input: *const ir.Lower.Program,
     store: LirStore,
     layouts: layout_mod.Store,
@@ -83,6 +89,7 @@ const Lowerer = struct {
     ) LowerResourceError!Lowerer {
         return .{
             .allocator = allocator,
+            .canonical_names = mir.Hosted.CanonicalNameStore.init(allocator),
             .input = input,
             .store = LirStore.init(allocator),
             .layouts = try layout_mod.Store.init(all_module_envs, builtin_str_ident, allocator, target_usize),
@@ -98,10 +105,12 @@ const Lowerer = struct {
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
         self.store.deinit();
+        self.canonical_names.deinit();
     }
 
     fn finish(self: *Lowerer) Result {
         const result = Result{
+            .canonical_names = self.canonical_names,
             .store = self.store,
             .layouts = self.layouts,
             .root_procs = self.root_procs,
@@ -110,6 +119,7 @@ const Lowerer = struct {
         self.local_env.deinit();
         self.store = LirStore.init(self.allocator);
         self.layouts = undefined;
+        self.canonical_names = mir.Hosted.CanonicalNameStore.init(self.allocator);
         self.root_procs = .empty;
         self.proc_map = .empty;
         self.local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(self.allocator);
@@ -134,8 +144,8 @@ const Lowerer = struct {
                 .body = null,
                 .ret_layout = try self.lowerLayoutRef(def.ret_layout),
                 .hosted = if (def.hosted) |hosted| .{
-                    .symbol_name = hosted.symbol_name,
-                    .index = hosted.index,
+                    .external_symbol_name = hosted.external_symbol_name,
+                    .dispatch_index = hosted.dispatch_index,
                 } else null,
             });
 

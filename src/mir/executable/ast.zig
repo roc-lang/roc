@@ -263,11 +263,22 @@ pub const FnDef = struct {
     body: ExprId,
 };
 
+pub const HostedFnDef = struct {
+    args: Span(TypedValue),
+    ret_ty: TypeId,
+    hosted: @import("../hosted.zig").Proc,
+};
+
+pub const DefVal = union(enum) {
+    fn_: FnDef,
+    hosted_fn: HostedFnDef,
+};
+
 pub const Def = struct {
     proc: ExecutableProcId,
     source_proc: canonical.MirProcedureRef,
     specialization_key: repr.ExecutableSpecializationKey,
-    value: FnDef,
+    value: DefVal,
 };
 
 pub const Store = struct {

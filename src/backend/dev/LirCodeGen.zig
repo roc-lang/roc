@@ -9190,18 +9190,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
             const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
             const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
-            const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.index) * @sizeOf(builtins.host_abi.HostedFn));
+            const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.dispatch_index) * @sizeOf(builtins.host_abi.HostedFn));
 
             if (builtin.mode == .Debug) {
                 const hosted_count_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(hosted_count_reg);
                 try self.emitLoad(.w32, hosted_count_reg, roc_ops_reg, hosted_fns_count_offset);
-                try self.emitCmpImm(hosted_count_reg, @intCast(hosted.index));
+                try self.emitCmpImm(hosted_count_reg, @intCast(hosted.dispatch_index));
                 const count_ok_patch = try self.codegen.emitCondJump(condAbove());
                 const msg = try std.fmt.allocPrint(
                     self.allocator,
                     "Dev/codegen invariant violated: hosted call index {d} out of bounds for proc {d}",
-                    .{ hosted.index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
+                    .{ hosted.dispatch_index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
                 );
                 defer self.allocator.free(msg);
                 try self.emitRocCrash(msg);

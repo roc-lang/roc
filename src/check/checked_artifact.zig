@@ -2255,6 +2255,7 @@ pub const HostedProcRef = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
     proc: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
 };
 
 pub const TopLevelValueRef = struct {
@@ -2683,6 +2684,7 @@ fn classifyLocalValueRef(
                             .module_idx = hosted.module_idx,
                             .def = hosted.def_idx,
                             .proc = hosted.proc,
+                            .template = hosted.template,
                         } },
                         .source_fn_ty_template = .{},
                     } };
@@ -3710,6 +3712,7 @@ pub const HostedProc = struct {
     external_symbol_name: canonical.ExternalSymbolNameId,
     deterministic_index: u32,
     proc: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
 };
 
 pub const HostedProcTable = struct {
@@ -3721,6 +3724,7 @@ pub const HostedProcTable = struct {
         expr_idx: CIR.Expr.Idx,
         external_symbol_name: canonical.ExternalSymbolNameId,
         proc: canonical.ProcedureValueRef,
+        template: canonical.ProcedureTemplateRef,
         sort_key: []const u8,
     };
 
@@ -3759,6 +3763,7 @@ pub const HostedProcTable = struct {
                             .artifact = template_ref.artifact,
                             .proc_base = template_ref.proc_base,
                         },
+                        .template = template_ref,
                         .sort_key = try hostedProcSortKey(allocator, module, hosted.symbol_name),
                     });
                 },
@@ -3785,6 +3790,7 @@ pub const HostedProcTable = struct {
                 .external_symbol_name = candidate.external_symbol_name,
                 .deterministic_index = @intCast(index),
                 .proc = candidate.proc,
+                .template = candidate.template,
             });
         }
 
@@ -5826,6 +5832,7 @@ fn hashHostedProcRef(hasher: *std.crypto.hash.sha2.Sha256, ref: HostedProcRef) v
     hashU32(hasher, ref.module_idx);
     hashEnumValue(hasher, ref.def);
     hashProcedureValueRef(hasher, ref.proc);
+    hashProcedureTemplateRef(hasher, ref.template);
 }
 
 fn hashImportedProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ImportedProcedureBindingRef) void {
@@ -5964,7 +5971,8 @@ fn topLevelValueRefEql(a: TopLevelValueRef, b: TopLevelValueRef) bool {
 fn hostedProcRefEql(a: HostedProcRef, b: HostedProcRef) bool {
     return a.module_idx == b.module_idx and
         a.def == b.def and
-        canonical.procedureValueRefEql(a.proc, b.proc);
+        canonical.procedureValueRefEql(a.proc, b.proc) and
+        canonical.procedureTemplateRefEql(a.template, b.template);
 }
 
 fn requiredAppProcedureRefEql(a: RequiredAppProcedureRef, b: RequiredAppProcedureRef) bool {

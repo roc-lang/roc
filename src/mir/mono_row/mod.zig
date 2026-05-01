@@ -467,6 +467,7 @@ const BodyFinalizer = struct {
                 .hosted_fn => |hosted| .{ .hosted_fn = .{
                     .proc = hosted.proc,
                     .args = try self.lowerTypedSymbolSpan(hosted.args),
+                    .ret_ty = hosted.ret_ty,
                     .hosted = hosted.hosted,
                 } },
                 .val => |expr| .{ .val = try self.lowerExpr(expr) },

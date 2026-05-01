@@ -16,6 +16,7 @@ pub const LowerResourceError = Allocator.Error;
 
 pub const Program = struct {
     allocator: Allocator,
+    canonical_names: mir.Hosted.CanonicalNameStore,
     literal_pool: mir.Ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
     store: Ast.Store,
@@ -25,6 +26,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .canonical_names = mir.Hosted.CanonicalNameStore.init(allocator),
             .literal_pool = mir.Ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
             .store = Ast.Store.init(allocator),
@@ -39,6 +41,7 @@ pub const Program = struct {
         self.store.deinit();
         self.symbols.deinit();
         self.literal_pool.deinit();
+        self.canonical_names.deinit();
         self.* = Program.init(self.allocator);
     }
 };
@@ -49,6 +52,8 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.canonical_names = input.canonical_names;
+    input.canonical_names = mir.Hosted.CanonicalNameStore.init(allocator);
     program.literal_pool = input.literal_pool;
     input.literal_pool = mir.Ids.ProgramLiteralPool.init(allocator);
     program.symbols = input.symbols;
@@ -91,17 +96,32 @@ const IrBuilder = struct {
     }
 
     fn lowerDef(self: *IrBuilder, def: Exec.Ast.Def) LowerResourceError!void {
-        const args = try self.lowerArgSpan(def.value.args);
-        const body = try self.lowerExprToBlock(def.value.body);
-        const ret_layout = self.blockReturnLayout(body);
-        _ = try self.output.store.addDef(.{
-            .proc = def.proc,
-            .debug_name = null,
-            .args = args,
-            .body = body,
-            .ret_layout = ret_layout,
-            .hosted = null,
-        });
+        switch (def.value) {
+            .fn_ => |fn_| {
+                const args = try self.lowerArgSpan(fn_.args);
+                const body = try self.lowerExprToBlock(fn_.body);
+                const ret_layout = self.blockReturnLayout(body);
+                _ = try self.output.store.addDef(.{
+                    .proc = def.proc,
+                    .debug_name = null,
+                    .args = args,
+                    .body = body,
+                    .ret_layout = ret_layout,
+                    .hosted = null,
+                });
+            },
+            .hosted_fn => |hosted| {
+                const args = try self.lowerArgSpan(hosted.args);
+                _ = try self.output.store.addDef(.{
+                    .proc = def.proc,
+                    .debug_name = null,
+                    .args = args,
+                    .body = null,
+                    .ret_layout = try self.layoutForType(hosted.ret_ty),
+                    .hosted = hosted.hosted,
+                });
+            },
+        }
     }
 
     fn lowerArgSpan(self: *IrBuilder, span: Exec.Ast.Span(Exec.Ast.TypedValue)) LowerResourceError!Ast.Span(Ast.Var) {

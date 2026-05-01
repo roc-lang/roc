@@ -15,6 +15,7 @@ pub const Ids = @import("ids.zig");
 pub const DebugVerify = @import("debug_verify.zig");
 pub const ConcreteSourceType = @import("concrete_source_type.zig");
 pub const ArtifactNames = @import("artifact_names.zig");
+pub const Hosted = @import("hosted.zig");
 
 test "mir tests" {
     std.testing.refAllDecls(@This());
@@ -27,4 +28,5 @@ test "mir tests" {
     std.testing.refAllDecls(DebugVerify);
     std.testing.refAllDecls(ConcreteSourceType);
     std.testing.refAllDecls(ArtifactNames);
+    std.testing.refAllDecls(Hosted);
 }

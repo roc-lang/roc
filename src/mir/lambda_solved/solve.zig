@@ -308,7 +308,8 @@ const BodySolver = struct {
                 },
                 .hosted_fn => |hosted| blk: {
                     const lowered_args = try self.lowerParamSpan(hosted.args);
-                    const ret = try self.newValue(try self.type_importer.output.freshUnbd());
+                    const ret_ty = try self.type_importer.importType(hosted.ret_ty);
+                    const ret = try self.newValue(ret_ty);
                     self.public_roots = .{
                         .params = lowered_args.values,
                         .ret = ret,
@@ -318,6 +319,7 @@ const BodySolver = struct {
                     break :blk .{ .hosted_fn = .{
                         .proc = hosted.proc,
                         .args = lowered_args.symbols,
+                        .ret_ty = ret_ty,
                         .hosted = hosted.hosted,
                     } };
                 },

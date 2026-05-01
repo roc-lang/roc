@@ -312,27 +312,23 @@ const BodyBuilder = struct {
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
                     .specialization_key = try self.executableSpecializationKey(),
-                    .value = .{
+                    .value = .{ .fn_ = .{
                         .args = args,
                         .body = body,
-                    },
+                    } },
                 };
             },
             .hosted_fn => |hosted| blk: {
                 const args = try self.lowerParamSpan(hosted.args);
-                const body = try self.output.addExpr(
-                    try self.type_lowerer.output.addType(.placeholder),
-                    self.output.freshValueRef(),
-                    .runtime_error,
-                );
                 break :blk .{
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
                     .specialization_key = try self.executableSpecializationKey(),
-                    .value = .{
+                    .value = .{ .hosted_fn = .{
                         .args = args,
-                        .body = body,
-                    },
+                        .ret_ty = try self.type_lowerer.lowerType(hosted.ret_ty),
+                        .hosted = hosted.hosted,
+                    } },
                 };
             },
             .val => |expr| blk: {
@@ -341,10 +337,10 @@ const BodyBuilder = struct {
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
                     .specialization_key = try self.executableSpecializationKey(),
-                    .value = .{
+                    .value = .{ .fn_ = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
                         .body = body,
-                    },
+                    } },
                 };
             },
             .run => |run| blk: {
@@ -353,10 +349,10 @@ const BodyBuilder = struct {
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
                     .specialization_key = try self.executableSpecializationKey(),
-                    .value = .{
+                    .value = .{ .fn_ = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
                         .body = body,
-                    },
+                    } },
                 };
             },
         });

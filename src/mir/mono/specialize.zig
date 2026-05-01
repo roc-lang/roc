@@ -13,6 +13,7 @@ const symbol_mod = @import("symbol");
 const Ast = @import("ast.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
 const ArtifactNames = @import("../artifact_names.zig");
+const Hosted = @import("../hosted.zig");
 const ids = @import("../ids.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
@@ -1258,10 +1259,60 @@ const BodyLowerer = struct {
                     else => invariantViolation("mono body lowering expected checked closure to reference a lambda body"),
                 }
             },
-            .hosted_lambda => invariantViolation("mono body lowering reached hosted lambda before hosted procedure lowering was implemented"),
+            .hosted_lambda => |hosted| try self.lowerHostedDef(reserved, fn_ty, hosted.symbol_name, hosted.args),
             .anno_only => invariantViolation("mono body lowering reached annotation-only procedure body without checked backing expression"),
             else => invariantViolation("mono body lowering expected a checked procedure body to be a lambda-like expression"),
         };
+    }
+
+    fn lowerHostedDef(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        symbol_name: canonical.ExternalSymbolNameId,
+        arg_patterns: []const checked_artifact.CheckedPatternId,
+    ) Allocator.Error!Ast.DefId {
+        const args = try self.lowerParamSpan(arg_patterns);
+        const hosted = try self.hostedProcForReserved(reserved.proc.proc, symbol_name);
+        return try self.program.ast.addDef(.{
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .debug_name = null,
+            .value = .{ .hosted_fn = .{
+                .proc = reserved.proc.proc,
+                .args = args,
+                .ret_ty = self.functionReturnType(fn_ty),
+                .hosted = hosted,
+            } },
+        });
+    }
+
+    fn functionReturnType(self: *const BodyLowerer, fn_ty: Type.TypeId) Type.TypeId {
+        return switch (self.program.types.getTypePreservingNominal(fn_ty)) {
+            .func => |func| func.ret,
+            else => invariantViolation("mono body lowering expected hosted procedure type to be a function"),
+        };
+    }
+
+    fn hostedProcForReserved(
+        self: *BodyLowerer,
+        proc: canonical.ProcedureValueRef,
+        symbol_name: canonical.ExternalSymbolNameId,
+    ) Allocator.Error!Hosted.Proc {
+        for (self.template_lookup.hosted_procs.procs) |hosted| {
+            if (!canonical.procedureValueRefEql(hosted.proc, proc)) continue;
+            if (hosted.external_symbol_name != symbol_name) {
+                invariantViolation("mono body lowering found hosted procedure metadata with a mismatched external symbol name");
+            }
+            return .{
+                .external_symbol_name = try self.name_resolver.externalSymbolName(
+                    self.template_lookup.artifact,
+                    hosted.external_symbol_name,
+                ),
+                .dispatch_index = hosted.deterministic_index,
+            };
+        }
+
+        invariantViolation("mono body lowering expected hosted procedure metadata published in the checked artifact");
     }
 
     fn lowerLambdaDef(
@@ -2324,7 +2375,7 @@ const BodyLowerer = struct {
                 binding_ref,
             ).template),
             .imported => |imported| checkedTemplateFromCallableTemplate(self.importedProcedureBinding(imported).template),
-            .hosted => |_| invariantViolation("mono body lowering reached hosted procedure use before hosted procedure templates were published"),
+            .hosted => |hosted| hosted.template,
             .platform_required => |required| checkedTemplateFromCallableTemplate(self.directProcedureBinding(
                 topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
                     debug.invariant(false, "mono body lowering invariant violated: platform-required artifact has no procedure binding table");
@@ -2459,7 +2510,8 @@ fn templateForProcedureUse(
                 required.procedure_binding,
             );
         },
-        .imported, .hosted, .promoted => {
+        .hosted => |hosted| hosted.template,
+        .imported, .promoted => {
             debug.invariant(false, "mono specialization invariant violated: platform-required root resolved to unsupported procedure binding kind");
             unreachable;
         },

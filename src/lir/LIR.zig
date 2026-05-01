@@ -12,9 +12,9 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
+const mir = @import("mir");
 
 const StringLiteral = base.StringLiteral;
-const Ident = base.Ident;
 
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
@@ -139,12 +139,7 @@ pub const RefOp = union(enum) {
 };
 
 /// Platform-hosted proc metadata used for external proc ABIs.
-pub const HostedProc = struct {
-    /// Symbol exported by the platform host for this hosted proc.
-    symbol_name: Ident.Idx,
-    /// Stable platform dispatch-table index for this hosted proc.
-    index: u32,
-};
+pub const HostedProc = mir.Hosted.Proc;
 
 /// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {

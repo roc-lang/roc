@@ -14,6 +14,8 @@ pub const LayoutRef = layout_mod.Ref;
 pub const ProcRef = mir.Executable.Ast.ExecutableProcId;
 /// Lowered-program string literal payload.
 pub const ProgramLiteralId = mir.Ids.ProgramLiteralId;
+/// Platform-hosted procedure metadata.
+pub const HostedProc = mir.Hosted.Proc;
 
 /// Identifier for a lowered IR expression node.
 pub const ExprId = enum(u32) { _ };
@@ -184,7 +186,7 @@ pub const Def = struct {
     args: Span(Var),
     body: ?BlockId = null,
     ret_layout: LayoutRef,
-    hosted: ?base.HostedProc = null,
+    hosted: ?HostedProc = null,
 };
 
 /// Owning store for lowered IR nodes and side arrays.

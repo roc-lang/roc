@@ -2366,7 +2366,7 @@ pub const Interpreter = struct {
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
 
-        const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.index];
+        const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
         const ops_for_host = self.currentRocOps();
         hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
 

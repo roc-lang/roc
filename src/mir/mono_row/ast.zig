@@ -9,6 +9,7 @@ const check = @import("check");
 const symbol_mod = @import("symbol");
 const mono_type = @import("../mono/type.zig");
 const ids = @import("../ids.zig");
+const hosted_mod = @import("../hosted.zig");
 
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
@@ -258,7 +259,8 @@ pub const RunDef = struct {
 pub const HostedFnDef = struct {
     proc: canonical.ProcedureValueRef,
     args: Span(TypedSymbol),
-    hosted: base.HostedProc,
+    ret_ty: TypeId,
+    hosted: hosted_mod.Proc,
 };
 
 pub const DefVal = union(enum) {
