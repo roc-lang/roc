@@ -1036,12 +1036,19 @@ const BodyLowerer = struct {
         ty: Type.TypeId,
         segments: []const checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        if (segments.len != 1) invariantViolation("mono body lowering reached interpolated string before string concatenation lowering was implemented");
-        const segment = self.checkedExpr(segments[0]);
-        return switch (segment.data) {
-            .str_segment => |literal| try self.program.ast.addExpr(ty, .{ .str_lit = try self.lowerCheckedStringLiteral(literal) }),
-            else => invariantViolation("mono body lowering expected string expression segment to be a string segment"),
-        };
+        if (segments.len == 0) invariantViolation("mono body lowering received string expression with no segments");
+
+        var current = try self.lowerExpr(segments[0]);
+        for (segments[1..]) |segment| {
+            const rhs = try self.lowerExpr(segment);
+            const args = [_]Ast.ExprId{ current, rhs };
+            current = try self.program.ast.addExpr(ty, .{ .low_level = .{
+                .op = .str_concat,
+                .args = try self.program.ast.addExprSpan(&args),
+                .source_constraint_ty = ty,
+            } });
+        }
+        return current;
     }
 
     fn lowerResolvedLookup(
