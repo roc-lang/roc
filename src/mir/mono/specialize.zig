@@ -1021,10 +1021,13 @@ const BodyLowerer = struct {
             .method_eq,
             .type_method_call,
             .type_dispatch_call,
-            .dbg,
             .expect,
             .hosted_lambda,
             => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
+            .dbg => |child| blk: {
+                const value = try self.lowerExpr(child);
+                break :blk try self.program.ast.addExpr(ty, .{ .inspect = value });
+            },
             .runtime_error => try self.program.ast.addExpr(ty, .runtime_error),
             .crash => |literal| try self.program.ast.addExpr(ty, .{ .crash = try self.lowerCheckedStringLiteral(literal) }),
             .ellipsis, .anno_only, .pending => invariantViolation("mono body lowering received a non-runtime checked expression form"),

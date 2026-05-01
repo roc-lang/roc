@@ -483,8 +483,20 @@ const BodyBuilder = struct {
             .call_value,
             .call_proc,
             .proc_value,
-            .inspect,
             => executableInvariant("executable MIR reached lambda-solved expression form whose executable lowering is still missing"),
+            .inspect => |child| blk: {
+                const value = try self.lowerExpr(child);
+                const debug_stmt = try self.output.addStmt(.{ .debug = value });
+                const stmts = try self.output.addStmtSpan(&.{debug_stmt});
+                break :blk try self.output.addExpr(
+                    self.output.getExpr(value).ty,
+                    self.exprValue(value),
+                    .{ .block = .{
+                        .stmts = stmts,
+                        .final_expr = value,
+                    } },
+                );
+            },
         };
         try self.expr_map.put(expr_id, lowered);
         return lowered;
