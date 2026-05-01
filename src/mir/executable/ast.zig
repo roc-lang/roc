@@ -461,6 +461,20 @@ pub const Store = struct {
         try self.direct_call_args.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
+
+    pub fn addCaptureValueRefSpan(self: *Store, values: []const CaptureValueRef) std.mem.Allocator.Error!Span(CaptureValueRef) {
+        if (values.len == 0) return Span(CaptureValueRef).empty();
+        const start: u32 = @intCast(self.capture_value_refs.items.len);
+        try self.capture_value_refs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addCallableMatchBranchSpan(self: *Store, values: []const CallableMatchBranch) std.mem.Allocator.Error!Span(CallableMatchBranch) {
+        if (values.len == 0) return Span(CallableMatchBranch).empty();
+        const start: u32 = @intCast(self.callable_match_branches.items.len);
+        try self.callable_match_branches.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
 };
 
 test "executable ast tests" {

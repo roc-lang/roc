@@ -96,18 +96,20 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     for (input.procs.items, 0..) |proc, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
         const value_store = &input.value_stores.items[@intFromEnum(proc.representation_instance)];
+        const proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)];
         var builder = BodyBuilder{
             .allocator = allocator,
             .input = &input.ast,
             .output = &program.ast,
             .type_lowerer = &type_lowerer,
             .value_store = value_store,
+            .representation_store = &input.solve_sessions.items[@intFromEnum(proc_instance.solve_session)].representation_store,
             .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
             .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
             .executable_proc = executable_proc,
             .source_proc = proc.proc,
             .representation_instance = proc.representation_instance,
-            .proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)],
+            .proc_instance = proc_instance,
             .proc_instances = input.proc_instances.items,
             .proc_map = &proc_map,
             .proc_instance_map = &proc_instance_map,
@@ -284,6 +286,7 @@ const BodyBuilder = struct {
     output: *Ast.Store,
     type_lowerer: *TypeLowerer,
     value_store: *const repr.ValueInfoStore,
+    representation_store: *const repr.RepresentationStore,
     env: std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef),
     expr_map: std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId),
     executable_proc: Ast.ExecutableProcId,
@@ -590,10 +593,10 @@ const BodyBuilder = struct {
             .for_ => |for_| try self.lowerForExpr(expr.ty, for_),
             .capture_ref,
             .structural_eq,
-            .call_value,
-            .proc_value,
             => executableInvariant("executable MIR reached lambda-solved expression form whose executable lowering is still missing"),
+            .call_value => |call| try self.lowerCallValue(expr.ty, call),
             .call_proc => |call| try self.lowerCallProc(expr.ty, call),
+            .proc_value => |proc_value| try self.lowerProcValue(expr.ty, expr.value_info, proc_value),
             .inspect => |child| blk: {
                 const value = try self.lowerExpr(child);
                 const debug_stmt = try self.output.addStmt(.{ .debug = value });
@@ -868,6 +871,178 @@ const BodyBuilder = struct {
             .stmts = try self.output.addStmtSpan(stmt_ids),
             .final_expr = final_call,
         } });
+    }
+
+    fn lowerProcValue(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        value_info_id: repr.ValueInfoId,
+        proc_value: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const value_info = self.value_store.values.items[@intFromEnum(value_info_id)];
+        const callable = value_info.callable orelse executableInvariant("executable proc_value reached value without callable metadata");
+        const construction_id = callable.construction_plan orelse executableInvariant("executable proc_value reached finite callable value without construction metadata");
+        const construction = self.representation_store.callableConstructionPlan(construction_id);
+        const member = self.representation_store.callableSetMember(construction.callable_set_key, construction.selected_member) orelse {
+            executableInvariant("executable proc_value construction selected a missing callable-set member");
+        };
+
+        const capture_items = self.input.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
+        if (capture_items.len != construction.capture_values.len) {
+            executableInvariant("executable proc_value capture arity does not match construction plan");
+        }
+        const capture_refs = try self.allocator.alloc(Ast.CaptureValueRef, capture_items.len);
+        defer self.allocator.free(capture_refs);
+        const stmt_ids = try self.allocator.alloc(Ast.StmtId, capture_items.len);
+        defer self.allocator.free(stmt_ids);
+
+        for (capture_items, 0..) |capture, i| {
+            if (capture.value_info != construction.capture_values[i]) {
+                executableInvariant("executable proc_value capture value differs from construction plan");
+            }
+            const lowered = try self.lowerExpr(capture.expr);
+            const value = self.exprValue(lowered);
+            capture_refs[i] = .{
+                .slot = capture.slot,
+                .value = value,
+                .exec_ty = self.output.getExpr(lowered).ty,
+            };
+            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+
+        const result_ty = try self.type_lowerer.lowerType(source_ty);
+        const result_value = self.output.freshValueRef();
+        const final_value = try self.output.addExpr(result_ty, result_value, .{ .callable_set_value = .{
+            .construction_plan = construction_id,
+            .callable_set_key = construction.callable_set_key,
+            .member = .{
+                .callable_set_key = construction.callable_set_key,
+                .member_index = construction.selected_member,
+            },
+            .capture_record = if (capture_refs.len == 0) null else .{
+                .capture_shape_key = member.capture_shape_key,
+                .values = try self.output.addCaptureValueRefSpan(capture_refs),
+                .record_tmp = self.output.freshValueRef(),
+            },
+        } });
+
+        if (stmt_ids.len == 0) return final_value;
+
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_value,
+        } });
+    }
+
+    fn lowerCallValue(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        call: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const func = try self.lowerExpr(call.func);
+        const func_value = self.exprValue(func);
+        const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
+        const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
+        const callable = func_value_info.callable orelse executableInvariant("executable call_value callee has no callable metadata");
+        const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
+        const callable_set_key = switch (emission) {
+            .finite => |key| key,
+            .already_erased,
+            .erase_proc_value,
+            .erase_finite_set,
+            => executableInvariant("executable call_value erased callable lowering is not implemented yet"),
+        };
+        const descriptor = self.representation_store.callableSetDescriptor(callable_set_key) orelse {
+            executableInvariant("executable call_value finite callable set has no descriptor");
+        };
+        if (descriptor.members.len == 0) executableInvariant("executable call_value finite callable set has no members");
+
+        const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
+        const arg_values = try self.allocator.alloc(Ast.ExecutableValueRef, arg_items.len);
+        defer self.allocator.free(arg_values);
+        const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len + 1);
+        defer self.allocator.free(stmt_ids);
+        stmt_ids[0] = try self.output.addStmt(.{ .decl = .{
+            .value = func_value,
+            .body = func,
+        } });
+        for (arg_items, 0..) |arg, i| {
+            const lowered = try self.lowerExpr(arg);
+            const value = self.exprValue(lowered);
+            arg_values[i] = value;
+            stmt_ids[i + 1] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+
+        const requested_source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
+        const branches = try self.allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
+        defer self.allocator.free(branches);
+        for (descriptor.members, 0..) |member, i| {
+            if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, requested_source_fn_ty)) {
+                executableInvariant("executable call_value callable-set member source type differs from call site");
+            }
+            const target = sourceProcForCallable(member.proc_value);
+            const executable_proc = self.proc_map.get(target) orelse executableInvariant("executable call_value member target was not reserved");
+            const target_instance_id = self.proc_instance_map.get(target) orelse executableInvariant("executable call_value member target has no representation instance");
+            const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
+            const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_values.len);
+            defer self.allocator.free(direct_args);
+            for (arg_values, 0..) |arg_value, arg_i| {
+                direct_args[arg_i] = .{ .value = arg_value };
+            }
+            branches[i] = .{
+                .member = .{
+                    .callable_set_key = callable_set_key,
+                    .member_index = member.member,
+                },
+                .source_fn_ty = member.proc_value.source_fn_ty,
+                .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
+                .executable_proc = executable_proc,
+                .direct_args = try self.output.addDirectCallArgSpan(direct_args),
+                .result_bridge = null,
+            };
+        }
+
+        const result_ty = try self.type_lowerer.lowerType(source_ty);
+        const result_value = self.output.freshValueRef();
+        const final_call = try self.output.addExpr(result_ty, result_value, .{ .callable_match = .{
+            .callable_set_key = callable_set_key,
+            .requested_source_fn_ty = requested_source_fn_ty,
+            .callee = func_value,
+            .args = try self.output.addValueRefSpan(arg_values),
+            .branches = try self.output.addCallableMatchBranchSpan(branches),
+            .result_ty = result_ty,
+            .result_value = result_value,
+        } });
+
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_call,
+        } });
+    }
+
+    fn sourceProcForCallable(proc_callable: canonical.ProcedureCallableRef) canonical.MonoSpecializedProcRef {
+        const template = switch (proc_callable.template) {
+            .checked => |checked| checked,
+            .lifted,
+            .synthetic,
+            => executableInvariant("executable callable member target is not a checked mono specialization"),
+        };
+        return .{
+            .proc = .{
+                .artifact = template.artifact,
+                .proc_base = template.proc_base,
+            },
+            .specialization = .{
+                .template = template,
+                .requested_mono_fn_ty = proc_callable.source_fn_ty,
+            },
+        };
     }
 
     fn addValueExpr(self: *BodyBuilder, source_ty: LambdaSolved.Type.TypeVarId, data: Ast.Expr.Data) Allocator.Error!Ast.ExprId {
