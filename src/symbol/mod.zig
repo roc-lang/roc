@@ -106,6 +106,9 @@ pub const BindingOrigin = union(enum) {
         module_idx: u32,
         pattern_idx: u32,
     },
+    checked_pattern_binder: struct {
+        binder_idx: u32,
+    },
     lifted_local_fn: struct {
         source_symbol: u32,
     },

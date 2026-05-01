@@ -51,6 +51,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     literal_pool: ids.ProgramLiteralPool,
+    symbols: symbol_mod.Store,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -60,6 +61,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
+            .symbols = symbol_mod.Store.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -72,6 +74,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.symbols.deinit();
         self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
@@ -87,6 +90,8 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
     input.program.types = Type.Store.init(allocator);
     program.literal_pool = input.program.literal_pool;
     input.program.literal_pool = ids.ProgramLiteralPool.init(allocator);
+    program.symbols = input.program.symbols;
+    input.program.symbols = symbol_mod.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.program.procs.items.len);
     for (input.program.procs.items, 0..) |proc, i| {

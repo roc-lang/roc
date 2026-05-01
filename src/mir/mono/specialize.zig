@@ -7,6 +7,8 @@
 
 const std = @import("std");
 const check = @import("check");
+const base = @import("base");
+const symbol_mod = @import("symbol");
 
 const Ast = @import("ast.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
@@ -66,6 +68,7 @@ pub const Program = struct {
     root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
     concrete_source_types: ConcreteSourceType.Store,
     literal_pool: ids.ProgramLiteralPool,
+    symbols: symbol_mod.Store,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -77,6 +80,7 @@ pub const Program = struct {
             .root_artifact_key = .{},
             .concrete_source_types = ConcreteSourceType.Store.init(allocator),
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
+            .symbols = symbol_mod.Store.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -89,6 +93,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.symbols.deinit();
         self.literal_pool.deinit();
         self.concrete_source_types.deinit();
         self.* = Program.init(self.allocator);
@@ -106,6 +111,15 @@ pub const Program = struct {
             .local_handle = reserved.local_handle,
             .fn_ty = fn_ty,
         });
+    }
+
+    pub fn addPatternBinderSymbol(
+        self: *Program,
+        binder: checked_artifact.PatternBinderId,
+    ) Allocator.Error!Ast.Symbol {
+        return try self.symbols.add(base.Ident.Idx.NONE, .{ .checked_pattern_binder = .{
+            .binder_idx = @intFromEnum(binder),
+        } });
     }
 };
 

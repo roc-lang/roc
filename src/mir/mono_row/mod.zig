@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const symbol_mod = @import("symbol");
 const Mono = @import("../mono/mod.zig");
 pub const Ast = @import("ast.zig");
 const ids = @import("../ids.zig");
@@ -247,6 +248,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     literal_pool: ids.ProgramLiteralPool,
+    symbols: symbol_mod.Store,
     types: Mono.Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -256,6 +258,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
+            .symbols = symbol_mod.Store.init(allocator),
             .types = Mono.Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -268,6 +271,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.symbols.deinit();
         self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
@@ -304,6 +308,8 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     owned_mono.types = Mono.Type.Store.init(allocator);
     program.literal_pool = owned_mono.literal_pool;
     owned_mono.literal_pool = ids.ProgramLiteralPool.init(allocator);
+    program.symbols = owned_mono.symbols;
+    owned_mono.symbols = symbol_mod.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, owned_mono.procs.items.len);
     for (owned_mono.procs.items) |proc| {
