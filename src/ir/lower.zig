@@ -288,8 +288,8 @@ const IrBuilder = struct {
                     .plan = bridge_plan,
                 } }, stmts);
             },
+            .call_erased => |call| try self.lowerCallErased(expr, call, stmts),
             .const_ref,
-            .call_erased,
             .packed_erased_fn,
             .crash,
             .runtime_error,
@@ -345,6 +345,25 @@ const IrBuilder = struct {
             } }, stmts);
         }
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), direct_call, stmts);
+    }
+
+    fn lowerCallErased(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        call: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        if (call.sig_key.capture_ty != null) {
+            irInvariant("IR lowering call_erased requires explicit hidden capture layout");
+        }
+        const func = self.value_env.get(call.func) orelse irInvariant("IR lowering call_erased function value was not bound");
+        const args = try self.lowerVarSpanFromValueRefSpan(call.args);
+        defer if (args.len > 0) self.allocator.free(args);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_erased = .{
+            .func = func,
+            .args = try self.output.store.addVarSpan(args),
+            .capture_layout = null,
+        } }, stmts);
     }
 
     fn lowerCallableSetValue(
@@ -896,6 +915,19 @@ const IrBuilder = struct {
         const values = try self.allocator.alloc(Ast.Var, input_items.len);
         for (input_items, 0..) |expr, i| {
             values[i] = try self.lowerExpr(expr, stmts);
+        }
+        return values;
+    }
+
+    fn lowerVarSpanFromValueRefSpan(
+        self: *IrBuilder,
+        span: Exec.Ast.Span(Exec.Ast.ExecutableValueRef),
+    ) LowerResourceError![]const Ast.Var {
+        if (span.len == 0) return &.{};
+        const input_items = self.input.ast.value_refs.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.Var, input_items.len);
+        for (input_items, 0..) |value_ref, i| {
+            values[i] = self.value_env.get(value_ref) orelse irInvariant("IR lowering value-ref call argument was not bound");
         }
         return values;
     }

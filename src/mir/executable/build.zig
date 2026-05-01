@@ -1135,7 +1135,7 @@ const BodyBuilder = struct {
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
         const callable_set_key = switch (call_site.dispatch orelse executableInvariant("executable call_value reached call site without resolved dispatch")) {
             .finite => |key| key,
-            .erased => executableInvariant("executable call_value erased callable lowering is not implemented yet"),
+            .erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call_site, sig_key),
         };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
@@ -1217,6 +1217,52 @@ const BodyBuilder = struct {
             .branches = try self.output.addCallableMatchBranchSpan(branches),
             .result_ty = result_ty,
             .result_value = result_value,
+        } });
+
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_call,
+        } });
+    }
+
+    fn lowerCallValueErased(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        call: anytype,
+        func: Ast.ExprId,
+        func_value: Ast.ExecutableValueRef,
+        call_site: repr.CallSiteInfo,
+        sig_key: repr.ErasedFnSigKey,
+    ) Allocator.Error!Ast.ExprId {
+        if (sig_key.capture_ty != null) {
+            executableInvariant("executable call_value erased callable lowering requires hidden capture layout publication");
+        }
+
+        const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
+        const arg_values = try self.allocator.alloc(Ast.ExecutableValueRef, arg_items.len);
+        defer self.allocator.free(arg_values);
+        const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len + 1);
+        defer self.allocator.free(stmt_ids);
+        stmt_ids[0] = try self.output.addStmt(.{ .decl = .{
+            .value = func_value,
+            .body = func,
+        } });
+        for (arg_items, 0..) |arg, i| {
+            const lowered = try self.lowerExpr(arg);
+            const value = self.exprValue(lowered);
+            arg_values[i] = value;
+            stmt_ids[i + 1] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+
+        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
+        const result_value = self.output.freshValueRef();
+        const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_erased = .{
+            .func = func_value,
+            .args = try self.output.addValueRefSpan(arg_values),
+            .sig_key = sig_key,
         } });
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
