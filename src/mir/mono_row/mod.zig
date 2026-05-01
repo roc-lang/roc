@@ -468,8 +468,22 @@ const BodyFinalizer = struct {
                 .iterable = try self.lowerExpr(for_.iterable),
                 .body = try self.lowerExpr(for_.body),
             } },
-            .let_ => rowInvariant("row finalization reached mono let expression before let lowering was implemented"),
+            .let_ => |let_| try self.lowerLet(let_),
         });
+    }
+
+    fn lowerLet(self: *BodyFinalizer, let_: anytype) Allocator.Error!Ast.Expr.Data {
+        return switch (let_.def) {
+            .let_val => |let_val| .{ .let_ = .{
+                .bind = .{
+                    .ty = let_val.bind.ty,
+                    .symbol = let_val.bind.symbol,
+                },
+                .body = try self.lowerExpr(let_val.body),
+                .rest = try self.lowerExpr(let_.rest),
+            } },
+            .let_fn => rowInvariant("row-finalized mono cannot preserve local function lets until lifted procedure identity is implemented"),
+        };
     }
 
     fn lowerRecord(

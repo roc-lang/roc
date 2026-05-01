@@ -241,7 +241,14 @@ const BodyLifter = struct {
                 .iterable = try self.lowerExpr(for_.iterable),
                 .body = try self.lowerExpr(for_.body),
             } },
-            .let_ => liftInvariant("lifted MIR reached row-finalized let expression before let lowering was implemented"),
+            .let_ => |let_| .{ .let_ = .{
+                .bind = .{
+                    .ty = let_.bind.ty,
+                    .symbol = let_.bind.symbol,
+                },
+                .body = try self.lowerExpr(let_.body),
+                .rest = try self.lowerExpr(let_.rest),
+            } },
         });
         try self.expr_map.put(expr_id, lowered);
         return lowered;
