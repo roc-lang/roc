@@ -497,12 +497,22 @@ const BodyFinalizer = struct {
         defer self.allocator.free(evals);
         const assemblies = try self.allocator.alloc(Ast.RecordFieldAssembly, mono_fields.len);
         defer self.allocator.free(assemblies);
+
         for (mono_fields, 0..) |field, i| {
             const field_id = self.recordFieldId(shape, field.field);
             const value = try self.lowerExpr(field.value);
             evals[i] = .{ .field = field_id, .value = value };
-            assemblies[i] = .{ .field = field_id, .value = value };
         }
+
+        const shape_fields = self.shapes.recordShapeFields(shape);
+        if (shape_fields.len != mono_fields.len) rowInvariant("row finalization record field count did not match finalized shape");
+        for (shape_fields, 0..) |field_id, i| {
+            assemblies[i] = .{
+                .field = field_id,
+                .value = self.recordEvalValue(evals, field_id),
+            };
+        }
+
         return .{ .record = .{
             .shape = shape,
             .eval_order = try self.output.addRecordFieldEvalSpan(evals),
@@ -710,6 +720,18 @@ const BodyFinalizer = struct {
             if (self.shapes.recordField(field_id).label == label) return field_id;
         }
         rowInvariant("row finalization could not find record field label in finalized shape");
+    }
+
+    fn recordEvalValue(
+        self: *const BodyFinalizer,
+        evals: []const Ast.RecordFieldEval,
+        field_id: RecordFieldId,
+    ) Ast.ExprId {
+        _ = self;
+        for (evals) |eval| {
+            if (eval.field == field_id) return eval.value;
+        }
+        rowInvariant("row finalization record assembly field was missing from eval order");
     }
 
     fn tagId(
