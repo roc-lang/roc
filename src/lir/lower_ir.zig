@@ -503,7 +503,17 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const source = try self.lowerVar(bridge.value);
-        return switch (self.input.store.getBridgePlan(bridge.plan)) {
+        return try self.lowerBridgePlanInto(target, source, bridge.plan, next);
+    }
+
+    fn lowerBridgePlanInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        plan_id: ir.Ast.BridgePlanId,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        return switch (self.input.store.getBridgePlan(plan_id)) {
             .direct => try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .local = source },
@@ -524,14 +534,283 @@ const Lowerer = struct {
                 .op = .{ .nominal = .{ .backing_ref = source } },
                 .next = next,
             } }),
-            .box_unbox,
-            .box_box,
-            .struct_,
-            .tag_union,
-            .singleton_to_tag_union,
-            .tag_union_to_singleton,
-            => lirInvariant("lir.lower_ir bridge plan requires recursive bridge lowering"),
+            .box_box => |child| try self.lowerBoxBoxBridge(target, source, child, next),
+            .box_unbox => |child| try self.lowerBoxUnboxBridge(target, source, child, next),
+            .struct_ => |children| try self.lowerStructBridge(target, source, children, next),
+            .tag_union => |children| try self.lowerTagUnionBridge(target, source, children, next),
+            .singleton_to_tag_union => |singleton| try self.lowerSingletonToTagUnionBridge(target, source, singleton, next),
+            .tag_union_to_singleton => |singleton| try self.lowerTagUnionToSingletonBridge(target, source, singleton, next),
         };
+    }
+
+    fn lowerBoxBoxBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        child: ir.Ast.BridgePlanId,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const payload_layout = self.boxPayloadLayout(self.store.getLocal(target).layout_idx);
+        const payload = try self.store.addLocal(.{ .layout_idx = payload_layout });
+        const args = [_]LIR.LocalId{payload};
+        const box_stmt = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .box_box,
+            .args = try self.store.addLocalSpan(&args),
+            .next = next,
+        } });
+        return try self.lowerBridgePlanInto(payload, source, child, box_stmt);
+    }
+
+    fn lowerBoxUnboxBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        child: ir.Ast.BridgePlanId,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const payload_layout = self.boxPayloadLayout(self.store.getLocal(source).layout_idx);
+        const payload = try self.store.addLocal(.{ .layout_idx = payload_layout });
+        const child_start = try self.lowerBridgePlanInto(target, payload, child, next);
+        const args = [_]LIR.LocalId{source};
+        return try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = payload,
+            .op = .box_unbox,
+            .args = try self.store.addLocalSpan(&args),
+            .next = child_start,
+        } });
+    }
+
+    fn lowerStructBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        children: ir.Ast.Span(ir.Ast.BridgePlanId),
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const child_plans = self.input.store.sliceBridgePlanSpan(children);
+        const source_layout = self.store.getLocal(source).layout_idx;
+        const target_layout = self.store.getLocal(target).layout_idx;
+        if (child_plans.len != self.structFieldCount(source_layout) or child_plans.len != self.structFieldCount(target_layout)) {
+            lirInvariant("lir.lower_ir struct bridge field count does not match source and target layouts");
+        }
+
+        const field_values = try self.allocator.alloc(LIR.LocalId, child_plans.len);
+        defer self.allocator.free(field_values);
+        for (child_plans, 0..) |_, i| {
+            field_values[i] = try self.store.addLocal(.{
+                .layout_idx = self.structFieldLayout(target_layout, i),
+            });
+        }
+
+        var current = try self.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.store.addLocalSpan(field_values),
+            .next = next,
+        } });
+
+        var i = child_plans.len;
+        while (i > 0) {
+            i -= 1;
+            const source_field = try self.store.addLocal(.{
+                .layout_idx = self.structFieldLayout(source_layout, i),
+            });
+            current = try self.lowerBridgePlanInto(field_values[i], source_field, child_plans[i], current);
+            current = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = source_field,
+                .op = .{ .field = .{
+                    .source = source,
+                    .field_idx = @intCast(i),
+                } },
+                .next = current,
+            } });
+        }
+        return current;
+    }
+
+    fn lowerTagUnionBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        children: ir.Ast.Span(ir.Ast.BridgePlanId),
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const child_plans = self.input.store.sliceBridgePlanSpan(children);
+        const source_layout = self.store.getLocal(source).layout_idx;
+        const target_layout = self.store.getLocal(target).layout_idx;
+        if (child_plans.len != self.tagUnionVariantCount(source_layout) or child_plans.len != self.tagUnionVariantCount(target_layout)) {
+            lirInvariant("lir.lower_ir tag-union bridge variant count does not match source and target layouts");
+        }
+
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, child_plans.len);
+        defer self.allocator.free(branches);
+        for (child_plans, 0..) |child_plan, i| {
+            branches[i] = .{
+                .value = @intCast(i),
+                .body = try self.lowerTagUnionBridgeBranch(target, source, source_layout, target_layout, i, child_plan, next),
+            };
+        }
+
+        const discriminant = try self.store.addLocal(.{ .layout_idx = .u16 });
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.store.addCFSwitchBranches(branches),
+            .default_branch = try self.store.addCFStmt(.{ .runtime_error = {} }),
+        } });
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = switch_stmt,
+        } });
+    }
+
+    fn lowerTagUnionBridgeBranch(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        source_layout: layout_mod.Idx,
+        target_layout: layout_mod.Idx,
+        variant_index: usize,
+        child_plan: ir.Ast.BridgePlanId,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const target_payload_layout = self.tagUnionPayloadLayout(target_layout, variant_index);
+        const payload = if (self.isZstLayout(target_payload_layout))
+            null
+        else
+            try self.store.addLocal(.{ .layout_idx = target_payload_layout });
+        const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .discriminant = @intCast(variant_index),
+            .payload = payload,
+            .next = next,
+        } });
+
+        const source_payload_layout = self.tagUnionPayloadLayout(source_layout, variant_index);
+        const source_payload = try self.store.addLocal(.{ .layout_idx = source_payload_layout });
+        const after_extract = if (payload) |payload_local|
+            try self.lowerBridgePlanInto(payload_local, source_payload, child_plan, assign_tag)
+        else
+            assign_tag;
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = source_payload,
+            .op = .{ .tag_payload_struct = .{
+                .source = source,
+                .tag_discriminant = @intCast(variant_index),
+            } },
+            .next = after_extract,
+        } });
+    }
+
+    fn lowerSingletonToTagUnionBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        singleton: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const target_payload_layout = self.tagUnionPayloadLayout(self.store.getLocal(target).layout_idx, @intCast(singleton.target_discriminant));
+        if (self.isZstLayout(target_payload_layout)) {
+            return try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .discriminant = singleton.target_discriminant,
+                .payload = null,
+                .next = next,
+            } });
+        }
+
+        if (singleton.payload_plan) |payload_plan| {
+            const bridged = try self.store.addLocal(.{ .layout_idx = target_payload_layout });
+            const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .discriminant = singleton.target_discriminant,
+                .payload = bridged,
+                .next = next,
+            } });
+            return try self.lowerBridgePlanInto(bridged, source, payload_plan, assign_tag);
+        }
+
+        return try self.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .discriminant = singleton.target_discriminant,
+            .payload = source,
+            .next = next,
+        } });
+    }
+
+    fn lowerTagUnionToSingletonBridge(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        singleton: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const source_payload_layout = self.tagUnionPayloadLayout(self.store.getLocal(source).layout_idx, @intCast(singleton.source_discriminant));
+        const source_payload = try self.store.addLocal(.{ .layout_idx = source_payload_layout });
+        const after_extract = if (singleton.payload_plan) |payload_plan|
+            try self.lowerBridgePlanInto(target, source_payload, payload_plan, next)
+        else if (self.isZstLayout(self.store.getLocal(target).layout_idx))
+            try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = LIR.LocalSpan.empty(),
+                .next = next,
+            } })
+        else
+            try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = source_payload },
+                .next = next,
+            } });
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = source_payload,
+            .op = .{ .tag_payload_struct = .{
+                .source = source,
+                .tag_discriminant = singleton.source_discriminant,
+            } },
+            .next = after_extract,
+        } });
+    }
+
+    fn boxPayloadLayout(self: *const Lowerer, box_layout_idx: layout_mod.Idx) layout_mod.Idx {
+        const box_layout = self.layouts.getLayout(box_layout_idx);
+        return switch (box_layout.tag) {
+            .box => box_layout.data.box,
+            .box_of_zst => .zst,
+            else => lirInvariant("lir.lower_ir box bridge expected box layout"),
+        };
+    }
+
+    fn structFieldCount(self: *const Lowerer, struct_layout_idx: layout_mod.Idx) usize {
+        const struct_layout = self.layouts.getLayout(struct_layout_idx);
+        if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
+        const data = self.layouts.getStructData(struct_layout.data.struct_.idx);
+        return data.getFields().count;
+    }
+
+    fn structFieldLayout(self: *const Lowerer, struct_layout_idx: layout_mod.Idx, field_index: usize) layout_mod.Idx {
+        const struct_layout = self.layouts.getLayout(struct_layout_idx);
+        if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
+        return self.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(field_index));
+    }
+
+    fn tagUnionVariantCount(self: *const Lowerer, tag_union_layout_idx: layout_mod.Idx) usize {
+        const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
+        if (tag_union_layout.tag != .tag_union) lirInvariant("lir.lower_ir tag-union bridge expected tag-union layout");
+        const data = self.layouts.getTagUnionData(tag_union_layout.data.tag_union.idx);
+        return self.layouts.getTagUnionVariants(data).len;
+    }
+
+    fn tagUnionPayloadLayout(self: *const Lowerer, tag_union_layout_idx: layout_mod.Idx, variant_index: usize) layout_mod.Idx {
+        const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
+        if (tag_union_layout.tag != .tag_union) lirInvariant("lir.lower_ir tag-union bridge expected tag-union layout");
+        const data = self.layouts.getTagUnionData(tag_union_layout.data.tag_union.idx);
+        const variants = self.layouts.getTagUnionVariants(data);
+        if (variant_index >= variants.len) lirInvariant("lir.lower_ir tag-union bridge payload index exceeded variant count");
+        return variants.get(@intCast(variant_index)).payload_layout;
+    }
+
+    fn isZstLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) bool {
+        return self.layouts.isZeroSized(self.layouts.getLayout(layout_idx));
     }
 
     fn lowerLiteral(self: *Lowerer, lit: ir.Ast.Lit, layout_idx: layout_mod.Idx) LowerResourceError!LIR.LiteralValue {
