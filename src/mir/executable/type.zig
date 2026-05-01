@@ -14,7 +14,6 @@ pub const Prim = solved.Type.Prim;
 
 pub const CallableSetType = struct {
     key: repr.CanonicalCallableSetKey,
-    capture_shape: repr.CaptureShapeKey,
 };
 
 pub const ErasedFnType = struct {

@@ -328,8 +328,32 @@ const IrBuilder = struct {
         callable: Exec.Ast.CallableSetValue,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        if (callable.capture_record != null) {
-            irInvariant("IR lowering captured callable_set_value requires closure layout lowering");
+        if (callable.capture_record) |record| {
+            const capture_refs = self.input.ast.capture_value_refs.items[record.values.start..][0..record.values.len];
+            const fields = try self.allocator.alloc(Ast.Var, capture_refs.len);
+            defer self.allocator.free(fields);
+            var seen = try self.allocator.alloc(bool, capture_refs.len);
+            defer self.allocator.free(seen);
+            @memset(seen, false);
+
+            for (capture_refs) |capture| {
+                const slot: usize = @intCast(capture.slot);
+                if (slot >= capture_refs.len) irInvariant("IR lowering captured callable slot exceeded capture record arity");
+                if (seen[slot]) irInvariant("IR lowering captured callable record saw duplicate capture slot");
+                const value = self.value_env.get(capture.value) orelse irInvariant("IR lowering captured callable value was not bound");
+                fields[slot] = value;
+                seen[slot] = true;
+            }
+            for (seen) |was_seen| {
+                if (!was_seen) irInvariant("IR lowering captured callable record did not provide every capture slot");
+            }
+
+            const layout = try self.structLayout(fields);
+            const bind = try self.bindExpr(expr.value, layout, .{
+                .make_struct = try self.output.store.addVarSpan(fields),
+            }, stmts);
+            try self.value_env.put(record.record_tmp, bind);
+            return bind;
         }
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .fn_ptr = callable.selected_executable_proc }, stmts);
     }
