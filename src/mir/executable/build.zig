@@ -24,6 +24,7 @@ pub const Proc = struct {
 
 pub const Program = struct {
     allocator: Allocator,
+    canonical_names: canonical.CanonicalNameStore,
     literal_pool: ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
     row_shapes: MonoRow.Store,
@@ -36,6 +37,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .canonical_names = canonical.CanonicalNameStore.init(allocator),
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
             .row_shapes = MonoRow.Store.init(allocator),
@@ -55,6 +57,7 @@ pub const Program = struct {
         self.row_shapes.deinit();
         self.symbols.deinit();
         self.literal_pool.deinit();
+        self.canonical_names.deinit();
         self.* = Program.init(self.allocator);
     }
 };
@@ -65,6 +68,8 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.canonical_names = input.canonical_names;
+    input.canonical_names = canonical.CanonicalNameStore.init(allocator);
     program.literal_pool = input.literal_pool;
     input.literal_pool = ids.ProgramLiteralPool.init(allocator);
     program.symbols = input.symbols;
