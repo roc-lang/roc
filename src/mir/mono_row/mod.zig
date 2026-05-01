@@ -679,6 +679,7 @@ const BodyFinalizer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .nominal => |child| .{ .nominal = try self.lowerPat(child) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),

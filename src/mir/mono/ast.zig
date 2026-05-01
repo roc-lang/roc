@@ -62,6 +62,7 @@ pub const Pat = struct {
             discriminant: u16,
             args: Span(PatId),
         },
+        nominal: PatId,
         tuple: Span(PatId),
         as: struct {
             pattern: PatId,

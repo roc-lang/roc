@@ -1347,6 +1347,7 @@ const BodyBuilder = struct {
             .dec_lit => |literal| .{ .dec_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
+            .nominal => |child| .{ .nominal = try self.lowerPatScoped(child, saved) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpanScoped(items, saved) },
             .as => |as| blk: {
                 const value = try self.bindPatternValue(as.binding_info, saved);

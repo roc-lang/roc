@@ -696,6 +696,7 @@ const IrBuilder = struct {
     fn sourceMatchPatternNeedsDiscriminant(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
         return switch (pat.data) {
             .as => |as| self.sourceMatchPatternNeedsDiscriminant(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
+            .nominal => |child| self.sourceMatchPatternNeedsDiscriminant(self.input.ast.pats.items[@intFromEnum(child)]),
             .tag => true,
             .wildcard, .bind, .bool_lit, .int_lit => false,
             else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
@@ -705,6 +706,7 @@ const IrBuilder = struct {
     fn sourceMatchPatternCanUseTagSubject(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
         return switch (pat.data) {
             .as => |as| self.sourceMatchPatternCanUseTagSubject(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
+            .nominal => |child| self.sourceMatchPatternCanUseTagSubject(self.input.ast.pats.items[@intFromEnum(child)]),
             .tag, .wildcard, .bind => true,
             else => false,
         };
@@ -713,6 +715,7 @@ const IrBuilder = struct {
     fn sourceMatchPatternSwitchValue(self: *IrBuilder, pat: Exec.Ast.Pat) ?u64 {
         return switch (pat.data) {
             .as => |as| self.sourceMatchPatternSwitchValue(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
+            .nominal => |child| self.sourceMatchPatternSwitchValue(self.input.ast.pats.items[@intFromEnum(child)]),
             .wildcard, .bind => null,
             .tag => |tag| @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
             .bool_lit => |value| @as(u64, if (value) 1 else 0),
@@ -834,6 +837,10 @@ const IrBuilder = struct {
                 try self.bindSourceMatchPatternValues(child_pat, value, stmts, saved);
             },
             .bind => |bind| try self.pushValueBinding(bind, value, saved),
+            .nominal => |child| {
+                const child_pat = self.input.ast.pats.items[@intFromEnum(child)];
+                try self.bindSourceMatchPatternValues(child_pat, value, stmts, saved);
+            },
             .tuple => |items| {
                 const child_pats = self.input.ast.pat_ids.items[items.start..][0..items.len];
                 for (child_pats, 0..) |child_pat_id, i| {

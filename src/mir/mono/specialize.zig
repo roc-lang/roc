@@ -2038,6 +2038,13 @@ const BodyLowerer = struct {
                     .args = try self.program.ast.addPatSpan(args),
                 } } });
             },
+            .nominal => |nominal| blk: {
+                const backing = self.nominalBackingType(ty);
+                break :blk try self.program.ast.addPat(.{
+                    .ty = ty,
+                    .data = .{ .nominal = try self.lowerPattern(backing, nominal.backing_pattern) },
+                });
+            },
             .tuple => |items| blk: {
                 const item_types = self.tupleElementTypes(ty, items.len);
                 const lowered = try self.allocator.alloc(Ast.PatId, items.len);
@@ -2055,6 +2062,13 @@ const BodyLowerer = struct {
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
             else => invariantViolation("mono body lowering reached pattern form whose lowering is still missing"),
+        };
+    }
+
+    fn nominalBackingType(self: *BodyLowerer, nominal_ty: Type.TypeId) Type.TypeId {
+        return switch (self.program.types.getTypePreservingNominal(nominal_ty)) {
+            .nominal => |nominal| nominal.backing,
+            else => nominal_ty,
         };
     }
 
