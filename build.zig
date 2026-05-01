@@ -2949,6 +2949,12 @@ pub fn build(b: *std.Build) void {
         echo_wasm.entry = .disabled;
         echo_wasm.rdynamic = true;
         echo_wasm.root_module.addImport("compile", roc_modules.compile);
+        echo_wasm.root_module.addImport("check", roc_modules.check);
+        echo_wasm.root_module.addImport("eval", roc_modules.eval);
+        echo_wasm.root_module.addImport("lir", roc_modules.lir);
+        echo_wasm.root_module.addImport("layout", roc_modules.layout);
+        echo_wasm.root_module.addImport("base", roc_modules.base);
+        echo_wasm.root_module.addImport("can", roc_modules.can);
         echo_wasm.root_module.addImport("echo_platform", roc_modules.echo_platform);
         echo_wasm.root_module.addImport("reporting", roc_modules.reporting);
         echo_wasm.root_module.addImport("roc_target", roc_modules.roc_target);

@@ -12,8 +12,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
+const can = @import("can");
+const check = @import("check");
 const compile = @import("compile");
 const echo_platform = @import("echo_platform");
+const eval = @import("eval");
+const layout = @import("layout");
+const lir = @import("lir");
 const roc_target = @import("roc_target");
 const reporting = @import("reporting");
 
@@ -71,6 +77,117 @@ fn emitDiagnostics(build_env: *BuildEnv) void {
             }
         }
     }
+}
+
+fn importedViewsFromCompiledModules(
+    alloc: Allocator,
+    modules: []const BuildEnv.CompiledModuleInfo,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]check.CheckedArtifact.ImportedModuleView {
+    var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+    errdefer views.deinit(alloc);
+
+    for (modules) |module| {
+        const artifact = module.semantic.checked_artifact orelse continue;
+        if (std.mem.eql(u8, &artifact.key.bytes, &root_artifact.key.bytes)) continue;
+
+        var seen = false;
+        for (views.items) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try views.append(alloc, check.CheckedArtifact.importedView(artifact));
+    }
+
+    return views.toOwnedSlice(alloc);
+}
+
+fn moduleEnvViewsFromResolvedModules(
+    alloc: Allocator,
+    resolved: *const BuildEnv.ResolvedModules,
+) ![]const *const can.ModuleEnv {
+    const envs = try alloc.alloc(*const can.ModuleEnv, resolved.all_module_envs.len);
+    for (resolved.all_module_envs, 0..) |env, i| {
+        envs[i] = env;
+    }
+    return envs;
+}
+
+fn platformRootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) lir.LirProcSpecId {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "echo platform invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi == .platform or metadata.exposure == .platform_required) return root_proc;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("echo platform invariant violated: checked artifact lowering produced no platform root", .{});
+    }
+    unreachable;
+}
+
+fn argLayoutsForProc(
+    alloc: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) ![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
+    errdefer alloc.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn runEchoLir(lowered: *const lir.CheckedPipeline.LoweredProgram) !u8 {
+    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
+    var result_buf: [16]u8 align(16) = undefined;
+
+    const root_proc = platformRootProc(lowered);
+    const arg_layouts = try argLayoutsForProc(allocator, &lowered.lir_result.store, root_proc);
+    defer allocator.free(arg_layouts);
+
+    var interpreter = try eval.LirInterpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
+    const proc = lowered.lir_result.store.getProcSpec(root_proc);
+    _ = interpreter.eval(.{
+        .proc_id = root_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(&cli_args_list),
+        .ret_ptr = @ptrCast(&result_buf),
+    }) catch |err| switch (err) {
+        error.RuntimeError, error.DivisionByZero => {
+            if (interpreter.getRuntimeErrorMessage()) |msg| jsErr(msg);
+            return error.EvaluationFailed;
+        },
+        error.Crash => return error.EvaluationFailed,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    return result_buf[0];
 }
 
 // --- Extra module file storage (static, survives FBA reset) ---
@@ -301,7 +418,77 @@ export fn compileAndRun(source_ptr: [*]const u8, source_len: usize) u8 {
 }
 
 fn compileAndRunInner(source: []const u8) !u8 {
-    _ = source;
-    @compileError("Phase 2 must route echo-platform execution through checked artifacts");
-}
+    _ = fba.reset(.retain_capacity);
+    allocator = fba.allocator();
 
+    const app_abs_path = "/app/main.roc";
+    const platform_main_path = "/app/.roc_echo_platform/main.roc";
+    const echo_module_path = "/app/.roc_echo_platform/Echo.roc";
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n";
+    const footer =
+        "\n\necho! = |msg| Echo.line!(msg)\n";
+    const synthetic_source = try std.mem.concat(allocator, u8, &.{ header, source, footer });
+
+    wasm_ctx.setFilename(allocator, app_abs_path);
+    wasm_ctx.setSource(allocator, synthetic_source);
+
+    var echo_ctx = EchoCtx{
+        .app_abs_path = app_abs_path,
+        .synthetic_app_source = synthetic_source,
+        .platform_main_path = platform_main_path,
+        .echo_module_path = echo_module_path,
+        .fallback = WasmFilesystem.wasm(&wasm_ctx),
+    };
+
+    var build_env = try BuildEnv.init(allocator, .single_threaded, 1, RocTarget.wasm32, "/app");
+    defer build_env.deinit();
+    build_env.filesystem = echo_ctx.io();
+
+    build_env.discoverDependencies(app_abs_path) catch |err| {
+        emitDiagnostics(&build_env);
+        return err;
+    };
+    build_env.compileDiscovered() catch |err| {
+        emitDiagnostics(&build_env);
+        return err;
+    };
+
+    emitDiagnostics(&build_env);
+
+    const root_semantic = build_env.getAppSemanticData() orelse return error.CompilationFailed;
+    const root_artifact = root_semantic.checked_artifact orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("echo platform invariant violated: app module has no checked artifact", .{});
+        }
+        unreachable;
+    };
+
+    var resolved = try build_env.getResolvedModuleEnvs(allocator);
+    defer allocator.free(resolved.all_module_envs);
+    defer allocator.free(resolved.compiled_modules);
+
+    const import_views = try importedViewsFromCompiledModules(allocator, resolved.compiled_modules, root_artifact);
+    defer allocator.free(import_views);
+
+    const module_envs = try moduleEnvViewsFromResolvedModules(allocator, &resolved);
+    defer allocator.free(module_envs);
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(root_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.u32,
+        },
+    );
+    defer lowered.deinit();
+
+    return try runEchoLir(&lowered);
+}
