@@ -267,6 +267,7 @@ const IrBuilder = struct {
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
+            .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
             .tag,
             .const_ref,
             .bridge,
@@ -386,6 +387,32 @@ const IrBuilder = struct {
             .{ .make_struct = Ast.Span(Ast.Var).empty() },
             stmts,
         );
+    }
+
+    fn lowerWhileExpr(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        while_: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        try self.appendWhile(while_, stmts);
+        return try self.bindExpr(
+            expr.value,
+            .{ .canonical = .zst },
+            .{ .make_struct = Ast.Span(Ast.Var).empty() },
+            stmts,
+        );
+    }
+
+    fn appendWhile(
+        self: *IrBuilder,
+        while_: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .while_ = .{
+            .cond = try self.lowerExprToBlock(while_.cond),
+            .body = try self.lowerExprToBlock(while_.body),
+        } }));
     }
 
     fn appendForList(
@@ -696,9 +723,9 @@ const IrBuilder = struct {
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .return_ = value }));
             },
             .for_ => |for_| try self.appendForList(for_, stmts),
+            .while_ => |while_| try self.appendWhile(while_, stmts),
             .break_ => try stmts.append(self.allocator, try self.output.store.addStmt(.break_)),
             .crash,
-            .while_,
             => irInvariant("IR lowering reached statement control flow that needs block splitting"),
         }
     }

@@ -79,6 +79,9 @@ const Lowerer = struct {
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     proc_map: std.ArrayList(ProcMapEntry),
+    local_env: std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId),
+    break_targets: std.ArrayList(LIR.CFStmtId),
+    next_join_point: u32,
 
     fn init(
         allocator: Allocator,
@@ -95,11 +98,14 @@ const Lowerer = struct {
             .layouts = try layout_mod.Store.init(all_module_envs, builtin_str_ident, allocator, target_usize),
             .root_procs = .empty,
             .proc_map = .empty,
+            .break_targets = .empty,
+            .next_join_point = 0,
             .local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(allocator),
         };
     }
 
     fn deinit(self: *Lowerer) void {
+        self.break_targets.deinit(self.allocator);
         self.local_env.deinit();
         self.proc_map.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
@@ -117,11 +123,14 @@ const Lowerer = struct {
             .proc_map = self.proc_map,
         };
         self.local_env.deinit();
+        self.break_targets.deinit(self.allocator);
         self.store = LirStore.init(self.allocator);
         self.layouts = undefined;
         self.canonical_names = mir.Hosted.CanonicalNameStore.init(self.allocator);
         self.root_procs = .empty;
         self.proc_map = .empty;
+        self.break_targets = .empty;
+        self.next_join_point = 0;
         self.local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(self.allocator);
         return result;
     }
@@ -237,15 +246,16 @@ const Lowerer = struct {
             } }),
             .return_ => |value| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
             .switch_ => |switch_| try self.lowerSwitch(switch_, next),
-            .break_ => try self.store.addCFStmt(.loop_break),
+            .break_ => self.currentBreakTarget(),
             .for_list => |for_list| try self.lowerForList(for_list, next),
-            .while_,
-            => lirInvariant("lir.lower_ir reached IR statement form whose LIR lowering is still missing"),
+            .while_ => |while_| try self.lowerWhile(while_, next),
         };
     }
 
     fn lowerForList(self: *Lowerer, for_list: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
         const loop_continue = try self.store.addCFStmt(.loop_continue);
+        const break_start = try self.pushBreakTarget(try self.store.addCFStmt(.loop_break));
+        defer self.restoreBreakTargets(break_start);
         return try self.store.addCFStmt(.{ .for_list = .{
             .elem = try self.localForVar(for_list.elem),
             .iterable = try self.lowerVar(for_list.iterable),
@@ -253,6 +263,62 @@ const Lowerer = struct {
             .body = try self.lowerBlockWithContinuation(for_list.body, null, loop_continue),
             .next = next,
         } });
+    }
+
+    fn lowerWhile(self: *Lowerer, while_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
+        const join_id = self.freshJoinPointId();
+        const loop_jump = try self.store.addCFStmt(.{ .jump = .{
+            .target = join_id,
+            .args = LIR.LocalSpan.empty(),
+        } });
+
+        const break_start = try self.pushBreakTarget(next);
+        defer self.restoreBreakTargets(break_start);
+        const body = try self.lowerBlockWithContinuation(while_.body, null, loop_jump);
+
+        const cond_local = try self.store.addLocal(.{
+            .layout_idx = try self.lowerLayoutRef(self.blockReturnLayout(while_.cond)),
+        });
+        const branches = [_]LIR.CFSwitchBranch{.{
+            .value = 1,
+            .body = body,
+        }};
+        const cond_switch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond_local,
+            .branches = try self.store.addCFSwitchBranches(&branches),
+            .default_branch = next,
+        } });
+        const cond_body = try self.lowerBlockWithContinuation(while_.cond, cond_local, cond_switch);
+
+        return try self.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = cond_body,
+            .remainder = loop_jump,
+        } });
+    }
+
+    fn pushBreakTarget(self: *Lowerer, target: LIR.CFStmtId) LowerResourceError!usize {
+        const start = self.break_targets.items.len;
+        try self.break_targets.append(self.allocator, target);
+        return start;
+    }
+
+    fn restoreBreakTargets(self: *Lowerer, start: usize) void {
+        self.break_targets.shrinkRetainingCapacity(start);
+    }
+
+    fn currentBreakTarget(self: *Lowerer) LIR.CFStmtId {
+        if (self.break_targets.items.len == 0) {
+            lirInvariant("lir.lower_ir reached break outside a lowered loop");
+        }
+        return self.break_targets.items[self.break_targets.items.len - 1];
+    }
+
+    fn freshJoinPointId(self: *Lowerer) LIR.JoinPointId {
+        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
     }
 
     fn lowerSwitch(self: *Lowerer, switch_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
@@ -304,6 +370,15 @@ const Lowerer = struct {
             next = try self.lowerStmt(stmts[i], next);
         }
         return next;
+    }
+
+    fn blockReturnLayout(self: *const Lowerer, block_id: ir.Ast.BlockId) ir.Ast.LayoutRef {
+        const block = self.input.store.getBlock(block_id);
+        return switch (block.term) {
+            .value => |value| value.layout,
+            .return_ => |value| value.layout,
+            .crash, .runtime_error, .@"unreachable" => .{ .canonical = .zst },
+        };
     }
 
     fn lowerExprInto(self: *Lowerer, target: LIR.LocalId, expr: ir.Ast.Expr, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
