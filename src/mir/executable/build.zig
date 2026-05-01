@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const symbol_mod = @import("symbol");
 const LambdaSolved = @import("../lambda_solved/mod.zig");
 const MonoRow = @import("../mono_row/mod.zig");
 const debug = @import("../debug_verify.zig");
@@ -24,6 +25,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     literal_pool: ids.ProgramLiteralPool,
+    symbols: symbol_mod.Store,
     row_shapes: MonoRow.Store,
     types: Type.Store,
     ast: Ast.Store,
@@ -35,6 +37,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
+            .symbols = symbol_mod.Store.init(allocator),
             .row_shapes = MonoRow.Store.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
@@ -50,6 +53,7 @@ pub const Program = struct {
         self.ast.deinit();
         self.types.deinit();
         self.row_shapes.deinit();
+        self.symbols.deinit();
         self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
@@ -63,6 +67,8 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     errdefer program.deinit();
     program.literal_pool = input.literal_pool;
     input.literal_pool = ids.ProgramLiteralPool.init(allocator);
+    program.symbols = input.symbols;
+    input.symbols = symbol_mod.Store.init(allocator);
     program.row_shapes = input.row_shapes;
     input.row_shapes = MonoRow.Store.init(allocator);
 
@@ -324,7 +330,7 @@ const BodyBuilder = struct {
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .access = .{
-                        .record = self.exprValue(record),
+                        .record = record,
                         .field = access.field,
                     } },
                 );
@@ -367,19 +373,19 @@ const BodyBuilder = struct {
                 );
             },
             .tuple => |items| blk: {
-                const values = try self.lowerExprValues(items);
+                const items_span = try self.lowerExprIds(items);
                 break :blk try self.output.addExpr(
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
-                    .{ .tuple = values },
+                    .{ .tuple = items_span },
                 );
             },
             .list => |items| blk: {
-                const values = try self.lowerExprValues(items);
+                const items_span = try self.lowerExprIds(items);
                 break :blk try self.output.addExpr(
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
-                    .{ .list = values },
+                    .{ .list = items_span },
                 );
             },
             .tag_payload => |payload| blk: {
@@ -388,7 +394,7 @@ const BodyBuilder = struct {
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .tag_payload = .{
-                        .tag_union = self.exprValue(tag_union),
+                        .tag_union = tag_union,
                         .payload = payload.payload,
                     } },
                 );
@@ -399,13 +405,13 @@ const BodyBuilder = struct {
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .tuple_access = .{
-                        .tuple = self.exprValue(tuple),
+                        .tuple = tuple,
                         .elem_index = access.elem_index,
                     } },
                 );
             },
             .low_level => |low_level| blk: {
-                const args = try self.lowerExprValues(low_level.args);
+                const args = try self.lowerExprIds(low_level.args);
                 break :blk try self.output.addExpr(
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
@@ -420,7 +426,7 @@ const BodyBuilder = struct {
                 break :blk try self.output.addExpr(
                     self.output.getExpr(lowered_child).ty,
                     self.exprValue(lowered_child),
-                    .{ .return_ = self.exprValue(lowered_child) },
+                    .{ .return_ = lowered_child },
                 );
             },
             .crash => |literal| try self.addValueExpr(expr.ty, .{ .crash = literal }),
@@ -494,43 +500,48 @@ const BodyBuilder = struct {
         return try self.output.addStmtSpan(output_items);
     }
 
-    fn lowerExprValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExecutableValueRef) {
-        if (span.len == 0) return Ast.Span(Ast.ExecutableValueRef).empty();
+    fn lowerExprIds(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (span.len == 0) return Ast.Span(Ast.ExprId).empty();
         const input_items = self.input.expr_ids.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(Ast.ExecutableValueRef, input_items.len);
-        defer self.allocator.free(values);
+        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(exprs);
         for (input_items, 0..) |expr, i| {
-            const lowered = try self.lowerExpr(expr);
-            values[i] = self.exprValue(lowered);
+            exprs[i] = try self.lowerExpr(expr);
         }
-        return try self.output.addValueRefSpan(values);
+        return try self.output.addExprSpan(exprs);
     }
 
-    fn lowerRecordFields(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly)) Allocator.Error!Ast.Span(Ast.TypedValue) {
-        if (span.len == 0) return Ast.Span(Ast.TypedValue).empty();
+    fn lowerRecordFields(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly)) Allocator.Error!Ast.Span(Ast.RecordFieldExpr) {
+        if (span.len == 0) return Ast.Span(Ast.RecordFieldExpr).empty();
         const input_items = self.input.record_field_assemblies.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(Ast.TypedValue, input_items.len);
+        const values = try self.allocator.alloc(Ast.RecordFieldExpr, input_items.len);
         defer self.allocator.free(values);
         for (input_items, 0..) |field, i| {
             const lowered = try self.lowerExpr(field.value);
             values[i] = .{
+                .field = field.field,
+                .expr = lowered,
                 .ty = self.output.getExpr(lowered).ty,
                 .value = self.exprValue(lowered),
             };
         }
-        return try self.output.addTypedValueSpan(values);
+        return try self.output.addRecordFieldExprSpan(values);
     }
 
-    fn lowerTagPayloadValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly)) Allocator.Error!Ast.Span(Ast.ExecutableValueRef) {
-        if (span.len == 0) return Ast.Span(Ast.ExecutableValueRef).empty();
+    fn lowerTagPayloadValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly)) Allocator.Error!Ast.Span(Ast.TagPayloadExpr) {
+        if (span.len == 0) return Ast.Span(Ast.TagPayloadExpr).empty();
         const input_items = self.input.tag_payload_assemblies.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(Ast.ExecutableValueRef, input_items.len);
+        const values = try self.allocator.alloc(Ast.TagPayloadExpr, input_items.len);
         defer self.allocator.free(values);
         for (input_items, 0..) |payload, i| {
             const lowered = try self.lowerExpr(payload.value);
-            values[i] = self.exprValue(lowered);
+            values[i] = .{
+                .payload = payload.payload,
+                .expr = lowered,
+                .value = self.exprValue(lowered),
+            };
         }
-        return try self.output.addValueRefSpan(values);
+        return try self.output.addTagPayloadExprSpan(values);
     }
 
     fn addValueExpr(self: *BodyBuilder, source_ty: LambdaSolved.Type.TypeVarId, data: Ast.Expr.Data) Allocator.Error!Ast.ExprId {

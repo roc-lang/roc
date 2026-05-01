@@ -39,6 +39,19 @@ pub const TypedValue = struct {
     value: ExecutableValueRef,
 };
 
+pub const RecordFieldExpr = struct {
+    field: row.RecordFieldId,
+    expr: ExprId,
+    ty: TypeId,
+    value: ExecutableValueRef,
+};
+
+pub const TagPayloadExpr = struct {
+    payload: row.TagPayloadId,
+    expr: ExprId,
+    value: ExecutableValueRef,
+};
+
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
@@ -132,14 +145,14 @@ pub const Expr = struct {
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,
-            payloads: Span(ExecutableValueRef),
+            payloads: Span(TagPayloadExpr),
         },
         record: struct {
             shape: row.RecordShapeId,
-            fields: Span(TypedValue),
+            fields: Span(RecordFieldExpr),
         },
         access: struct {
-            record: ExecutableValueRef,
+            record: ExprId,
             field: row.RecordFieldId,
         },
         bridge: struct {
@@ -165,7 +178,7 @@ pub const Expr = struct {
         packed_erased_fn: PackedErasedFn,
         low_level: struct {
             op: base.LowLevel,
-            args: Span(ExecutableValueRef),
+            args: Span(ExprId),
         },
         source_match: SourceMatch,
         if_: struct {
@@ -177,17 +190,17 @@ pub const Expr = struct {
             stmts: Span(StmtId),
             final_expr: ExprId,
         },
-        tuple: Span(ExecutableValueRef),
+        tuple: Span(ExprId),
         tag_payload: struct {
-            tag_union: ExecutableValueRef,
+            tag_union: ExprId,
             payload: row.TagPayloadId,
         },
         tuple_access: struct {
-            tuple: ExecutableValueRef,
+            tuple: ExprId,
             elem_index: u32,
         },
-        list: Span(ExecutableValueRef),
-        return_: ExecutableValueRef,
+        list: Span(ExprId),
+        return_: ExprId,
         crash: ProgramLiteralId,
         runtime_error,
     };
@@ -236,6 +249,8 @@ pub const Store = struct {
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
     typed_values: std.ArrayList(TypedValue),
+    record_field_exprs: std.ArrayList(RecordFieldExpr),
+    tag_payload_exprs: std.ArrayList(TagPayloadExpr),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -252,10 +267,14 @@ pub const Store = struct {
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
             .typed_values = .empty,
+            .record_field_exprs = .empty,
+            .tag_payload_exprs = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.tag_payload_exprs.deinit(self.allocator);
+        self.record_field_exprs.deinit(self.allocator);
         self.typed_values.deinit(self.allocator);
         self.callable_match_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
@@ -322,6 +341,20 @@ pub const Store = struct {
         if (values.len == 0) return Span(TypedValue).empty();
         const start: u32 = @intCast(self.typed_values.items.len);
         try self.typed_values.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordFieldExprSpan(self: *Store, values: []const RecordFieldExpr) std.mem.Allocator.Error!Span(RecordFieldExpr) {
+        if (values.len == 0) return Span(RecordFieldExpr).empty();
+        const start: u32 = @intCast(self.record_field_exprs.items.len);
+        try self.record_field_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addTagPayloadExprSpan(self: *Store, values: []const TagPayloadExpr) std.mem.Allocator.Error!Span(TagPayloadExpr) {
+        if (values.len == 0) return Span(TagPayloadExpr).empty();
+        const start: u32 = @intCast(self.tag_payload_exprs.items.len);
+        try self.tag_payload_exprs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

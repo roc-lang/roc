@@ -12,19 +12,21 @@ pub const LayoutPublicationKey = struct {
 };
 
 pub const Layouts = struct {
+    allocator: std.mem.Allocator,
     graph: layout_mod.Graph,
     type_layouts: std.AutoHashMap(Type.TypeId, layout_mod.GraphRef),
 
     pub fn init(allocator: std.mem.Allocator) Layouts {
         return .{
-            .graph = layout_mod.Graph.init(allocator),
+            .allocator = allocator,
+            .graph = .{},
             .type_layouts = std.AutoHashMap(Type.TypeId, layout_mod.GraphRef).init(allocator),
         };
     }
 
     pub fn deinit(self: *Layouts) void {
         self.type_layouts.deinit();
-        self.graph.deinit();
+        self.graph.deinit(self.allocator);
     }
 };
 
