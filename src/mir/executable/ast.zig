@@ -61,11 +61,16 @@ pub const Pat = struct {
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,
-            payloads: Span(PatId),
+            payloads: Span(TagPayloadPattern),
         },
         bind: ExecutableValueRef,
         wildcard,
     };
+};
+
+pub const TagPayloadPattern = struct {
+    payload: row.TagPayloadId,
+    pattern: PatId,
 };
 
 pub const Branch = struct {
@@ -119,6 +124,11 @@ pub const CallableMatchBranch = struct {
 pub const SourceMatch = struct {
     scrutinees: Span(ExecutableValueRef),
     decision_plan: PatternDecisionPlanId,
+    branches: Span(BranchId),
+};
+
+pub const PatternDecisionPlan = struct {
+    scrutinees: Span(ExecutableValueRef),
     branches: Span(BranchId),
 };
 
@@ -204,6 +214,11 @@ pub const Expr = struct {
         return_: ExprId,
         crash: ProgramLiteralId,
         runtime_error,
+        for_: struct {
+            patt: PatId,
+            iterable: ExprId,
+            body: ExprId,
+        },
     };
 };
 
@@ -222,6 +237,15 @@ pub const Stmt = union(enum) {
     crash: ProgramLiteralId,
     return_: ExecutableValueRef,
     break_,
+    for_: struct {
+        patt: PatId,
+        iterable: ExprId,
+        body: ExprId,
+    },
+    while_: struct {
+        cond: ExprId,
+        body: ExprId,
+    },
 };
 
 pub const FnDef = struct {
@@ -245,10 +269,14 @@ pub const Store = struct {
     stmts: std.ArrayList(Stmt),
     defs: std.ArrayList(Def),
     expr_ids: std.ArrayList(ExprId),
+    pat_ids: std.ArrayList(PatId),
+    branch_ids: std.ArrayList(BranchId),
     value_refs: std.ArrayList(ExecutableValueRef),
     capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
+    pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
+    tag_payload_patterns: std.ArrayList(TagPayloadPattern),
     typed_values: std.ArrayList(TypedValue),
     record_field_exprs: std.ArrayList(RecordFieldExpr),
     tag_payload_exprs: std.ArrayList(TagPayloadExpr),
@@ -263,10 +291,14 @@ pub const Store = struct {
             .stmts = .empty,
             .defs = .empty,
             .expr_ids = .empty,
+            .pat_ids = .empty,
+            .branch_ids = .empty,
             .value_refs = .empty,
             .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
+            .pattern_decision_plans = .empty,
+            .tag_payload_patterns = .empty,
             .typed_values = .empty,
             .record_field_exprs = .empty,
             .tag_payload_exprs = .empty,
@@ -277,10 +309,14 @@ pub const Store = struct {
         self.tag_payload_exprs.deinit(self.allocator);
         self.record_field_exprs.deinit(self.allocator);
         self.typed_values.deinit(self.allocator);
+        self.tag_payload_patterns.deinit(self.allocator);
+        self.pattern_decision_plans.deinit(self.allocator);
         self.callable_match_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
+        self.branch_ids.deinit(self.allocator);
+        self.pat_ids.deinit(self.allocator);
         self.expr_ids.deinit(self.allocator);
         self.defs.deinit(self.allocator);
         self.stmts.deinit(self.allocator);
@@ -311,6 +347,31 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
+    pub fn addPat(self: *Store, pat: Pat) std.mem.Allocator.Error!PatId {
+        const idx: u32 = @intCast(self.pats.items.len);
+        try self.pats.append(self.allocator, pat);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addBranch(self: *Store, branch: Branch) std.mem.Allocator.Error!BranchId {
+        const idx: u32 = @intCast(self.branches.items.len);
+        try self.branches.append(self.allocator, branch);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addPatternDecisionPlan(self: *Store, plan: PatternDecisionPlan) std.mem.Allocator.Error!PatternDecisionPlanId {
+        const idx: u32 = @intCast(self.pattern_decision_plans.items.len);
+        try self.pattern_decision_plans.append(self.allocator, plan);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addTagPayloadPatternSpan(self: *Store, values: []const TagPayloadPattern) std.mem.Allocator.Error!Span(TagPayloadPattern) {
+        if (values.len == 0) return Span(TagPayloadPattern).empty();
+        const start: u32 = @intCast(self.tag_payload_patterns.items.len);
+        try self.tag_payload_patterns.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
         const idx: u32 = @intCast(self.defs.items.len);
         try self.defs.append(self.allocator, def);
@@ -321,6 +382,20 @@ pub const Store = struct {
         if (ids.len == 0) return Span(ExprId).empty();
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addPatSpan(self: *Store, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
+        if (ids.len == 0) return Span(PatId).empty();
+        const start: u32 = @intCast(self.pat_ids.items.len);
+        try self.pat_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addBranchSpan(self: *Store, ids: []const BranchId) std.mem.Allocator.Error!Span(BranchId) {
+        if (ids.len == 0) return Span(BranchId).empty();
+        const start: u32 = @intCast(self.branch_ids.items.len);
+        try self.branch_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 

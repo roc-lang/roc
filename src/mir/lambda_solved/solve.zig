@@ -609,7 +609,10 @@ const BodySolver = struct {
                     .symbol = symbol,
                     .previous = if (previous) |entry| entry.value else null,
                 });
-                break :blk .{ .var_ = symbol };
+                break :blk .{ .var_ = .{
+                    .symbol = symbol,
+                    .binding_info = binding,
+                } };
             },
             .tag => |tag| .{ .tag = .{
                 .union_shape = tag.union_shape,

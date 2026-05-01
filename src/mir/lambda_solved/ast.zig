@@ -59,7 +59,10 @@ pub const Pat = struct {
             tag: row.TagId,
             payloads: Span(TagPayloadPattern),
         },
-        var_: Symbol,
+        var_: struct {
+            symbol: Symbol,
+            binding_info: repr.BindingInfoId,
+        },
         wildcard,
     };
 };
