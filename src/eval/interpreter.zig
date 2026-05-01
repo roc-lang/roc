@@ -313,6 +313,7 @@ pub const Interpreter = struct {
     const ExecOutcome = union(enum) {
         returned: LocalId,
         loop_continue,
+        loop_break,
     };
 
     pub const EvalResult = union(enum) {
@@ -1100,6 +1101,10 @@ pub const Interpreter = struct {
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
                 .{proc_spec.name.raw()},
             ),
+            .loop_break => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: proc {d} terminated via loop_break",
+                .{proc_spec.name.raw()},
+            ),
         };
     }
 
@@ -1168,6 +1173,7 @@ pub const Interpreter = struct {
             },
             .runtime_error,
             .loop_continue,
+            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -1385,7 +1391,7 @@ pub const Interpreter = struct {
                     const rl = valueToRocList(resolved_iterable.value);
 
                     var i: usize = 0;
-                    while (i < rl.len()) : (i += 1) {
+                    loop: while (i < rl.len()) : (i += 1) {
                         const normalized_elem = if (info.width == 0 or rl.bytes == null)
                             try self.coerceExplicitRefValueToLayout(Value.zst, actual_elem_layout, elem_layout)
                         else
@@ -1401,12 +1407,14 @@ pub const Interpreter = struct {
                         switch (outcome) {
                             .returned => |ret_local| return .{ .returned = ret_local },
                             .loop_continue => {},
+                            .loop_break => break :loop,
                         }
                     }
 
                     current = for_stmt.next;
                 },
                 .loop_continue => return .loop_continue,
+                .loop_break => return .loop_break,
                 .join => |join_stmt| {
                     current = join_stmt.remainder;
                 },
@@ -1692,6 +1700,9 @@ pub const Interpreter = struct {
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
+                },
+                .loop_break => {
+                    debugPrint("    {d}: loop_break\n", .{@intFromEnum(stmt_id)});
                 },
                 .join => |join| {
                     debugPrint("    {d}: join id={d} params=", .{

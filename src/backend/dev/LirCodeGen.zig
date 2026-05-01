@@ -645,6 +645,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `loop_continue` lowers by jumping to the innermost active loop header.
         loop_continue_targets: std.ArrayList(usize),
 
+        /// Stack markers into `loop_break_patches` for active `for_list` exits.
+        loop_break_patch_starts: std.ArrayList(usize),
+
+        /// Jump patches emitted by `loop_break` that must target the active loop exit.
+        loop_break_patches: std.ArrayList(usize),
+
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
 
@@ -894,6 +900,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
                 .loop_continue_targets = std.ArrayList(usize).empty,
+                .loop_break_patch_starts = std.ArrayList(usize).empty,
+                .loop_break_patches = std.ArrayList(usize).empty,
                 .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
                 .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
@@ -922,6 +930,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
             self.loop_continue_targets.deinit(self.allocator);
+            self.loop_break_patch_starts.deinit(self.allocator);
+            self.loop_break_patches.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -949,6 +959,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
             self.loop_continue_targets.clearRetainingCapacity();
+            self.loop_break_patch_starts.clearRetainingCapacity();
+            self.loop_break_patches.clearRetainingCapacity();
         }
 
         fn cloneJoinPointJumpsMap(
@@ -1006,6 +1018,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_jumps.clearRetainingCapacity();
             self.join_point_params.clearRetainingCapacity();
             self.loop_continue_targets.clearRetainingCapacity();
+            self.loop_break_patch_starts.clearRetainingCapacity();
+            self.loop_break_patches.clearRetainingCapacity();
         }
 
         /// Generate code for a compiled root proc.
@@ -4562,6 +4576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
                 .loop_continue => {},
+                .loop_break => {},
             }
         }
 
@@ -4683,6 +4698,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
                 .loop_continue => {},
+                .loop_break => {},
             }
         }
 
@@ -11125,6 +11141,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer saved_join_point_params.deinit();
             var saved_loop_continue_targets = try self.loop_continue_targets.clone(self.allocator);
             defer saved_loop_continue_targets.deinit(self.allocator);
+            var saved_loop_break_patch_starts = try self.loop_break_patch_starts.clone(self.allocator);
+            defer saved_loop_break_patch_starts.deinit(self.allocator);
+            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
+            defer saved_loop_break_patches.deinit(self.allocator);
 
             // Clear state for procedure's scope
             self.local_locations.clearRetainingCapacity();
@@ -11217,6 +11237,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.join_point_params = saved_join_point_params.clone() catch unreachable;
                 self.loop_continue_targets.deinit(self.allocator);
                 self.loop_continue_targets = saved_loop_continue_targets.clone(self.allocator) catch unreachable;
+                self.loop_break_patch_starts.deinit(self.allocator);
+                self.loop_break_patch_starts = saved_loop_break_patch_starts.clone(self.allocator) catch unreachable;
+                self.loop_break_patches.deinit(self.allocator);
+                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
@@ -11390,6 +11414,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_params = try saved_join_point_params.clone();
             self.loop_continue_targets.deinit(self.allocator);
             self.loop_continue_targets = try saved_loop_continue_targets.clone(self.allocator);
+            self.loop_break_patch_starts.deinit(self.allocator);
+            self.loop_break_patch_starts = try saved_loop_break_patch_starts.clone(self.allocator);
+            self.loop_break_patches.deinit(self.allocator);
+            self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
         }
 
         fn requireProcBody(proc: LirProcSpec) lir.LIR.CFStmtId {
@@ -12636,6 +12664,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const patch = try self.codegen.emitJump();
                     self.codegen.patchJump(patch, loop_target);
                 },
+
+                .loop_break => {
+                    if (builtin.mode == .Debug and self.loop_break_patch_starts.items.len == 0) {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: loop_break encountered outside for_list",
+                            .{},
+                        );
+                    }
+                    try self.loop_break_patches.append(self.allocator, try self.emitJumpPlaceholder());
+                },
             }
         }
 
@@ -12678,10 +12716,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_loop_continue_depth = self.loop_continue_targets.items.len;
             try self.loop_continue_targets.append(self.allocator, loop_header);
             defer self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
+            const break_patch_start = self.loop_break_patches.items.len;
+            const saved_break_depth = self.loop_break_patch_starts.items.len;
+            try self.loop_break_patch_starts.append(self.allocator, break_patch_start);
+            defer self.loop_break_patch_starts.shrinkRetainingCapacity(saved_break_depth);
+            defer self.loop_break_patches.shrinkRetainingCapacity(break_patch_start);
 
             try self.generateStmt(for_stmt.body);
 
-            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+            const exit_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(exit_patch, exit_offset);
+            for (self.loop_break_patches.items[break_patch_start..]) |patch| {
+                self.codegen.patchJump(patch, exit_offset);
+            }
+            self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
+            self.loop_break_patch_starts.shrinkRetainingCapacity(saved_break_depth);
+            self.loop_break_patches.shrinkRetainingCapacity(break_patch_start);
             try self.generateStmt(for_stmt.next);
         }
 

@@ -251,6 +251,7 @@ pub const CFStmt = union(enum) {
         next: CFStmtId,
     },
     loop_continue: void,
+    loop_break: void,
     join: struct {
         id: JoinPointId,
         params: LocalSpan,

@@ -236,11 +236,22 @@ const Lowerer = struct {
                 .next = next,
             } }),
             .switch_ => |switch_| try self.lowerSwitch(switch_, next),
-            .break_,
-            .for_list,
+            .break_ => try self.store.addCFStmt(.loop_break),
+            .for_list => |for_list| try self.lowerForList(for_list, next),
             .while_,
             => lirInvariant("lir.lower_ir reached IR statement form whose LIR lowering is still missing"),
         };
+    }
+
+    fn lowerForList(self: *Lowerer, for_list: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
+        const loop_continue = try self.store.addCFStmt(.loop_continue);
+        return try self.store.addCFStmt(.{ .for_list = .{
+            .elem = try self.localForVar(for_list.elem),
+            .iterable = try self.lowerVar(for_list.iterable),
+            .iterable_elem_layout = try self.lowerLayoutRef(for_list.elem.layout),
+            .body = try self.lowerBlockWithContinuation(for_list.body, null, loop_continue),
+            .next = next,
+        } });
     }
 
     fn lowerSwitch(self: *Lowerer, switch_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {

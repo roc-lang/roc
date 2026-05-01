@@ -266,12 +266,12 @@ const IrBuilder = struct {
             .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
+            .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .tag,
             .const_ref,
             .bridge,
             .call_erased,
             .packed_erased_fn,
-            .for_,
             .crash,
             .runtime_error,
             => irInvariant("IR lowering reached executable expression form whose IR lowering is still missing"),
@@ -371,6 +371,61 @@ const IrBuilder = struct {
         try self.appendSourceMatchBranchSwitch(branch_ids, 0, scrutinee, subject, result, stmts);
         try self.value_env.put(expr.value, result);
         return result;
+    }
+
+    fn lowerForExpr(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        for_: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        try self.appendForList(for_, stmts);
+        return try self.bindExpr(
+            expr.value,
+            .{ .canonical = .zst },
+            .{ .make_struct = Ast.Span(Ast.Var).empty() },
+            stmts,
+        );
+    }
+
+    fn appendForList(
+        self: *IrBuilder,
+        for_: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        const iterable = try self.lowerExpr(for_.iterable, stmts);
+        const elem_ty = self.listElementType(self.input.ast.getExpr(for_.iterable).ty);
+        const elem = try self.freshVar(try self.layoutForType(elem_ty));
+        const direct = try self.output.store.addBridgePlan(.direct);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .for_list = .{
+            .elem = elem,
+            .iterable = iterable,
+            .body = try self.lowerForBodyBlock(for_.patt, elem, for_.body),
+            .elem_bridge_plan = direct,
+        } }));
+    }
+
+    fn lowerForBodyBlock(
+        self: *IrBuilder,
+        pat_id: Exec.Ast.PatId,
+        elem: Ast.Var,
+        body: Exec.Ast.ExprId,
+    ) LowerResourceError!Ast.BlockId {
+        var saved = std.ArrayList(SavedValueBinding).empty;
+        defer {
+            self.restoreValueBindings(saved.items);
+            saved.deinit(self.allocator);
+        }
+
+        var body_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer body_stmts.deinit(self.allocator);
+        const pat = self.input.ast.pats.items[@intFromEnum(pat_id)];
+        try self.bindSourceMatchPatternValues(pat, elem, &body_stmts, &saved);
+        const result = try self.lowerExpr(body, &body_stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(body_stmts.items),
+            .term = .{ .value = result },
+        });
     }
 
     fn sourceMatchSwitchSubject(
@@ -636,10 +691,10 @@ const IrBuilder = struct {
                 const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .expect = value }));
             },
+            .for_ => |for_| try self.appendForList(for_, stmts),
+            .break_ => try stmts.append(self.allocator, try self.output.store.addStmt(.break_)),
             .crash,
             .return_,
-            .break_,
-            .for_,
             .while_,
             => irInvariant("IR lowering reached statement control flow that needs block splitting"),
         }
@@ -955,6 +1010,14 @@ const IrBuilder = struct {
             .callable_set,
             .erased_fn,
             => .{ .canonical = .opaque_ptr },
+        };
+    }
+
+    fn listElementType(self: *IrBuilder, ty: Exec.Type.TypeId) Exec.Type.TypeId {
+        return switch (self.input.types.getType(ty)) {
+            .link => |next| self.listElementType(next),
+            .list => |elem| elem,
+            else => irInvariant("IR lowering for_list expected iterable expression to have List(T) type"),
         };
     }
 };

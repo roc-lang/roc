@@ -130,6 +130,8 @@ active_stmt_generations: std.AutoHashMap(u32, void),
 stmt_generation_counts: std.AutoHashMap(u32, u32),
 /// Stack of loop-continue label depths for lowering explicit LIR loop_continue.
 loop_continue_target_depths: std.ArrayList(u32),
+/// Stack of loop-break label depths for lowering explicit LIR loop_break.
+loop_break_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
 dec_mul_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_to_str host function.
@@ -239,6 +241,7 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .active_stmt_generations = std.AutoHashMap(u32, void).init(allocator),
         .stmt_generation_counts = std.AutoHashMap(u32, u32).init(allocator),
         .loop_continue_target_depths = .empty,
+        .loop_break_target_depths = .empty,
     };
 }
 
@@ -266,6 +269,7 @@ pub fn deinit(self: *Self) void {
     self.active_stmt_generations.deinit();
     self.stmt_generation_counts.deinit();
     self.loop_continue_target_depths.deinit(self.allocator);
+    self.loop_break_target_depths.deinit(self.allocator);
 }
 
 /// Register host function imports. Must be called before any addFunction calls
@@ -1800,6 +1804,7 @@ fn collectProcLocals(
         .jump => |jump_stmt| {
             for (self.store.getLocalSpan(jump_stmt.args)) |arg| try recordProcLocal(locals, arg);
         },
+        .loop_break => {},
         .ret => |ret_stmt| try recordProcLocal(locals, ret_stmt.value),
         .incref => |inc| {
             try recordProcLocal(locals, inc.value);
@@ -5070,6 +5075,8 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             const saved_loop_depth = self.loop_continue_target_depths.items.len;
             try self.loop_continue_target_depths.append(self.allocator, self.cf_depth);
+            const saved_break_depth = self.loop_break_target_depths.items.len;
+            try self.loop_break_target_depths.append(self.allocator, self.cf_depth - 1);
 
             try self.emitLocalGet(index_local);
             try self.emitLocalGet(len_local);
@@ -5119,6 +5126,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             try self.generateCFStmt(for_stmt.body);
             self.loop_continue_target_depths.shrinkRetainingCapacity(saved_loop_depth);
+            self.loop_break_target_depths.shrinkRetainingCapacity(saved_break_depth);
 
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
@@ -5292,6 +5300,18 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             }
             const loop_depth = self.loop_continue_target_depths.items[self.loop_continue_target_depths.items.len - 1];
             const br_target = self.cf_depth - loop_depth;
+            self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
+        },
+        .loop_break => {
+            if (builtin.mode == .Debug and self.loop_break_target_depths.items.len == 0) {
+                std.debug.panic(
+                    "WasmCodeGen invariant violated: loop_break encountered outside for_list",
+                    .{},
+                );
+            }
+            const break_depth = self.loop_break_target_depths.items[self.loop_break_target_depths.items.len - 1];
+            const br_target = self.cf_depth - break_depth;
             self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
         },
