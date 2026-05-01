@@ -723,6 +723,24 @@ pub fn callableSetKeyEql(a: CanonicalCallableSetKey, b: CanonicalCallableSetKey)
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+pub fn canonicalExecValueTypeKeyEql(a: CanonicalExecValueTypeKey, b: CanonicalExecValueTypeKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+}
+
+pub fn captureShapeKeyEql(a: CaptureShapeKey, b: CaptureShapeKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+}
+
+pub fn erasedFnSigKeyEql(a: ErasedFnSigKey, b: ErasedFnSigKey) bool {
+    if (!canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty)) return false;
+    if (!std.mem.eql(u8, a.abi.bytes[0..], b.abi.bytes[0..])) return false;
+    if (a.capture_ty) |a_capture| {
+        const b_capture = b.capture_ty orelse return false;
+        return canonicalExecValueTypeKeyEql(a_capture, b_capture);
+    }
+    return b.capture_ty == null;
+}
+
 pub const RepresentationSolveSession = struct {
     members: []const ProcRepresentationInstanceId,
     representation_store: RepresentationStore,

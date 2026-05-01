@@ -1234,6 +1234,22 @@ const BodyBuilder = struct {
         call_site: repr.CallSiteInfo,
         sig_key: repr.ErasedFnSigKey,
     ) Allocator.Error!Ast.ExprId {
+        const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
+        const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
+        const callable = func_value_info.callable orelse executableInvariant("executable erased call_value callee has no callable metadata");
+        switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .already_erased => |erased| if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
+                executableInvariant("executable erased call_value call-site dispatch differs from already-erased callee emission");
+            },
+            .erase_proc_value => |erase| if (!repr.erasedFnSigKeyEql(erase.erased_fn_sig_key, sig_key)) {
+                executableInvariant("executable erased call_value call-site dispatch differs from proc erase emission");
+            },
+            .erase_finite_set => |adapter| if (!repr.erasedFnSigKeyEql(adapter.erased_fn_sig_key, sig_key)) {
+                executableInvariant("executable erased call_value call-site dispatch differs from finite-set adapter emission");
+            },
+            .finite => executableInvariant("executable erased call_value reached finite callee emission"),
+        }
+
         if (sig_key.capture_ty != null) {
             executableInvariant("executable call_value erased callable lowering requires hidden capture layout publication");
         }
