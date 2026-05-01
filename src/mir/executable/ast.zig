@@ -115,6 +115,7 @@ pub const CallableSetValue = struct {
     construction_plan: repr.CallableSetConstructionPlanId,
     callable_set_key: repr.CanonicalCallableSetKey,
     member: CallableSetMemberRef,
+    selected_executable_proc: ExecutableProcId,
     capture_record: ?CallableCaptureRecord = null,
 };
 

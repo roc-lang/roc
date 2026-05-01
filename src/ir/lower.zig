@@ -240,13 +240,13 @@ const IrBuilder = struct {
             },
             .return_ => |child| try self.lowerExpr(child, stmts),
             .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
+            .call_direct => |call| try self.lowerCallDirect(expr, call, stmts),
+            .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
+            .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .tag,
             .const_ref,
             .bridge,
-            .call_direct,
             .call_erased,
-            .callable_set_value,
-            .callable_match,
             .packed_erased_fn,
             .source_match,
             .for_,
@@ -282,6 +282,50 @@ const IrBuilder = struct {
         } }));
         try self.value_env.put(expr.value, result);
         return result;
+    }
+
+    fn lowerCallDirect(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        call: Exec.Ast.CallDirectPlan,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const args = try self.lowerDirectCallArgSpan(call.direct_args);
+        defer if (args.len > 0) self.allocator.free(args);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_direct = .{
+            .proc = call.executable_proc,
+            .args = try self.output.store.addVarSpan(args),
+        } }, stmts);
+    }
+
+    fn lowerCallableSetValue(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        callable: Exec.Ast.CallableSetValue,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        if (callable.capture_record != null) {
+            irInvariant("IR lowering captured callable_set_value requires closure layout lowering");
+        }
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .fn_ptr = callable.selected_executable_proc }, stmts);
+    }
+
+    fn lowerCallableMatch(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        callable_match: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        _ = self.value_env.get(callable_match.callee) orelse irInvariant("IR lowering callable_match callee was not bound");
+        const branch_ids = self.input.ast.callable_match_branches.items[callable_match.branches.start..][0..callable_match.branches.len];
+        if (branch_ids.len != 1) irInvariant("IR lowering multi-branch callable_match requires callable payload dispatch lowering");
+        const branch = branch_ids[0];
+        const args = try self.lowerDirectCallArgSpan(branch.direct_args);
+        defer if (args.len > 0) self.allocator.free(args);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_direct = .{
+            .proc = branch.executable_proc,
+            .args = try self.output.store.addVarSpan(args),
+        } }, stmts);
     }
 
     fn lowerStmtSpan(
@@ -427,6 +471,20 @@ const IrBuilder = struct {
         const values = try self.allocator.alloc(Ast.Var, input_items.len);
         for (input_items, 0..) |expr, i| {
             values[i] = try self.lowerExpr(expr, stmts);
+        }
+        return values;
+    }
+
+    fn lowerDirectCallArgSpan(
+        self: *IrBuilder,
+        span: Exec.Ast.Span(Exec.Ast.DirectCallArg),
+    ) LowerResourceError![]const Ast.Var {
+        if (span.len == 0) return &.{};
+        const input_items = self.input.ast.direct_call_args.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.Var, input_items.len);
+        for (input_items, 0..) |arg, i| {
+            if (arg.bridge != null) irInvariant("IR lowering direct call argument bridges are not implemented yet");
+            values[i] = self.value_env.get(arg.value) orelse irInvariant("IR lowering direct call argument value was not bound");
         }
         return values;
     }
@@ -628,7 +686,7 @@ const IrBuilder = struct {
             .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
             .callable_set,
             .erased_fn,
-            => irInvariant("IR lowering requires executable layout metadata for this type"),
+            => .{ .canonical = .opaque_ptr },
         };
     }
 };

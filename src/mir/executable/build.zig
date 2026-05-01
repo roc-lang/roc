@@ -886,6 +886,8 @@ const BodyBuilder = struct {
         const member = self.representation_store.callableSetMember(construction.callable_set_key, construction.selected_member) orelse {
             executableInvariant("executable proc_value construction selected a missing callable-set member");
         };
+        const selected_proc = sourceProcForCallable(member.proc_value);
+        const selected_executable_proc = self.proc_map.get(selected_proc) orelse executableInvariant("executable proc_value selected member target was not reserved");
 
         const capture_items = self.input.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
         if (capture_items.len != construction.capture_values.len) {
@@ -922,6 +924,7 @@ const BodyBuilder = struct {
                 .callable_set_key = construction.callable_set_key,
                 .member_index = construction.selected_member,
             },
+            .selected_executable_proc = selected_executable_proc,
             .capture_record = if (capture_refs.len == 0) null else .{
                 .capture_shape_key = member.capture_shape_key,
                 .values = try self.output.addCaptureValueRefSpan(capture_refs),
