@@ -8173,6 +8173,92 @@ Internal stage tests may call an individual MIR pass only when they construct
 that pass's exact input type-state. Those helpers must not become compatibility
 entrypoints for tools.
 
+### Interpreter Shim Runtime Image Boundary
+
+`roc run`, `roc build --opt=interpreter`, the dev shim, and any interpreter-shim
+host path must split compilation from execution at ARC-inserted LIR, not at
+`ModuleEnv`, CIR, checked artifacts, MIR, or IR.
+
+The parent compiler process owns every semantic stage:
+
+```text
+parse -> canonicalize -> check -> checked artifact publication
+-> mono MIR -> row-finalized mono MIR -> lifted MIR -> lambda-solved MIR
+-> executable MIR -> IR -> LIR -> ARC insertion
+```
+
+After ARC insertion, the parent serializes a target-specific `LirRuntimeImage`
+or exact equivalent. The child interpreter process receives that image and only
+does runtime work:
+
+```text
+deserialize LirRuntimeImage -> initialize LIR interpreter -> call explicit roots
+```
+
+The child interpreter process must never:
+
+- deserialize `ModuleEnv`
+- inspect CIR
+- inspect checked artifacts
+- run MIR, IR, LIR lowering, ARC insertion, static dispatch resolution,
+  root selection, hosted/platform binding lookup, or compile-time evaluation
+- scan source, exports, declarations, expressions, `ModuleEnv` definitions, or
+  platform module definitions to find entrypoints
+- recover missing semantic data
+
+The transport mechanism may remain shared memory for `roc run` and may remain
+embedded bytes for `roc build --opt=interpreter`, but the payload must be a
+serialized LIR runtime image, not a live or serialized `ModuleEnv` and not a
+checked artifact. Shared memory is only a byte transport at this boundary; it is
+not an allocator whose object graph is later interpreted by semantic compiler
+code in the child process.
+
+Conceptual shape:
+
+```zig
+const LirRuntimeImage = struct {
+    header: LirRuntimeImageHeader,
+    target: TargetConfigSummary,
+    root_procs: []LirProcSpecId,
+    platform_entrypoints: []PlatformEntrypointRoot,
+    store: SerializedLirStore,
+    layouts: SerializedCommittedLayouts,
+    literal_pool: SerializedProgramLiteralPool,
+    hosted_table: SerializedHostedProcTable,
+};
+```
+
+The exact Zig names may differ, but the ownership rule must not. The image
+contains target-shaped runtime data that the interpreter needs to execute
+already-lowered LIR. It may contain LIR proc ids, LIR locals, LIR statements,
+committed layouts, explicit RC statements, literal bytes, hosted procedure
+descriptors, root proc ids, and platform entrypoint-to-root mappings. It must
+not contain `ModuleEnv`, CIR ids, checked expression ids, checked pattern ids,
+checker type variables, checked artifact views, MIR ids, IR vars, raw
+`base.StringLiteral.Idx`, raw `Ident.Idx`, raw source text as semantic data, or
+post-check lookup keys that require semantic compiler stages to run in the child.
+
+Platform entrypoints must be resolved in the parent from published checked
+artifacts and platform-required binding tables before serialization. The runtime
+image stores direct LIR root proc ids for those entrypoints. It must not store
+platform def indices, app def indices, `CIR.Def.Idx`, exported-name lookup
+requests, or offsets to `ModuleEnv` values.
+
+The child may validate the runtime image header, compiler/runtime image version,
+target pointer width, byte order, and structural bounds before interpretation.
+Invalid image bytes are a runtime image loading failure, not a semantic compiler
+fallback. Once validation succeeds, all missing-root, missing-layout,
+missing-proc, missing-hosted-binding, or malformed-RC conditions are compiler
+bugs: debug builds assert at the first invalid read, and release builds use
+`unreachable`.
+
+This boundary is target-specific and intentionally outside the target-independent
+checked artifact cache. Checked artifact cache keys must not include layout or
+target ABI inputs. `LirRuntimeImage` bytes may be cached separately using
+target/layout/compiler-runtime inputs, because the image contains committed
+layouts, explicit RC statements, platform entry roots, and runtime storage
+choices.
+
 ### Post-Check API Error Shape
 
 Post-check semantic lowering APIs must not return semantic errors.
@@ -11093,6 +11179,15 @@ temporary checked artifacts with explicit `.repl_expr` or `.dev_expr` roots.
 Tests may build small artifacts directly, but semantic lowering tests must call
 the same checked-artifact public pipeline as production tools.
 
+For `roc run`, `roc build --opt=interpreter`, the dev shim, and the interpreter
+shim, move the semantic pipeline into the parent compiler process. The parent
+must call the checked-artifact public pipeline, run ARC insertion, and serialize
+a target-specific `LirRuntimeImage`. Delete the old shared-memory/embedded
+`ModuleEnv` payload shape, `ModuleEnvHeader`, platform/app `CIR.Def.Idx`
+entrypoint tables, and child-side CIR-to-LIR lowering path. The child shim
+deserializes only `LirRuntimeImage` and invokes the LIR interpreter on explicit
+root proc ids.
+
 Remove helper names that refer to old stages.
 
 Commit when `rg` finds no old post-check imports or pipeline labels, no
@@ -13039,6 +13134,16 @@ The cutover is complete only when all of these are true:
 - target-specific constant materialization uses explicit layout,
   reference-counting, and storage plans outside the checked artifact cache
 - no public pipeline imports old top-level post-check modules
+- `roc run`, `roc build --opt=interpreter`, dev shim, and interpreter shim
+  execution split at serialized ARC-inserted LIR: the parent lowers through the
+  checked-artifact public pipeline and serializes `LirRuntimeImage`; the child
+  deserializes that image and interprets LIR only
+- interpreter-shim transports contain no live or serialized `ModuleEnv`, no CIR,
+  no checked artifact, no MIR, no IR, no checker vars, no `CIR.Def.Idx`
+  entrypoint tables, and no post-check lookup requests
+- interpreter-shim child code contains no semantic lowering, root selection,
+  static-dispatch resolution, platform-required lookup, or compile-time
+  evaluation path
 - static dispatch exists only in checked CIR and mono MIR input pattern matching
 - every checked static-dispatch node exported to mono MIR carries a
   `StaticDispatchCallPlan`, or has already been rewritten to `structural_eq`
