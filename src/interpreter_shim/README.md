@@ -1,9 +1,10 @@
 # Interpreter Shim
 
 The interpreter shim runs already-lowered Roc programs. The compiler parent
-process owns all semantic compilation and writes a serialized ARC-inserted LIR
-runtime image. The child process only deserializes that image and evaluates it
-with the LIR interpreter.
+process owns all semantic compilation and publishes an ARC-inserted LIR runtime
+image into shared memory. The child process maps that same memory, creates
+zero-copy views over the LIR/runtime-layout arrays, and evaluates them with the
+LIR interpreter.
 
 ## Runtime Boundary
 
@@ -21,13 +22,14 @@ Parent responsibilities:
 3. Resolve roots, platform entrypoints, hosted procedures, static dispatch, and
    compile-time constants before post-check lowering.
 4. Lower through MIR, IR, LIR, and ARC insertion.
-5. Serialize the target-specific LIR runtime image.
+5. Publish the target-specific LIR runtime image into shared memory.
 
 Child responsibilities:
 
-1. Map or read the serialized LIR runtime image.
-2. Deserialize the LIR store, committed layouts, literal pool, root procedures,
-   and hosted-function dispatch metadata.
+1. Map shared memory.
+2. Validate the LIR runtime image header and bounds.
+3. Create zero-copy views of the LIR store, committed layouts, literal pool,
+   root procedures, and hosted-function dispatch metadata.
 3. Initialize `LirInterpreter`.
 4. Invoke the explicit LIR root procedure requested by the host.
 
@@ -39,17 +41,16 @@ platform lookup, compile-time evaluation, or recovery of missing compiler data.
 
 ### IPC Mode (`roc path/to/app.roc`)
 
-The parent writes the serialized runtime image into shared memory. The child
-maps that memory and deserializes the image.
+The parent publishes the runtime image into shared memory using the existing
+shared-memory coordination path. The child maps that memory and views the image
+in place.
 
 ### Embedded Mode (`roc build --opt=interpreter path/to/app.roc`)
 
-The parent embeds the serialized runtime image into the output binary. At
-runtime, the shim reads the embedded bytes and deserializes the same image shape
-used by IPC mode.
+The parent embeds a viewable runtime image into the output binary. At runtime,
+the shim views that image without running semantic compiler stages.
 
 ## Key Symbols
 
-- `roc__serialized_base_ptr`: Points to embedded serialized runtime-image data.
 - `roc__main`: Entry point called by the platform host.
 - `roc_alloc`, `roc_dealloc`, `roc_realloc`: Memory allocation functions.

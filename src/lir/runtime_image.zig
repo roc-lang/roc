@@ -1,27 +1,26 @@
-//! Serialized ARC-inserted LIR image for interpreter-shim execution.
+//! Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 //!
 //! The parent process owns all semantic compilation. It publishes checked
-//! artifacts, lowers through MIR/IR/LIR, inserts ARC, and serializes this image.
-//! The child process only deserializes this image and initializes the LIR
-//! interpreter; it never sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
+//! artifacts, lowers through MIR/IR/LIR, inserts ARC, and then publishes a small
+//! offset table into the existing shared-memory allocator. The child process maps
+//! the same shared-memory object and views the LIR/runtime-layout arrays in
+//! place; it never reconstructs compiler data.
 
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const layout_mod = @import("layout");
-const mir = @import("mir");
 
 const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 const LowerIr = @import("lower_ir.zig");
 
 const Allocator = std.mem.Allocator;
-const CompactWriter = collections.CompactWriter;
 
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 pub const FORMAT_VERSION: u32 = 1;
 
-pub const RuntimeImageError = Allocator.Error || error{
+pub const ImageError = error{
     InvalidRuntimeImage,
     UnsupportedRuntimeImageVersion,
 };
@@ -32,125 +31,131 @@ pub const PlatformEntrypoint = extern struct {
     root_proc: LIR.LirProcSpecId,
 };
 
-/// Offset/length pair into the serialized image buffer.
-pub const SliceRef = extern struct {
+/// Offset/length/capacity of one array inside the shared-memory mapping.
+pub const ArrayRef = extern struct {
     offset: u64,
     len: u64,
+    capacity: u64,
+
+    pub fn empty() ArrayRef {
+        return .{ .offset = 0, .len = 0, .capacity = 0 };
+    }
 };
 
-/// Header at the start of every LIR runtime image.
+/// Header stored as the first user allocation after `SharedMemoryAllocator.Header`.
 pub const Header = extern struct {
     magic: u32,
     format_version: u32,
-    total_size: u64,
+    image_size: u64,
     target_usize: u8,
     _padding: [7]u8 = [_]u8{0} ** 7,
-    root_procs: SliceRef,
-    platform_entrypoints: SliceRef,
-    store: SerializedLirStore,
-    layouts: SerializedLayoutStore,
+    root_procs: ArrayRef,
+    platform_entrypoints: ArrayRef,
+    store: LirStoreImage,
+    layouts: LayoutStoreImage,
 };
 
-/// Owned deserialized runtime program. This is the only semantic payload the
-/// child interpreter needs.
-pub const RuntimeProgram = struct {
-    lowered: LowerIr.Result,
-    platform_entrypoints: std.ArrayList(PlatformEntrypoint),
+/// A child-side view over mapped shared memory. This value owns no compiler
+/// storage. Do not call `deinit` on `store` or `layouts`; unmapping the shared
+/// memory releases the storage.
+pub const ProgramView = struct {
+    store: LirStore,
+    layouts: layout_mod.Store,
+    root_procs: []LIR.LirProcSpecId,
+    platform_entrypoints: []PlatformEntrypoint,
     target_usize: base.target.TargetUsize,
-
-    pub fn deinit(self: *RuntimeProgram) void {
-        self.platform_entrypoints.deinit(self.lowered.store.allocator);
-        self.lowered.deinit();
-    }
 };
 
-pub const SerializedLirStore = extern struct {
-    cf_stmts: SliceRef,
-    cf_switch_branches: SliceRef,
-    locals: SliceRef,
-    local_ids: SliceRef,
-    proc_specs: SliceRef,
-    strings: base.StringLiteral.Store.Serialized,
+pub const LirStoreImage = extern struct {
+    cf_stmts: ArrayRef,
+    cf_switch_branches: ArrayRef,
+    locals: ArrayRef,
+    local_ids: ArrayRef,
+    proc_specs: ArrayRef,
+    strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
 
-    pub fn serialize(
-        self: *SerializedLirStore,
-        store: *const LirStore,
-        allocator: Allocator,
-        writer: *CompactWriter,
-    ) Allocator.Error!void {
-        self.cf_stmts = try appendSlice(writer, allocator, store.cf_stmts.items);
-        self.cf_switch_branches = try appendSlice(writer, allocator, store.cf_switch_branches.items);
-        self.locals = try appendSlice(writer, allocator, store.locals.items);
-        self.local_ids = try appendSlice(writer, allocator, store.local_ids.items);
-        self.proc_specs = try appendSlice(writer, allocator, store.proc_specs.items);
-        try self.strings.serialize(&store.strings, allocator, writer);
-        self.next_synthetic_symbol = store.next_synthetic_symbol;
+    fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const LirStore) ImageError!LirStoreImage {
+        return .{
+            .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.items),
+            .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.items),
+            .locals = try arrayRef(base_ptr, image_size, store.locals.items),
+            .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.items),
+            .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.items),
+            .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &store.strings),
+            .next_synthetic_symbol = store.next_synthetic_symbol,
+        };
     }
 
-    pub fn deserializeOwned(
-        self: *const SerializedLirStore,
-        allocator: Allocator,
-        base: usize,
-    ) RuntimeImageError!LirStore {
-        var borrowed_strings = self.strings.deserializeInto(base);
-        const owned_strings = try borrowed_strings.clone(allocator);
-
+    fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!LirStore {
         return .{
-            .cf_stmts = try arrayListFromSerializedSlice(LIR.CFStmt, allocator, base, self.cf_stmts),
-            .cf_switch_branches = try arrayListFromSerializedSlice(LIR.CFSwitchBranch, allocator, base, self.cf_switch_branches),
-            .locals = try arrayListFromSerializedSlice(LIR.Local, allocator, base, self.locals),
-            .local_ids = try arrayListFromSerializedSlice(LIR.LocalId, allocator, base, self.local_ids),
-            .proc_specs = try arrayListFromSerializedSlice(LIR.LirProcSpec, allocator, base, self.proc_specs),
-            .strings = owned_strings,
-            .allocator = allocator,
+            .cf_stmts = arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
+            .cf_switch_branches = arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
+            .locals = arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
+            .local_ids = arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
+            .proc_specs = arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
+            .strings = try self.strings.view(base_ptr, image_size),
+            .allocator = std.heap.page_allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
         };
     }
 };
 
-pub const SerializedLayoutStore = extern struct {
-    layouts: collections.SafeList(layout_mod.Layout).Serialized,
-    resolved_list_layouts: SliceRef,
-    tuple_elems: collections.SafeList(layout_mod.Idx).Serialized,
-    struct_fields: layout_mod.StructField.SafeMultiList.Serialized,
-    struct_data: collections.SafeList(layout_mod.StructData).Serialized,
-    tag_union_variants: layout_mod.TagUnionVariant.SafeMultiList.Serialized,
-    tag_union_data: collections.SafeList(layout_mod.TagUnionData).Serialized,
+pub const StringLiteralStoreImage = extern struct {
+    buffer: ArrayRef,
 
-    pub fn serialize(
-        self: *SerializedLayoutStore,
-        store: *const layout_mod.Store,
-        allocator: Allocator,
-        writer: *CompactWriter,
-    ) Allocator.Error!void {
-        try self.layouts.serialize(&store.layouts, allocator, writer);
-        self.resolved_list_layouts = try appendSlice(writer, allocator, store.resolved_list_layouts.items);
-        try self.tuple_elems.serialize(&store.tuple_elems, allocator, writer);
-        try self.struct_fields.serialize(&store.struct_fields, allocator, writer);
-        try self.struct_data.serialize(&store.struct_data, allocator, writer);
-        try self.tag_union_variants.serialize(&store.tag_union_variants, allocator, writer);
-        try self.tag_union_data.serialize(&store.tag_union_data, allocator, writer);
+    fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const base.StringLiteral.Store) ImageError!StringLiteralStoreImage {
+        return .{
+            .buffer = try arrayRef(base_ptr, image_size, store.buffer.items.items),
+        };
     }
 
-    pub fn deserializeOwned(
-        self: *const SerializedLayoutStore,
-        allocator: Allocator,
-        base_addr: usize,
+    fn view(self: StringLiteralStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!base.StringLiteral.Store {
+        return .{
+            .buffer = safeListFromRef(u8, base_ptr, image_size, self.buffer),
+        };
+    }
+};
+
+pub const LayoutStoreImage = extern struct {
+    layouts: ArrayRef,
+    resolved_list_layouts: ArrayRef,
+    tuple_elems: ArrayRef,
+    struct_fields: ArrayRef,
+    struct_data: ArrayRef,
+    tag_union_variants: ArrayRef,
+    tag_union_data: ArrayRef,
+
+    fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const layout_mod.Store) ImageError!LayoutStoreImage {
+        return .{
+            .layouts = try arrayRef(base_ptr, image_size, store.layouts.items.items),
+            .resolved_list_layouts = try arrayRef(base_ptr, image_size, store.resolved_list_layouts.items),
+            .tuple_elems = try arrayRef(base_ptr, image_size, store.tuple_elems.items.items),
+            .struct_fields = try multiArrayRef(layout_mod.StructField, base_ptr, image_size, store.struct_fields),
+            .struct_data = try arrayRef(base_ptr, image_size, store.struct_data.items.items),
+            .tag_union_variants = try multiArrayRef(layout_mod.TagUnionVariant, base_ptr, image_size, store.tag_union_variants),
+            .tag_union_data = try arrayRef(base_ptr, image_size, store.tag_union_data.items.items),
+        };
+    }
+
+    fn view(
+        self: LayoutStoreImage,
+        base_ptr: [*]align(1) u8,
+        image_size: usize,
         target_usize: base.target.TargetUsize,
-    ) RuntimeImageError!layout_mod.Store {
+    ) ImageError!layout_mod.Store {
         return .{
             .all_module_envs = &.{},
-            .allocator = allocator,
+            .allocator = std.heap.page_allocator,
             .mutable_env = null,
-            .layouts = try self.layouts.deserializeWithCopy(base_addr, allocator),
-            .resolved_list_layouts = try arrayListFromSerializedSlice(?layout_mod.Idx, allocator, base_addr, self.resolved_list_layouts),
-            .tuple_elems = try self.tuple_elems.deserializeWithCopy(base_addr, allocator),
-            .struct_fields = try self.struct_fields.deserializeWithCopy(base_addr, allocator),
-            .struct_data = try self.struct_data.deserializeWithCopy(base_addr, allocator),
-            .tag_union_variants = try self.tag_union_variants.deserializeWithCopy(base_addr, allocator),
-            .tag_union_data = try self.tag_union_data.deserializeWithCopy(base_addr, allocator),
-            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
+            .layouts = safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
+            .resolved_list_layouts = arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
+            .tuple_elems = safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
+            .struct_fields = safeMultiListFromRef(layout_mod.StructField, base_ptr, image_size, self.struct_fields),
+            .struct_data = safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
+            .tag_union_variants = safeMultiListFromRef(layout_mod.TagUnionVariant, base_ptr, image_size, self.tag_union_variants),
+            .tag_union_data = safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
+            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(std.heap.page_allocator),
             .scratch_intern_key = .empty,
             .builtin_str_ident = null,
             .target_usize = target_usize,
@@ -158,42 +163,40 @@ pub const SerializedLayoutStore = extern struct {
     }
 };
 
-pub fn serializeLoweredProgram(
+/// Publish an already-lowered program into the existing shared-memory mapping.
+///
+/// `lowered` must already have been allocated with the shared-memory allocator
+/// associated with `base_ptr`; this function only installs offset metadata.
+pub fn installHeaderInSharedMemory(
     allocator: Allocator,
+    base_ptr: [*]align(1) const u8,
+    image_size: usize,
     lowered: *const LowerIr.Result,
     target_usize: base.target.TargetUsize,
     platform_entrypoints: []const PlatformEntrypoint,
-) RuntimeImageError![]align(16) u8 {
-    var writer = CompactWriter.init();
-    defer writer.deinit(allocator);
-
-    const header = try writer.appendAlloc(allocator, Header);
-    header.magic = MAGIC;
-    header.format_version = FORMAT_VERSION;
-    header.target_usize = @intFromEnum(target_usize);
-    header.root_procs = try appendSlice(&writer, allocator, lowered.root_procs.items);
-    header.platform_entrypoints = try appendSlice(&writer, allocator, platform_entrypoints);
-    try header.store.serialize(&lowered.store, allocator, &writer);
-    try header.layouts.serialize(&lowered.layouts, allocator, &writer);
-    header.total_size = writer.total_bytes;
-
-    const bytes = try allocator.alignedAlloc(u8, collections.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    errdefer allocator.free(bytes);
-    _ = try writer.writeToBuffer(bytes);
-    return bytes;
+) (Allocator.Error || ImageError)!*Header {
+    const header = try allocator.create(Header);
+    header.* = .{
+        .magic = MAGIC,
+        .format_version = FORMAT_VERSION,
+        .image_size = image_size,
+        .target_usize = @intFromEnum(target_usize),
+        .root_procs = try arrayRef(base_ptr, image_size, lowered.root_procs.items),
+        .platform_entrypoints = try arrayRef(base_ptr, image_size, platform_entrypoints),
+        .store = try LirStoreImage.fromStore(base_ptr, image_size, &lowered.store),
+        .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
+    };
+    return header;
 }
 
-pub fn deserializeOwned(allocator: Allocator, bytes: []align(16) const u8) RuntimeImageError!RuntimeProgram {
-    if (bytes.len < @sizeOf(Header)) return error.InvalidRuntimeImage;
+/// View an ARC-inserted LIR program in place from mapped shared memory.
+pub fn viewMappedImage(base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
+    if (mapped_size < @sizeOf(Header)) return error.InvalidRuntimeImage;
 
-    const base_addr = @intFromPtr(bytes.ptr);
-    const header: *const Header = @ptrCast(@alignCast(bytes.ptr));
+    const header: *const Header = @ptrCast(@alignCast(base_ptr));
     if (header.magic != MAGIC) return error.InvalidRuntimeImage;
     if (header.format_version != FORMAT_VERSION) return error.UnsupportedRuntimeImageVersion;
-    if (header.total_size != bytes.len) return error.InvalidRuntimeImage;
-
-    var store = try header.store.deserializeOwned(allocator, base_addr);
-    errdefer store.deinit();
+    if (header.image_size > mapped_size) return error.InvalidRuntimeImage;
 
     const target_usize: base.target.TargetUsize = switch (header.target_usize) {
         0 => .u32,
@@ -201,58 +204,107 @@ pub fn deserializeOwned(allocator: Allocator, bytes: []align(16) const u8) Runti
         else => return error.InvalidRuntimeImage,
     };
 
-    var layouts = try header.layouts.deserializeOwned(allocator, base_addr, target_usize);
-    errdefer layouts.deinit();
-
-    var root_procs = try arrayListFromSerializedSlice(LIR.LirProcSpecId, allocator, base_addr, header.root_procs);
-    errdefer root_procs.deinit(allocator);
-
-    var platform_entrypoints = try arrayListFromSerializedSlice(PlatformEntrypoint, allocator, base_addr, header.platform_entrypoints);
-    errdefer platform_entrypoints.deinit(allocator);
-
     return .{
-        .lowered = .{
-            .canonical_names = mir.Hosted.CanonicalNameStore.init(allocator),
-            .store = store,
-            .layouts = layouts,
-            .root_procs = root_procs,
-            .proc_map = .empty,
-        },
-        .platform_entrypoints = platform_entrypoints,
+        .store = try header.store.view(base_ptr, @intCast(header.image_size)),
+        .layouts = try header.layouts.view(base_ptr, @intCast(header.image_size), target_usize),
+        .root_procs = sliceFromRef(LIR.LirProcSpecId, base_ptr, @intCast(header.image_size), header.root_procs),
+        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, base_ptr, @intCast(header.image_size), header.platform_entrypoints),
         .target_usize = target_usize,
     };
 }
 
-fn appendSlice(
-    writer: *CompactWriter,
-    allocator: Allocator,
-    slice: anytype,
-) Allocator.Error!SliceRef {
-    const relocated = try writer.appendSlice(allocator, slice);
+fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) ImageError!ArrayRef {
+    if (slice.len == 0) return ArrayRef.empty();
+
+    const base_addr = @intFromPtr(base_ptr);
+    const ptr_addr = @intFromPtr(slice.ptr);
+    if (ptr_addr < base_addr) return error.InvalidRuntimeImage;
+
+    const offset = ptr_addr - base_addr;
+    const byte_len = slice.len * @sizeOf(std.meta.Child(@TypeOf(slice)));
+    if (offset + byte_len > image_size) return error.InvalidRuntimeImage;
+
     return .{
-        .offset = @intFromPtr(relocated.ptr),
-        .len = relocated.len,
+        .offset = @intCast(offset),
+        .len = @intCast(slice.len),
+        .capacity = @intCast(slice.len),
     };
 }
 
-fn arrayListFromSerializedSlice(
+fn multiArrayRef(
     comptime T: type,
-    allocator: Allocator,
-    base: usize,
-    slice_ref: SliceRef,
-) RuntimeImageError!std.ArrayList(T) {
-    if (slice_ref.len == 0) return .empty;
+    base_ptr: [*]align(1) const u8,
+    image_size: usize,
+    list: collections.SafeMultiList(T),
+) ImageError!ArrayRef {
+    if (list.items.capacity == 0) return ArrayRef.empty();
 
-    const offset: usize = @intCast(slice_ref.offset);
-    const len: usize = @intCast(slice_ref.len);
-    const end = offset +% len * @sizeOf(T);
-    if (end < offset) return error.InvalidRuntimeImage;
+    const base_addr = @intFromPtr(base_ptr);
+    const ptr_addr = @intFromPtr(list.items.bytes);
+    if (ptr_addr < base_addr) return error.InvalidRuntimeImage;
 
-    const src_ptr: [*]const T = @ptrFromInt(base +% offset);
-    const src = src_ptr[0..len];
-    const owned = try allocator.alloc(T, len);
-    @memcpy(owned, src);
-    return std.ArrayList(T).fromOwnedSlice(owned);
+    const offset = ptr_addr - base_addr;
+    const byte_len = std.MultiArrayList(T).capacityInBytes(list.items.capacity);
+    if (offset + byte_len > image_size) return error.InvalidRuntimeImage;
+
+    return .{
+        .offset = @intCast(offset),
+        .len = @intCast(list.items.len),
+        .capacity = @intCast(list.items.capacity),
+    };
+}
+
+fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) []T {
+    if (ref.len == 0) return &.{};
+    debugCheckArrayRef(T, image_size, ref);
+    const ptr: [*]T = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
+    return ptr[0..@intCast(ref.len)];
+}
+
+fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) std.ArrayList(T) {
+    const slice = sliceFromRef(T, base_ptr, image_size, ref);
+    return .{
+        .items = slice,
+        .capacity = @intCast(ref.capacity),
+    };
+}
+
+fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) collections.SafeList(T) {
+    const slice = sliceFromRef(T, base_ptr, image_size, ref);
+    return .{
+        .items = .{
+            .items = slice,
+            .capacity = @intCast(ref.capacity),
+        },
+    };
+}
+
+fn safeMultiListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) collections.SafeMultiList(T) {
+    if (ref.capacity == 0) return .{ .items = .{} };
+    debugCheckByteRef(image_size, ref, std.MultiArrayList(T).capacityInBytes(@intCast(ref.capacity)));
+    const ptr: [*]align(@alignOf(T)) u8 = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
+    return .{
+        .items = .{
+            .bytes = ptr,
+            .len = @intCast(ref.len),
+            .capacity = @intCast(ref.capacity),
+        },
+    };
+}
+
+fn debugCheckArrayRef(comptime T: type, image_size: usize, ref: ArrayRef) void {
+    debugCheckByteRef(image_size, ref, @as(usize, @intCast(ref.len)) * @sizeOf(T));
+}
+
+fn debugCheckByteRef(image_size: usize, ref: ArrayRef, byte_len: usize) void {
+    if (@import("builtin").mode == .Debug) {
+        const offset: usize = @intCast(ref.offset);
+        if (offset + byte_len > image_size) {
+            std.debug.panic("LIR runtime image invariant violated: offset={d} byte_len={d} image_size={d}", .{ offset, byte_len, image_size });
+        }
+    } else if (@as(usize, @intCast(ref.offset)) + byte_len > image_size) {
+        unreachable;
+    }
 }
 
 test "runtime image declarations are referenced" {

@@ -7,7 +7,7 @@
 //! The CLI supports two modes for passing compiled Roc programs to the interpreter:
 //!
 //! ### IPC Mode (`roc path/to/app.roc`)
-//! - Compiles Roc source through ARC-inserted LIR and writes a serialized LIR runtime image to shared memory
+//! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR runtime image in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
 //! - See: `buildLirRuntimeImageWithCoordinator`, `rocRun`
@@ -1243,7 +1243,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
     }
 
-    // Build the serialized LIR runtime image and place it in shared memory.
+    // Build the viewable LIR runtime image in shared memory.
     const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
 
     // Check for errors - abort unless --allow-errors flag is set
@@ -1592,7 +1592,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
     }
 
-    // Build the serialized LIR runtime image and place it in shared memory.
+    // Build the viewable LIR runtime image in shared memory.
     const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
 
     if (shm_result.error_count > 0 and !args.allow_errors) {
@@ -2150,17 +2150,17 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 }
 
-/// Build shared memory containing a serialized ARC-inserted LIR runtime image.
+/// Build shared memory containing a viewable ARC-inserted LIR runtime image.
 ///
 /// The parent process owns parse, canonicalize, checking, checked-artifact
 /// publication, MIR lowering, IR lowering, LIR lowering, and ARC insertion.
-/// The child process receives only the serialized LIR runtime image and never
+/// The child process maps only the LIR runtime image and never
 /// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
 pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     _ = ctx;
     _ = roc_file_path;
     _ = allow_errors;
-    @compileError("Phase 2 must build and serialize an ARC-inserted LIR runtime image from checked artifacts");
+    @compileError("Phase 2 must publish an ARC-inserted LIR runtime image into shared memory from checked artifacts");
 }
 
 /// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
@@ -3308,7 +3308,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
         .interpreter, .wasm => {
             // Use embedded interpreter build approach
-            // This compiles the Roc app, serializes the LIR runtime image, and embeds it in the binary.
+            // This compiles the Roc app and embeds a viewable LIR runtime image in the binary.
             try rocBuildEmbedded(ctx, args);
         },
     }

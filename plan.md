@@ -8187,17 +8187,20 @@ parse -> canonicalize -> check -> checked artifact publication
 -> executable MIR -> IR -> LIR -> ARC insertion
 ```
 
-After ARC insertion, the parent serializes a target-specific `LirRuntimeImage`
-or exact equivalent. The child interpreter process receives that image and only
-does runtime work:
+After ARC insertion, the parent publishes a target-specific `LirRuntimeImage`
+or exact equivalent into the existing shared-memory infrastructure. It is an
+offset-addressed shared-memory object graph containing the exact
+LIR/runtime-layout arrays that the interpreter reads. The child interpreter
+process maps the same shared-memory object and only does runtime work:
 
 ```text
-deserialize LirRuntimeImage -> initialize LIR interpreter -> call explicit roots
+map shared memory -> validate LIR runtime image header -> create zero-copy LIR views
+-> initialize LIR interpreter -> call explicit roots
 ```
 
 The child interpreter process must never:
 
-- deserialize `ModuleEnv`
+- map or view `ModuleEnv`
 - inspect CIR
 - inspect checked artifacts
 - run MIR, IR, LIR lowering, ARC insertion, static dispatch resolution,
@@ -8205,59 +8208,89 @@ The child interpreter process must never:
 - scan source, exports, declarations, expressions, `ModuleEnv` definitions, or
   platform module definitions to find entrypoints
 - recover missing semantic data
+- create anything other than zero-copy views over the mapped LIR/runtime-layout
+  arrays
 
-The transport mechanism may remain shared memory for `roc run` and may remain
-embedded bytes for `roc build --opt=interpreter`, but the payload must be a
-serialized LIR runtime image, not a live or serialized `ModuleEnv` and not a
-checked artifact. Shared memory is only a byte transport at this boundary; it is
-not an allocator whose object graph is later interpreted by semantic compiler
-code in the child process.
+For IPC paths such as `roc run` and the dev shim, the transport mechanism must
+use the existing `SharedMemoryAllocator`/shared-memory coordination
+infrastructure. The payload is a viewable LIR runtime image, not a live or
+cached `ModuleEnv` and not a checked artifact. Shared memory is the allocator
+for the runtime image at this boundary. The child process turns offsets in the
+mapped region into read-only views.
+
+For embedded interpreter builds, any file-backed runtime image must preserve the
+same view-oriented contract: the embedded payload is made viewable as the LIR
+runtime image before interpretation, and the child/interpreter side still does
+not run semantic compiler stages, root discovery, or reconstruction from CIR.
+The embedded path must not dictate or slow down the shared-memory IPC path.
 
 Conceptual shape:
 
 ```zig
-const LirRuntimeImage = struct {
+const LirRuntimeImageHeader = extern struct {
+    magic: u32,
+    format_version: u32,
+    image_size: u64,
+    target_usize: u8,
+    root_procs: ArrayRef,
+    platform_entrypoints: ArrayRef,
+    store: LirStoreImage,
+    layouts: LayoutStoreImage,
+    literal_pool: ProgramLiteralPoolImage,
+    hosted_table: HostedProcTableImage,
+};
+
+const ArrayRef = extern struct {
+    offset: u64,
+    len: u64,
+    capacity: u64,
+};
+
+const LirRuntimeImageView = struct {
     header: LirRuntimeImageHeader,
-    target: TargetConfigSummary,
     root_procs: []LirProcSpecId,
     platform_entrypoints: []PlatformEntrypointRoot,
-    store: SerializedLirStore,
-    layouts: SerializedCommittedLayouts,
-    literal_pool: SerializedProgramLiteralPool,
-    hosted_table: SerializedHostedProcTable,
+    store: LirStoreView,
+    layouts: CommittedLayoutStoreView,
+    literal_pool: ProgramLiteralPoolView,
+    hosted_table: HostedProcTableView,
 };
 ```
 
 The exact Zig names may differ, but the ownership rule must not. The image
 contains target-shaped runtime data that the interpreter needs to execute
-already-lowered LIR. It may contain LIR proc ids, LIR locals, LIR statements,
-committed layouts, explicit RC statements, literal bytes, hosted procedure
-descriptors, root proc ids, and platform entrypoint-to-root mappings. It must
-not contain `ModuleEnv`, CIR ids, checked expression ids, checked pattern ids,
-checker type variables, checked artifact views, MIR ids, IR vars, raw
-`base.StringLiteral.Idx`, raw `Ident.Idx`, raw source text as semantic data, or
-post-check lookup keys that require semantic compiler stages to run in the child.
+already-lowered LIR, allocated in the shared-memory runtime image for IPC. It
+may contain LIR proc ids, LIR locals, LIR statements, committed layouts,
+explicit RC statements, literal bytes, hosted procedure descriptors, root proc
+ids, and platform entrypoint-to-root mappings. It must not contain `ModuleEnv`,
+CIR ids, checked expression ids, checked pattern ids, checker type variables,
+checked artifact views, MIR ids, IR vars, raw `Ident.Idx`, raw source text as
+semantic data, or post-check lookup keys that require semantic compiler stages
+to run in the child. Any string or literal ids present in the LIR runtime image
+must refer only to runtime-image-local LIR literal/string stores, not to
+`ModuleEnv` or checked-artifact stores.
 
 Platform entrypoints must be resolved in the parent from published checked
-artifacts and platform-required binding tables before serialization. The runtime
-image stores direct LIR root proc ids for those entrypoints. It must not store
+artifacts and platform-required binding tables before runtime-image
+publication. The runtime image stores direct LIR root proc ids for those
+entrypoints. It must not store
 platform def indices, app def indices, `CIR.Def.Idx`, exported-name lookup
 requests, or offsets to `ModuleEnv` values.
 
 The child may validate the runtime image header, compiler/runtime image version,
 target pointer width, byte order, and structural bounds before interpretation.
-Invalid image bytes are a runtime image loading failure, not a semantic compiler
-fallback. Once validation succeeds, all missing-root, missing-layout,
-missing-proc, missing-hosted-binding, or malformed-RC conditions are compiler
-bugs: debug builds assert at the first invalid read, and release builds use
-`unreachable`.
+These checks are invariant checks over compiler-produced shared memory, not a
+semantic fallback path. Header, bounds, missing-root, missing-layout,
+missing-proc, missing-hosted-binding, or malformed-RC violations are compiler
+or runtime-image publication bugs: debug builds assert at the first invalid
+read, and release builds use `unreachable`.
 
 This boundary is target-specific and intentionally outside the target-independent
 checked artifact cache. Checked artifact cache keys must not include layout or
-target ABI inputs. `LirRuntimeImage` bytes may be cached separately using
-target/layout/compiler-runtime inputs, because the image contains committed
-layouts, explicit RC statements, platform entry roots, and runtime storage
-choices.
+target ABI inputs. Any future cache for viewable runtime images must use
+target/layout/compiler-runtime inputs and must preserve the same zero-copy view
+contract. The `roc run` and dev-shim IPC paths continue to use the existing
+shared-memory allocator handoff.
 
 ### Post-Check API Error Shape
 
@@ -11181,12 +11214,13 @@ the same checked-artifact public pipeline as production tools.
 
 For `roc run`, `roc build --opt=interpreter`, the dev shim, and the interpreter
 shim, move the semantic pipeline into the parent compiler process. The parent
-must call the checked-artifact public pipeline, run ARC insertion, and serialize
-a target-specific `LirRuntimeImage`. Delete the old shared-memory/embedded
+must call the checked-artifact public pipeline, run ARC insertion, and publish
+a target-specific viewable `LirRuntimeImage` through the existing shared-memory
+handoff for IPC execution. Delete the old shared-memory/embedded
 `ModuleEnv` payload shape, `ModuleEnvHeader`, platform/app `CIR.Def.Idx`
 entrypoint tables, and child-side CIR-to-LIR lowering path. The child shim
-deserializes only `LirRuntimeImage` and invokes the LIR interpreter on explicit
-root proc ids.
+maps shared memory, constructs zero-copy LIR runtime-image views, and invokes
+the LIR interpreter on explicit root proc ids.
 
 Remove helper names that refer to old stages.
 
@@ -13134,13 +13168,18 @@ The cutover is complete only when all of these are true:
 - target-specific constant materialization uses explicit layout,
   reference-counting, and storage plans outside the checked artifact cache
 - no public pipeline imports old top-level post-check modules
-- `roc run`, `roc build --opt=interpreter`, dev shim, and interpreter shim
-  execution split at serialized ARC-inserted LIR: the parent lowers through the
-  checked-artifact public pipeline and serializes `LirRuntimeImage`; the child
-  deserializes that image and interprets LIR only
-- interpreter-shim transports contain no live or serialized `ModuleEnv`, no CIR,
-  no checked artifact, no MIR, no IR, no checker vars, no `CIR.Def.Idx`
-  entrypoint tables, and no post-check lookup requests
+- `roc run`, dev shim, and interpreter-shim IPC execution split at a viewable
+  ARC-inserted LIR runtime image allocated/published through the existing
+  shared-memory infrastructure: the parent lowers through the checked-artifact
+  public pipeline and publishes `LirRuntimeImage`; the child maps shared memory,
+  constructs zero-copy LIR views, and interprets LIR only
+- `roc build --opt=interpreter` keeps the same semantic split at ARC-inserted
+  LIR and must not reintroduce child-side semantic lowering; any embedded
+  runtime-image format must preserve view-oriented execution and must not
+  dictate the IPC handoff used by `roc run` and the dev shim
+- interpreter-shim transports contain no live or cached `ModuleEnv`, no CIR, no
+  checked artifact, no MIR, no IR, no checker vars, no `CIR.Def.Idx` entrypoint
+  tables, and no post-check lookup requests
 - interpreter-shim child code contains no semantic lowering, root selection,
   static-dispatch resolution, platform-required lookup, or compile-time
   evaluation path

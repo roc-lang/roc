@@ -12,11 +12,11 @@ pub const Handle = platform.Handle;
 pub const FdInfo = coordination.FdInfo;
 pub const CoordinationError = coordination.CoordinationError;
 
-/// Shared-memory header for a serialized LIR runtime image.
+/// Shared-memory header for a viewable LIR runtime image.
 ///
-/// The IPC layer is only a byte transport. Semantic compilation happens in the
-/// parent process before bytes are written, and the child process only receives
-/// a target-specific LIR runtime image.
+/// Semantic compilation happens in the parent process before this header is
+/// published. The child process maps the same shared-memory object and views a
+/// target-specific LIR runtime image in place.
 pub const LirRuntimeImageHeader = extern struct {
     magic: u32,
     format_version: u32,

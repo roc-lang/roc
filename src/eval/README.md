@@ -57,9 +57,8 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 ## Host Integrations
 
 - **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
-  C-callable entry point (`roc_entrypoint`) that receives a serialized
-  ARC-inserted LIR runtime image via shared memory or embedded data and
-  evaluates it via the interpreter.
+  C-callable entry point (`roc_entrypoint`) that maps/views an ARC-inserted LIR
+  runtime image and evaluates it via the interpreter.
 
 ## Tests
 
