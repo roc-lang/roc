@@ -21,7 +21,6 @@ const Can = can.Can;
 const Check = check.Check;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const ModuleSourceFile = check.TypedCIR.Modules.SourceModule;
 const RocStr = builtins.str.RocStr;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
@@ -62,7 +61,6 @@ pub const ParsedResources = struct {
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
-    typed_cir_modules: check.TypedCIR.Modules,
     checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
     import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
     builtin_module: builtin_loading.LoadedModule,
@@ -82,7 +80,6 @@ pub const ParsedResources = struct {
         self.checked_artifact.deinit(allocator);
         for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(self.import_artifacts);
-        self.typed_cir_modules.deinit();
         allocator.free(self.imported_envs);
         allocator.destroy(self.checker);
         allocator.destroy(self.can);
@@ -263,7 +260,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     }
     resolveImportsByModuleIndex(all_module_envs);
 
-    var source_modules = try allocator.alloc(ModuleSourceFile, extra_modules.items.len + 2);
+    var source_modules = try allocator.alloc(check.TypedCIR.Modules.SourceModule, extra_modules.items.len + 2);
     defer allocator.free(source_modules);
     source_modules[0] = .{ .precompiled = main_checked.module_env };
     source_modules[1] = .{ .precompiled = builtin_module.env };
@@ -271,11 +268,8 @@ pub fn parseAndCanonicalizeProgramWrapped(
         source_modules[i + 2] = .{ .precompiled = extra.module_env };
     }
 
-    const typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
-    errdefer {
-        var owned_modules = typed_cir_modules;
-        owned_modules.deinit();
-    }
+    var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
+    defer typed_cir_modules.deinit();
     var import_artifacts = try publishImportArtifacts(
         allocator,
         &typed_cir_modules,
@@ -324,7 +318,6 @@ pub fn parseAndCanonicalizeProgramWrapped(
         .parse_ast = main_checked.parse_ast,
         .can = main_checked.can,
         .checker = main_checked.checker,
-        .typed_cir_modules = typed_cir_modules,
         .checked_artifact = checked_artifact,
         .import_artifacts = import_artifacts,
         .builtin_module = builtin_module,
