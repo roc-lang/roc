@@ -473,9 +473,15 @@ const Lowerer = struct {
                 .args = try self.lowerVarSpan(call.args),
                 .next = next,
             } }),
+            .call_erased => |call| try self.store.addCFStmt(.{ .assign_call_erased = .{
+                .target = target,
+                .closure = try self.lowerVar(call.func),
+                .args = try self.lowerVarSpan(call.args),
+                .capture_layout = if (call.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
+                .next = next,
+            } }),
             .bridge,
             .layout_size,
-            .call_erased,
             => lirInvariant("lir.lower_ir reached IR expression form whose LIR lowering is still missing"),
         };
     }
