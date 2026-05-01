@@ -327,6 +327,9 @@ pub const Store = struct {
         self.branch_ids.deinit(self.allocator);
         self.pat_ids.deinit(self.allocator);
         self.expr_ids.deinit(self.allocator);
+        for (self.defs.items) |*def| {
+            repr.deinitExecutableSpecializationKey(self.allocator, &def.specialization_key);
+        }
         self.defs.deinit(self.allocator);
         self.stmts.deinit(self.allocator);
         self.branches.deinit(self.allocator);

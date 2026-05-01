@@ -56,6 +56,9 @@ pub const Program = struct {
             store.deinit();
         }
         self.value_stores.deinit(self.allocator);
+        for (self.proc_instances.items) |*instance| {
+            repr.deinitProcRepresentationInstance(self.allocator, instance);
+        }
         self.proc_instances.deinit(self.allocator);
         for (self.solve_sessions.items) |*session| {
             session.deinit();
@@ -123,11 +126,19 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
         const body = try solver.lowerDef(proc.body);
         const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
+        const executable_key = try repr.executableSpecializationKeyForProc(
+            allocator,
+            &program.canonical_names,
+            &program.types,
+            &program.value_stores.items[i],
+            proc.proc,
+            roots,
+        );
 
         program.solve_sessions.items[i].state = .sealed;
         program.proc_instances.appendAssumeCapacity(.{
             .proc = proc.proc,
-            .executable_specialization_key = null,
+            .executable_specialization_key = executable_key,
             .solve_session = session_id,
             .value_store = value_store_id,
             .public_roots = roots,

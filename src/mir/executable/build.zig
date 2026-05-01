@@ -290,7 +290,7 @@ const BodyBuilder = struct {
                 break :blk .{
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
-                    .specialization_key = self.executableSpecializationKey(),
+                    .specialization_key = try self.executableSpecializationKey(),
                     .value = .{
                         .args = args,
                         .body = body,
@@ -307,7 +307,7 @@ const BodyBuilder = struct {
                 break :blk .{
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
-                    .specialization_key = self.executableSpecializationKey(),
+                    .specialization_key = try self.executableSpecializationKey(),
                     .value = .{
                         .args = args,
                         .body = body,
@@ -319,7 +319,7 @@ const BodyBuilder = struct {
                 break :blk .{
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
-                    .specialization_key = self.executableSpecializationKey(),
+                    .specialization_key = try self.executableSpecializationKey(),
                     .value = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
                         .body = body,
@@ -331,7 +331,7 @@ const BodyBuilder = struct {
                 break :blk .{
                     .proc = self.executable_proc,
                     .source_proc = def.proc,
-                    .specialization_key = self.executableSpecializationKey(),
+                    .specialization_key = try self.executableSpecializationKey(),
                     .value = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
                         .body = body,
@@ -341,12 +341,11 @@ const BodyBuilder = struct {
         });
     }
 
-    fn executableSpecializationKey(self: *const BodyBuilder) repr.ExecutableSpecializationKey {
-        const key = self.proc_instance.executable_specialization_key orelse executableInvariant("executable build reached a procedure before lambda-solved MIR published its executable specialization key");
+    fn executableSpecializationKey(self: *const BodyBuilder) Allocator.Error!repr.ExecutableSpecializationKey {
         if (!canonical.monoSpecializedProcRefEql(self.proc_instance.proc, self.source_proc)) {
             executableInvariant("executable build procedure instance does not match the source procedure being lowered");
         }
-        return key;
+        return try repr.cloneExecutableSpecializationKey(self.allocator, self.proc_instance.executable_specialization_key);
     }
 
     fn lowerParamSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {

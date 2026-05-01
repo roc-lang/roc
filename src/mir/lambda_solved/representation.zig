@@ -543,11 +543,254 @@ pub const RepresentationSolveSession = struct {
 
 pub const ProcRepresentationInstance = struct {
     proc: canonical.MonoSpecializedProcRef,
-    executable_specialization_key: ?ExecutableSpecializationKey = null,
+    executable_specialization_key: ExecutableSpecializationKey,
     solve_session: RepresentationSolveSessionId,
     value_store: ValueInfoStoreId,
     public_roots: ProcPublicValueRoots,
 };
+
+pub fn executableSpecializationKeyForProc(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    value_store: *const ValueInfoStore,
+    proc: canonical.MonoSpecializedProcRef,
+    roots: ProcPublicValueRoots,
+) std.mem.Allocator.Error!ExecutableSpecializationKey {
+    const params = value_store.sliceValueSpan(roots.params);
+    const arg_keys = if (params.len == 0)
+        &.{}
+    else
+        try allocator.alloc(CanonicalExecValueTypeKey, params.len);
+    errdefer if (arg_keys.len > 0) allocator.free(arg_keys);
+    for (params, 0..) |param, i| {
+        arg_keys[i] = try execValueTypeKeyForValue(allocator, names, types, value_store, param);
+    }
+
+    return .{
+        .base = proc.proc.proc_base,
+        .requested_fn_ty = proc.specialization.requested_mono_fn_ty,
+        .exec_arg_tys = arg_keys,
+        .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, types, value_store, roots.ret),
+        .callable_repr_mode = .direct,
+        .capture_shape_key = try captureShapeKeyForValues(allocator, names, types, value_store, roots.captures),
+    };
+}
+
+pub fn deinitExecutableSpecializationKey(
+    allocator: std.mem.Allocator,
+    key: *ExecutableSpecializationKey,
+) void {
+    if (key.exec_arg_tys.len > 0) allocator.free(key.exec_arg_tys);
+    key.exec_arg_tys = &.{};
+}
+
+pub fn cloneExecutableSpecializationKey(
+    allocator: std.mem.Allocator,
+    key: ExecutableSpecializationKey,
+) std.mem.Allocator.Error!ExecutableSpecializationKey {
+    return .{
+        .base = key.base,
+        .requested_fn_ty = key.requested_fn_ty,
+        .exec_arg_tys = if (key.exec_arg_tys.len == 0)
+            &.{}
+        else
+            try allocator.dupe(CanonicalExecValueTypeKey, key.exec_arg_tys),
+        .exec_ret_ty = key.exec_ret_ty,
+        .callable_repr_mode = key.callable_repr_mode,
+        .capture_shape_key = key.capture_shape_key,
+    };
+}
+
+pub fn deinitProcRepresentationInstance(
+    allocator: std.mem.Allocator,
+    instance: *ProcRepresentationInstance,
+) void {
+    deinitExecutableSpecializationKey(allocator, &instance.executable_specialization_key);
+}
+
+pub fn execValueTypeKeyForValue(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    value_store: *const ValueInfoStore,
+    value: ValueInfoId,
+) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+    const info = value_store.values.items[@intFromEnum(value)];
+    return try execValueTypeKey(allocator, names, types, info.logical_ty);
+}
+
+pub fn execValueTypeKey(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    root: type_mod.TypeVarId,
+) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+    var builder = ExecValueTypeKeyBuilder.init(allocator, names, types);
+    defer builder.deinit();
+    return try builder.key(root);
+}
+
+pub fn captureShapeKeyForValues(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    value_store: *const ValueInfoStore,
+    values: Span(ValueInfoId),
+) std.mem.Allocator.Error!CaptureShapeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "capture_shape");
+    const captures = value_store.sliceValueSpan(values);
+    writeHashU32(&hasher, @intCast(captures.len));
+    for (captures, 0..) |capture, i| {
+        writeHashU32(&hasher, @intCast(i));
+        const key = try execValueTypeKeyForValue(allocator, names, types, value_store, capture);
+        hasher.update(&key.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+const ExecValueTypeKeyBuilder = struct {
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    hasher: std.crypto.hash.sha2.Sha256,
+    active: std.AutoHashMap(type_mod.TypeVarId, u32),
+
+    fn init(
+        allocator: std.mem.Allocator,
+        names: *const canonical.CanonicalNameStore,
+        types: *const type_mod.Store,
+    ) ExecValueTypeKeyBuilder {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .types = types,
+            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ExecValueTypeKeyBuilder) void {
+        self.active.deinit();
+    }
+
+    fn key(self: *ExecValueTypeKeyBuilder, root: type_mod.TypeVarId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        try self.writeType(root);
+        return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    fn writeType(self: *ExecValueTypeKeyBuilder, id: type_mod.TypeVarId) std.mem.Allocator.Error!void {
+        const root = self.types.unlinkConst(id);
+        if (self.active.get(root)) |slot| {
+            self.writeTag("cycle");
+            self.writeU32(slot);
+            return;
+        }
+
+        const slot: u32 = @intCast(self.active.count());
+        try self.active.put(root, slot);
+        switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("executable value type key reached unresolved lambda-solved type"),
+            .nominal => |nominal| {
+                self.writeTag("nominal");
+                self.writeBytes(self.names.moduleNameText(nominal.nominal.module_name));
+                self.writeBytes(self.names.typeNameText(nominal.nominal.type_name));
+                self.writeBool(nominal.is_opaque);
+                try self.writeTypeSpan(nominal.args);
+                try self.writeType(nominal.backing);
+            },
+            .content => |content| try self.writeContent(content),
+        }
+        _ = self.active.remove(root);
+    }
+
+    fn writeContent(self: *ExecValueTypeKeyBuilder, content: type_mod.Content) std.mem.Allocator.Error!void {
+        switch (content) {
+            .primitive => |prim| {
+                self.writeTag("primitive");
+                self.writeU32(@as(u32, @intCast(@intFromEnum(prim))));
+            },
+            .list => |elem| {
+                self.writeTag("list");
+                try self.writeType(elem);
+            },
+            .box => |elem| {
+                self.writeTag("box");
+                try self.writeType(elem);
+            },
+            .tuple => |items| {
+                self.writeTag("tuple");
+                try self.writeTypeSpan(items);
+            },
+            .record => |record| {
+                self.writeTag("record");
+                const fields = self.types.sliceFields(record.fields);
+                self.writeU32(@intCast(fields.len));
+                for (fields) |field| {
+                    self.writeBytes(self.names.recordFieldLabelText(field.name));
+                    try self.writeType(field.ty);
+                }
+            },
+            .tag_union => |tag_union| {
+                self.writeTag("tag_union");
+                const tags = self.types.sliceTags(tag_union.tags);
+                self.writeU32(@intCast(tags.len));
+                for (tags) |tag| {
+                    self.writeBytes(self.names.tagLabelText(tag.name));
+                    try self.writeTypeSpan(tag.args);
+                }
+            },
+            .func => representationInvariant("executable value type key reached a function type before callable representation was solved"),
+        }
+    }
+
+    fn writeTypeSpan(self: *ExecValueTypeKeyBuilder, span: type_mod.Span(type_mod.TypeVarId)) std.mem.Allocator.Error!void {
+        const items = self.types.sliceTypeVarSpan(span);
+        self.writeU32(@intCast(items.len));
+        for (items) |item| try self.writeType(item);
+    }
+
+    fn writeTag(self: *ExecValueTypeKeyBuilder, tag: []const u8) void {
+        writeHashTag(&self.hasher, tag);
+    }
+
+    fn writeBytes(self: *ExecValueTypeKeyBuilder, bytes: []const u8) void {
+        writeHashBytes(&self.hasher, bytes);
+    }
+
+    fn writeBool(self: *ExecValueTypeKeyBuilder, value: bool) void {
+        self.hasher.update(&[_]u8{if (value) 1 else 0});
+    }
+
+    fn writeU32(self: *ExecValueTypeKeyBuilder, value: u32) void {
+        writeHashU32(&self.hasher, value);
+    }
+};
+
+fn writeHashTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
+    writeHashBytes(hasher, tag);
+}
+
+fn writeHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    writeHashU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+fn representationInvariant(comptime message: []const u8) noreturn {
+    debug.invariant(false, message);
+    unreachable;
+}
 
 test "lambda-solved representation records are explicit" {
     std.testing.refAllDecls(@This());
