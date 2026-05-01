@@ -90,6 +90,7 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .executable_proc = executable_proc,
             .source_proc = proc.proc,
             .representation_instance = proc.representation_instance,
+            .proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)],
         };
         defer builder.deinit();
 
@@ -268,6 +269,7 @@ const BodyBuilder = struct {
     executable_proc: Ast.ExecutableProcId,
     source_proc: canonical.MonoSpecializedProcRef,
     representation_instance: repr.ProcRepresentationInstanceId,
+    proc_instance: *const repr.ProcRepresentationInstance,
 
     fn deinit(self: *BodyBuilder) void {
         self.expr_map.deinit();
@@ -334,9 +336,12 @@ const BodyBuilder = struct {
         });
     }
 
-    fn executableSpecializationKey(self: *const BodyBuilder) ?repr.ExecutableSpecializationKey {
-        _ = self;
-        return null;
+    fn executableSpecializationKey(self: *const BodyBuilder) repr.ExecutableSpecializationKey {
+        const key = self.proc_instance.executable_specialization_key orelse executableInvariant("executable build reached a procedure before lambda-solved MIR published its executable specialization key");
+        if (!canonical.monoSpecializedProcRefEql(self.proc_instance.proc, self.source_proc)) {
+            executableInvariant("executable build procedure instance does not match the source procedure being lowered");
+        }
+        return key;
     }
 
     fn lowerParamSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
