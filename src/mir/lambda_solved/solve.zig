@@ -277,6 +277,7 @@ const BodySolver = struct {
     expr_map: std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
     instance: repr.ProcRepresentationInstanceId,
     public_roots: ?repr.ProcPublicValueRoots = null,
+    active_captures: ?repr.Span(repr.ValueInfoId) = null,
 
     fn deinit(self: *BodySolver) void {
         self.expr_map.deinit();
@@ -291,6 +292,9 @@ const BodySolver = struct {
                 .fn_ => |fn_| blk: {
                     const lowered_args = try self.lowerParamSpan(fn_.args);
                     const capture_values = try self.lowerCaptureSlotRoots(fn_.captures);
+                    const previous_captures = self.active_captures;
+                    self.active_captures = capture_values;
+                    defer self.active_captures = previous_captures;
                     const body = try self.lowerExpr(fn_.body);
                     const body_value = self.exprValue(body);
                     const function_root = self.representation_store.reserveRoot();
@@ -408,13 +412,34 @@ const BodySolver = struct {
 
         const expr = self.input.getExpr(expr_id);
         const ty = try self.type_importer.importType(expr.ty);
+        switch (expr.data) {
+            .var_ => |symbol| {
+                const binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info");
+                const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
+                const lowered = try self.output.addExpr(ty, binding.value, .{ .var_ = .{
+                    .symbol = symbol,
+                    .binding_info = binding_info,
+                } });
+                try self.expr_map.put(expr_id, lowered);
+                return lowered;
+            },
+            .capture_ref => |slot| {
+                const captures_span = self.active_captures orelse lambdaInvariant("lambda-solved capture_ref reached a procedure without capture roots");
+                const captures = self.value_store.sliceValueSpan(captures_span);
+                const capture_index: usize = @intCast(slot);
+                if (capture_index >= captures.len) lambdaInvariant("lambda-solved capture_ref slot does not exist in procedure capture roots");
+                const lowered = try self.output.addExpr(ty, captures[capture_index], .{ .capture_ref = slot });
+                try self.expr_map.put(expr_id, lowered);
+                return lowered;
+            },
+            else => {},
+        }
+
         const value = try self.newValue(ty);
         const lowered = try self.output.addExpr(ty, value, switch (expr.data) {
-            .var_ => |symbol| .{ .var_ = .{
-                .symbol = symbol,
-                .binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info"),
-            } },
-            .capture_ref => |slot| .{ .capture_ref = slot },
+            .var_,
+            .capture_ref,
+            => unreachable,
             .int_lit => |literal| .{ .int_lit = literal },
             .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
             .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
