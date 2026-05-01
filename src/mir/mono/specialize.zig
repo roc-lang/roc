@@ -972,7 +972,7 @@ const BodyLowerer = struct {
             .typed_frac => |frac| try self.program.ast.addExpr(ty, .{ .dec_lit = frac.value.toI128() }),
             .str_segment => |literal| try self.program.ast.addExpr(ty, .{ .str_lit = try self.lowerCheckedStringLiteral(literal) }),
             .str => |segments| try self.lowerStringExpr(ty, segments),
-            .bytes_literal => invariantViolation("mono body lowering reached bytes literal before bytes literal lowering was implemented"),
+            .bytes_literal => |literal| try self.lowerBytesLiteral(ty, literal),
             .lookup_local => |lookup| try self.lowerResolvedLookup(ty, lookup.resolved orelse invariantViolation("checked lookup_local reached mono without a resolved value ref")),
             .lookup_external => |ref_id| try self.lowerResolvedLookup(ty, ref_id orelse invariantViolation("checked lookup_external reached mono without a resolved value ref")),
             .lookup_required => |ref_id| try self.lowerResolvedLookup(ty, ref_id orelse invariantViolation("checked lookup_required reached mono without a resolved value ref")),
@@ -1049,6 +1049,26 @@ const BodyLowerer = struct {
             } });
         }
         return current;
+    }
+
+    fn lowerBytesLiteral(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        literal: checked_artifact.CheckedStringLiteralId,
+    ) Allocator.Error!Ast.ExprId {
+        const elem_ty = switch (self.program.types.getType(ty)) {
+            .list => |elem| elem,
+            else => invariantViolation("mono body lowering bytes literal expected List(U8) type"),
+        };
+        const bytes = self.checkedStringLiteral(literal);
+        if (bytes.len == 0) return try self.program.ast.addExpr(ty, .{ .list = Ast.Span(Ast.ExprId).empty() });
+
+        const elems = try self.allocator.alloc(Ast.ExprId, bytes.len);
+        defer self.allocator.free(elems);
+        for (bytes, 0..) |byte, i| {
+            elems[i] = try self.program.ast.addExpr(elem_ty, .{ .int_lit = @intCast(byte) });
+        }
+        return try self.program.ast.addExpr(ty, .{ .list = try self.program.ast.addExprSpan(elems) });
     }
 
     fn lowerResolvedLookup(
@@ -1594,11 +1614,18 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         literal: checked_artifact.CheckedStringLiteralId,
     ) Allocator.Error!ids.ProgramLiteralId {
+        return try self.program.literal_pool.intern(self.checkedStringLiteral(literal));
+    }
+
+    fn checkedStringLiteral(
+        self: *BodyLowerer,
+        literal: checked_artifact.CheckedStringLiteralId,
+    ) []const u8 {
         const raw = @intFromEnum(literal);
         if (raw >= self.template_lookup.checked_bodies.string_literals.len) {
             invariantViolation("mono body lowering received a checked string literal outside the owning checked body store");
         }
-        return try self.program.literal_pool.intern(self.template_lookup.checked_bodies.string_literals[raw]);
+        return self.template_lookup.checked_bodies.string_literals[raw];
     }
 
     fn checkedBody(self: *const BodyLowerer, id: checked_artifact.CheckedBodyId) checked_artifact.CheckedBody {
