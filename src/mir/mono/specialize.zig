@@ -994,6 +994,7 @@ const BodyLowerer = struct {
                 _ = tag.closure_name;
                 break :blk try self.lowerTag(ty, tag.name, &.{});
             },
+            .closure => |closure| try self.lowerCheckedClosureExpr(ty, closure),
             .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, access.field_name),
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
@@ -1010,7 +1011,6 @@ const BodyLowerer = struct {
             },
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
             .run_low_level => |run| try self.lowerRunLowLevel(ty, run.op, run.args),
-            .closure,
             .nominal,
             .binop,
             .unary_minus,
@@ -1135,6 +1135,20 @@ const BodyLowerer = struct {
             .args = args,
             .body = body,
         } });
+    }
+
+    fn lowerCheckedClosureExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        closure: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        _ = closure.captures;
+        _ = closure.tag_name;
+        const lambda_expr = self.checkedExpr(closure.lambda);
+        return switch (lambda_expr.data) {
+            .lambda => |lambda| try self.lowerClosureExpr(ty, lambda.args, lambda.body),
+            else => invariantViolation("mono body lowering expected closure expression to reference a checked lambda"),
+        };
     }
 
     fn lowerCall(
