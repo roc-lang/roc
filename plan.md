@@ -2113,8 +2113,31 @@ const CallableValueSource = union(enum) {
         fn_ty: TypeId,
     },
     finite_set: CanonicalCallableSetKey,
-    already_erased: ErasedFnSigKey,
+    already_erased: AlreadyErasedCallablePlan,
     erased_adapter: ErasedAdapterKey,
+};
+
+const AlreadyErasedCapturePlan = union(enum) {
+    // There is no hidden capture value. The ErasedFnSigKey must also have
+    // capture_ty = null.
+    none,
+
+    // The hidden capture exists in the erased signature, but its runtime value
+    // is zero-sized. The type is still explicit because executable MIR must
+    // lower a concrete executable TypeId; it must not try to reconstruct that
+    // type from the canonical signature key.
+    zero_sized_ty: TypeId,
+
+    // The hidden capture is an explicit lambda-solved value occurrence whose
+    // executable representation is the hidden capture type.
+    value: ValueInfoId,
+};
+
+const AlreadyErasedCallablePlan = struct {
+    sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    capture: AlreadyErasedCapturePlan,
+    provenance: Span(BoxBoundaryId),
 };
 
 const CallableSetConstructionPlanId = enum(u32) { _ };
@@ -2898,10 +2921,7 @@ explicit callable emission plan:
 ```zig
 const CallableValueEmissionPlan = union(enum) {
     finite_callable_set: CanonicalCallableSetKey,
-    already_erased: struct {
-        sig_key: ErasedFnSigKey,
-        provenance: ErasedCallableProvenance,
-    },
+    already_erased: AlreadyErasedCallablePlan,
     proc_value_to_erased: ProcValueErasePlan,
     finite_set_to_erased_adapter: ErasedAdapterKey,
 };
@@ -2922,6 +2942,20 @@ type. Two erased callables with the same erased argument and return
 representations but different hidden capture types or different `ErasedFnAbiKey`
 values are different erased callable representations. They must not silently
 merge.
+
+`ErasedFnSigKey.capture_ty` is a canonical executable-value type key, not an
+executable `TypeId`. It is correct for equality, interning, and debug
+verification, but it is not sufficient by itself to emit executable MIR. For an
+`already_erased` callable, lambda-solved MIR must also publish an
+`AlreadyErasedCapturePlan`. If the signature has no hidden capture type, the
+capture plan must be `none`. If the signature has a hidden capture type, the
+capture plan must be either `zero_sized_ty` with the exact lambda-solved type to
+lower, or `value` with the exact lambda-solved value occurrence whose executable
+representation is the hidden capture. Executable MIR consumes that capture plan
+directly to obtain the hidden capture `TypeId` and uses `sig_key.capture_ty` only
+for debug-only consistency assertions. It must not maintain a cache from
+canonical type keys to executable type ids, and it must not recover a hidden
+capture type by inspecting source syntax, layouts, or callable shapes.
 
 The required structural representation algebra is separate and equally
 mandatory. Each solved representation class has exactly one `RepresentationShape`
@@ -3035,7 +3069,7 @@ const FunctionPayloadRepresentation = struct {
 };
 
 const CallableBoxPlan = union(enum) {
-    already_erased: ErasedFnSigKey,
+    already_erased: AlreadyErasedCallablePlan,
     proc_value_to_erased: ProcValueErasePlan,
     finite_set_to_erased_adapter: ErasedAdapterKey,
 };

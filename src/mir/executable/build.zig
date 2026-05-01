@@ -431,7 +431,7 @@ const BodyBuilder = struct {
                 .already_erased => |erased| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erased.sig_key,
                     .capture_shape = erased.capture_shape_key,
-                    .capture_ty = try self.lowerAlreadyErasedCaptureType(erased),
+                    .capture_ty = try self.lowerAlreadyErasedCaptureType(erased, value_store, representation_store),
                 } }),
                 .erase_proc_value => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erase.erased_fn_sig_key,
@@ -713,10 +713,59 @@ const BodyBuilder = struct {
     fn lowerAlreadyErasedCaptureType(
         self: *BodyBuilder,
         erased: repr.AlreadyErasedCallablePlan,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
     ) Allocator.Error!?Type.TypeId {
-        _ = self;
-        if (erased.sig_key.capture_ty == null) return null;
-        executableInvariant("executable already-erased callable requires published hidden capture type");
+        return switch (erased.capture) {
+            .none => blk: {
+                if (erased.sig_key.capture_ty != null) {
+                    executableInvariant("executable already-erased capture plan is none but signature has hidden capture type");
+                }
+                break :blk null;
+            },
+            .zero_sized_ty => |logical_ty| blk: {
+                const capture_key = erased.sig_key.capture_ty orelse {
+                    executableInvariant("executable already-erased zero-sized capture has no hidden capture type key");
+                };
+                if (builtin.mode == .Debug) {
+                    const actual_key = try repr.execValueTypeKey(
+                        self.allocator,
+                        self.canonical_names,
+                        self.type_lowerer.input,
+                        logical_ty,
+                    );
+                    if (!repr.canonicalExecValueTypeKeyEql(actual_key, capture_key)) {
+                        executableInvariant("executable already-erased zero-sized capture type disagrees with signature key");
+                    }
+                }
+                break :blk try self.type_lowerer.lowerType(logical_ty);
+            },
+            .value => |capture_value| blk: {
+                const capture_key = erased.sig_key.capture_ty orelse {
+                    executableInvariant("executable already-erased capture value has no hidden capture type key");
+                };
+                const capture_info = value_store.values.items[@intFromEnum(capture_value)];
+                if (builtin.mode == .Debug) {
+                    const actual_key = try repr.execValueTypeKeyForValue(
+                        self.allocator,
+                        self.canonical_names,
+                        self.type_lowerer.input,
+                        representation_store,
+                        value_store,
+                        capture_value,
+                    );
+                    if (!repr.canonicalExecValueTypeKeyEql(actual_key, capture_key)) {
+                        executableInvariant("executable already-erased capture value type disagrees with signature key");
+                    }
+                }
+                break :blk try self.lowerExecutableValueTypeInStore(
+                    capture_info.logical_ty,
+                    capture_value,
+                    value_store,
+                    representation_store,
+                );
+            },
+        };
     }
 
     fn lowerProcValueErasedCaptureType(

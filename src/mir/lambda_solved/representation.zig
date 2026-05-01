@@ -194,9 +194,16 @@ pub const ProcValueErasePlan = struct {
     provenance: []const BoxBoundaryId,
 };
 
+pub const AlreadyErasedCapturePlan = union(enum) {
+    none,
+    zero_sized_ty: TypeVarId,
+    value: ValueInfoId,
+};
+
 pub const AlreadyErasedCallablePlan = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
+    capture: AlreadyErasedCapturePlan = .none,
     provenance: []const BoxBoundaryId = &.{},
 };
 
