@@ -379,10 +379,15 @@ const BodyBuilder = struct {
             const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
             return switch (emission) {
                 .finite => |key| try self.type_lowerer.output.addType(.{ .callable_set = .{ .key = key } }),
-                .already_erased,
-                .erase_proc_value,
-                .erase_finite_set,
-                => executableInvariant("executable erased callable value type lowering requires explicit erased signature metadata"),
+                .already_erased => executableInvariant("executable already-erased callable value type lowering requires explicit capture metadata"),
+                .erase_proc_value => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
+                    .sig_key = erase.erased_fn_sig_key,
+                    .capture_shape = erase.capture_shape_key,
+                } }),
+                .erase_finite_set => |adapter| try self.type_lowerer.output.addType(.{ .erased_fn = .{
+                    .sig_key = adapter.erased_fn_sig_key,
+                    .capture_shape = adapter.capture_shape_key,
+                } }),
             };
         }
         if (value_info.aggregate) |aggregate| {
