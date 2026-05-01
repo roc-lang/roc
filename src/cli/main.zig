@@ -782,10 +782,8 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-/// If serialized_module is provided, it will be embedded in the binary (for roc build).
-/// If serialized_module is null, the binary will use IPC to get module data (for roc run).
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_names: []const []const u8, target: RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
+fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_names: []const []const u8, target: RocTarget, debug: bool) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -825,18 +823,19 @@ fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_
 
     // Create the complete platform shim
     // Note: Symbol names include platform-specific prefixes (underscore for macOS)
-    // serialized_module is null for roc run (IPC mode) or contains data for roc build (embedded mode)
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, serialized_module) catch |err| {
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     // Generate paths for temporary files
-    // Use a hash of the serialized module content to avoid race conditions when multiple
-    // builds run in parallel. Each unique module content gets its own shim files.
-    const content_hash = if (serialized_module) |module_bytes|
-        std.hash.Crc32.hash(module_bytes)
-    else
-        0; // For IPC mode (roc run), use a fixed name since there's no embedded data
+    var hash = std.hash.Crc32.init();
+    for (entrypoint_names) |name| {
+        hash.update(name);
+        hash.update(&[_]u8{0});
+    }
+    hash.update(target.toTriple());
+    hash.update(if (debug) "debug" else "nodebug");
+    const content_hash = hash.final();
 
     const bitcode_filename = std.fmt.allocPrint(ctx.arena, "platform_shim_{x}.bc", .{content_hash}) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
@@ -1126,9 +1125,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
         // Generate platform host shim using the detected entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
-        // Pass null for serialized_module since roc run uses IPC mode
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -1509,7 +1507,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
 
         // Generate platform host shim
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, builtin.mode == .Debug);
 
         // Link the host with our dev shim
         var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {

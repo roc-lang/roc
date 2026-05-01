@@ -12,7 +12,7 @@ pub const LowerIr = @import("lower_ir.zig");
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
-/// Serialized ARC-inserted LIR runtime image for interpreter-shim execution.
+/// Shared-memory ARC-inserted LIR runtime image for interpreter-shim execution.
 pub const RuntimeImage = @import("runtime_image.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
