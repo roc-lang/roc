@@ -321,6 +321,67 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
+    pub fn getExpr(self: *const Store, id: ExprId) Expr {
+        return self.exprs.items[@intFromEnum(id)];
+    }
+
+    pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
+        const idx: u32 = @intCast(self.stmts.items.len);
+        try self.stmts.append(self.allocator, stmt);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getStmt(self: *const Store, id: StmtId) Stmt {
+        return self.stmts.items[@intFromEnum(id)];
+    }
+
+    pub fn addExprSpan(self: *Store, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
+        if (ids.len == 0) return Span(ExprId).empty();
+        const start: u32 = @intCast(self.expr_ids.items.len);
+        try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn sliceExprSpan(self: *const Store, span: Span(ExprId)) []const ExprId {
+        if (span.len == 0) return &.{};
+        return self.expr_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addStmtSpan(self: *Store, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+        if (ids.len == 0) return Span(StmtId).empty();
+        const start: u32 = @intCast(self.stmt_ids.items.len);
+        try self.stmt_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addRecordFieldEvalSpan(self: *Store, values: []const RecordFieldEval) std.mem.Allocator.Error!Span(RecordFieldEval) {
+        if (values.len == 0) return Span(RecordFieldEval).empty();
+        const start: u32 = @intCast(self.record_field_evals.items.len);
+        try self.record_field_evals.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordFieldAssemblySpan(self: *Store, values: []const RecordFieldAssembly) std.mem.Allocator.Error!Span(RecordFieldAssembly) {
+        if (values.len == 0) return Span(RecordFieldAssembly).empty();
+        const start: u32 = @intCast(self.record_field_assemblies.items.len);
+        try self.record_field_assemblies.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {
+        if (values.len == 0) return Span(CaptureArg).empty();
+        const start: u32 = @intCast(self.capture_args.items.len);
+        try self.capture_args.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {
+        if (values.len == 0) return Span(TypedSymbol).empty();
+        const start: u32 = @intCast(self.typed_symbols.items.len);
+        try self.typed_symbols.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
         const idx: u32 = @intCast(self.defs.items.len);
         try self.defs.append(self.allocator, def);

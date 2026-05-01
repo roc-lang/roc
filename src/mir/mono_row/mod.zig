@@ -242,7 +242,7 @@ pub const Proc = struct {
     proc: canonical.MonoSpecializedProcRef,
     local_handle: Mono.Specialize.MonoProcHandle,
     fn_ty: TypeId,
-    body: ?Ast.DefId = null,
+    body: Ast.DefId,
 };
 
 pub const Program = struct {
@@ -311,6 +311,14 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     program.symbols = owned_mono.symbols;
     owned_mono.symbols = symbol_mod.Store.init(allocator);
 
+    var finalizer = BodyFinalizer{
+        .allocator = allocator,
+        .input = &owned_mono.ast,
+        .output = &program.ast,
+        .types = &program.types,
+        .shapes = &shapes,
+    };
+
     try program.procs.ensureTotalCapacity(allocator, owned_mono.procs.items.len);
     for (owned_mono.procs.items) |proc| {
         program.procs.appendAssumeCapacity(.{
@@ -318,7 +326,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .proc = proc.proc,
             .local_handle = proc.local_handle,
             .fn_ty = proc.fn_ty,
-            .body = null,
+            .body = try finalizer.lowerDef(proc.body),
         });
     }
     try program.root_procs.appendSlice(allocator, owned_mono.root_procs.items);
@@ -355,6 +363,237 @@ pub fn verifyResult(result: *const Result) void {
             }
         }
     }
+}
+
+const BodyFinalizer = struct {
+    allocator: Allocator,
+    input: *const Mono.Ast.Store,
+    output: *Ast.Store,
+    types: *const Mono.Type.Store,
+    shapes: *Store,
+
+    fn lowerDef(self: *BodyFinalizer, def_id: Mono.Ast.DefId) Allocator.Error!Ast.DefId {
+        const def = self.input.getDef(def_id);
+        return try self.output.addDef(.{
+            .proc = def.proc,
+            .debug_name = def.debug_name,
+            .value = switch (def.value) {
+                .fn_ => |fn_| .{ .fn_ = .{
+                    .args = try self.lowerTypedSymbolSpan(fn_.args),
+                    .captures = Ast.Span(Ast.TypedSymbol).empty(),
+                    .body = try self.lowerExpr(fn_.body),
+                } },
+                .hosted_fn => |hosted| .{ .hosted_fn = .{
+                    .proc = hosted.proc,
+                    .args = try self.lowerTypedSymbolSpan(hosted.args),
+                    .hosted = hosted.hosted,
+                } },
+                .val => |expr| .{ .val = try self.lowerExpr(expr) },
+                .run => |run| .{ .run = .{ .body = try self.lowerExpr(run.body) } },
+            },
+        });
+    }
+
+    fn lowerExpr(self: *BodyFinalizer, expr_id: Mono.Ast.ExprId) Allocator.Error!Ast.ExprId {
+        const expr = self.input.getExpr(expr_id);
+        return try self.output.addExpr(expr.ty, switch (expr.data) {
+            .var_ => |symbol| .{ .var_ = symbol },
+            .int_lit => |value| .{ .int_lit = value },
+            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
+            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
+            .dec_lit => |value| .{ .dec_lit = value },
+            .bool_lit => |value| .{ .bool_lit = value },
+            .str_lit => |literal| .{ .str_lit = literal },
+            .const_ref => |const_ref| .{ .const_ref = const_ref },
+            .structural_eq => |eq| .{ .structural_eq = .{
+                .lhs = try self.lowerExpr(eq.lhs),
+                .rhs = try self.lowerExpr(eq.rhs),
+            } },
+            .bool_not => |child| .{ .bool_not = try self.lowerExpr(child) },
+            .clos => |clos| .{ .clos = .{
+                .args = try self.lowerTypedSymbolSpan(clos.args),
+                .body = try self.lowerExpr(clos.body),
+            } },
+            .call_value => |call| .{ .call_value = .{
+                .func = try self.lowerExpr(call.func),
+                .args = try self.lowerExprSpan(call.args),
+                .requested_fn_ty = call.requested_fn_ty,
+            } },
+            .call_proc => |call| .{ .call_proc = .{
+                .proc = call.proc,
+                .args = try self.lowerExprSpan(call.args),
+                .requested_fn_ty = call.requested_fn_ty,
+            } },
+            .proc_value => |proc_value| .{ .proc_value = .{
+                .proc = proc_value.proc,
+                .captures = try self.lowerCaptureArgSpan(proc_value.captures),
+                .fn_ty = proc_value.fn_ty,
+            } },
+            .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
+            .low_level => |low_level| .{ .low_level = .{
+                .op = low_level.op,
+                .args = try self.lowerExprSpan(low_level.args),
+                .source_constraint_ty = low_level.source_constraint_ty,
+            } },
+            .block => |block| .{ .block = .{
+                .stmts = try self.lowerStmtSpan(block.stmts),
+                .final_expr = try self.lowerExpr(block.final_expr),
+            } },
+            .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
+            .list => |items| .{ .list = try self.lowerExprSpan(items) },
+            .unit => .unit,
+            .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
+            .crash => |literal| .{ .crash = literal },
+            .runtime_error => .runtime_error,
+            .record => |fields| try self.lowerRecord(expr.ty, fields),
+            .access => |access| try self.lowerAccess(access),
+            .tag,
+            .let_,
+            .match_,
+            .if_,
+            .tag_payload,
+            .tuple_access,
+            .for_,
+            => rowInvariant("row finalization reached a mono expression form whose row rewrite is still missing"),
+        });
+    }
+
+    fn lowerRecord(
+        self: *BodyFinalizer,
+        record_ty: TypeId,
+        fields: Mono.Ast.Span(Mono.Ast.FieldExpr),
+    ) Allocator.Error!Ast.Expr.Data {
+        const shape = try self.shapes.internRecordShapeFromType(self.types, record_ty);
+        const mono_fields = self.input.sliceFieldExprSpan(fields);
+        const evals = try self.allocator.alloc(Ast.RecordFieldEval, mono_fields.len);
+        defer self.allocator.free(evals);
+        const assemblies = try self.allocator.alloc(Ast.RecordFieldAssembly, mono_fields.len);
+        defer self.allocator.free(assemblies);
+        for (mono_fields, 0..) |field, i| {
+            const field_id = self.recordFieldId(shape, field.field);
+            const value = try self.lowerExpr(field.value);
+            evals[i] = .{ .field = field_id, .value = value };
+            assemblies[i] = .{ .field = field_id, .value = value };
+        }
+        return .{ .record = .{
+            .shape = shape,
+            .eval_order = try self.output.addRecordFieldEvalSpan(evals),
+            .assembly_order = try self.output.addRecordFieldAssemblySpan(assemblies),
+        } };
+    }
+
+    fn lowerAccess(self: *BodyFinalizer, access: anytype) Allocator.Error!Ast.Expr.Data {
+        const record_expr = self.input.getExpr(access.record);
+        const shape = try self.shapes.internRecordShapeFromType(self.types, record_expr.ty);
+        return .{ .access = .{
+            .record = try self.lowerExpr(access.record),
+            .field = self.recordFieldId(shape, access.field),
+        } };
+    }
+
+    fn lowerStmt(self: *BodyFinalizer, stmt_id: Mono.Ast.StmtId) Allocator.Error!Ast.StmtId {
+        const stmt = self.input.getStmt(stmt_id);
+        return try self.output.addStmt(switch (stmt) {
+            .decl => |decl| .{ .decl = .{
+                .bind = decl.bind,
+                .body = try self.lowerExpr(decl.body),
+            } },
+            .var_decl => |decl| .{ .var_decl = .{
+                .bind = decl.bind,
+                .body = try self.lowerExpr(decl.body),
+            } },
+            .reassign => |reassign| .{ .reassign = .{
+                .target = reassign.target,
+                .body = try self.lowerExpr(reassign.body),
+            } },
+            .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
+            .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
+            .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
+            .crash => |literal| .{ .crash = literal },
+            .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
+            .break_ => .break_,
+            .for_,
+            .while_,
+            .local_fn,
+            => rowInvariant("row finalization reached a mono statement form whose lowering is still missing"),
+        });
+    }
+
+    fn lowerExprSpan(
+        self: *BodyFinalizer,
+        span: Mono.Ast.Span(Mono.Ast.ExprId),
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const input_items = self.input.sliceExprSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.ExprId).empty();
+        const output_items = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |expr, i| {
+            output_items[i] = try self.lowerExpr(expr);
+        }
+        return try self.output.addExprSpan(output_items);
+    }
+
+    fn lowerStmtSpan(
+        self: *BodyFinalizer,
+        span: Mono.Ast.Span(Mono.Ast.StmtId),
+    ) Allocator.Error!Ast.Span(Ast.StmtId) {
+        const input_items = self.input.sliceStmtSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.StmtId).empty();
+        const output_items = try self.allocator.alloc(Ast.StmtId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |stmt, i| {
+            output_items[i] = try self.lowerStmt(stmt);
+        }
+        return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerTypedSymbolSpan(
+        self: *BodyFinalizer,
+        span: Mono.Ast.Span(Mono.Ast.TypedSymbol),
+    ) Allocator.Error!Ast.Span(Ast.TypedSymbol) {
+        const input_items = self.input.sliceTypedSymbolSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.TypedSymbol).empty();
+        const output_items = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |symbol, i| {
+            output_items[i] = .{ .ty = symbol.ty, .symbol = symbol.symbol };
+        }
+        return try self.output.addTypedSymbolSpan(output_items);
+    }
+
+    fn lowerCaptureArgSpan(
+        self: *BodyFinalizer,
+        span: Mono.Ast.Span(Mono.Ast.CaptureArg),
+    ) Allocator.Error!Ast.Span(Ast.CaptureArg) {
+        const input_items = self.input.sliceCaptureArgSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.CaptureArg).empty();
+        const output_items = try self.allocator.alloc(Ast.CaptureArg, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |capture, i| {
+            output_items[i] = .{
+                .slot = capture.slot,
+                .symbol = capture.symbol,
+                .expr = try self.lowerExpr(capture.expr),
+            };
+        }
+        return try self.output.addCaptureArgSpan(output_items);
+    }
+
+    fn recordFieldId(
+        self: *const BodyFinalizer,
+        shape: RecordShapeId,
+        label: canonical.RecordFieldLabelId,
+    ) RecordFieldId {
+        for (self.shapes.recordShapeFields(shape)) |field_id| {
+            if (self.shapes.recordField(field_id).label == label) return field_id;
+        }
+        rowInvariant("row finalization could not find record field label in finalized shape");
+    }
+};
+
+fn rowInvariant(comptime message: []const u8) noreturn {
+    verify.invariant(false, message);
+    unreachable;
 }
 
 fn freeStringHashMapKeys(map: *std.StringHashMap(RecordShapeId), allocator: Allocator) void {
