@@ -790,6 +790,7 @@ const BodySolver = struct {
             .dec_lit => |literal| .{ .dec_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
+            .tuple => |items| .{ .tuple = try self.lowerPatSpanScoped(items, saved) },
             .as => |as| blk: {
                 const binding = try self.bindPatternSymbol(as.symbol, value, saved);
                 break :blk .{ .as = .{
@@ -830,6 +831,21 @@ const BodySolver = struct {
             .previous = if (previous) |entry| entry.value else null,
         });
         return binding;
+    }
+
+    fn lowerPatSpanScoped(
+        self: *BodySolver,
+        span: Lifted.Ast.Span(Lifted.Ast.PatId),
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.Span(Ast.PatId) {
+        const input_items = self.input.slicePatSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.PatId).empty();
+        const output_items = try self.allocator.alloc(Ast.PatId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |item, i| {
+            output_items[i] = try self.lowerPatScoped(item, saved);
+        }
+        return try self.output.addPatSpan(output_items);
     }
 
     fn restoreBindings(self: *BodySolver, saved: *std.ArrayList(SavedBinding), start: usize) void {

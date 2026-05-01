@@ -920,6 +920,11 @@ const BodyLifter = struct {
                 try self.bindSymbol(as.symbol, bound, restorations);
                 try self.bindPatternSymbols(as.pattern, bound, restorations);
             },
+            .tuple => |items| {
+                for (self.input.slicePatSpan(items)) |item| {
+                    try self.bindPatternSymbols(item, bound, restorations);
+                }
+            },
             .tag => |tag| {
                 for (self.input.sliceTagPayloadPatternSpan(tag.payloads)) |payload| {
                     try self.bindPatternSymbols(payload.pattern, bound, restorations);
@@ -974,6 +979,7 @@ const BodyLifter = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),
                 .symbol = as.symbol,

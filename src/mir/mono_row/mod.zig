@@ -679,6 +679,7 @@ const BodyFinalizer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),
                 .symbol = as.symbol,
@@ -706,6 +707,17 @@ const BodyFinalizer = struct {
                 } };
             },
         } });
+    }
+
+    fn lowerPatSpan(self: *BodyFinalizer, span: Mono.Ast.Span(Mono.Ast.PatId)) Allocator.Error!Ast.Span(Ast.PatId) {
+        const input_items = self.input.slicePatSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.PatId).empty();
+        const output_items = try self.allocator.alloc(Ast.PatId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |item, i| {
+            output_items[i] = try self.lowerPat(item);
+        }
+        return try self.output.addPatSpan(output_items);
     }
 
     fn lowerBranch(self: *BodyFinalizer, branch_id: Mono.Ast.BranchId) Allocator.Error!Ast.BranchId {

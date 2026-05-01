@@ -71,6 +71,7 @@ pub const Pat = struct {
             tag: TagId,
             payloads: Span(TagPayloadPattern),
         },
+        tuple: Span(PatId),
         as: struct {
             pattern: PatId,
             symbol: Symbol,

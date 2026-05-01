@@ -65,6 +65,7 @@ pub const Pat = struct {
             tag: row.TagId,
             payloads: Span(TagPayloadPattern),
         },
+        tuple: Span(PatId),
         as: struct {
             pattern: PatId,
             symbol: Symbol,
@@ -374,6 +375,13 @@ pub const Store = struct {
         if (ids.len == 0) return Span(ExprId).empty();
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addPatSpan(self: *Store, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
+        if (ids.len == 0) return Span(PatId).empty();
+        const start: u32 = @intCast(self.pat_ids.items.len);
+        try self.pat_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 

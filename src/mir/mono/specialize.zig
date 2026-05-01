@@ -2038,6 +2038,15 @@ const BodyLowerer = struct {
                     .args = try self.program.ast.addPatSpan(args),
                 } } });
             },
+            .tuple => |items| blk: {
+                const item_types = self.tupleElementTypes(ty, items.len);
+                const lowered = try self.allocator.alloc(Ast.PatId, items.len);
+                defer self.allocator.free(lowered);
+                for (items, 0..) |item, i| {
+                    lowered[i] = try self.lowerPattern(item_types[i], item);
+                }
+                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tuple = try self.program.ast.addPatSpan(lowered) } });
+            },
             .num_literal => |num| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .int_lit = num.value.toI128() } }),
             .small_dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.toRocDec().num } }),
             .dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.num } }),
@@ -2047,6 +2056,16 @@ const BodyLowerer = struct {
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
             else => invariantViolation("mono body lowering reached pattern form whose lowering is still missing"),
         };
+    }
+
+    fn tupleElementTypes(self: *BodyLowerer, tuple_ty: Type.TypeId, expected_len: usize) []const Type.TypeId {
+        switch (self.program.types.getType(tuple_ty)) {
+            .tuple => |items| {
+                if (items.len != expected_len) invariantViolation("mono body lowering tuple pattern arity did not match its resolved type");
+                return items;
+            },
+            else => invariantViolation("mono body lowering expected a resolved tuple type"),
+        }
     }
 
     const TagInfo = struct {
