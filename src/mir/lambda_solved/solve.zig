@@ -131,6 +131,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             allocator,
             &program.canonical_names,
             &program.types,
+            &program.solve_sessions.items[i].representation_store,
             &program.value_stores.items[i],
             proc.proc,
             roots,

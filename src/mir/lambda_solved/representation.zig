@@ -458,6 +458,7 @@ pub const RepresentationStore = struct {
             self.allocator,
             names,
             types,
+            self,
             value_store,
             capture_values,
         );
@@ -573,7 +574,7 @@ pub const RepresentationStore = struct {
         const slots = try self.allocator.alloc(CallableSetCaptureSlot, values.len);
         errdefer self.allocator.free(slots);
         for (values, 0..) |value, i| {
-            const exec_key = try execValueTypeKeyForValue(self.allocator, names, types, value_store, value);
+            const exec_key = try execValueTypeKeyForValue(self.allocator, names, types, self, value_store, value);
             slots[i] = .{
                 .slot = @intCast(i),
                 .source_ty = .{ .bytes = exec_key.bytes },
@@ -763,6 +764,7 @@ pub fn executableSpecializationKeyForProc(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
     proc: canonical.MirProcedureRef,
     roots: ProcPublicValueRoots,
@@ -774,16 +776,16 @@ pub fn executableSpecializationKeyForProc(
         try allocator.alloc(CanonicalExecValueTypeKey, params.len);
     errdefer if (arg_keys.len > 0) allocator.free(arg_keys);
     for (params, 0..) |param, i| {
-        arg_keys[i] = try execValueTypeKeyForValue(allocator, names, types, value_store, param);
+        arg_keys[i] = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, param);
     }
 
     return .{
         .base = proc.proc.proc_base,
         .requested_fn_ty = proc.callable.source_fn_ty,
         .exec_arg_tys = arg_keys,
-        .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, types, value_store, roots.ret),
+        .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, roots.ret),
         .callable_repr_mode = .direct,
-        .capture_shape_key = try captureShapeKeyForValues(allocator, names, types, value_store, roots.captures),
+        .capture_shape_key = try captureShapeKeyForValues(allocator, names, types, representation_store, value_store, roots.captures),
     };
 }
 
@@ -823,11 +825,13 @@ pub fn execValueTypeKeyForValue(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
     value: ValueInfoId,
 ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
-    const info = value_store.values.items[@intFromEnum(value)];
-    return try execValueTypeKey(allocator, names, types, info.logical_ty);
+    var builder = ExecValueTypeKeyBuilder.initForValues(allocator, names, types, representation_store, value_store);
+    defer builder.deinit();
+    return try builder.keyForValue(value);
 }
 
 pub fn execValueTypeKey(
@@ -845,6 +849,7 @@ pub fn captureShapeKeyForValues(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
     values: Span(ValueInfoId),
 ) std.mem.Allocator.Error!CaptureShapeKey {
@@ -852,6 +857,7 @@ pub fn captureShapeKeyForValues(
         allocator,
         names,
         types,
+        representation_store,
         value_store,
         value_store.sliceValueSpan(values),
     );
@@ -861,6 +867,7 @@ pub fn captureShapeKeyForValueSlice(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
     values: []const ValueInfoId,
 ) std.mem.Allocator.Error!CaptureShapeKey {
@@ -869,7 +876,7 @@ pub fn captureShapeKeyForValueSlice(
     writeHashU32(&hasher, @intCast(values.len));
     for (values, 0..) |capture, i| {
         writeHashU32(&hasher, @intCast(i));
-        const key = try execValueTypeKeyForValue(allocator, names, types, value_store, capture);
+        const key = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, capture);
         hasher.update(&key.bytes);
     }
     return .{ .bytes = hasher.finalResult() };
@@ -897,8 +904,11 @@ const ExecValueTypeKeyBuilder = struct {
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
+    representation_store: ?*const RepresentationStore = null,
+    value_store: ?*const ValueInfoStore = null,
     hasher: std.crypto.hash.sha2.Sha256,
     active: std.AutoHashMap(type_mod.TypeVarId, u32),
+    active_values: std.AutoHashMap(ValueInfoId, u32),
 
     fn init(
         allocator: std.mem.Allocator,
@@ -911,16 +921,155 @@ const ExecValueTypeKeyBuilder = struct {
             .types = types,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+            .active_values = std.AutoHashMap(ValueInfoId, u32).init(allocator),
+        };
+    }
+
+    fn initForValues(
+        allocator: std.mem.Allocator,
+        names: *const canonical.CanonicalNameStore,
+        types: *const type_mod.Store,
+        representation_store: *const RepresentationStore,
+        value_store: *const ValueInfoStore,
+    ) ExecValueTypeKeyBuilder {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .types = types,
+            .representation_store = representation_store,
+            .value_store = value_store,
+            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+            .active_values = std.AutoHashMap(ValueInfoId, u32).init(allocator),
         };
     }
 
     fn deinit(self: *ExecValueTypeKeyBuilder) void {
+        self.active_values.deinit();
         self.active.deinit();
     }
 
     fn key(self: *ExecValueTypeKeyBuilder, root: type_mod.TypeVarId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
         try self.writeType(root);
         return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    fn keyForValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        try self.writeValue(value);
+        return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    fn writeValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!void {
+        const values = self.value_store orelse representationInvariant("executable value type key for value has no value store");
+        if (self.active_values.get(value)) |slot| {
+            self.writeTag("value_cycle");
+            self.writeU32(slot);
+            return;
+        }
+
+        const slot: u32 = @intCast(self.active_values.count());
+        try self.active_values.put(value, slot);
+        const info = values.values.items[@intFromEnum(value)];
+        if (info.callable) |callable| {
+            try self.writeCallableValue(callable);
+        } else if (info.aggregate) |aggregate| {
+            try self.writeAggregateValue(info.logical_ty, aggregate);
+        } else {
+            try self.writeType(info.logical_ty);
+        }
+        _ = self.active_values.remove(value);
+    }
+
+    fn writeCallableValue(self: *ExecValueTypeKeyBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!void {
+        const representations = self.representation_store orelse representationInvariant("executable value type key for callable has no representation store");
+        switch (representations.callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| {
+                self.writeTag("callable_set");
+                self.writeCanonicalCallableSetKey(key);
+            },
+            .already_erased => |erased| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(erased.sig_key);
+            },
+            .erase_proc_value => |erase| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(erase.erased_fn_sig_key);
+            },
+            .erase_finite_set => |adapter| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(adapter.erased_fn_sig_key);
+            },
+        }
+    }
+
+    fn writeAggregateValue(
+        self: *ExecValueTypeKeyBuilder,
+        logical_ty: TypeVarId,
+        aggregate: AggregateValueInfo,
+    ) std.mem.Allocator.Error!void {
+        switch (aggregate) {
+            .record => |record| {
+                self.writeTag("record_value");
+                self.writeU32(@intFromEnum(record.shape));
+                self.writeU32(@intCast(record.fields.len));
+                for (record.fields) |field| {
+                    self.writeU32(@intFromEnum(field.field));
+                    try self.writeValue(field.value);
+                }
+            },
+            .tuple => |tuple| {
+                self.writeTag("tuple_value");
+                self.writeU32(@intCast(tuple.len));
+                const seen = try self.allocator.alloc(bool, tuple.len);
+                defer self.allocator.free(seen);
+                @memset(seen, false);
+                const ordered = try self.allocator.alloc(ValueInfoId, tuple.len);
+                defer self.allocator.free(ordered);
+                for (tuple) |elem| {
+                    const index: usize = @intCast(elem.index);
+                    if (index >= tuple.len) representationInvariant("executable value type key tuple element index exceeded tuple arity");
+                    if (seen[index]) representationInvariant("executable value type key tuple had duplicate element index");
+                    ordered[index] = elem.value;
+                    seen[index] = true;
+                }
+                for (seen) |was_seen| {
+                    if (!was_seen) representationInvariant("executable value type key tuple did not provide every element");
+                }
+                for (ordered) |elem| try self.writeValue(elem);
+            },
+            .tag => |tag| {
+                self.writeTag("tag_value");
+                self.writeU32(@intFromEnum(tag.union_shape));
+                self.writeU32(@intFromEnum(tag.tag));
+                self.writeU32(@intCast(tag.payloads.len));
+                for (tag.payloads) |payload| {
+                    self.writeU32(@intFromEnum(payload.payload));
+                    try self.writeValue(payload.value);
+                }
+            },
+            .list => |list| {
+                self.writeTag("list_value");
+                if (list.elems.len == 0) {
+                    self.writeTag("empty");
+                    try self.writeType(logical_ty);
+                    return;
+                }
+                const first_key = try self.valueKeySnapshot(list.elems[0]);
+                self.writeCanonicalExecValueTypeKey(first_key);
+                for (list.elems[1..]) |elem| {
+                    const elem_key = try self.valueKeySnapshot(elem);
+                    if (!canonicalExecValueTypeKeyEql(first_key, elem_key)) {
+                        representationInvariant("executable value type key list elements have different executable representations");
+                    }
+                }
+            },
+        }
+    }
+
+    fn valueKeySnapshot(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        const representations = self.representation_store orelse representationInvariant("executable value type key snapshot has no representation store");
+        const values = self.value_store orelse representationInvariant("executable value type key snapshot has no value store");
+        return try execValueTypeKeyForValue(self.allocator, self.names, self.types, representations, values, value);
     }
 
     fn writeType(self: *ExecValueTypeKeyBuilder, id: type_mod.TypeVarId) std.mem.Allocator.Error!void {
@@ -1012,6 +1161,25 @@ const ExecValueTypeKeyBuilder = struct {
 
     fn writeU32(self: *ExecValueTypeKeyBuilder, value: u32) void {
         writeHashU32(&self.hasher, value);
+    }
+
+    fn writeCanonicalCallableSetKey(self: *ExecValueTypeKeyBuilder, key: CanonicalCallableSetKey) void {
+        self.hasher.update(&key.bytes);
+    }
+
+    fn writeCanonicalExecValueTypeKey(self: *ExecValueTypeKeyBuilder, key: CanonicalExecValueTypeKey) void {
+        self.hasher.update(&key.bytes);
+    }
+
+    fn writeErasedFnSigKey(self: *ExecValueTypeKeyBuilder, key: ErasedFnSigKey) void {
+        self.hasher.update(&key.source_fn_ty.bytes);
+        self.hasher.update(&key.abi.bytes);
+        if (key.capture_ty) |capture_ty| {
+            self.writeBool(true);
+            self.writeCanonicalExecValueTypeKey(capture_ty);
+        } else {
+            self.writeBool(false);
+        }
     }
 };
 
