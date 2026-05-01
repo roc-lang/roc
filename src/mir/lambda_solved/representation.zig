@@ -239,7 +239,10 @@ pub const BoxedValueInfo = struct {
 };
 
 pub const AggregateValueInfo = union(enum) {
-    record: []const FieldValueInfo,
+    record: struct {
+        shape: row.RecordShapeId,
+        fields: []const FieldValueInfo,
+    },
     tuple: []const ElemValueInfo,
     tag: struct {
         union_shape: row.TagUnionShapeId,
@@ -641,7 +644,7 @@ pub const ValueInfoStore = struct {
         for (self.values.items) |value| {
             if (value.aggregate) |aggregate| {
                 switch (aggregate) {
-                    .record => |fields| if (fields.len > 0) self.allocator.free(fields),
+                    .record => |record| if (record.fields.len > 0) self.allocator.free(record.fields),
                     .tuple => |elems| if (elems.len > 0) self.allocator.free(elems),
                     .tag => |tag| if (tag.payloads.len > 0) self.allocator.free(tag.payloads),
                     .list => |list| if (list.elems.len > 0) self.allocator.free(list.elems),

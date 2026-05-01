@@ -437,7 +437,7 @@ const BodySolver = struct {
             .record => |record| blk: {
                 const eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order);
                 const assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order);
-                try self.publishRecordAggregate(value, assembly_order);
+                try self.publishRecordAggregate(value, record.shape, assembly_order);
                 break :blk .{ .record = .{
                     .shape = record.shape,
                     .eval_order = eval_order,
@@ -940,6 +940,7 @@ const BodySolver = struct {
     fn publishRecordAggregate(
         self: *BodySolver,
         value: repr.ValueInfoId,
+        shape: MonoRow.RecordShapeId,
         assembly_order: Ast.Span(Ast.RecordFieldAssembly),
     ) Allocator.Error!void {
         const assemblies = self.output.record_field_assemblies.items[assembly_order.start..][0..assembly_order.len];
@@ -952,7 +953,10 @@ const BodySolver = struct {
                 .value = self.exprValue(field.value),
             };
         }
-        self.publishAggregate(value, .{ .record = fields });
+        self.publishAggregate(value, .{ .record = .{
+            .shape = shape,
+            .fields = fields,
+        } });
     }
 
     fn publishTupleAggregate(

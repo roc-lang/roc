@@ -385,7 +385,57 @@ const BodyBuilder = struct {
                 => executableInvariant("executable erased callable value type lowering requires explicit erased signature metadata"),
             };
         }
+        if (value_info.aggregate) |aggregate| {
+            return try self.lowerAggregateExecutableValueType(aggregate);
+        }
         return try self.type_lowerer.lowerType(logical_ty);
+    }
+
+    fn lowerAggregateExecutableValueType(
+        self: *BodyBuilder,
+        aggregate: repr.AggregateValueInfo,
+    ) Allocator.Error!Type.TypeId {
+        return switch (aggregate) {
+            .record => |record| blk: {
+                const fields = try self.allocator.alloc(Type.RecordFieldType, record.fields.len);
+                errdefer if (fields.len > 0) self.allocator.free(fields);
+                for (record.fields, 0..) |field, i| {
+                    const child = self.value_store.values.items[@intFromEnum(field.value)];
+                    fields[i] = .{
+                        .field = field.field,
+                        .ty = try self.lowerExecutableValueType(child.logical_ty, field.value),
+                    };
+                }
+                break :blk try self.type_lowerer.output.addType(.{ .record = .{
+                    .shape = record.shape,
+                    .fields = fields,
+                } });
+            },
+            .tuple => |tuple| blk: {
+                const items = try self.allocator.alloc(Type.TypeId, tuple.len);
+                errdefer if (items.len > 0) self.allocator.free(items);
+                const seen = try self.allocator.alloc(bool, tuple.len);
+                defer self.allocator.free(seen);
+                @memset(seen, false);
+
+                for (tuple) |elem| {
+                    const index: usize = @intCast(elem.index);
+                    if (index >= tuple.len) executableInvariant("executable aggregate tuple element index exceeded tuple arity");
+                    if (seen[index]) executableInvariant("executable aggregate tuple had duplicate element index");
+                    const child = self.value_store.values.items[@intFromEnum(elem.value)];
+                    items[index] = try self.lowerExecutableValueType(child.logical_ty, elem.value);
+                    seen[index] = true;
+                }
+                for (seen) |was_seen| {
+                    if (!was_seen) executableInvariant("executable aggregate tuple did not provide every element");
+                }
+
+                break :blk try self.type_lowerer.output.addType(.{ .tuple = items });
+            },
+            .tag,
+            .list,
+            => executableInvariant("executable aggregate type lowering for this aggregate form requires solved aggregate representation metadata"),
+        };
     }
 
     fn lowerFnArgSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
@@ -456,8 +506,9 @@ const BodyBuilder = struct {
         const lowered = switch (expr.data) {
             .var_ => |var_| blk: {
                 const value = self.env.get(var_.binding_info) orelse executableInvariant("executable variable occurrence has no lowered binding value");
+                const binding = self.value_store.bindings.items[@intFromEnum(var_.binding_info)];
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    try self.lowerExecutableValueType(expr.ty, binding.value),
                     value,
                     .{ .value_ref = value },
                 );
