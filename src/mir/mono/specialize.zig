@@ -1021,12 +1021,21 @@ const BodyLowerer = struct {
             .method_eq,
             .type_method_call,
             .type_dispatch_call,
-            .expect,
             .hosted_lambda,
             => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
             .dbg => |child| blk: {
                 const value = try self.lowerExpr(child);
                 break :blk try self.program.ast.addExpr(ty, .{ .inspect = value });
+            },
+            .expect => |child| blk: {
+                const condition = try self.lowerExpr(child);
+                const expect_stmt = try self.program.ast.addStmt(.{ .expect = condition });
+                const stmts = try self.program.ast.addStmtSpan(&.{expect_stmt});
+                const unit = try self.program.ast.addExpr(ty, .unit);
+                break :blk try self.program.ast.addExpr(ty, .{ .block = .{
+                    .stmts = stmts,
+                    .final_expr = unit,
+                } });
             },
             .runtime_error => try self.program.ast.addExpr(ty, .runtime_error),
             .crash => |literal| try self.program.ast.addExpr(ty, .{ .crash = try self.lowerCheckedStringLiteral(literal) }),
