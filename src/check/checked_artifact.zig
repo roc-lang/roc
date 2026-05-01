@@ -529,6 +529,7 @@ pub const CheckedStatementId = checked_ids.CheckedStatementId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
+pub const PatternBinderId = enum(u32) { _ };
 
 pub const CheckedTypeRoot = struct {
     id: CheckedTypeId,
@@ -1061,6 +1062,11 @@ pub const CheckedBody = struct {
     owner_template: canonical.ProcedureTemplateRef,
 };
 
+pub const CheckedPatternBinder = struct {
+    id: PatternBinderId,
+    pattern: CheckedPatternId,
+};
+
 pub const CheckedStringLiteralId = enum(u32) { _ };
 
 pub const CheckedRecordField = struct {
@@ -1128,8 +1134,11 @@ pub const CheckedStatementData = union(enum) {
 
 pub const CheckedPatternData = union(enum) {
     pending,
-    assign,
-    as: CheckedPatternId,
+    assign: PatternBinderId,
+    as: struct {
+        pattern: CheckedPatternId,
+        binder: PatternBinderId,
+    },
     applied_tag: struct {
         name: canonical.TagLabelId,
         args: []const CheckedPatternId,
@@ -1338,6 +1347,8 @@ pub const CheckedBodyStoreView = struct {
     patterns: []const CheckedPattern = &.{},
     statements: []const CheckedStatement = &.{},
     string_literals: []const []const u8 = &.{},
+    pattern_binders: []const CheckedPatternBinder = &.{},
+    pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
 };
 
 pub const CheckedBodyStore = struct {
@@ -1346,6 +1357,8 @@ pub const CheckedBodyStore = struct {
     patterns: []CheckedPattern = &.{},
     statements: []CheckedStatement = &.{},
     string_literals: []const []const u8 = &.{},
+    pattern_binders: []CheckedPatternBinder = &.{},
+    pattern_binder_by_pattern: []?PatternBinderId = &.{},
     expr_by_node: []?CheckedExprId = &.{},
     pattern_by_node: []?CheckedPatternId = &.{},
     statement_by_node: []?CheckedStatementId = &.{},
@@ -1362,6 +1375,8 @@ pub const CheckedBodyStore = struct {
         var patterns = std.ArrayList(CheckedPattern).empty;
         errdefer patterns.deinit(allocator);
         errdefer deinitCheckedPatternList(allocator, patterns.items);
+        var pattern_binders = std.ArrayList(CheckedPatternBinder).empty;
+        errdefer pattern_binders.deinit(allocator);
         var statements = std.ArrayList(CheckedStatement).empty;
         errdefer statements.deinit(allocator);
         errdefer deinitCheckedStatementList(allocator, statements.items);
@@ -1439,6 +1454,10 @@ pub const CheckedBodyStore = struct {
             }
         }
 
+        const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
+        errdefer allocator.free(pattern_binder_by_pattern);
+        @memset(pattern_binder_by_pattern, null);
+
         var copier = CheckedBodyPayloadCopier{
             .allocator = allocator,
             .module = module,
@@ -1447,6 +1466,8 @@ pub const CheckedBodyStore = struct {
             .pattern_by_node = pattern_by_node,
             .statement_by_node = statement_by_node,
             .string_builder = &string_builder,
+            .pattern_binders = &pattern_binders,
+            .pattern_binder_by_pattern = pattern_binder_by_pattern,
         };
 
         node_idx = 0;
@@ -1471,6 +1492,8 @@ pub const CheckedBodyStore = struct {
             .patterns = try patterns.toOwnedSlice(allocator),
             .statements = try statements.toOwnedSlice(allocator),
             .string_literals = try string_builder.toOwnedSlice(),
+            .pattern_binders = try pattern_binders.toOwnedSlice(allocator),
+            .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .expr_by_node = expr_by_node,
             .pattern_by_node = pattern_by_node,
             .statement_by_node = statement_by_node,
@@ -1484,6 +1507,8 @@ pub const CheckedBodyStore = struct {
             .patterns = self.patterns,
             .statements = self.statements,
             .string_literals = self.string_literals,
+            .pattern_binders = self.pattern_binders,
+            .pattern_binder_by_pattern = self.pattern_binder_by_pattern,
         };
     }
 
@@ -1505,6 +1530,17 @@ pub const CheckedBodyStore = struct {
         const raw = @intFromEnum(pattern);
         if (raw >= self.pattern_by_node.len) return null;
         return self.pattern_by_node[raw];
+    }
+
+    pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.pattern_binder_by_pattern.len) return null;
+        return self.pattern_binder_by_pattern[raw];
+    }
+
+    pub fn patternBinderForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?PatternBinderId {
+        const checked_pattern = self.patternIdForSource(pattern) orelse return null;
+        return self.patternBinderForCheckedPattern(checked_pattern);
     }
 
     pub fn attachStaticDispatchPlans(
@@ -1595,6 +1631,8 @@ pub const CheckedBodyStore = struct {
         allocator.free(self.statement_by_node);
         allocator.free(self.pattern_by_node);
         allocator.free(self.expr_by_node);
+        allocator.free(self.pattern_binder_by_pattern);
+        allocator.free(self.pattern_binders);
         for (self.string_literals) |literal| allocator.free(literal);
         allocator.free(self.string_literals);
         deinitCheckedStatementList(allocator, self.statements);
@@ -1657,6 +1695,8 @@ const CheckedBodyPayloadCopier = struct {
     pattern_by_node: []const ?CheckedPatternId,
     statement_by_node: []const ?CheckedStatementId,
     string_builder: *CheckedStringLiteralBuilder,
+    pattern_binders: *std.ArrayList(CheckedPatternBinder),
+    pattern_binder_by_pattern: []?PatternBinderId,
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -1799,8 +1839,11 @@ const CheckedBodyPayloadCopier = struct {
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
         const pattern = self.module.pattern(pattern_idx).data;
         return switch (pattern) {
-            .assign => .assign,
-            .as => |as| .{ .as = self.checkedPattern(as.pattern) },
+            .assign => .{ .assign = try self.patternBinder(pattern_idx) },
+            .as => |as| .{ .as = .{
+                .pattern = self.checkedPattern(as.pattern),
+                .binder = try self.patternBinder(pattern_idx),
+            } },
             .applied_tag => |tag| .{ .applied_tag = .{
                 .name = try self.names.internTagIdent(self.module.identStoreConst(), tag.name),
                 .args = try self.copyPatternSpan(tag.args),
@@ -2007,6 +2050,20 @@ const CheckedBodyPayloadCopier = struct {
         unreachable;
     }
 
+    fn patternBinder(self: *@This(), pattern: CIR.Pattern.Idx) Allocator.Error!PatternBinderId {
+        const checked_pattern = self.checkedPattern(pattern);
+        const raw = @intFromEnum(checked_pattern);
+        if (self.pattern_binder_by_pattern[raw]) |existing| return existing;
+
+        const id: PatternBinderId = @enumFromInt(@as(u32, @intCast(self.pattern_binders.items.len)));
+        try self.pattern_binders.append(self.allocator, .{
+            .id = id,
+            .pattern = checked_pattern,
+        });
+        self.pattern_binder_by_pattern[raw] = id;
+        return id;
+    }
+
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
         const raw = @intFromEnum(statement);
         if (raw < self.statement_by_node.len) {
@@ -2178,7 +2235,7 @@ pub const ResolvedValueRefTableRef = struct {
 pub const ResolvedValueRefId = enum(u32) { _ };
 
 pub const LocalBindingRef = struct {
-    pattern: CheckedPatternId,
+    binder: PatternBinderId,
 };
 
 pub const TopLevelBindingRef = struct {
@@ -2593,7 +2650,7 @@ fn classifyLocalValueRef(
     top_level_values: *const TopLevelValueTable,
     checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
-    const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
+    _ = checked_bodies.patternIdForSource(pattern) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
@@ -2638,25 +2695,35 @@ fn classifyLocalValueRef(
         }
     }
 
+    const binder = checked_bodies.patternBinderForSource(pattern) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: local lookup pattern {d} has no checked pattern binder",
+                .{@intFromEnum(pattern)},
+            );
+        }
+        unreachable;
+    };
+
     if (patternIsLambdaArg(module, pattern)) {
-        return .{ .local_param = .{ .pattern = checked_pattern } };
+        return .{ .local_param = .{ .binder = binder } };
     }
 
     if (localStatementForPattern(module, pattern)) |statement| {
         switch (statement) {
-            .s_var => return .{ .local_mutable_version = .{ .pattern = checked_pattern } },
+            .s_var => return .{ .local_mutable_version = .{ .binder = binder } },
             .s_decl => |decl| {
                 if (isLocalProcExpr(module, decl.expr)) {
-                    return .{ .local_proc = .{ .pattern = checked_pattern } };
+                    return .{ .local_proc = .{ .binder = binder } };
                 }
-                return .{ .local_value = .{ .pattern = checked_pattern } };
+                return .{ .local_value = .{ .binder = binder } };
             },
             else => {},
         }
     }
 
     if (patternIsBinder(module, pattern)) {
-        return .{ .pattern_binder = .{ .pattern = checked_pattern } };
+        return .{ .pattern_binder = .{ .binder = binder } };
     }
 
     if (builtin.mode == .Debug) {
@@ -3042,7 +3109,7 @@ const CheckedTemplateRefCollector = struct {
 
         const pattern = self.checked_bodies.patterns[@intFromEnum(pattern_id)];
         switch (pattern.data) {
-            .as => |child| try self.collectPattern(child),
+            .as => |as| try self.collectPattern(as.pattern),
             .applied_tag => |tag| {
                 for (tag.args) |arg| try self.collectPattern(arg);
             },
@@ -3548,7 +3615,7 @@ const NestedProcSiteBuilder = struct {
 
         const pattern = self.checked_bodies.patterns[@intFromEnum(pattern_id)];
         switch (pattern.data) {
-            .as => |child| try self.scanPattern(child, owner),
+            .as => |as| try self.scanPattern(as.pattern, owner),
             .applied_tag => |tag| {
                 for (tag.args) |arg| try self.scanPattern(arg, owner);
             },
@@ -6099,6 +6166,15 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(pattern.id) == i);
             std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.len);
             verifyCheckedPatternDataPublished(pattern.data);
+        }
+
+        for (self.checked_bodies.pattern_binders, 0..) |binder, i| {
+            std.debug.assert(@intFromEnum(binder.id) == i);
+            std.debug.assert(@intFromEnum(binder.pattern) < self.checked_bodies.patterns.len);
+            const indexed = self.checked_bodies.pattern_binder_by_pattern[@intFromEnum(binder.pattern)] orelse {
+                std.debug.panic("checked artifact invariant violated: pattern binder was not indexed by pattern", .{});
+            };
+            std.debug.assert(indexed == binder.id);
         }
 
         for (self.checked_bodies.statements, 0..) |statement, i| {
