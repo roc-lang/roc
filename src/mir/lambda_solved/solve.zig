@@ -612,13 +612,15 @@ const BodySolver = struct {
             .let_ => unreachable,
             .call_value => |call| blk: {
                 const func = try self.lowerExpr(call.func);
+                const callee_value = self.exprValue(func);
                 const lowered_args = try self.lowerExprSpanWithValues(call.args);
                 const requested_fn_ty = try self.type_importer.importType(call.requested_fn_ty);
                 const call_site = try self.value_store.addCallSite(.{
-                    .callee = self.exprValue(func),
+                    .callee = callee_value,
                     .args = lowered_args.values,
                     .result = value,
                     .requested_fn_root = self.representation_store.reserveRoot(),
+                    .dispatch = self.callSiteDispatchForCallee(callee_value),
                 });
                 break :blk .{ .call_value = .{
                     .func = func,
@@ -927,6 +929,20 @@ const BodySolver = struct {
         return .{
             .exprs = try self.output.addExprSpan(exprs),
             .values = try self.value_store.addValueSpan(values),
+        };
+    }
+
+    fn callSiteDispatchForCallee(
+        self: *BodySolver,
+        callee_value: repr.ValueInfoId,
+    ) repr.CallSiteDispatch {
+        const value_info = self.value_store.values.items[@intFromEnum(callee_value)];
+        const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
+        return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| .{ .finite = key },
+            .already_erased => |sig| .{ .erased = sig },
+            .erase_finite_set => |adapter| .{ .erased = adapter.erased_fn_sig_key },
+            .erase_proc_value => lambdaInvariant("lambda-solved erased proc-value call is missing explicit erased function signature metadata"),
         };
     }
 

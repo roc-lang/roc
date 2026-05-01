@@ -1124,17 +1124,24 @@ const BodyBuilder = struct {
     ) Allocator.Error!Ast.ExprId {
         const func = try self.lowerExpr(call.func);
         const func_value = self.exprValue(func);
+        const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
+        const callable_set_key = switch (call_site.dispatch orelse executableInvariant("executable call_value reached call site without resolved dispatch")) {
+            .finite => |key| key,
+            .erased => executableInvariant("executable call_value erased callable lowering is not implemented yet"),
+        };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
         const callable = func_value_info.callable orelse executableInvariant("executable call_value callee has no callable metadata");
         const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
-        const callable_set_key = switch (emission) {
-            .finite => |key| key,
+        switch (emission) {
+            .finite => |key| if (!repr.callableSetKeyEql(key, callable_set_key)) {
+                executableInvariant("executable call_value call-site dispatch differs from callee finite emission");
+            },
             .already_erased,
             .erase_proc_value,
             .erase_finite_set,
             => executableInvariant("executable call_value erased callable lowering is not implemented yet"),
-        };
+        }
         const descriptor = self.representation_store.callableSetDescriptor(callable_set_key) orelse {
             executableInvariant("executable call_value finite callable set has no descriptor");
         };
@@ -1192,7 +1199,6 @@ const BodyBuilder = struct {
             };
         }
 
-        const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
         const result_value = self.output.freshValueRef();
         const final_call = try self.output.addExpr(result_ty, result_value, .{ .callable_match = .{
