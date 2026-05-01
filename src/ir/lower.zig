@@ -65,6 +65,7 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
         .output = &program,
         .value_env = std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var).init(allocator),
         .expr_map = std.AutoHashMap(Exec.Ast.ExprId, Ast.Var).init(allocator),
+        .next_internal_value_ref = input.ast.next_value_ref,
     };
     defer lowerer.deinit();
     try lowerer.lowerAllDefs();
@@ -81,6 +82,7 @@ const IrBuilder = struct {
     output: *Program,
     value_env: std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var),
     expr_map: std.AutoHashMap(Exec.Ast.ExprId, Ast.Var),
+    next_internal_value_ref: u32,
 
     fn deinit(self: *IrBuilder) void {
         self.expr_map.deinit();
@@ -263,12 +265,12 @@ const IrBuilder = struct {
             .call_direct => |call| try self.lowerCallDirect(expr, call, stmts),
             .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
+            .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .tag,
             .const_ref,
             .bridge,
             .call_erased,
             .packed_erased_fn,
-            .source_match,
             .for_,
             .crash,
             .runtime_error,
@@ -346,6 +348,252 @@ const IrBuilder = struct {
             .proc = branch.executable_proc,
             .args = try self.output.store.addVarSpan(args),
         } }, stmts);
+    }
+
+    fn lowerSourceMatch(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        source_match: Exec.Ast.SourceMatch,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const scrutinee_exprs = self.input.ast.expr_ids.items[source_match.scrutinee_exprs.start..][0..source_match.scrutinee_exprs.len];
+        const scrutinee_values = self.input.ast.value_refs.items[source_match.scrutinees.start..][0..source_match.scrutinees.len];
+        if (scrutinee_exprs.len != 1 or scrutinee_values.len != 1) {
+            irInvariant("IR lowering source_match requires executable decision-plan lowering for multi-scrutinee matches");
+        }
+
+        const scrutinee = try self.lowerExpr(scrutinee_exprs[0], stmts);
+        const subject = try self.sourceMatchSwitchSubject(scrutinee, source_match.branches, stmts);
+        const branch_ids = self.input.ast.branch_ids.items[source_match.branches.start..][0..source_match.branches.len];
+        if (branch_ids.len == 0) irInvariant("IR lowering source_match received no branches");
+
+        const result = try self.freshVar(try self.layoutForType(expr.ty));
+        try self.appendSourceMatchBranchSwitch(branch_ids, 0, scrutinee, subject, result, stmts);
+        try self.value_env.put(expr.value, result);
+        return result;
+    }
+
+    fn sourceMatchSwitchSubject(
+        self: *IrBuilder,
+        scrutinee: Ast.Var,
+        branches: Exec.Ast.Span(Exec.Ast.BranchId),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const branch_ids = self.input.ast.branch_ids.items[branches.start..][0..branches.len];
+        var needs_discriminant = false;
+        for (branch_ids) |branch_id| {
+            const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
+            const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
+            switch (pat.data) {
+                .tag => needs_discriminant = true,
+                .wildcard, .bind, .bool_lit, .int_lit => {},
+                else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
+            }
+        }
+        if (!needs_discriminant) return scrutinee;
+
+        for (branch_ids) |branch_id| {
+            const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
+            const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
+            switch (pat.data) {
+                .tag, .wildcard, .bind => {},
+                else => irInvariant("IR lowering source_match cannot mix tag tests with non-tag literal tests"),
+            }
+        }
+
+        return try self.bindExpr(
+            self.freshInternalValueRef(),
+            .{ .canonical = .u16 },
+            .{ .get_union_id = scrutinee },
+            stmts,
+        );
+    }
+
+    fn sourceMatchPatternSwitchValue(self: *IrBuilder, pat: Exec.Ast.Pat) ?u64 {
+        return switch (pat.data) {
+            .wildcard, .bind => null,
+            .tag => |tag| @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
+            .bool_lit => |value| @as(u64, if (value) 1 else 0),
+            .int_lit => |value| blk: {
+                if (value < 0) irInvariant("IR lowering source_match needs signed-int pattern lowering for negative literals");
+                if (value > std.math.maxInt(u64)) irInvariant("IR lowering source_match needs large-int pattern lowering");
+                break :blk @intCast(value);
+            },
+            else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
+        };
+    }
+
+    const SavedValueBinding = struct {
+        value: Exec.Ast.ExecutableValueRef,
+        previous: ?Ast.Var,
+    };
+
+    fn appendSourceMatchBranchSwitch(
+        self: *IrBuilder,
+        branch_ids: []const Exec.Ast.BranchId,
+        index: usize,
+        scrutinee: Ast.Var,
+        subject: Ast.Var,
+        result: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        if (index >= branch_ids.len) irInvariant("IR lowering source_match exhausted branches while emitting ordered cascade");
+
+        const branch = self.input.ast.branches.items[@intFromEnum(branch_ids[index])];
+        const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
+        const body = try self.lowerSourceMatchBranchBlock(branch, scrutinee);
+
+        if (self.sourceMatchPatternSwitchValue(pat)) |value| {
+            const branches = [_]Ast.Branch{.{
+                .value = value,
+                .block = body,
+            }};
+            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+                .cond = subject,
+                .branches = try self.output.store.addBranchSpan(&branches),
+                .default_block = try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result),
+                .join = result,
+            } }));
+        } else {
+            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+                .cond = subject,
+                .branches = Ast.Span(Ast.BranchId).empty(),
+                .default_block = body,
+                .join = result,
+            } }));
+        }
+    }
+
+    fn sourceMatchBranchCascadeBlock(
+        self: *IrBuilder,
+        branch_ids: []const Exec.Ast.BranchId,
+        index: usize,
+        scrutinee: Ast.Var,
+        subject: Ast.Var,
+        result: Ast.Var,
+    ) LowerResourceError!Ast.BlockId {
+        if (index >= branch_ids.len) {
+            return try self.output.store.addBlock(.{
+                .stmts = Ast.Span(Ast.StmtId).empty(),
+                .term = .@"unreachable",
+            });
+        }
+
+        var stmts = std.ArrayList(Ast.StmtId).empty;
+        defer stmts.deinit(self.allocator);
+        try self.appendSourceMatchBranchSwitch(branch_ids, index, scrutinee, subject, result, &stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(stmts.items),
+            .term = .{ .value = result },
+        });
+    }
+
+    fn lowerSourceMatchBranchBlock(
+        self: *IrBuilder,
+        branch: Exec.Ast.Branch,
+        scrutinee: Ast.Var,
+    ) LowerResourceError!Ast.BlockId {
+        var saved = std.ArrayList(SavedValueBinding).empty;
+        defer {
+            self.restoreValueBindings(saved.items);
+            saved.deinit(self.allocator);
+        }
+
+        var branch_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer branch_stmts.deinit(self.allocator);
+        const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
+        try self.bindSourceMatchPatternValues(pat, scrutinee, &branch_stmts, &saved);
+        const result = try self.lowerExpr(branch.body, &branch_stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(branch_stmts.items),
+            .term = .{ .value = result },
+        });
+    }
+
+    fn bindSourceMatchPatternValues(
+        self: *IrBuilder,
+        pat: Exec.Ast.Pat,
+        value: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+        saved: *std.ArrayList(SavedValueBinding),
+    ) LowerResourceError!void {
+        switch (pat.data) {
+            .wildcard,
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            => {},
+            .bind => |bind| try self.pushValueBinding(bind, value, saved),
+            .tag => |tag| {
+                const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
+                if (payload_ids.len == 0) return;
+
+                const payload_record = try self.bindExpr(
+                    self.freshInternalValueRef(),
+                    try self.payloadStructLayoutForTag(pat.ty, tag.tag),
+                    .{ .get_union_struct = .{
+                        .value = value,
+                        .tag_discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
+                    } },
+                    stmts,
+                );
+
+                for (payload_ids) |payload_pattern| {
+                    const child_pat = self.input.ast.pats.items[@intFromEnum(payload_pattern.pattern)];
+                    const payload_value = if (payload_ids.len == 1)
+                        payload_record
+                    else blk: {
+                        const payload = self.input.row_shapes.tagPayload(payload_pattern.payload);
+                        break :blk try self.bindExpr(
+                            self.freshInternalValueRef(),
+                            try self.layoutForType(child_pat.ty),
+                            .{ .get_struct_field = .{
+                                .record = payload_record,
+                                .field_index = @intCast(payload.logical_index),
+                                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                            } },
+                            stmts,
+                        );
+                    };
+                    try self.bindSourceMatchPatternValues(child_pat, payload_value, stmts, saved);
+                }
+            },
+        }
+    }
+
+    fn pushValueBinding(
+        self: *IrBuilder,
+        value_ref: Exec.Ast.ExecutableValueRef,
+        value: Ast.Var,
+        saved: *std.ArrayList(SavedValueBinding),
+    ) LowerResourceError!void {
+        const previous = try self.value_env.fetchPut(value_ref, value);
+        try saved.append(self.allocator, .{
+            .value = value_ref,
+            .previous = if (previous) |entry| entry.value else null,
+        });
+    }
+
+    fn freshInternalValueRef(self: *IrBuilder) Exec.Ast.ExecutableValueRef {
+        const value: Exec.Ast.ExecutableValueRef = @enumFromInt(self.next_internal_value_ref);
+        self.next_internal_value_ref += 1;
+        return value;
+    }
+
+    fn restoreValueBindings(self: *IrBuilder, saved: []const SavedValueBinding) void {
+        var i = saved.len;
+        while (i > 0) {
+            i -= 1;
+            const entry = saved[i];
+            if (entry.previous) |previous| {
+                self.value_env.put(entry.value, previous) catch unreachable;
+            } else {
+                _ = self.value_env.remove(entry.value);
+            }
+        }
     }
 
     fn lowerStmtSpan(
