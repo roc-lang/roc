@@ -500,6 +500,11 @@ const BodyBuilder = struct {
         const pat = self.input.pats.items[@intFromEnum(pat_id)];
         return try self.output.addPat(.{ .ty = try self.type_lowerer.lowerType(pat.ty), .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
+            .int_lit => |literal| .{ .int_lit = literal },
+            .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
+            .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
+            .dec_lit => |literal| .{ .dec_lit = literal },
+            .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
             .var_ => |var_| blk: {
                 const value = self.output.freshValueRef();

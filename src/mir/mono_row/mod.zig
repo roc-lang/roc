@@ -569,6 +569,11 @@ const BodyFinalizer = struct {
         const pat = self.input.getPat(pat_id);
         return try self.output.addPat(.{ .ty = pat.ty, .data = switch (pat.data) {
             .bool_lit => |value| .{ .bool_lit = value },
+            .int_lit => |value| .{ .int_lit = value },
+            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
+            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
+            .dec_lit => |value| .{ .dec_lit = value },
+            .str_lit => |value| .{ .str_lit = value },
             .var_ => |symbol| .{ .var_ = symbol },
             .wildcard => .wildcard,
             .tag => |tag| blk: {

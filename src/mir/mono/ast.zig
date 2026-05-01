@@ -51,6 +51,11 @@ pub const Pat = struct {
 
     pub const Data = union(enum) {
         bool_lit: bool,
+        int_lit: i128,
+        frac_f32_lit: f32,
+        frac_f64_lit: f64,
+        dec_lit: i128,
+        str_lit: ProgramLiteralId,
         tag: struct {
             name: canonical.TagLabelId,
             discriminant: u16,

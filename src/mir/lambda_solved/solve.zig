@@ -597,6 +597,11 @@ const BodySolver = struct {
         const value = try self.newValue(ty);
         return try self.output.addPat(.{ .ty = ty, .value_info = value, .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
+            .int_lit => |literal| .{ .int_lit = literal },
+            .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
+            .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
+            .dec_lit => |literal| .{ .dec_lit = literal },
+            .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
             .var_ => |symbol| blk: {
                 const binding = try self.value_store.addBinding(.{
