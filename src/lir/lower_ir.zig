@@ -492,8 +492,45 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
-            .bridge,
-            => lirInvariant("lir.lower_ir reached IR expression form whose LIR lowering is still missing"),
+            .bridge => |bridge| try self.lowerBridgeExpr(target, bridge, next),
+        };
+    }
+
+    fn lowerBridgeExpr(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        bridge: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const source = try self.lowerVar(bridge.value);
+        return switch (self.input.store.getBridgePlan(bridge.plan)) {
+            .direct => try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = source },
+                .next = next,
+            } }),
+            .zst => try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = LIR.LocalSpan.empty(),
+                .next = next,
+            } }),
+            .list_reinterpret => try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .list_reinterpret = .{ .backing_ref = source } },
+                .next = next,
+            } }),
+            .nominal_reinterpret => try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{ .backing_ref = source } },
+                .next = next,
+            } }),
+            .box_unbox,
+            .box_box,
+            .struct_,
+            .tag_union,
+            .singleton_to_tag_union,
+            .tag_union_to_singleton,
+            => lirInvariant("lir.lower_ir bridge plan requires recursive bridge lowering"),
         };
     }
 
