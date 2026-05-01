@@ -719,6 +719,100 @@ pub const Coordinator = struct {
         return self.packages.get(name);
     }
 
+    /// Return the published checked artifact for a package root module.
+    pub fn rootCheckedArtifact(self: *Coordinator, package_name: []const u8) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const pkg = self.packages.get(package_name) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
+            }
+            unreachable;
+        };
+        const root_id = pkg.root_module_id orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
+            }
+            unreachable;
+        };
+        const root_mod = pkg.getModule(root_id) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
+            }
+            unreachable;
+        };
+        return root_mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
+            }
+            unreachable;
+        };
+    }
+
+    /// Collect published checked artifacts available to post-check lowering.
+    pub fn collectImportedArtifactViews(
+        self: *Coordinator,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
+
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
+            }
+        }
+
+        return try views.toOwnedSlice(allocator);
+    }
+
+    /// Collect ModuleEnv pointers needed by LIR layout lowering.
+    pub fn collectModuleEnvViews(self: *Coordinator, allocator: Allocator) Allocator.Error![]const *const ModuleEnv {
+        var envs = std.ArrayList(*const ModuleEnv).empty;
+        errdefer envs.deinit(allocator);
+
+        try appendModuleEnvIfMissing(&envs, allocator, self.builtin_modules.builtin_module.env);
+
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                const env = mod.moduleEnv() orelse continue;
+                try appendModuleEnvIfMissing(&envs, allocator, env);
+            }
+        }
+
+        return try envs.toOwnedSlice(allocator);
+    }
+
+    fn appendImportedArtifactViewIfMissing(
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        if (std.mem.eql(u8, &artifact.key.bytes, &root_key.bytes)) return;
+        for (views.items) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) return;
+        }
+        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+    }
+
+    fn appendModuleEnvIfMissing(
+        envs: *std.ArrayList(*const ModuleEnv),
+        allocator: Allocator,
+        env: *const ModuleEnv,
+    ) Allocator.Error!void {
+        for (envs.items) |existing| {
+            if (existing == env) return;
+        }
+        try envs.append(allocator, env);
+    }
+
     /// Start the coordinator and spawn worker threads (for multi-threaded mode).
     /// max_threads <= 1 is treated as single-threaded (inline execution); callers
     /// that want auto-detection should resolve 0 to the CPU count before init.

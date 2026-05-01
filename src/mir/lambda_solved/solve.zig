@@ -30,6 +30,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
+    root_metadata: std.ArrayList(ids.RootMetadata),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
     value_stores: std.ArrayList(repr.ValueInfoStore),
@@ -45,6 +46,7 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .root_procs = .empty,
+            .root_metadata = .empty,
             .solve_sessions = .empty,
             .proc_instances = .empty,
             .value_stores = .empty,
@@ -64,6 +66,7 @@ pub const Program = struct {
             session.deinit();
         }
         self.solve_sessions.deinit(self.allocator);
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -152,6 +155,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
         });
     }
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
+    try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
 
     input.deinit();
     return program;

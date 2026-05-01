@@ -163,19 +163,18 @@ pub const LayoutStoreImage = extern struct {
     }
 };
 
-/// Publish an already-lowered program into the existing shared-memory mapping.
+/// Fill the reserved runtime-image header in the existing shared-memory mapping.
 ///
 /// `lowered` must already have been allocated with the shared-memory allocator
 /// associated with `base_ptr`; this function only installs offset metadata.
-pub fn installHeaderInSharedMemory(
-    allocator: Allocator,
+pub fn fillHeaderInSharedMemory(
+    header: *Header,
     base_ptr: [*]align(1) const u8,
     image_size: usize,
     lowered: *const LowerIr.Result,
     target_usize: base.target.TargetUsize,
     platform_entrypoints: []const PlatformEntrypoint,
-) (Allocator.Error || ImageError)!*Header {
-    const header = try allocator.create(Header);
+) ImageError!void {
     header.* = .{
         .magic = MAGIC,
         .format_version = FORMAT_VERSION,
@@ -186,14 +185,12 @@ pub fn installHeaderInSharedMemory(
         .store = try LirStoreImage.fromStore(base_ptr, image_size, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
     };
-    return header;
 }
 
 /// View an ARC-inserted LIR program in place from mapped shared memory.
-pub fn viewMappedImage(base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
+pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
     if (mapped_size < @sizeOf(Header)) return error.InvalidRuntimeImage;
 
-    const header: *const Header = @ptrCast(@alignCast(base_ptr));
     if (header.magic != MAGIC) return error.InvalidRuntimeImage;
     if (header.format_version != FORMAT_VERSION) return error.UnsupportedRuntimeImageVersion;
     if (header.image_size > mapped_size) return error.InvalidRuntimeImage;

@@ -33,6 +33,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
+    root_metadata: std.ArrayList(ids.RootMetadata),
     layouts: ?Layouts.Layouts = null,
 
     pub fn init(allocator: Allocator) Program {
@@ -46,11 +47,13 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .root_procs = .empty,
+            .root_metadata = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
         if (self.layouts) |*layouts| layouts.deinit();
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -133,12 +136,13 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
         });
     }
 
-    for (input.root_procs.items) |root| {
+    for (input.root_procs.items, input.root_metadata.items) |root, metadata| {
         const executable_root = executableProcForSource(&program, root) orelse {
             debug.invariant(false, "executable build invariant violated: root source proc has no executable proc");
             unreachable;
         };
         try program.root_procs.append(allocator, executable_root);
+        try program.root_metadata.append(allocator, metadata);
     }
 
     input.deinit();

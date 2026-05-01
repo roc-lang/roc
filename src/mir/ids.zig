@@ -2,6 +2,40 @@
 
 const std = @import("std");
 
+pub const RootKind = enum {
+    runtime_entrypoint,
+    provided_export,
+    platform_required_binding,
+    hosted_export,
+    test_expect,
+    repl_expr,
+    dev_expr,
+    compile_time_constant,
+    compile_time_callable,
+};
+
+pub const RootAbi = enum {
+    roc,
+    platform,
+    hosted,
+    test_expect,
+    compile_time,
+};
+
+pub const RootExposure = enum {
+    private,
+    exported,
+    platform_required,
+    hosted,
+};
+
+pub const RootMetadata = struct {
+    order: u32,
+    kind: RootKind,
+    abi: RootAbi,
+    exposure: RootExposure,
+};
+
 pub const RecordShapeId = enum(u32) { _ };
 pub const RecordFieldId = enum(u32) { _ };
 pub const TagUnionShapeId = enum(u32) { _ };

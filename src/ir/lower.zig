@@ -23,6 +23,7 @@ pub const Program = struct {
     store: Ast.Store,
     layouts: Layout.Graph,
     root_procs: std.ArrayList(Ast.ProcRef),
+    root_metadata: std.ArrayList(mir.Ids.RootMetadata),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -33,10 +34,12 @@ pub const Program = struct {
             .store = Ast.Store.init(allocator),
             .layouts = .{},
             .root_procs = .empty,
+            .root_metadata = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit(self.allocator);
         self.store.deinit();
@@ -73,6 +76,7 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
     try lowerer.lowerAllDefs();
 
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
+    try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
 
     input.deinit();
     return program;

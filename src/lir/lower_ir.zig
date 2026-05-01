@@ -29,10 +29,12 @@ pub const Result = struct {
     store: LirStore,
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
+    root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
 
     pub fn deinit(self: *Result) void {
         self.proc_map.deinit(self.store.allocator);
+        self.root_metadata.deinit(self.store.allocator);
         self.root_procs.deinit(self.store.allocator);
         self.layouts.deinit();
         self.store.deinit();
@@ -54,6 +56,7 @@ pub fn run(
     target_usize: base.target.TargetUsize,
     input: ir.Lower.Program,
     explicit_roots: []const ir.Ast.ProcRef,
+    explicit_root_metadata: []const mir.Ids.RootMetadata,
 ) LowerResourceError!Result {
     var owned_input = input;
     errdefer owned_input.deinit();
@@ -65,7 +68,7 @@ pub fn run(
 
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllDefs();
-    try lowerer.bindRoots(explicit_roots);
+    try lowerer.bindRoots(explicit_roots, explicit_root_metadata);
 
     owned_input.deinit();
     return lowerer.finish();
@@ -78,6 +81,7 @@ const Lowerer = struct {
     store: LirStore,
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
+    root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
     local_env: std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId),
     break_targets: std.ArrayList(LIR.CFStmtId),
@@ -97,6 +101,7 @@ const Lowerer = struct {
             .store = LirStore.init(allocator),
             .layouts = try layout_mod.Store.init(all_module_envs, builtin_str_ident, allocator, target_usize),
             .root_procs = .empty,
+            .root_metadata = .empty,
             .proc_map = .empty,
             .break_targets = .empty,
             .next_join_point = 0,
@@ -108,6 +113,7 @@ const Lowerer = struct {
         self.break_targets.deinit(self.allocator);
         self.local_env.deinit();
         self.proc_map.deinit(self.allocator);
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
         self.store.deinit();
@@ -120,6 +126,7 @@ const Lowerer = struct {
             .store = self.store,
             .layouts = self.layouts,
             .root_procs = self.root_procs,
+            .root_metadata = self.root_metadata,
             .proc_map = self.proc_map,
         };
         self.local_env.deinit();
@@ -128,6 +135,7 @@ const Lowerer = struct {
         self.layouts = undefined;
         self.canonical_names = mir.Hosted.CanonicalNameStore.init(self.allocator);
         self.root_procs = .empty;
+        self.root_metadata = .empty;
         self.proc_map = .empty;
         self.break_targets = .empty;
         self.next_join_point = 0;
@@ -196,9 +204,23 @@ const Lowerer = struct {
         proc.body = try self.lowerBlock(def.body.?);
     }
 
-    fn bindRoots(self: *Lowerer, explicit_roots: []const ir.Ast.ProcRef) LowerResourceError!void {
+    fn bindRoots(
+        self: *Lowerer,
+        explicit_roots: []const ir.Ast.ProcRef,
+        explicit_root_metadata: []const mir.Ids.RootMetadata,
+    ) LowerResourceError!void {
+        if (explicit_roots.len != explicit_root_metadata.len) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "lir.lower_ir invariant violated: explicit root metadata mismatch roots={d} metadata={d}",
+                    .{ explicit_roots.len, explicit_root_metadata.len },
+                );
+            }
+            unreachable;
+        }
         try self.root_procs.ensureTotalCapacity(self.allocator, explicit_roots.len);
-        for (explicit_roots) |root| {
+        try self.root_metadata.ensureTotalCapacity(self.allocator, explicit_root_metadata.len);
+        for (explicit_roots, explicit_root_metadata) |root, metadata| {
             const proc = self.lirProcForExecutable(root) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic("lir.lower_ir invariant violated: explicit root has no LIR proc", .{});
@@ -206,6 +228,7 @@ const Lowerer = struct {
                 unreachable;
             };
             self.root_procs.appendAssumeCapacity(proc);
+            self.root_metadata.appendAssumeCapacity(metadata);
         }
     }
 

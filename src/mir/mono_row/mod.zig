@@ -330,6 +330,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
+    root_metadata: std.ArrayList(ids.RootMetadata),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -341,10 +342,12 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .root_procs = .empty,
+            .root_metadata = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -411,8 +414,11 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
         });
     }
     try program.root_procs.appendSlice(allocator, owned_mono.root_procs.items);
+    try program.root_metadata.appendSlice(allocator, owned_mono.root_metadata.items);
     owned_mono.root_procs.clearRetainingCapacity();
+    owned_mono.root_metadata.clearRetainingCapacity();
     owned_mono.ast.deinit();
+    owned_mono.root_metadata.deinit(allocator);
     owned_mono.root_procs.deinit(allocator);
     owned_mono.procs.deinit(allocator);
 
@@ -426,6 +432,12 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
 
 pub fn verifyResult(result: *const Result) void {
     if (!verify.enabled()) return;
+
+    verify.assertFmt(
+        result.program.root_procs.items.len == result.program.root_metadata.items.len,
+        "root proc metadata mismatch: procs={d} metadata={d}",
+        .{ result.program.root_procs.items.len, result.program.root_metadata.items.len },
+    );
 
     for (result.shapes.record_shapes.items) |shape| {
         const fields = shape.fields.get(result.shapes.record_shape_fields.items);

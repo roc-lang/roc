@@ -36,6 +36,7 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
+const lir = @import("lir");
 const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
@@ -2095,59 +2096,89 @@ pub const SharedMemoryResult = struct {
     warning_count: usize,
 };
 
-/// Write data to shared memory for inter-process communication.
-/// Creates a shared memory region and writes the data with a length prefix.
-/// Returns a handle that can be used to access the shared memory.
-pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
-    // Calculate total size needed: length + data
-    const total_size = @sizeOf(usize) + data.len;
+const CoordinatorReportCounts = struct {
+    errors: usize,
+    warnings: usize,
+};
 
-    if (comptime is_windows) {
-        return writeToWindowsSharedMemory(data, total_size);
-    } else {
-        return writeToPosixSharedMemory(data, total_size);
+fn renderCoordinatorReports(ctx: *CliContext, coord: *Coordinator, roc_file_path: []const u8) CoordinatorReportCounts {
+    var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
+
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |entry| {
+        const pkg = entry.value_ptr.*;
+        for (pkg.modules.items) |*mod| {
+            for (mod.reports.items) |*rep| {
+                if (rep.severity == .fatal or rep.severity == .runtime_error) {
+                    counts.errors += 1;
+                    if (!builtin.is_test) {
+                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    }
+                } else if (rep.severity == .warning) {
+                    counts.warnings += 1;
+                    if (!builtin.is_test) {
+                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    }
+                }
+            }
+        }
     }
+
+    if (counts.errors > 0 or counts.warnings > 0) {
+        const stderr = ctx.io.stderr();
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            counts.errors,
+            counts.warnings,
+            roc_file_path,
+        }) catch {};
+    }
+
+    ctx.io.flush();
+    return counts;
 }
 
-fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
-    // Create anonymous shared memory object (no name for handle inheritance)
-    const shm_handle = ipc.platform.windows.CreateFileMappingW(
-        ipc.platform.windows.INVALID_HANDLE_VALUE,
-        null,
-        ipc.platform.windows.PAGE_READWRITE,
-        0,
-        @intCast(total_size),
-        null, // Anonymous - no name needed for handle inheritance
-    ) orelse {
-        return error.SharedMemoryCreateFailed;
+fn sharedMemoryResult(shm: *SharedMemoryAllocator, counts: CoordinatorReportCounts) SharedMemoryResult {
+    return .{
+        .handle = .{
+            .fd = shm.handle,
+            .ptr = shm.base_ptr,
+            .size = shm.getUsedSize(),
+            .mapped_size = shm.total_size,
+        },
+        .error_count = counts.errors,
+        .warning_count = counts.warnings,
     };
+}
 
-    // Map the shared memory at a fixed address to avoid ASLR issues
-    const mapped_ptr = ipc.platform.windows.MapViewOfFileEx(
-        shm_handle,
-        ipc.platform.windows.FILE_MAP_ALL_ACCESS,
-        0,
-        0,
-        0,
-        ipc.platform.SHARED_MEMORY_BASE_ADDR,
-    ) orelse {
-        _ = ipc.platform.windows.CloseHandle(shm_handle);
-        return error.SharedMemoryMapFailed;
-    };
+fn buildPlatformEntrypoints(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ![]lir.RuntimeImage.PlatformEntrypoint {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked pipeline invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
 
-    // Write length and data
-    const length_ptr: *usize = @ptrCast(@alignCast(mapped_ptr));
-    length_ptr.* = data.len;
+    var entrypoints = std.ArrayList(lir.RuntimeImage.PlatformEntrypoint).empty;
+    errdefer entrypoints.deinit(allocator);
 
-    const data_ptr = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
-    @memcpy(data_ptr[0..data.len], data);
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+        try entrypoints.append(allocator, .{
+            .ordinal = @intCast(entrypoints.items.len),
+            .root_proc = root_proc,
+        });
+    }
 
-    return SharedMemoryHandle{
-        .fd = shm_handle,
-        .ptr = mapped_ptr,
-        .size = total_size,
-        .mapped_size = total_size,
-    };
+    return try entrypoints.toOwnedSlice(allocator);
 }
 
 /// Build shared memory containing a viewable ARC-inserted LIR runtime image.
@@ -2157,10 +2188,145 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// The child process maps only the LIR runtime image and never
 /// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
 pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    _ = ctx;
-    _ = roc_file_path;
-    _ = allow_errors;
-    @compileError("Phase 2 must publish an ARC-inserted LIR runtime image into shared memory from checked artifacts");
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemoryWithFallback(page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const shm_allocator = shm.allocator();
+    const runtime_header = try shm_allocator.create(lir.RuntimeImage.Header);
+
+    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
+    defer builtin_modules.deinit();
+
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
+    try validatePlatformSpec(ctx, platform_spec);
+
+    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
+        try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
+    else if (base.url.isSafeUrl(platform_spec)) blk: {
+        const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
+            error.CliError => break :blk null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        break :blk platform_paths.platform_source_path;
+    } else null;
+
+    const platform_dir: ?[]const u8 = if (platform_main_path) |p|
+        std.fs.path.dirname(p) orelse return error.InvalidPlatformPath
+    else
+        null;
+
+    var coord = try Coordinator.init(
+        ctx.gpa,
+        .single_threaded,
+        1,
+        RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+
+    const app_pkg = try coord.ensurePackage("app", app_dir);
+    const app_module_name = base.module_path.getModuleName(roc_file_path);
+    const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
+    app_pkg.root_module_id = app_module_id;
+    app_pkg.modules.items[app_module_id].depth = 0;
+    app_pkg.remaining_modules += 1;
+    coord.total_remaining += 1;
+
+    const platform_qualifier = try extractPlatformQualifier(ctx, roc_file_path);
+
+    if (platform_dir) |pf_dir| {
+        const pf_pkg = try coord.ensurePackage("pf", pf_dir);
+
+        if (platform_qualifier) |qual| {
+            try app_pkg.shorthands.put(
+                try ctx.gpa.dupe(u8, qual),
+                try ctx.gpa.dupe(u8, "pf"),
+            );
+        }
+
+        if (platform_main_path) |pmp| {
+            const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", pmp);
+            pf_pkg.root_module_id = pf_module_id;
+            pf_pkg.modules.items[pf_module_id].depth = 1;
+            pf_pkg.remaining_modules += 1;
+            coord.total_remaining += 1;
+            try coord.enqueueParseTask("pf", pf_module_id);
+        }
+    }
+
+    var non_platform_packages = try extractNonPlatformPackages(ctx, roc_file_path, platform_qualifier);
+    defer {
+        var iter = non_platform_packages.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
+        }
+        non_platform_packages.deinit();
+    }
+
+    var pkg_iter = non_platform_packages.iterator();
+    while (pkg_iter.next()) |entry| {
+        const shorthand = entry.key_ptr.*;
+        const pkg_main_path = entry.value_ptr.*;
+        const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
+        const pkg_name = try ctx.gpa.dupe(u8, shorthand);
+        defer ctx.gpa.free(pkg_name);
+
+        _ = try coord.ensurePackage(pkg_name, pkg_dir);
+        try app_pkg.shorthands.put(
+            try ctx.gpa.dupe(u8, shorthand),
+            try ctx.gpa.dupe(u8, pkg_name),
+        );
+    }
+
+    try coord.enqueueParseTask("app", app_module_id);
+    try coord.coordinatorLoop();
+
+    const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
+    if (counts.errors > 0 and !allow_errors) {
+        shm.updateHeader();
+        return sharedMemoryResult(&shm, counts);
+    }
+
+    const root_artifact = coord.rootCheckedArtifact("app");
+    const imported_artifacts = try coord.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const module_envs = try coord.collectModuleEnvViews(ctx.gpa);
+    defer ctx.gpa.free(module_envs);
+
+    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        shm_allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(root_artifact),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    );
+
+    const platform_entrypoints = try buildPlatformEntrypoints(shm_allocator, &lowered);
+
+    try lir.RuntimeImage.fillHeaderInSharedMemory(
+        runtime_header,
+        shm.base_ptr,
+        shm.getUsedSize(),
+        &lowered.lir_result,
+        lowered.target_usize,
+        platform_entrypoints,
+    );
+
+    shm.updateHeader();
+    return sharedMemoryResult(&shm, counts);
 }
 
 /// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
@@ -2361,56 +2527,6 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
             return false;
         },
     }
-}
-
-fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
-    const shm_name = "/ROC_FILE_TO_INTERPRET";
-
-    // Unlink any existing shared memory object first
-    posix.shm_unlink(shm_name) catch {};
-
-    // Create shared memory object
-    const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
-    if (shm_fd < 0) {
-        return error.SharedMemoryCreateFailed;
-    }
-
-    // Set the size of the shared memory object
-    if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
-        if (c.close(shm_fd) != 0) {}
-        return error.SharedMemoryTruncateFailed;
-    }
-
-    // Map the shared memory
-    const mapped_ptr = posix.mmap(
-        null,
-        total_size,
-        0x01 | 0x02, // PROT_READ | PROT_WRITE
-        0x0001, // MAP_SHARED
-        shm_fd,
-        0,
-    );
-    // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
-    if (mapped_ptr == posix.MAP_FAILED) {
-        if (c.close(shm_fd) != 0) {}
-        return error.SharedMemoryMapFailed;
-    }
-    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
-
-    // Write length at the beginning
-    const length_ptr: *align(1) usize = @ptrCast(mapped_memory.ptr);
-    length_ptr.* = data.len;
-
-    // Write data after the length
-    const data_ptr = mapped_memory.ptr + @sizeOf(usize);
-    @memcpy(data_ptr[0..data.len], data);
-
-    return SharedMemoryHandle{
-        .fd = shm_fd,
-        .ptr = mapped_ptr,
-        .size = total_size,
-        .mapped_size = total_size,
-    };
 }
 
 /// Platform resolution result containing the platform source path

@@ -58,6 +58,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
+    root_metadata: std.ArrayList(ids.RootMetadata),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -70,10 +71,12 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .root_procs = .empty,
+            .root_metadata = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -124,6 +127,7 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
         });
     }
     try program.root_procs.appendSlice(allocator, input.program.root_procs.items);
+    try program.root_metadata.appendSlice(allocator, input.program.root_metadata.items);
 
     input.deinit();
     return program;

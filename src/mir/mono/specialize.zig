@@ -77,6 +77,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
+    root_metadata: std.ArrayList(ids.RootMetadata),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -90,10 +91,12 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .root_procs = .empty,
+            .root_metadata = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -172,6 +175,7 @@ pub fn run(
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, canonical.mirProcedureRefFromMono(reserved.proc));
+        try program.root_metadata.append(allocator, rootMetadataFromChecked(root));
     }
 
     while (queue.pending.items.len != 0) {
@@ -2694,6 +2698,36 @@ fn templateForRoot(
     }
 }
 
+fn rootMetadataFromChecked(root: checked_artifact.RootRequest) ids.RootMetadata {
+    return .{
+        .order = root.order,
+        .kind = switch (root.kind) {
+            .runtime_entrypoint => .runtime_entrypoint,
+            .provided_export => .provided_export,
+            .platform_required_binding => .platform_required_binding,
+            .hosted_export => .hosted_export,
+            .test_expect => .test_expect,
+            .repl_expr => .repl_expr,
+            .dev_expr => .dev_expr,
+            .compile_time_constant => .compile_time_constant,
+            .compile_time_callable => .compile_time_callable,
+        },
+        .abi = switch (root.abi) {
+            .roc => .roc,
+            .platform => .platform,
+            .hosted => .hosted,
+            .test_expect => .test_expect,
+            .compile_time => .compile_time,
+        },
+        .exposure = switch (root.exposure) {
+            .private => .private,
+            .exported => .exported,
+            .platform_required => .platform_required,
+            .hosted => .hosted,
+        },
+    };
+}
+
 fn templateForProcedureUse(
     input: Input,
     proc_use: checked_artifact.ProcedureUseTemplate,
@@ -2912,6 +2946,7 @@ fn methodOwnerEql(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner
 
 fn verifyProgram(program: *const Program) void {
     if (@import("builtin").mode != .Debug) return;
+    std.debug.assert(program.root_procs.items.len == program.root_metadata.items.len);
     for (program.root_procs.items) |root| {
         var found = false;
         for (program.procs.items) |proc| {

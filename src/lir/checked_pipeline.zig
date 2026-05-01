@@ -76,6 +76,7 @@ pub fn lowerArtifactsToLir(
     errdefer lowered_ir.deinit();
 
     const executable_roots = lowered_ir.root_procs.items;
+    const executable_root_metadata = lowered_ir.root_metadata.items;
 
     var lowered_lir = try LowerIr.run(
         allocator,
@@ -84,6 +85,7 @@ pub fn lowerArtifactsToLir(
         target.target_usize,
         lowered_ir,
         executable_roots,
+        executable_root_metadata,
     );
     errdefer lowered_lir.deinit();
 
