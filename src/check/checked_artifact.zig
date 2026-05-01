@@ -365,6 +365,8 @@ pub const RootRequestTable = struct {
             });
         }
 
+        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types);
+
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
                 .module_idx = module.moduleIndex(),
@@ -407,6 +409,85 @@ pub const RootRequestTable = struct {
         self.* = .{};
     }
 };
+
+fn appendPublishedEntrypointRoots(
+    requests: *std.ArrayList(RootRequest),
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypeStore,
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+
+    for (module_env.provides_entries.items.items) |provides_entry| {
+        const def_idx = findTopLevelDefByIdent(module, provides_entry.ident) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: provided entry {s} has no top-level definition",
+                    .{module_env.getIdent(provides_entry.ident)},
+                );
+            }
+            unreachable;
+        };
+        try appendRoot(requests, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .provided_export,
+            .source = .{ .def = def_idx },
+            .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = def_idx }),
+            .abi = .platform,
+            .exposure = .exported,
+        });
+    }
+
+    switch (module_env.module_kind) {
+        .default_app => {
+            const main_def = findTopLevelDefByText(module, "main!") orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: default app has no main! root definition",
+                        .{},
+                    );
+                }
+                unreachable;
+            };
+            try appendRoot(requests, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .runtime_entrypoint,
+                .source = .{ .def = main_def },
+                .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = main_def }),
+                .abi = .roc,
+                .exposure = .exported,
+            });
+        },
+        else => {},
+    }
+}
+
+fn findTopLevelDefByIdent(module: TypedCIR.Module, ident: Ident.Idx) ?CIR.Def.Idx {
+    for (module.allDefs()) |def_idx| {
+        const def = module.def(def_idx);
+        const pattern = module.pattern(def.pattern.idx);
+        switch (pattern.data) {
+            .assign => |assign| if (assign.ident == ident) return def_idx,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findTopLevelDefByText(module: TypedCIR.Module, name: []const u8) ?CIR.Def.Idx {
+    const module_env = module.moduleEnvConst();
+    for (module.allDefs()) |def_idx| {
+        const def = module.def(def_idx);
+        const pattern = module.pattern(def.pattern.idx);
+        switch (pattern.data) {
+            .assign => |assign| {
+                if (std.mem.eql(u8, module_env.getIdent(assign.ident), name)) return def_idx;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
 
 fn checkedTypeIdForRootSource(
     allocator: Allocator,
@@ -3915,6 +3996,17 @@ pub const PlatformAppRelation = struct {
     platform_module_idx: u32,
     app_artifact: CheckedModuleArtifactKey,
     bindings: []const PlatformRequiredBindingInput,
+
+    pub fn deinit(self: *PlatformAppRelation, allocator: Allocator) void {
+        allocator.free(self.bindings);
+        self.* = .{
+            .key = .{},
+            .requirement_context = .{},
+            .platform_module_idx = 0,
+            .app_artifact = .{},
+            .bindings = &.{},
+        };
+    }
 };
 
 pub const PlatformRequiredBinding = struct {
@@ -4069,6 +4161,124 @@ pub const PlatformRequiredBindingTable = struct {
         return self.bindings[binding_id];
     }
 };
+
+pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) PlatformRequirementContextKey {
+    return PlatformRequirementContextKey.compute(
+        artifact.module_identity,
+        artifact.platform_required_declarations.identityHash(&artifact.canonical_names),
+    );
+}
+
+pub fn buildPlatformAppRelation(
+    allocator: Allocator,
+    platform_declaration_artifact: *const CheckedModuleArtifact,
+    platform_module: TypedCIR.Module,
+    app_artifact: *const CheckedModuleArtifact,
+) Allocator.Error!PlatformAppRelation {
+    const declarations = platform_declaration_artifact.platform_required_declarations.declarations;
+    const bindings = try allocator.alloc(PlatformRequiredBindingInput, declarations.len);
+    errdefer allocator.free(bindings);
+
+    const requirement_context = platformRequirementContextKey(platform_declaration_artifact);
+    const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
+
+    for (declarations, 0..) |declaration, i| {
+        const required_name = platform_declaration_artifact.canonical_names.exportNameText(declaration.platform_name);
+        const app_value = appTopLevelValueByName(app_artifact, required_name) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: app artifact does not publish a top-level value for platform requirement {s}",
+                    .{required_name},
+                );
+            }
+            unreachable;
+        };
+
+        const requested_source_ty = try canonical_type_keys.fromVar(
+            allocator,
+            platform_module.typeStoreConst(),
+            platform_module.identStoreConst(),
+            ModuleEnv.varFrom(declaration.type_anno),
+        );
+        const app_value_ref = TopLevelValueRef{
+            .artifact = app_artifact.key,
+            .pattern = app_value.pattern,
+        };
+        const required_ty_is_function = sourceTypeIsFunction(platform_module, ModuleEnv.varFrom(declaration.type_anno));
+
+        bindings[i] = .{
+            .declaration = declaration.id,
+            .requires_idx = declaration.requires_idx,
+            .app_value = app_value_ref,
+            .requested_source_ty = requested_source_ty,
+            .checked_relation = @enumFromInt(@as(u32, @intCast(i))),
+            .value_use = if (required_ty_is_function) blk: {
+                const procedure_binding = switch (app_value.value) {
+                    .procedure_binding => |binding| binding,
+                    .const_ref => {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "checked artifact invariant violated: platform requirement {s} needs a procedure but app value is a const",
+                                .{required_name},
+                            );
+                        }
+                        unreachable;
+                    },
+                };
+                break :blk .{ .procedure_value = .{
+                    .binding = .{ .platform_required = .{
+                        .artifact = app_artifact.key,
+                        .app_value = app_value_ref,
+                        .procedure_binding = procedure_binding,
+                    } },
+                    .source_fn_ty_template = requested_source_ty,
+                } };
+            } else blk: {
+                const const_ref = switch (app_value.value) {
+                    .const_ref => |ref| ref,
+                    .procedure_binding => {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "checked artifact invariant violated: platform requirement {s} needs a const but app value is a procedure",
+                                .{required_name},
+                            );
+                        }
+                        unreachable;
+                    },
+                };
+                break :blk .{ .const_value = .{
+                    .const_ref = const_ref,
+                    .requested_source_ty_template = requested_source_ty,
+                } };
+            },
+        };
+    }
+
+    return .{
+        .key = relation_key,
+        .requirement_context = requirement_context,
+        .platform_module_idx = platform_declaration_artifact.module_identity.module_idx,
+        .app_artifact = app_artifact.key,
+        .bindings = bindings,
+    };
+}
+
+fn appTopLevelValueByName(
+    app_artifact: *const CheckedModuleArtifact,
+    required_name: []const u8,
+) ?TopLevelValueEntry {
+    const app_env = app_artifact.moduleEnv();
+    for (app_artifact.top_level_values.entries) |entry| {
+        const pattern = app_env.store.getPattern(entry.pattern);
+        switch (pattern) {
+            .assign => |assign| {
+                if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) return entry;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
 
 pub const ModuleInterfaceCapabilities = struct {
     exported_def_count: u32,
@@ -6664,6 +6874,17 @@ pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
         .artifact = artifact,
         .roots = &artifact.root_requests,
         .relation_artifacts = &.{},
+    };
+}
+
+pub fn loweringViewWithRelations(
+    artifact: *const CheckedModuleArtifact,
+    relation_artifacts: []const ImportedModuleView,
+) LoweringModuleView {
+    return .{
+        .artifact = artifact,
+        .roots = &artifact.root_requests,
+        .relation_artifacts = relation_artifacts,
     };
 }
 
