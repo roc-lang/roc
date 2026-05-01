@@ -1040,9 +1040,26 @@ const BodyBuilder = struct {
         const callable = value_info.callable orelse executableInvariant("executable proc_value reached value without callable metadata");
         const construction_id = callable.construction_plan orelse executableInvariant("executable proc_value reached finite callable value without construction metadata");
         const construction = self.representation_store.callableConstructionPlan(construction_id);
+        if (construction.result != value_info_id) {
+            executableInvariant("executable proc_value construction plan is attached to the wrong value");
+        }
+        const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
+        const emission_key = switch (emission) {
+            .finite => |key| key,
+            else => executableInvariant("executable proc_value construction plan does not have finite callable emission"),
+        };
+        if (!repr.callableSetKeyEql(emission_key, construction.callable_set_key)) {
+            executableInvariant("executable proc_value construction key differs from finite emission key");
+        }
         const member = self.representation_store.callableSetMember(construction.callable_set_key, construction.selected_member) orelse {
             executableInvariant("executable proc_value construction selected a missing callable-set member");
         };
+        if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, construction.source_fn_ty)) {
+            executableInvariant("executable proc_value construction source function type differs from descriptor member");
+        }
+        if (member.capture_slots.len != construction.capture_values.len) {
+            executableInvariant("executable proc_value construction capture count differs from descriptor member");
+        }
         const selected_proc = member.source_proc;
         const selected_executable_proc = self.proc_map.get(selected_proc) orelse executableInvariant("executable proc_value selected member target was not reserved");
 
@@ -1056,6 +1073,9 @@ const BodyBuilder = struct {
         defer self.allocator.free(stmt_ids);
 
         for (capture_items, 0..) |capture, i| {
+            if (member.capture_slots[i].slot != capture.slot) {
+                executableInvariant("executable proc_value capture slot differs from construction member schema");
+            }
             if (capture.value_info != construction.capture_values[i]) {
                 executableInvariant("executable proc_value capture value differs from construction plan");
             }
