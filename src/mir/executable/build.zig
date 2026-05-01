@@ -1,6 +1,7 @@
 //! Executable MIR construction state.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const check = @import("check");
 const symbol_mod = @import("symbol");
 const LambdaSolved = @import("../lambda_solved/mod.zig");
@@ -105,6 +106,7 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .allocator = allocator,
             .input = &input.ast,
             .output = &program.ast,
+            .canonical_names = &program.canonical_names,
             .type_lowerer = &type_lowerer,
             .value_store = value_store,
             .representation_store = &input.solve_sessions.items[@intFromEnum(proc_instance.solve_session)].representation_store,
@@ -289,6 +291,7 @@ const BodyBuilder = struct {
     allocator: Allocator,
     input: *const LambdaSolved.Ast.Store,
     output: *Ast.Store,
+    canonical_names: *const canonical.CanonicalNameStore,
     type_lowerer: *TypeLowerer,
     value_store: *const repr.ValueInfoStore,
     representation_store: *const repr.RepresentationStore,
@@ -416,7 +419,7 @@ const BodyBuilder = struct {
             };
         }
         if (value_info.aggregate) |aggregate| {
-            return try self.lowerAggregateExecutableValueType(aggregate);
+            return try self.lowerAggregateExecutableValueType(logical_ty, aggregate);
         }
         return try self.type_lowerer.lowerType(logical_ty);
     }
@@ -487,6 +490,7 @@ const BodyBuilder = struct {
 
     fn lowerAggregateExecutableValueType(
         self: *BodyBuilder,
+        logical_ty: LambdaSolved.Type.TypeVarId,
         aggregate: repr.AggregateValueInfo,
     ) Allocator.Error!Type.TypeId {
         return switch (aggregate) {
@@ -526,10 +530,196 @@ const BodyBuilder = struct {
 
                 break :blk try self.type_lowerer.output.addType(.{ .tuple = items });
             },
-            .tag,
-            .list,
-            => executableInvariant("executable aggregate type lowering for this aggregate form requires solved aggregate representation metadata"),
+            .tag => |tag| try self.lowerTagAggregateExecutableValueType(logical_ty, tag),
+            .list => |list| try self.lowerListAggregateExecutableValueType(logical_ty, list),
         };
+    }
+
+    fn lowerListAggregateExecutableValueType(
+        self: *BodyBuilder,
+        logical_ty: LambdaSolved.Type.TypeVarId,
+        list: anytype,
+    ) Allocator.Error!Type.TypeId {
+        if (list.elems.len == 0) {
+            const elem_ty = try self.lowerLogicalListElemType(logical_ty);
+            return try self.type_lowerer.output.addType(.{ .list = elem_ty });
+        }
+
+        const first = self.value_store.values.items[@intFromEnum(list.elems[0])];
+        if (builtin.mode == .Debug) {
+            const first_key = try repr.execValueTypeKeyForValue(
+                self.allocator,
+                self.canonical_names,
+                self.type_lowerer.input,
+                self.representation_store,
+                self.value_store,
+                list.elems[0],
+            );
+            for (list.elems[1..]) |elem| {
+                const elem_key = try repr.execValueTypeKeyForValue(
+                    self.allocator,
+                    self.canonical_names,
+                    self.type_lowerer.input,
+                    self.representation_store,
+                    self.value_store,
+                    elem,
+                );
+                if (!repr.canonicalExecValueTypeKeyEql(first_key, elem_key)) {
+                    executableInvariant("executable aggregate list elements have different executable representations");
+                }
+            }
+        }
+        const elem_ty = try self.lowerExecutableValueType(first.logical_ty, list.elems[0]);
+        return try self.type_lowerer.output.addType(.{ .list = elem_ty });
+    }
+
+    fn lowerLogicalListElemType(
+        self: *BodyBuilder,
+        logical_ty: LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!Type.TypeId {
+        const root = self.type_lowerer.input.unlinkConst(logical_ty);
+        return switch (self.type_lowerer.input.getNode(root)) {
+            .link => unreachable,
+            .nominal => |nominal| try self.lowerLogicalListElemType(nominal.backing),
+            .content => |content| switch (content) {
+                .list => |elem| try self.type_lowerer.lowerType(elem),
+                else => executableInvariant("executable aggregate list metadata attached to non-list logical type"),
+            },
+            else => executableInvariant("executable aggregate list metadata attached to unresolved logical type"),
+        };
+    }
+
+    fn lowerTagAggregateExecutableValueType(
+        self: *BodyBuilder,
+        logical_ty: LambdaSolved.Type.TypeVarId,
+        tag: anytype,
+    ) Allocator.Error!Type.TypeId {
+        const source_tags = self.logicalTagUnionTags(logical_ty);
+        const shape_tags = self.type_lowerer.row_shapes.tagUnionTags(tag.union_shape);
+        if (shape_tags.len != source_tags.len) {
+            executableInvariant("executable aggregate tag metadata shape does not match logical type arity");
+        }
+
+        const tags = try self.allocator.alloc(Type.TagType, shape_tags.len);
+        for (tags) |*item| item.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (tags) |item| {
+                if (item.payloads.len > 0) self.allocator.free(item.payloads);
+            }
+            self.allocator.free(tags);
+        }
+
+        const seen_tags = try self.allocator.alloc(bool, shape_tags.len);
+        defer self.allocator.free(seen_tags);
+        @memset(seen_tags, false);
+
+        for (shape_tags) |shape_tag| {
+            const shape_tag_info = self.type_lowerer.row_shapes.tag(shape_tag);
+            const tag_index: usize = @intCast(shape_tag_info.logical_index);
+            if (tag_index >= source_tags.len) {
+                executableInvariant("executable aggregate tag logical index exceeded logical type arity");
+            }
+            if (seen_tags[tag_index]) {
+                executableInvariant("executable aggregate tag metadata saw duplicate tag logical index");
+            }
+
+            const payloads = if (shape_tag == tag.tag)
+                try self.lowerSelectedTagPayloadTypes(tag)
+            else
+                try self.lowerLogicalTagPayloadTypes(shape_tag, source_tags[tag_index]);
+            tags[tag_index] = .{
+                .tag = shape_tag,
+                .payloads = payloads,
+            };
+            seen_tags[tag_index] = true;
+        }
+        for (seen_tags) |was_seen| {
+            if (!was_seen) executableInvariant("executable aggregate tag metadata did not provide every logical tag");
+        }
+
+        return try self.type_lowerer.output.addType(.{ .tag_union = .{
+            .shape = tag.union_shape,
+            .tags = tags,
+        } });
+    }
+
+    fn logicalTagUnionTags(
+        self: *BodyBuilder,
+        logical_ty: LambdaSolved.Type.TypeVarId,
+    ) []const LambdaSolved.Type.Tag {
+        const root = self.type_lowerer.input.unlinkConst(logical_ty);
+        return switch (self.type_lowerer.input.getNode(root)) {
+            .link => unreachable,
+            .nominal => |nominal| self.logicalTagUnionTags(nominal.backing),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| self.type_lowerer.input.sliceTags(tag_union.tags),
+                else => executableInvariant("executable aggregate tag metadata attached to non-tag-union logical type"),
+            },
+            else => executableInvariant("executable aggregate tag metadata attached to unresolved logical type"),
+        };
+    }
+
+    fn lowerLogicalTagPayloadTypes(
+        self: *BodyBuilder,
+        tag_id: MonoRow.TagId,
+        source_tag: LambdaSolved.Type.Tag,
+    ) Allocator.Error![]const Type.TagPayloadType {
+        const source_payload_tys = self.type_lowerer.input.sliceTypeVarSpan(source_tag.args);
+        const shape_payloads = self.type_lowerer.row_shapes.tagPayloads(tag_id);
+        if (shape_payloads.len != source_payload_tys.len) {
+            executableInvariant("executable aggregate tag logical payload arity differs from row shape");
+        }
+        if (shape_payloads.len == 0) return &.{};
+
+        const payloads = try self.allocator.alloc(Type.TagPayloadType, shape_payloads.len);
+        errdefer self.allocator.free(payloads);
+        for (shape_payloads, 0..) |payload_id, i| {
+            payloads[i] = .{
+                .payload = payload_id,
+                .ty = try self.type_lowerer.lowerType(source_payload_tys[i]),
+            };
+        }
+        return payloads;
+    }
+
+    fn lowerSelectedTagPayloadTypes(
+        self: *BodyBuilder,
+        tag: anytype,
+    ) Allocator.Error![]const Type.TagPayloadType {
+        const shape_payloads = self.type_lowerer.row_shapes.tagPayloads(tag.tag);
+        if (shape_payloads.len == 0) return &.{};
+        const payloads = try self.allocator.alloc(Type.TagPayloadType, shape_payloads.len);
+        errdefer self.allocator.free(payloads);
+        const seen = try self.allocator.alloc(bool, shape_payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (tag.payloads) |payload| {
+            const payload_info = self.type_lowerer.row_shapes.tagPayload(payload.payload);
+            if (payload_info.tag != tag.tag) {
+                executableInvariant("executable aggregate selected tag payload belongs to a different tag");
+            }
+            const payload_index: usize = @intCast(payload_info.logical_index);
+            if (payload_index >= shape_payloads.len) {
+                executableInvariant("executable aggregate selected tag payload index exceeded tag arity");
+            }
+            if (seen[payload_index]) {
+                executableInvariant("executable aggregate selected tag payload was duplicated");
+            }
+            if (payload.payload != shape_payloads[payload_index]) {
+                executableInvariant("executable aggregate selected tag payload id differs from row shape logical slot");
+            }
+            const child = self.value_store.values.items[@intFromEnum(payload.value)];
+            payloads[payload_index] = .{
+                .payload = shape_payloads[payload_index],
+                .ty = try self.lowerExecutableValueType(child.logical_ty, payload.value),
+            };
+            seen[payload_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) executableInvariant("executable aggregate selected tag did not provide every payload");
+        }
+        return payloads;
     }
 
     fn lowerFnArgSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
