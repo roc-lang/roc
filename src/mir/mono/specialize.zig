@@ -1119,7 +1119,7 @@ const BodyLowerer = struct {
         ty: Type.TypeId,
         record: anytype,
     ) Allocator.Error!Ast.ExprId {
-        if (record.ext != null) invariantViolation("mono body lowering reached record update before record extension lowering was implemented");
+        if (record.ext) |ext| return try self.lowerRecordUpdate(ty, ext, record.fields);
         if (record.fields.len == 0) return try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() });
         const fields = try self.allocator.alloc(Ast.FieldExpr, record.fields.len);
         defer self.allocator.free(fields);
@@ -1130,6 +1130,70 @@ const BodyLowerer = struct {
             };
         }
         return try self.program.ast.addExpr(ty, .{ .record = try self.program.ast.addFieldExprSpan(fields) });
+    }
+
+    fn lowerRecordUpdate(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        ext: checked_artifact.CheckedExprId,
+        update_fields: []const checked_artifact.CheckedRecordExprField,
+    ) Allocator.Error!Ast.ExprId {
+        const ext_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(ext).ty);
+        const ext_expr = try self.lowerExpr(ext);
+        const ext_symbol = try self.program.symbols.add(base.Ident.Idx.NONE, .synthetic);
+        const ext_var = try self.program.ast.addExpr(ext_ty, .{ .var_ = ext_symbol });
+
+        const record_ty = switch (self.program.types.getType(ty)) {
+            .record => |record| record,
+            else => invariantViolation("mono body lowering record update expected record result type"),
+        };
+
+        const fields = try self.allocator.alloc(Ast.FieldExpr, record_ty.fields.len);
+        defer self.allocator.free(fields);
+        var field_count: usize = 0;
+
+        for (update_fields) |field| {
+            if (findRecordUpdateField(update_fields[0..field_count], field.label) != null) {
+                invariantViolation("mono body lowering record update contained duplicate field labels");
+            }
+            _ = self.recordFieldIndex(ty, field.label);
+            if (field_count >= fields.len) invariantViolation("mono body lowering record update had more fields than its result type");
+            fields[field_count] = .{
+                .field = field.label,
+                .value = try self.lowerExpr(field.value),
+            };
+            field_count += 1;
+        }
+
+        for (record_ty.fields) |field| {
+            if (findRecordUpdateField(update_fields, field.name) != null) continue;
+            if (field_count >= fields.len) invariantViolation("mono body lowering record update had more fields than its result type");
+            fields[field_count] = .{
+                .field = field.name,
+                .value = try self.program.ast.addExpr(field.ty, .{ .access = .{
+                    .record = ext_var,
+                    .field = field.name,
+                    .field_index = self.recordFieldIndex(ext_ty, field.name),
+                } }),
+            };
+            field_count += 1;
+        }
+
+        if (field_count != fields.len) invariantViolation("mono body lowering record update did not produce every result field exactly once");
+
+        const rest = try self.program.ast.addExpr(ty, .{
+            .record = try self.program.ast.addFieldExprSpan(fields),
+        });
+        return try self.program.ast.addExpr(ty, .{ .let_ = .{
+            .def = .{ .let_val = .{
+                .bind = .{
+                    .ty = ext_ty,
+                    .symbol = ext_symbol,
+                },
+                .body = ext_expr,
+            } },
+            .rest = rest,
+        } });
     }
 
     fn lowerClosureExpr(
@@ -1647,6 +1711,16 @@ fn findRecordField(
 ) ?checked_artifact.CheckedRecordField {
     for (fields) |field| {
         if (field.name == name) return field;
+    }
+    return null;
+}
+
+fn findRecordUpdateField(
+    fields: []const checked_artifact.CheckedRecordExprField,
+    name: canonical.RecordFieldLabelId,
+) ?checked_artifact.CheckedRecordExprField {
+    for (fields) |field| {
+        if (field.label == name) return field;
     }
     return null;
 }
