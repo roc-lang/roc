@@ -1743,13 +1743,69 @@ fn cliEchoFileExists(ctx: ?*anyopaque, path: []const u8) bool {
 }
 
 /// Run a default_app (headerless file with main! and echo platform).
-/// This compiles the app with real platform .roc files through the standard
-/// multi-module pipeline, JIT-compiles main_for_host!, and executes it.
+/// This compiles the app through checked artifacts and executes the resulting
+/// LIR runtime image with the echo platform host function.
 fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: []const u8) !void {
-    _ = ctx;
-    _ = args;
-    _ = original_source;
-    @compileError("Phase 2 must route default-app execution through checked artifacts");
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.fs.cwd().deleteTree(temp_dir) catch {};
+
+    const platform_dir = std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" }) catch return error.OutOfMemory;
+    std.fs.cwd().makePath(platform_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = platform_dir, .err = err } });
+    };
+
+    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" }) catch return error.OutOfMemory;
+    const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
+    const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
+    const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(synthetic_source);
+
+    std.fs.cwd().writeFile(.{ .sub_path = app_path, .data = synthetic_source }) catch |err| {
+        return ctx.fail(.{ .file_write_failed = .{ .path = app_path, .err = err } });
+    };
+    std.fs.cwd().writeFile(.{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source }) catch |err| {
+        return ctx.fail(.{ .file_write_failed = .{ .path = platform_main_path, .err = err } });
+    };
+    std.fs.cwd().writeFile(.{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source }) catch |err| {
+        return ctx.fail(.{ .file_write_failed = .{ .path = echo_module_path, .err = err } });
+    };
+
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, args.allow_errors);
+    defer closeSharedMemoryHandle(shm_result.handle);
+
+    if (shm_result.error_count > 0 and !args.allow_errors) {
+        return error.TypeCheckingFailed;
+    }
+
+    const view = try viewRuntimeImageFromHandle(shm_result.handle);
+
+    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+    var result_buf: [16]u8 align(16) = undefined;
+
+    try evaluateRuntimeImageEntrypoint(
+        ctx.gpa,
+        &view,
+        0,
+        &roc_ops,
+        @ptrCast(&result_buf),
+        @ptrCast(&cli_args_list),
+    );
+
+    const exit_code = result_buf[0];
+    if (exit_code != 0) {
+        std.process.exit(exit_code);
+    }
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -2146,6 +2202,95 @@ fn sharedMemoryResult(shm: *SharedMemoryAllocator, counts: CoordinatorReportCoun
         },
         .error_count = counts.errors,
         .warning_count = counts.warnings,
+    };
+}
+
+fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
+    if (comptime is_windows) {
+        _ = ipc.platform.windows.UnmapViewOfFile(handle.ptr);
+        _ = ipc.platform.windows.CloseHandle(@ptrCast(handle.fd));
+    } else {
+        _ = posix.munmap(handle.ptr, handle.mapped_size);
+        if (c.close(handle.fd) != 0) {}
+    }
+}
+
+fn viewRuntimeImageFromHandle(handle: SharedMemoryHandle) lir.RuntimeImage.ImageError!lir.RuntimeImage.ProgramView {
+    const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
+    const header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    return lir.RuntimeImage.viewMappedImage(header, base_ptr, handle.size);
+}
+
+fn argLayoutsForProc(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) Allocator.Error![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(layout.Idx, arg_ids.len);
+    errdefer allocator.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
+    const message = switch (err) {
+        error.OutOfMemory => "Roc interpreter ran out of memory",
+        error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
+        error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
+        error.Crash => return,
+    };
+    ops.crash(message);
+}
+
+fn evaluateRuntimeImageEntrypoint(
+    allocator: Allocator,
+    view: *const lir.RuntimeImage.ProgramView,
+    ordinal: u32,
+    ops: *echo_platform.host_abi.RocOps,
+    ret_ptr: ?*anyopaque,
+    arg_ptr: ?*anyopaque,
+) !void {
+    var entrypoint: ?lir.RuntimeImage.PlatformEntrypoint = null;
+    for (view.platform_entrypoints) |candidate| {
+        if (candidate.ordinal == ordinal) {
+            entrypoint = candidate;
+            break;
+        }
+    }
+    const selected = entrypoint orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("CLI runtime image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
+        }
+        unreachable;
+    };
+
+    const arg_layouts = try argLayoutsForProc(allocator, &view.store, selected.root_proc);
+    defer allocator.free(arg_layouts);
+
+    var interpreter = try eval.LirInterpreter.init(
+        allocator,
+        &view.store,
+        &view.layouts,
+        ops,
+    );
+    defer interpreter.deinit();
+
+    const proc = view.store.getProcSpec(selected.root_proc);
+    _ = interpreter.eval(.{
+        .proc_id = selected.root_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = arg_ptr,
+        .ret_ptr = ret_ptr,
+    }) catch |err| {
+        reportCliInterpreterError(ops, &interpreter, err);
+        return;
     };
 }
 
