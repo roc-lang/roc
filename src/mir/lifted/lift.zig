@@ -102,7 +102,9 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
         .allocator = allocator,
         .input = &input.program.ast,
         .output = &program.ast,
+        .expr_map = std.AutoHashMap(MonoRow.Ast.ExprId, Ast.ExprId).init(allocator),
     };
+    defer lifter.deinit();
 
     try program.procs.ensureTotalCapacity(allocator, input.program.procs.items.len);
     for (input.program.procs.items, 0..) |proc, i| {
@@ -122,6 +124,11 @@ const BodyLifter = struct {
     allocator: Allocator,
     input: *const MonoRow.Ast.Store,
     output: *Ast.Store,
+    expr_map: std.AutoHashMap(MonoRow.Ast.ExprId, Ast.ExprId),
+
+    fn deinit(self: *BodyLifter) void {
+        self.expr_map.deinit();
+    }
 
     fn lowerDef(self: *BodyLifter, def_id: MonoRow.Ast.DefId) Allocator.Error!Ast.DefId {
         const def = self.input.getDef(def_id);
@@ -146,8 +153,10 @@ const BodyLifter = struct {
     }
 
     fn lowerExpr(self: *BodyLifter, expr_id: MonoRow.Ast.ExprId) Allocator.Error!Ast.ExprId {
+        if (self.expr_map.get(expr_id)) |existing| return existing;
+
         const expr = self.input.getExpr(expr_id);
-        return try self.output.addExpr(expr.ty, switch (expr.data) {
+        const lowered = try self.output.addExpr(expr.ty, switch (expr.data) {
             .var_ => |symbol| .{ .var_ = symbol },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -223,6 +232,8 @@ const BodyLifter = struct {
             .for_,
             => liftInvariant("lifted MIR reached row-finalized expression form whose lowering is still missing"),
         });
+        try self.expr_map.put(expr_id, lowered);
+        return lowered;
     }
 
     fn lowerStmt(self: *BodyLifter, stmt_id: MonoRow.Ast.StmtId) Allocator.Error!Ast.StmtId {

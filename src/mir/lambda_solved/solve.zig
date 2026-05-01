@@ -16,7 +16,7 @@ const canonical = check.CanonicalNames;
 
 pub const Proc = struct {
     proc: canonical.MonoSpecializedProcRef,
-    body: ?Ast.DefId = null,
+    body: Ast.DefId,
     representation_instance: repr.ProcRepresentationInstanceId,
 };
 
@@ -31,6 +31,7 @@ pub const Program = struct {
     root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
+    value_stores: std.ArrayList(repr.ValueInfoStore),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -44,11 +45,19 @@ pub const Program = struct {
             .root_procs = .empty,
             .solve_sessions = .empty,
             .proc_instances = .empty,
+            .value_stores = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        for (self.value_stores.items) |*store| {
+            store.deinit();
+        }
+        self.value_stores.deinit(self.allocator);
         self.proc_instances.deinit(self.allocator);
+        for (self.solve_sessions.items) |*session| {
+            session.deinit();
+        }
         self.solve_sessions.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
@@ -75,11 +84,52 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     input.row_shapes = MonoRow.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
+    try program.solve_sessions.ensureTotalCapacity(allocator, input.procs.items.len);
+    try program.proc_instances.ensureTotalCapacity(allocator, input.procs.items.len);
+    try program.value_stores.ensureTotalCapacity(allocator, input.procs.items.len);
+
+    var type_importer = TypeImporter.init(allocator, &input.types, &program.types);
+    defer type_importer.deinit();
+
     for (input.procs.items, 0..) |proc, i| {
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
+        const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(i)));
+        const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(i)));
+
+        program.solve_sessions.appendAssumeCapacity(.{
+            .members = &.{},
+            .representation_store = repr.RepresentationStore.init(allocator),
+            .state = .building,
+        });
+        program.value_stores.appendAssumeCapacity(repr.ValueInfoStore.init(allocator));
+
+        var solver = BodySolver{
+            .allocator = allocator,
+            .input = &input.ast,
+            .output = &program.ast,
+            .type_importer = &type_importer,
+            .representation_store = &program.solve_sessions.items[i].representation_store,
+            .value_store = &program.value_stores.items[i],
+            .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(allocator),
+            .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(allocator),
+            .instance = instance,
+        };
+        defer solver.deinit();
+
+        const body = try solver.lowerDef(proc.body);
+        const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
+
+        program.solve_sessions.items[i].state = .sealed;
+        program.proc_instances.appendAssumeCapacity(.{
+            .proc = proc.proc.proc,
+            .executable_specialization_key = null,
+            .solve_session = session_id,
+            .value_store = value_store_id,
+            .public_roots = roots,
+        });
         program.procs.appendAssumeCapacity(.{
             .proc = proc.proc,
-            .body = null,
+            .body = body,
             .representation_instance = instance,
         });
     }
@@ -87,6 +137,613 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
     input.deinit();
     return program;
+}
+
+const TypeImporter = struct {
+    allocator: Allocator,
+    input: *const Lifted.Type.Store,
+    output: *Type.Store,
+    active: std.AutoHashMap(Lifted.Type.TypeId, Type.TypeVarId),
+
+    fn init(allocator: Allocator, input: *const Lifted.Type.Store, output: *Type.Store) TypeImporter {
+        return .{
+            .allocator = allocator,
+            .input = input,
+            .output = output,
+            .active = std.AutoHashMap(Lifted.Type.TypeId, Type.TypeVarId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeImporter) void {
+        self.active.deinit();
+    }
+
+    fn importType(self: *TypeImporter, source: Lifted.Type.TypeId) Allocator.Error!Type.TypeVarId {
+        switch (self.input.getTypePreservingNominal(source)) {
+            .link => |next| return try self.importType(next),
+            else => {},
+        }
+
+        if (self.active.get(source)) |existing| return existing;
+
+        const target = try self.output.freshUnbd();
+        try self.active.put(source, target);
+        errdefer _ = self.active.remove(source);
+
+        const node: Type.Node = switch (self.input.getTypePreservingNominal(source)) {
+            .placeholder,
+            .unbd,
+            => lambdaInvariant("lambda-solved type import received unresolved lifted type"),
+            .link => unreachable,
+            .primitive => |prim| .{ .content = .{ .primitive = prim } },
+            .func => |func| blk: {
+                const args = try self.allocator.alloc(Type.TypeVarId, func.args.len);
+                defer self.allocator.free(args);
+                for (func.args, 0..) |arg, i| {
+                    args[i] = try self.importType(arg);
+                }
+                const ret = try self.importType(func.ret);
+                break :blk .{ .content = .{ .func = .{
+                    .fixed_arity = @intCast(func.args.len),
+                    .args = try self.output.addTypeVarSpan(args),
+                    .ret = ret,
+                    .callable = self.output.freshCallableVar(),
+                } } };
+            },
+            .nominal => |nominal| blk: {
+                const args = try self.allocator.alloc(Type.TypeVarId, nominal.args.len);
+                defer self.allocator.free(args);
+                for (nominal.args, 0..) |arg, i| {
+                    args[i] = try self.importType(arg);
+                }
+                break :blk .{ .nominal = .{
+                    .nominal = nominal.nominal,
+                    .is_opaque = nominal.is_opaque,
+                    .args = try self.output.addTypeVarSpan(args),
+                    .backing = try self.importType(nominal.backing),
+                } };
+            },
+            .list => |elem| .{ .content = .{ .list = try self.importType(elem) } },
+            .box => |elem| .{ .content = .{ .box = try self.importType(elem) } },
+            .tuple => |elems| blk: {
+                const items = try self.allocator.alloc(Type.TypeVarId, elems.len);
+                defer self.allocator.free(items);
+                for (elems, 0..) |elem, i| {
+                    items[i] = try self.importType(elem);
+                }
+                break :blk .{ .content = .{ .tuple = try self.output.addTypeVarSpan(items) } };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = try self.allocator.alloc(Type.Tag, tag_union.tags.len);
+                defer self.allocator.free(tags);
+                for (tag_union.tags, 0..) |tag, i| {
+                    const args = try self.allocator.alloc(Type.TypeVarId, tag.args.len);
+                    defer self.allocator.free(args);
+                    for (tag.args, 0..) |arg, j| {
+                        args[j] = try self.importType(arg);
+                    }
+                    tags[i] = .{
+                        .name = tag.name,
+                        .args = try self.output.addTypeVarSpan(args),
+                    };
+                }
+                break :blk .{ .content = .{ .tag_union = .{ .tags = try self.output.addTags(tags) } } };
+            },
+            .record => |record| blk: {
+                const fields = try self.allocator.alloc(Type.Field, record.fields.len);
+                defer self.allocator.free(fields);
+                for (record.fields, 0..) |field, i| {
+                    fields[i] = .{
+                        .name = field.name,
+                        .ty = try self.importType(field.ty),
+                    };
+                }
+                break :blk .{ .content = .{ .record = .{ .fields = try self.output.addFields(fields) } } };
+            },
+        };
+
+        self.output.setNode(target, node);
+        _ = self.active.remove(source);
+        return target;
+    }
+};
+
+const BodySolver = struct {
+    allocator: Allocator,
+    input: *const Lifted.Ast.Store,
+    output: *Ast.Store,
+    type_importer: *TypeImporter,
+    representation_store: *repr.RepresentationStore,
+    value_store: *repr.ValueInfoStore,
+    env: std.AutoHashMap(Ast.Symbol, repr.BindingInfoId),
+    expr_map: std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
+    instance: repr.ProcRepresentationInstanceId,
+    public_roots: ?repr.ProcPublicValueRoots = null,
+
+    fn deinit(self: *BodySolver) void {
+        self.expr_map.deinit();
+        self.env.deinit();
+    }
+
+    fn lowerDef(self: *BodySolver, def_id: Lifted.Ast.DefId) Allocator.Error!Ast.DefId {
+        const def = self.input.getDef(def_id);
+        return try self.output.addDef(.{
+            .proc = def.proc,
+            .value = switch (def.value) {
+                .fn_ => |fn_| blk: {
+                    const lowered_args = try self.lowerParamSpan(fn_.args);
+                    const capture_values = try self.lowerCaptureSlotRoots(fn_.captures);
+                    const body = try self.lowerExpr(fn_.body);
+                    const body_value = self.exprValue(body);
+                    const function_root = self.representation_store.reserveRoot();
+                    self.public_roots = .{
+                        .params = lowered_args.values,
+                        .ret = body_value,
+                        .captures = capture_values,
+                        .function_root = function_root,
+                    };
+                    break :blk .{ .fn_ = .{
+                        .args = lowered_args.symbols,
+                        .body = body,
+                        .representation_instance = self.instance,
+                    } };
+                },
+                .hosted_fn => |hosted| blk: {
+                    const lowered_args = try self.lowerParamSpan(hosted.args);
+                    const ret = try self.newValue(try self.type_importer.output.freshUnbd());
+                    self.public_roots = .{
+                        .params = lowered_args.values,
+                        .ret = ret,
+                        .captures = repr.Span(repr.ValueInfoId).empty(),
+                        .function_root = self.representation_store.reserveRoot(),
+                    };
+                    break :blk .{ .hosted_fn = .{
+                        .proc = hosted.proc,
+                        .args = lowered_args.symbols,
+                        .hosted = hosted.hosted,
+                    } };
+                },
+                .val => |expr| blk: {
+                    const body = try self.lowerExpr(expr);
+                    self.public_roots = .{
+                        .params = repr.Span(repr.ValueInfoId).empty(),
+                        .ret = self.exprValue(body),
+                        .captures = repr.Span(repr.ValueInfoId).empty(),
+                        .function_root = self.representation_store.reserveRoot(),
+                    };
+                    break :blk .{ .val = body };
+                },
+                .run => |run| blk: {
+                    const body = try self.lowerExpr(run.body);
+                    self.public_roots = .{
+                        .params = repr.Span(repr.ValueInfoId).empty(),
+                        .ret = self.exprValue(body),
+                        .captures = repr.Span(repr.ValueInfoId).empty(),
+                        .function_root = self.representation_store.reserveRoot(),
+                    };
+                    break :blk .{ .run = .{ .body = body } };
+                },
+            },
+        });
+    }
+
+    const LoweredParams = struct {
+        symbols: Ast.Span(Ast.TypedSymbol),
+        values: repr.Span(repr.ValueInfoId),
+    };
+
+    fn lowerParamSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.TypedSymbol)) Allocator.Error!LoweredParams {
+        const input_items = self.input.sliceTypedSymbolSpan(span);
+        if (input_items.len == 0) return .{
+            .symbols = Ast.Span(Ast.TypedSymbol).empty(),
+            .values = repr.Span(repr.ValueInfoId).empty(),
+        };
+        const symbols = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
+        defer self.allocator.free(symbols);
+        const values = try self.allocator.alloc(repr.ValueInfoId, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |param, i| {
+            const ty = try self.type_importer.importType(param.ty);
+            const value = try self.newValue(ty);
+            const binding = try self.value_store.addBinding(.{
+                .symbol = param.symbol,
+                .value = value,
+                .root = self.valueRoot(value),
+            });
+            try self.env.put(param.symbol, binding);
+            symbols[i] = .{
+                .ty = ty,
+                .symbol = param.symbol,
+                .binding_info = binding,
+            };
+            values[i] = value;
+        }
+        return .{
+            .symbols = try self.output.addTypedSymbolSpan(symbols),
+            .values = try self.value_store.addValueSpan(values),
+        };
+    }
+
+    fn lowerCaptureSlotRoots(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.CaptureSlot)) Allocator.Error!repr.Span(repr.ValueInfoId) {
+        const input_items = self.input.sliceCaptureSlotSpan(span);
+        if (input_items.len == 0) return repr.Span(repr.ValueInfoId).empty();
+        const values = try self.allocator.alloc(repr.ValueInfoId, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |slot, i| {
+            const ty = try self.type_importer.importType(slot.ty);
+            const value = try self.newValue(ty);
+            const binding = try self.value_store.addBinding(.{
+                .symbol = slot.source_symbol,
+                .value = value,
+                .root = self.valueRoot(value),
+            });
+            try self.env.put(slot.source_symbol, binding);
+            values[i] = value;
+        }
+        return try self.value_store.addValueSpan(values);
+    }
+
+    fn lowerExpr(self: *BodySolver, expr_id: Lifted.Ast.ExprId) Allocator.Error!Ast.ExprId {
+        if (self.expr_map.get(expr_id)) |existing| return existing;
+
+        const expr = self.input.getExpr(expr_id);
+        const ty = try self.type_importer.importType(expr.ty);
+        const value = try self.newValue(ty);
+        const lowered = try self.output.addExpr(ty, value, switch (expr.data) {
+            .var_ => |symbol| .{ .var_ = .{
+                .symbol = symbol,
+                .binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info"),
+            } },
+            .capture_ref => |slot| .{ .capture_ref = slot },
+            .int_lit => |literal| .{ .int_lit = literal },
+            .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
+            .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
+            .dec_lit => |literal| .{ .dec_lit = literal },
+            .bool_lit => |literal| .{ .bool_lit = literal },
+            .str_lit => |literal| .{ .str_lit = literal },
+            .const_ref => |const_ref| .{ .const_ref = const_ref },
+            .tag => |tag| .{ .tag = .{
+                .union_shape = tag.union_shape,
+                .tag = tag.tag,
+                .eval_order = try self.lowerTagPayloadEvalSpan(tag.eval_order),
+                .assembly_order = try self.lowerTagPayloadAssemblySpan(tag.assembly_order),
+                .constructor_ty = try self.type_importer.importType(tag.constructor_ty),
+            } },
+            .record => |record| .{ .record = .{
+                .shape = record.shape,
+                .eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order),
+                .assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order),
+            } },
+            .access => |access| blk: {
+                const record = try self.lowerExpr(access.record);
+                const projection = try self.value_store.addProjection(.{
+                    .source = self.exprValue(record),
+                    .result = value,
+                    .root = self.valueRoot(value),
+                    .kind = .{ .record_field = access.field },
+                });
+                break :blk .{ .access = .{
+                    .record = record,
+                    .field = access.field,
+                    .projection_info = projection,
+                } };
+            },
+            .structural_eq => |eq| .{ .structural_eq = .{
+                .lhs = try self.lowerExpr(eq.lhs),
+                .rhs = try self.lowerExpr(eq.rhs),
+            } },
+            .bool_not => |child| .{ .bool_not = try self.lowerExpr(child) },
+            .let_ => |let_| blk: {
+                const body = try self.lowerExpr(let_.body);
+                const bind_ty = try self.type_importer.importType(let_.bind.ty);
+                const binding = try self.value_store.addBinding(.{
+                    .symbol = let_.bind.symbol,
+                    .value = self.exprValue(body),
+                    .root = self.valueRoot(self.exprValue(body)),
+                });
+                const previous = try self.env.fetchPut(let_.bind.symbol, binding);
+                defer {
+                    if (previous) |entry| {
+                        self.env.put(let_.bind.symbol, entry.value) catch unreachable;
+                    } else {
+                        _ = self.env.remove(let_.bind.symbol);
+                    }
+                }
+                break :blk .{ .let_ = .{
+                    .bind = .{
+                        .ty = bind_ty,
+                        .symbol = let_.bind.symbol,
+                        .binding_info = binding,
+                    },
+                    .body = body,
+                    .rest = try self.lowerExpr(let_.rest),
+                } };
+            },
+            .call_value => |call| blk: {
+                const func = try self.lowerExpr(call.func);
+                const lowered_args = try self.lowerExprSpanWithValues(call.args);
+                const requested_fn_ty = try self.type_importer.importType(call.requested_fn_ty);
+                const call_site = try self.value_store.addCallSite(.{
+                    .callee = self.exprValue(func),
+                    .args = lowered_args.values,
+                    .result = value,
+                    .requested_fn_root = self.representation_store.reserveRoot(),
+                });
+                break :blk .{ .call_value = .{
+                    .func = func,
+                    .args = lowered_args.exprs,
+                    .requested_fn_ty = requested_fn_ty,
+                    .call_site = call_site,
+                } };
+            },
+            .call_proc => |call| blk: {
+                const lowered_args = try self.lowerExprSpanWithValues(call.args);
+                const requested_fn_ty = try self.type_importer.importType(call.requested_fn_ty);
+                const call_site = try self.value_store.addCallSite(.{
+                    .callee = null,
+                    .args = lowered_args.values,
+                    .result = value,
+                    .requested_fn_root = self.representation_store.reserveRoot(),
+                });
+                break :blk .{ .call_proc = .{
+                    .proc = call.proc,
+                    .args = lowered_args.exprs,
+                    .requested_fn_ty = requested_fn_ty,
+                    .call_site = call_site,
+                } };
+            },
+            .proc_value => |proc_value| .{ .proc_value = .{
+                .proc = proc_value.proc,
+                .captures = try self.lowerCaptureArgSpan(proc_value.captures),
+                .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
+            } },
+            .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
+            .low_level => |low_level| .{ .low_level = .{
+                .op = low_level.op,
+                .args = try self.lowerExprSpan(low_level.args),
+                .source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty),
+            } },
+            .block => |block| .{ .block = .{
+                .stmts = try self.lowerStmtSpan(block.stmts),
+                .final_expr = try self.lowerExpr(block.final_expr),
+            } },
+            .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
+            .tag_payload => |payload| blk: {
+                const tag_union = try self.lowerExpr(payload.tag_union);
+                const projection = try self.value_store.addProjection(.{
+                    .source = self.exprValue(tag_union),
+                    .result = value,
+                    .root = self.valueRoot(value),
+                    .kind = .{ .tag_payload = payload.payload },
+                });
+                break :blk .{ .tag_payload = .{
+                    .tag_union = tag_union,
+                    .payload = payload.payload,
+                    .projection_info = projection,
+                } };
+            },
+            .tuple_access => |access| blk: {
+                const tuple = try self.lowerExpr(access.tuple);
+                const projection = try self.value_store.addProjection(.{
+                    .source = self.exprValue(tuple),
+                    .result = value,
+                    .root = self.valueRoot(value),
+                    .kind = .{ .tuple_elem = access.elem_index },
+                });
+                break :blk .{ .tuple_access = .{
+                    .tuple = tuple,
+                    .elem_index = access.elem_index,
+                    .projection_info = projection,
+                } };
+            },
+            .list => |items| .{ .list = try self.lowerExprSpan(items) },
+            .unit => .unit,
+            .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
+            .crash => |literal| .{ .crash = literal },
+            .runtime_error => .runtime_error,
+            .match_,
+            .if_,
+            .for_,
+            => lambdaInvariant("lambda-solved MIR reached lifted expression form whose value-flow lowering is still missing"),
+        });
+        try self.expr_map.put(expr_id, lowered);
+        return lowered;
+    }
+
+    fn lowerStmt(self: *BodySolver, stmt_id: Lifted.Ast.StmtId) Allocator.Error!Ast.StmtId {
+        const stmt = self.input.getStmt(stmt_id);
+        return try self.output.addStmt(switch (stmt) {
+            .decl => |decl| blk: {
+                const body = try self.lowerExpr(decl.body);
+                const bind_ty = try self.type_importer.importType(decl.bind.ty);
+                const binding = try self.value_store.addBinding(.{
+                    .symbol = decl.bind.symbol,
+                    .value = self.exprValue(body),
+                    .root = self.valueRoot(self.exprValue(body)),
+                });
+                try self.env.put(decl.bind.symbol, binding);
+                break :blk .{ .decl = .{
+                    .bind = .{
+                        .ty = bind_ty,
+                        .symbol = decl.bind.symbol,
+                        .binding_info = binding,
+                    },
+                    .body = body,
+                } };
+            },
+            .var_decl => |decl| blk: {
+                const body = try self.lowerExpr(decl.body);
+                const bind_ty = try self.type_importer.importType(decl.bind.ty);
+                const binding = try self.value_store.addBinding(.{
+                    .symbol = decl.bind.symbol,
+                    .value = self.exprValue(body),
+                    .root = self.valueRoot(self.exprValue(body)),
+                });
+                try self.env.put(decl.bind.symbol, binding);
+                break :blk .{ .var_decl = .{
+                    .bind = .{
+                        .ty = bind_ty,
+                        .symbol = decl.bind.symbol,
+                        .binding_info = binding,
+                    },
+                    .body = body,
+                } };
+            },
+            .reassign => |reassign| blk: {
+                const body = try self.lowerExpr(reassign.body);
+                const binding = self.env.get(reassign.target) orelse lambdaInvariant("lambda-solved reassignment target has no binding info");
+                break :blk .{ .reassign = .{
+                    .target = reassign.target,
+                    .version = binding,
+                    .body = body,
+                } };
+            },
+            .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
+            .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
+            .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
+            .crash => |literal| .{ .crash = literal },
+            .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
+            .break_ => .break_,
+            .for_,
+            .while_,
+            => lambdaInvariant("lambda-solved MIR reached lifted statement form whose value-flow lowering is still missing"),
+        });
+    }
+
+    const LoweredExprSpan = struct {
+        exprs: Ast.Span(Ast.ExprId),
+        values: repr.Span(repr.ValueInfoId),
+    };
+
+    fn lowerExprSpanWithValues(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!LoweredExprSpan {
+        const input_items = self.input.sliceExprSpan(span);
+        if (input_items.len == 0) return .{
+            .exprs = Ast.Span(Ast.ExprId).empty(),
+            .values = repr.Span(repr.ValueInfoId).empty(),
+        };
+        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(exprs);
+        const values = try self.allocator.alloc(repr.ValueInfoId, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |expr, i| {
+            exprs[i] = try self.lowerExpr(expr);
+            values[i] = self.exprValue(exprs[i]);
+        }
+        return .{
+            .exprs = try self.output.addExprSpan(exprs),
+            .values = try self.value_store.addValueSpan(values),
+        };
+    }
+
+    fn lowerExprSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
+        return (try self.lowerExprSpanWithValues(span)).exprs;
+    }
+
+    fn lowerStmtSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {
+        const input_items = self.input.sliceStmtSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.StmtId).empty();
+        const output_items = try self.allocator.alloc(Ast.StmtId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |stmt, i| {
+            output_items[i] = try self.lowerStmt(stmt);
+        }
+        return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerCaptureArgSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!Ast.Span(Ast.CaptureArg) {
+        const input_items = self.input.sliceCaptureArgSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.CaptureArg).empty();
+        const output_items = try self.allocator.alloc(Ast.CaptureArg, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |capture, i| {
+            const expr = try self.lowerExpr(capture.expr);
+            output_items[i] = .{
+                .slot = capture.slot,
+                .value_info = self.exprValue(expr),
+                .expr = expr,
+            };
+        }
+        return try self.output.addCaptureArgSpan(output_items);
+    }
+
+    fn lowerRecordFieldEvalSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldEval)) Allocator.Error!Ast.Span(Ast.RecordFieldEval) {
+        const input_items = self.input.sliceRecordFieldEvalSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.RecordFieldEval).empty();
+        const output_items = try self.allocator.alloc(Ast.RecordFieldEval, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |field, i| {
+            output_items[i] = .{
+                .field = field.field,
+                .value = try self.lowerExpr(field.value),
+            };
+        }
+        return try self.output.addRecordFieldEvalSpan(output_items);
+    }
+
+    fn lowerRecordFieldAssemblySpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldAssembly)) Allocator.Error!Ast.Span(Ast.RecordFieldAssembly) {
+        const input_items = self.input.sliceRecordFieldAssemblySpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.RecordFieldAssembly).empty();
+        const output_items = try self.allocator.alloc(Ast.RecordFieldAssembly, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |field, i| {
+            output_items[i] = .{
+                .field = field.field,
+                .value = try self.lowerExpr(field.value),
+            };
+        }
+        return try self.output.addRecordFieldAssemblySpan(output_items);
+    }
+
+    fn lowerTagPayloadEvalSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadEval)) Allocator.Error!Ast.Span(Ast.TagPayloadEval) {
+        const input_items = self.input.sliceTagPayloadEvalSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.TagPayloadEval).empty();
+        const output_items = try self.allocator.alloc(Ast.TagPayloadEval, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |payload, i| {
+            output_items[i] = .{
+                .payload = payload.payload,
+                .value = try self.lowerExpr(payload.value),
+            };
+        }
+        return try self.output.addTagPayloadEvalSpan(output_items);
+    }
+
+    fn lowerTagPayloadAssemblySpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadAssembly)) Allocator.Error!Ast.Span(Ast.TagPayloadAssembly) {
+        const input_items = self.input.sliceTagPayloadAssemblySpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.TagPayloadAssembly).empty();
+        const output_items = try self.allocator.alloc(Ast.TagPayloadAssembly, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |payload, i| {
+            output_items[i] = .{
+                .payload = payload.payload,
+                .value = try self.lowerExpr(payload.value),
+            };
+        }
+        return try self.output.addTagPayloadAssemblySpan(output_items);
+    }
+
+    fn newValue(self: *BodySolver, ty: Type.TypeVarId) Allocator.Error!repr.ValueInfoId {
+        const root = self.representation_store.reserveRoot();
+        const class = self.representation_store.reserveClass();
+        return try self.value_store.addValue(.{
+            .logical_ty = ty,
+            .root = root,
+            .solved_class = class,
+        });
+    }
+
+    fn exprValue(self: *const BodySolver, expr: Ast.ExprId) repr.ValueInfoId {
+        return self.output.exprs.items[@intFromEnum(expr)].value_info;
+    }
+
+    fn valueRoot(self: *const BodySolver, value: repr.ValueInfoId) repr.RepRootId {
+        return self.value_store.values.items[@intFromEnum(value)].root;
+    }
+};
+
+fn lambdaInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
 }
 
 test "lambda-solved program owns representation tables" {

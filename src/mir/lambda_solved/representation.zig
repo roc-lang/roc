@@ -2,12 +2,14 @@
 
 const std = @import("std");
 const check = @import("check");
+const symbol_mod = @import("symbol");
 const row = @import("../mono_row/mod.zig");
 const debug = @import("../debug_verify.zig");
+const type_mod = @import("type.zig");
 
 const canonical = check.CanonicalNames;
 
-pub const CallableVarId = enum(u32) { _ };
+pub const CallableVarId = type_mod.CallableVarId;
 pub const RepRootId = enum(u32) { _ };
 pub const ValueInfoId = enum(u32) { _ };
 pub const BindingInfoId = enum(u32) { _ };
@@ -23,6 +25,23 @@ pub const RepresentationSolveSessionId = enum(u32) { _ };
 pub const ValueInfoStoreId = enum(u32) { _ };
 pub const CallableSetMemberId = enum(u32) { _ };
 pub const ErasedAdapterId = enum(u32) { _ };
+pub const Symbol = symbol_mod.Symbol;
+pub const TypeVarId = type_mod.TypeVarId;
+
+pub fn Span(comptime _: type) type {
+    return extern struct {
+        start: u32,
+        len: u32,
+
+        pub fn empty() @This() {
+            return .{ .start = 0, .len = 0 };
+        }
+
+        pub fn isEmpty(self: @This()) bool {
+            return self.len == 0;
+        }
+    };
+}
 
 pub const CanonicalCallableSetKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
@@ -247,12 +266,31 @@ pub const TagPayloadValueInfo = struct {
 };
 
 pub const ValueInfo = struct {
-    logical_ty: canonical.CanonicalTypeKey,
+    logical_ty: TypeVarId,
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
     aggregate: ?AggregateValueInfo = null,
+};
+
+pub const BindingInfo = struct {
+    symbol: Symbol,
+    value: ValueInfoId,
+    root: RepRootId,
+};
+
+pub const ProjectionKind = union(enum) {
+    record_field: row.RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: row.TagPayloadId,
+};
+
+pub const ProjectionInfo = struct {
+    source: ValueInfoId,
+    result: ValueInfoId,
+    root: RepRootId,
+    kind: ProjectionKind,
 };
 
 pub const CallSiteDispatch = union(enum) {
@@ -261,17 +299,17 @@ pub const CallSiteDispatch = union(enum) {
 };
 
 pub const CallSiteInfo = struct {
-    callee: ValueInfoId,
-    args: []const ValueInfoId,
+    callee: ?ValueInfoId,
+    args: Span(ValueInfoId),
     result: ValueInfoId,
     requested_fn_root: RepRootId,
-    dispatch: CallSiteDispatch,
+    dispatch: ?CallSiteDispatch = null,
 };
 
 pub const ProcPublicValueRoots = struct {
-    params: []const ValueInfoId,
+    params: Span(ValueInfoId),
     ret: ValueInfoId,
-    captures: []const ValueInfoId,
+    captures: Span(ValueInfoId),
     function_root: RepRootId,
 };
 
@@ -283,12 +321,35 @@ pub const RepresentationSolveState = enum {
 };
 
 pub const RepresentationStore = struct {
+    allocator: std.mem.Allocator,
     roots_len: u32 = 0,
     classes_len: u32 = 0,
     callable_emission_plans: []const CallableValueEmissionPlan = &.{},
     callable_construction_plans: []const CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
     box_boundaries: []const BoxBoundary = &.{},
+
+    pub fn init(allocator: std.mem.Allocator) RepresentationStore {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *RepresentationStore) void {
+        self.* = RepresentationStore.init(self.allocator);
+    }
+
+    pub fn reserveRoot(self: *RepresentationStore) RepRootId {
+        const id: RepRootId = @enumFromInt(self.roots_len);
+        self.roots_len += 1;
+        return id;
+    }
+
+    pub fn reserveClass(self: *RepresentationStore) RepresentationClassId {
+        const id: RepresentationClassId = @enumFromInt(self.classes_len);
+        self.classes_len += 1;
+        return id;
+    }
 
     pub fn callableEmissionPlan(
         self: *const RepresentationStore,
@@ -374,6 +435,71 @@ pub const RepresentationStore = struct {
     }
 };
 
+pub const ValueInfoStore = struct {
+    allocator: std.mem.Allocator,
+    values: std.ArrayList(ValueInfo),
+    bindings: std.ArrayList(BindingInfo),
+    projections: std.ArrayList(ProjectionInfo),
+    call_sites: std.ArrayList(CallSiteInfo),
+    value_ids: std.ArrayList(ValueInfoId),
+
+    pub fn init(allocator: std.mem.Allocator) ValueInfoStore {
+        return .{
+            .allocator = allocator,
+            .values = .empty,
+            .bindings = .empty,
+            .projections = .empty,
+            .call_sites = .empty,
+            .value_ids = .empty,
+        };
+    }
+
+    pub fn deinit(self: *ValueInfoStore) void {
+        self.value_ids.deinit(self.allocator);
+        self.call_sites.deinit(self.allocator);
+        self.projections.deinit(self.allocator);
+        self.bindings.deinit(self.allocator);
+        self.values.deinit(self.allocator);
+        self.* = ValueInfoStore.init(self.allocator);
+    }
+
+    pub fn addValue(self: *ValueInfoStore, value: ValueInfo) std.mem.Allocator.Error!ValueInfoId {
+        const id: ValueInfoId = @enumFromInt(@as(u32, @intCast(self.values.items.len)));
+        try self.values.append(self.allocator, value);
+        return id;
+    }
+
+    pub fn addBinding(self: *ValueInfoStore, binding: BindingInfo) std.mem.Allocator.Error!BindingInfoId {
+        const id: BindingInfoId = @enumFromInt(@as(u32, @intCast(self.bindings.items.len)));
+        try self.bindings.append(self.allocator, binding);
+        return id;
+    }
+
+    pub fn addProjection(self: *ValueInfoStore, projection: ProjectionInfo) std.mem.Allocator.Error!ProjectionInfoId {
+        const id: ProjectionInfoId = @enumFromInt(@as(u32, @intCast(self.projections.items.len)));
+        try self.projections.append(self.allocator, projection);
+        return id;
+    }
+
+    pub fn addCallSite(self: *ValueInfoStore, call_site: CallSiteInfo) std.mem.Allocator.Error!CallSiteInfoId {
+        const id: CallSiteInfoId = @enumFromInt(@as(u32, @intCast(self.call_sites.items.len)));
+        try self.call_sites.append(self.allocator, call_site);
+        return id;
+    }
+
+    pub fn addValueSpan(self: *ValueInfoStore, values: []const ValueInfoId) std.mem.Allocator.Error!Span(ValueInfoId) {
+        if (values.len == 0) return Span(ValueInfoId).empty();
+        const start: u32 = @intCast(self.value_ids.items.len);
+        try self.value_ids.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceValueSpan(self: *const ValueInfoStore, span: Span(ValueInfoId)) []const ValueInfoId {
+        if (span.len == 0) return &.{};
+        return self.value_ids.items[span.start..][0..span.len];
+    }
+};
+
 pub fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
@@ -386,11 +512,15 @@ pub const RepresentationSolveSession = struct {
     members: []const ProcRepresentationInstanceId,
     representation_store: RepresentationStore,
     state: RepresentationSolveState,
+
+    pub fn deinit(self: *RepresentationSolveSession) void {
+        self.representation_store.deinit();
+    }
 };
 
 pub const ProcRepresentationInstance = struct {
     proc: canonical.ProcedureValueRef,
-    executable_specialization_key: ExecutableSpecializationKey,
+    executable_specialization_key: ?ExecutableSpecializationKey = null,
     solve_session: RepresentationSolveSessionId,
     value_store: ValueInfoStoreId,
     public_roots: ProcPublicValueRoots,

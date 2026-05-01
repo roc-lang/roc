@@ -8,12 +8,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
 const lifted_type = @import("../lifted/mod.zig").Type;
-const repr = @import("representation.zig");
 
 const canonical = check.CanonicalNames;
 
 pub const Prim = lifted_type.Prim;
-pub const CallableVarId = repr.CallableVarId;
+pub const CallableVarId = enum(u32) { _ };
 
 pub const TypeVarId = enum(u32) { _ };
 
