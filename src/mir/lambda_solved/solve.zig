@@ -121,7 +121,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
         program.solve_sessions.items[i].state = .sealed;
         program.proc_instances.appendAssumeCapacity(.{
-            .proc = proc.proc.proc,
+            .proc = proc.proc,
             .executable_specialization_key = null,
             .solve_session = session_id,
             .value_store = value_store_id,

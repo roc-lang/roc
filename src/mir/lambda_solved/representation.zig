@@ -206,7 +206,7 @@ pub const CallableValueEmissionPlan = union(enum) {
 
 pub const CallableValueSource = union(enum) {
     proc_value: struct {
-        proc: canonical.ProcedureValueRef,
+        proc: canonical.MonoSpecializedProcRef,
         captures: []const ValueInfoId,
         fn_ty: canonical.CanonicalTypeKey,
     },
@@ -542,7 +542,7 @@ pub const RepresentationSolveSession = struct {
 };
 
 pub const ProcRepresentationInstance = struct {
-    proc: canonical.ProcedureValueRef,
+    proc: canonical.MonoSpecializedProcRef,
     executable_specialization_key: ?ExecutableSpecializationKey = null,
     solve_session: RepresentationSolveSessionId,
     value_store: ValueInfoStoreId,

@@ -1270,7 +1270,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = reserved.proc.proc,
+            .proc = reserved.proc,
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .recursive = false,
@@ -1709,7 +1709,7 @@ const BodyLowerer = struct {
                 .reason = .{ .static_dispatch_target = plan_id },
             });
             const call_expr = try self.program.ast.addExpr(ty, .{ .call_proc = .{
-                .proc = reserved.proc.proc,
+                .proc = reserved.proc,
                 .args = lowered_args,
                 .requested_fn_ty = callable_ty,
             } });
@@ -2223,7 +2223,7 @@ const BodyLowerer = struct {
         use: checked_artifact.ProcedureUseTemplate,
         checked_fn_ty: checked_artifact.CheckedTypeId,
         reason: MonoSpecializationReason,
-    ) Allocator.Error!canonical.ProcedureValueRef {
+    ) Allocator.Error!canonical.MonoSpecializedProcRef {
         const template = self.procedureTemplateForUse(use);
         const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(checked_fn_ty);
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
@@ -2231,7 +2231,7 @@ const BodyLowerer = struct {
             .requested_fn_ty = requested_fn_ty,
             .reason = reason,
         });
-        return reserved.proc.proc;
+        return reserved.proc;
     }
 
     fn procedureTemplateForUse(
