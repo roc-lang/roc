@@ -482,6 +482,78 @@ const BodySolver = struct {
             },
             else => {},
         }
+        switch (expr.data) {
+            .access => |access| {
+                const record = try self.lowerExpr(access.record);
+                const source = self.exprValue(record);
+                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                    const result = switch (aggregate) {
+                        .record => |record_info| self.recordAggregateFieldValue(record_info, access.field),
+                        else => lambdaInvariant("lambda-solved record access source had non-record aggregate metadata"),
+                    };
+                    const projection = try self.value_store.addProjection(.{
+                        .source = source,
+                        .result = result,
+                        .root = self.valueRoot(result),
+                        .kind = .{ .record_field = access.field },
+                    });
+                    const lowered = try self.output.addExpr(ty, result, .{ .access = .{
+                        .record = record,
+                        .field = access.field,
+                        .projection_info = projection,
+                    } });
+                    try self.expr_map.put(expr_id, lowered);
+                    return lowered;
+                }
+            },
+            .tuple_access => |access| {
+                const tuple = try self.lowerExpr(access.tuple);
+                const source = self.exprValue(tuple);
+                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                    const result = switch (aggregate) {
+                        .tuple => |tuple_info| self.tupleAggregateElemValue(tuple_info, access.elem_index),
+                        else => lambdaInvariant("lambda-solved tuple access source had non-tuple aggregate metadata"),
+                    };
+                    const projection = try self.value_store.addProjection(.{
+                        .source = source,
+                        .result = result,
+                        .root = self.valueRoot(result),
+                        .kind = .{ .tuple_elem = access.elem_index },
+                    });
+                    const lowered = try self.output.addExpr(ty, result, .{ .tuple_access = .{
+                        .tuple = tuple,
+                        .elem_index = access.elem_index,
+                        .projection_info = projection,
+                    } });
+                    try self.expr_map.put(expr_id, lowered);
+                    return lowered;
+                }
+            },
+            .tag_payload => |payload| {
+                const tag_union = try self.lowerExpr(payload.tag_union);
+                const source = self.exprValue(tag_union);
+                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                    const result = switch (aggregate) {
+                        .tag => |tag_info| self.tagAggregatePayloadValue(tag_info, payload.payload),
+                        else => lambdaInvariant("lambda-solved tag payload source had non-tag aggregate metadata"),
+                    };
+                    const projection = try self.value_store.addProjection(.{
+                        .source = source,
+                        .result = result,
+                        .root = self.valueRoot(result),
+                        .kind = .{ .tag_payload = payload.payload },
+                    });
+                    const lowered = try self.output.addExpr(ty, result, .{ .tag_payload = .{
+                        .tag_union = tag_union,
+                        .payload = payload.payload,
+                        .projection_info = projection,
+                    } });
+                    try self.expr_map.put(expr_id, lowered);
+                    return lowered;
+                }
+            },
+            else => {},
+        }
 
         const value = try self.newValue(ty);
         const lowered = try self.output.addExpr(ty, value, switch (expr.data) {
@@ -980,6 +1052,30 @@ const BodySolver = struct {
             };
         }
         return try self.output.addTagPayloadAssemblySpan(output_items);
+    }
+
+    fn recordAggregateFieldValue(self: *const BodySolver, record: anytype, field: MonoRow.RecordFieldId) repr.ValueInfoId {
+        _ = self;
+        for (record.fields) |field_info| {
+            if (field_info.field == field) return field_info.value;
+        }
+        lambdaInvariant("lambda-solved record aggregate projection referenced a missing field");
+    }
+
+    fn tupleAggregateElemValue(self: *const BodySolver, tuple: []const repr.ElemValueInfo, elem_index: u32) repr.ValueInfoId {
+        _ = self;
+        for (tuple) |elem| {
+            if (elem.index == elem_index) return elem.value;
+        }
+        lambdaInvariant("lambda-solved tuple aggregate projection referenced a missing element");
+    }
+
+    fn tagAggregatePayloadValue(self: *const BodySolver, tag: anytype, payload: MonoRow.TagPayloadId) repr.ValueInfoId {
+        _ = self;
+        for (tag.payloads) |payload_info| {
+            if (payload_info.payload == payload) return payload_info.value;
+        }
+        lambdaInvariant("lambda-solved tag aggregate projection referenced a missing payload");
     }
 
     fn publishRecordAggregate(
