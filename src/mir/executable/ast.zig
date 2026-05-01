@@ -6,11 +6,13 @@ const check = @import("check");
 const row = @import("../mono_row/mod.zig");
 const solved = @import("../lambda_solved/mod.zig");
 const type_mod = @import("type.zig");
+const ids = @import("../ids.zig");
 
 const canonical = check.CanonicalNames;
 const repr = solved.Representation;
 
 pub const TypeId = type_mod.TypeId;
+pub const ProgramLiteralId = ids.ProgramLiteralId;
 pub const ExprId = enum(u32) { _ };
 pub const PatId = enum(u32) { _ };
 pub const DefId = enum(u32) { _ };
@@ -123,7 +125,7 @@ pub const Expr = struct {
         frac_f32_lit: f32,
         frac_f64_lit: f64,
         dec_lit: i128,
-        str_lit: base.StringLiteral.Idx,
+        str_lit: ProgramLiteralId,
         bool_lit: bool,
         unit,
         const_ref: check.CheckedArtifact.ConstRef,
@@ -186,7 +188,7 @@ pub const Expr = struct {
         },
         list: Span(ExecutableValueRef),
         return_: ExecutableValueRef,
-        runtime_error: base.StringLiteral.Idx,
+        runtime_error,
     };
 };
 
@@ -202,7 +204,7 @@ pub const Stmt = union(enum) {
     expr: ExprId,
     debug: ExprId,
     expect: ExprId,
-    crash: base.StringLiteral.Idx,
+    crash: ProgramLiteralId,
     return_: ExecutableValueRef,
     break_,
 };

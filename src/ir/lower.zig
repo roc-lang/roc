@@ -12,6 +12,7 @@ pub const LowerResourceError = Allocator.Error;
 
 pub const Program = struct {
     allocator: Allocator,
+    literal_pool: mir.Ids.ProgramLiteralPool,
     store: Ast.Store,
     layouts: Layout.Graph,
     root_procs: std.ArrayList(Ast.ProcRef),
@@ -19,6 +20,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .literal_pool = mir.Ids.ProgramLiteralPool.init(allocator),
             .store = Ast.Store.init(allocator),
             .layouts = Layout.Graph.init(allocator),
             .root_procs = .empty,
@@ -29,6 +31,7 @@ pub const Program = struct {
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
         self.store.deinit();
+        self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
 };
@@ -39,6 +42,8 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.literal_pool = input.literal_pool;
+    input.literal_pool = mir.Ids.ProgramLiteralPool.init(allocator);
 
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
 

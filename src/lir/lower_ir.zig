@@ -185,9 +185,13 @@ const Lowerer = struct {
         return switch (block.term) {
             .return_ => |ret| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(ret) } }),
             .value => |value| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
-            .crash => |msg| try self.store.addCFStmt(.{ .crash = .{ .msg = msg } }),
+            .crash => |msg| try self.store.addCFStmt(.{ .crash = .{ .msg = try self.lowerProgramLiteral(msg) } }),
             .runtime_error, .@"unreachable" => try self.store.addCFStmt(.{ .runtime_error = {} }),
         };
+    }
+
+    fn lowerProgramLiteral(self: *Lowerer, literal: ir.Ast.ProgramLiteralId) LowerResourceError!base.StringLiteral.Idx {
+        return try self.store.insertString(self.input.literal_pool.get(literal));
     }
 
     fn lowerVar(self: *Lowerer, var_: ir.Ast.Var) LowerResourceError!LIR.LocalId {

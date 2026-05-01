@@ -246,6 +246,7 @@ pub const Proc = struct {
 
 pub const Program = struct {
     allocator: Allocator,
+    literal_pool: ids.ProgramLiteralPool,
     types: Mono.Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -254,6 +255,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .types = Mono.Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -266,6 +268,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
 };
@@ -299,6 +302,8 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     errdefer program.deinit();
     program.types = owned_mono.types;
     owned_mono.types = Mono.Type.Store.init(allocator);
+    program.literal_pool = owned_mono.literal_pool;
+    owned_mono.literal_pool = ids.ProgramLiteralPool.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, owned_mono.procs.items.len);
     for (owned_mono.procs.items) |proc| {

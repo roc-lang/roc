@@ -27,6 +27,7 @@ pub const RecordFieldId = ids.RecordFieldId;
 pub const TagUnionShapeId = ids.TagUnionShapeId;
 pub const TagId = ids.TagId;
 pub const TagPayloadId = ids.TagPayloadId;
+pub const ProgramLiteralId = ids.ProgramLiteralId;
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -106,7 +107,7 @@ pub const Expr = struct {
         frac_f64_lit: f64,
         dec_lit: i128,
         bool_lit: bool,
-        str_lit: base.StringLiteral.Idx,
+        str_lit: ProgramLiteralId,
         const_ref: checked_artifact.ConstRef,
         tag: struct {
             union_shape: TagUnionShapeId,
@@ -185,7 +186,7 @@ pub const Expr = struct {
         list: Span(ExprId),
         unit,
         return_: ExprId,
-        runtime_error: base.StringLiteral.Idx,
+        runtime_error,
         for_: struct {
             patt: PatId,
             iterable: ExprId,
@@ -210,7 +211,7 @@ pub const Stmt = union(enum) {
     expr: ExprId,
     debug: ExprId,
     expect: ExprId,
-    crash: base.StringLiteral.Idx,
+    crash: ProgramLiteralId,
     return_: ExprId,
     break_,
     for_: struct {

@@ -10,6 +10,7 @@ const check = @import("check");
 
 const Ast = @import("ast.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
+const ids = @import("../ids.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
 const debug = @import("../debug_verify.zig");
@@ -64,6 +65,7 @@ pub const Program = struct {
     allocator: Allocator,
     root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
     concrete_source_types: ConcreteSourceType.Store,
+    literal_pool: ids.ProgramLiteralPool,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -74,6 +76,7 @@ pub const Program = struct {
             .allocator = allocator,
             .root_artifact_key = .{},
             .concrete_source_types = ConcreteSourceType.Store.init(allocator),
+            .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -86,6 +89,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.literal_pool.deinit();
         self.concrete_source_types.deinit();
         self.* = Program.init(self.allocator);
     }

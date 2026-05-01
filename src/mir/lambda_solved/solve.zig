@@ -3,6 +3,7 @@
 const std = @import("std");
 const check = @import("check");
 const Lifted = @import("../lifted/mod.zig");
+const ids = @import("../ids.zig");
 
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
@@ -19,6 +20,7 @@ pub const Proc = struct {
 
 pub const Program = struct {
     allocator: Allocator,
+    literal_pool: ids.ProgramLiteralPool,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
@@ -29,6 +31,7 @@ pub const Program = struct {
     pub fn init(allocator: Allocator) Program {
         return .{
             .allocator = allocator,
+            .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
@@ -45,6 +48,7 @@ pub const Program = struct {
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
+        self.literal_pool.deinit();
         self.* = Program.init(self.allocator);
     }
 };
@@ -55,6 +59,8 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.literal_pool = input.literal_pool;
+    input.literal_pool = ids.ProgramLiteralPool.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
     for (input.procs.items, 0..) |proc, i| {

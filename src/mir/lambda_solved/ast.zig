@@ -11,11 +11,13 @@ const symbol_mod = @import("symbol");
 const row = @import("../mono_row/mod.zig");
 const type_mod = @import("type.zig");
 const repr = @import("representation.zig");
+const ids = @import("../ids.zig");
 
 const canonical = check.CanonicalNames;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
+pub const ProgramLiteralId = ids.ProgramLiteralId;
 
 pub const ExprId = enum(u32) { _ };
 pub const PatId = enum(u32) { _ };
@@ -87,7 +89,7 @@ pub const Expr = struct {
         frac_f32_lit: f32,
         frac_f64_lit: f64,
         dec_lit: i128,
-        str_lit: base.StringLiteral.Idx,
+        str_lit: ProgramLiteralId,
         bool_lit: bool,
         unit,
         const_ref: check.CheckedArtifact.ConstRef,
@@ -168,7 +170,7 @@ pub const Expr = struct {
         },
         list: Span(ExprId),
         return_: ExprId,
-        runtime_error: base.StringLiteral.Idx,
+        runtime_error,
         for_: struct {
             patt: PatId,
             iterable: ExprId,
@@ -194,7 +196,7 @@ pub const Stmt = union(enum) {
     expr: ExprId,
     debug: ExprId,
     expect: ExprId,
-    crash: base.StringLiteral.Idx,
+    crash: ProgramLiteralId,
     return_: ExprId,
     break_,
     for_: struct {

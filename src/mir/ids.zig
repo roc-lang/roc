@@ -7,6 +7,56 @@ pub const RecordFieldId = enum(u32) { _ };
 pub const TagUnionShapeId = enum(u32) { _ };
 pub const TagId = enum(u32) { _ };
 pub const TagPayloadId = enum(u32) { _ };
+pub const ProgramLiteralId = enum(u32) { _ };
+
+pub const ProgramLiteral = struct {
+    bytes: []const u8,
+};
+
+pub const ProgramLiteralPool = struct {
+    allocator: std.mem.Allocator,
+    literals: std.ArrayList(ProgramLiteral),
+    by_bytes: std.StringHashMapUnmanaged(ProgramLiteralId),
+
+    pub fn init(allocator: std.mem.Allocator) ProgramLiteralPool {
+        return .{
+            .allocator = allocator,
+            .literals = .empty,
+            .by_bytes = .{},
+        };
+    }
+
+    pub fn deinit(self: *ProgramLiteralPool) void {
+        self.by_bytes.deinit(self.allocator);
+        for (self.literals.items) |literal| {
+            self.allocator.free(literal.bytes);
+        }
+        self.literals.deinit(self.allocator);
+        self.* = ProgramLiteralPool.init(self.allocator);
+    }
+
+    pub fn intern(self: *ProgramLiteralPool, bytes: []const u8) std.mem.Allocator.Error!ProgramLiteralId {
+        if (self.by_bytes.get(bytes)) |existing| return existing;
+
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+
+        const id: ProgramLiteralId = @enumFromInt(@as(u32, @intCast(self.literals.items.len)));
+        try self.literals.append(self.allocator, .{ .bytes = owned });
+        errdefer _ = self.literals.pop();
+
+        try self.by_bytes.put(self.allocator, owned, id);
+        return id;
+    }
+
+    pub fn get(self: *const ProgramLiteralPool, id: ProgramLiteralId) []const u8 {
+        return self.literals.items[@intFromEnum(id)].bytes;
+    }
+
+    pub fn count(self: *const ProgramLiteralPool) usize {
+        return self.literals.items.len;
+    }
+};
 
 pub fn Span(comptime T: type) type {
     return extern struct {

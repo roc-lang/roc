@@ -12,6 +12,8 @@ pub const Symbol = symbol_mod.Symbol;
 pub const LayoutRef = layout_mod.Ref;
 /// Executable procedure selected before IR lowering.
 pub const ProcRef = mir.Executable.Ast.ExecutableProcId;
+/// Lowered-program string literal payload.
+pub const ProgramLiteralId = mir.Ids.ProgramLiteralId;
 
 /// Identifier for a lowered IR expression node.
 pub const ExprId = enum(u32) { _ };
@@ -51,7 +53,7 @@ pub const Lit = union(enum) {
     f32: f32,
     f64: f64,
     dec: i128,
-    str: base.StringLiteral.Idx,
+    str: ProgramLiteralId,
     bool: bool,
 };
 
@@ -126,7 +128,7 @@ pub const Expr = union(enum) {
 pub const Term = union(enum) {
     value: Var,
     return_: Var,
-    crash: base.StringLiteral.Idx,
+    crash: ProgramLiteralId,
     runtime_error,
     @"unreachable": void,
 };
