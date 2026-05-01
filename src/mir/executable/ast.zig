@@ -136,13 +136,14 @@ pub const CallableSetValue = struct {
     construction_plan: repr.CallableSetConstructionPlanId,
     callable_set_key: repr.CanonicalCallableSetKey,
     member: CallableSetMemberRef,
-    selected_executable_proc: ExecutableProcId,
     capture_record: ?CallableCaptureRecord = null,
 };
 
 pub const CallableMatchBranch = struct {
     member: CallableSetMemberRef,
     source_fn_ty: canonical.CanonicalTypeKey,
+    capture_payload: ?ExecutableValueRef = null,
+    capture_payload_ty: ?TypeId = null,
     executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
@@ -320,6 +321,7 @@ pub const Store = struct {
     expr_ids: std.ArrayList(ExprId),
     pat_ids: std.ArrayList(PatId),
     branch_ids: std.ArrayList(BranchId),
+    stmt_ids: std.ArrayList(StmtId),
     bridge_ids: std.ArrayList(BridgeId),
     value_refs: std.ArrayList(ExecutableValueRef),
     capture_value_refs: std.ArrayList(CaptureValueRef),
@@ -344,6 +346,7 @@ pub const Store = struct {
             .expr_ids = .empty,
             .pat_ids = .empty,
             .branch_ids = .empty,
+            .stmt_ids = .empty,
             .bridge_ids = .empty,
             .value_refs = .empty,
             .capture_value_refs = .empty,
@@ -373,6 +376,7 @@ pub const Store = struct {
         self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
         self.bridge_ids.deinit(self.allocator);
+        self.stmt_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.pat_ids.deinit(self.allocator);
         self.expr_ids.deinit(self.allocator);

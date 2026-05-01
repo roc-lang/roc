@@ -12,8 +12,14 @@ pub const TypeId = enum(u32) { _ };
 pub const TypeIds = []const TypeId;
 pub const Prim = solved.Type.Prim;
 
+pub const CallableSetMemberType = struct {
+    member: repr.CallableSetMemberId,
+    payload_ty: ?TypeId,
+};
+
 pub const CallableSetType = struct {
     key: repr.CanonicalCallableSetKey,
+    members: []const CallableSetMemberType,
 };
 
 pub const ErasedFnType = struct {
@@ -96,6 +102,9 @@ pub const Store = struct {
                     if (tag.payloads.len > 0) self.allocator.free(tag.payloads);
                 }
                 if (tag_union.tags.len > 0) self.allocator.free(tag_union.tags);
+            },
+            .callable_set => |callable_set| {
+                if (callable_set.members.len > 0) self.allocator.free(callable_set.members);
             },
             else => {},
         }

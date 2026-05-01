@@ -11,6 +11,7 @@ const Layout = @import("layout.zig");
 
 const Allocator = std.mem.Allocator;
 const Exec = mir.Executable;
+const repr = mir.LambdaSolved.Representation;
 
 pub const LowerResourceError = Allocator.Error;
 
@@ -413,6 +414,10 @@ const IrBuilder = struct {
         callable: Exec.Ast.CallableSetValue,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
+        if (!repr.callableSetKeyEql(callable.member.callable_set_key, callable.callable_set_key)) {
+            irInvariant("IR lowering callable_set_value member points at a different callable set");
+        }
+        var payload: ?Ast.Var = null;
         if (callable.capture_record) |record| {
             const capture_refs = self.input.ast.capture_value_refs.items[record.values.start..][0..record.values.len];
             const fields = try self.allocator.alloc(Ast.Var, capture_refs.len);
@@ -434,13 +439,16 @@ const IrBuilder = struct {
             }
 
             const layout = try self.structLayout(fields);
-            const bind = try self.bindExpr(expr.value, layout, .{
+            const bind = try self.bindExpr(record.record_tmp, layout, .{
                 .make_struct = try self.output.store.addVarSpan(fields),
             }, stmts);
-            try self.value_env.put(record.record_tmp, bind);
-            return bind;
+            payload = bind;
         }
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .fn_ptr = callable.selected_executable_proc }, stmts);
+
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
+            .discriminant = @intCast(@intFromEnum(callable.member.member_index)),
+            .payload = payload,
+        } }, stmts);
     }
 
     fn lowerStructuralEq(
@@ -463,24 +471,93 @@ const IrBuilder = struct {
         callable_match: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        _ = self.value_env.get(callable_match.callee) orelse irInvariant("IR lowering callable_match callee was not bound");
+        const callee = self.value_env.get(callable_match.callee) orelse irInvariant("IR lowering callable_match callee was not bound");
         const branch_ids = self.input.ast.callable_match_branches.items[callable_match.branches.start..][0..callable_match.branches.len];
-        if (branch_ids.len != 1) irInvariant("IR lowering multi-branch callable_match requires callable payload dispatch lowering");
-        const branch = branch_ids[0];
-        const args = try self.lowerDirectCallArgSpan(branch.executable_proc, branch.direct_args, stmts);
+        if (branch_ids.len == 0) irInvariant("IR lowering callable_match received no branches");
+
+        const subject = try self.bindExpr(
+            self.freshInternalValueRef(),
+            .{ .canonical = .u16 },
+            .{ .get_union_id = callee },
+            stmts,
+        );
+        const result = try self.freshVar(try self.layoutForType(expr.ty));
+        const branches = try self.allocator.alloc(Ast.Branch, branch_ids.len);
+        defer self.allocator.free(branches);
+
+        for (branch_ids, 0..) |branch_id, i| {
+            const branch = branch_id;
+            if (!repr.callableSetKeyEql(branch.member.callable_set_key, callable_match.callable_set_key)) {
+                irInvariant("IR lowering callable_match branch points at a different callable set");
+            }
+            branches[i] = .{
+                .value = @intCast(@intFromEnum(branch.member.member_index)),
+                .block = try self.lowerCallableMatchBranchBlock(branch, callee, callable_match.result_ty),
+            };
+        }
+
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+            .cond = subject,
+            .branches = try self.output.store.addBranchSpan(branches),
+            .default_block = try self.output.store.addBlock(.{
+                .stmts = Ast.Span(Ast.StmtId).empty(),
+                .term = .@"unreachable",
+            }),
+            .join = result,
+        } }));
+        try self.value_env.put(expr.value, result);
+        return result;
+    }
+
+    fn lowerCallableMatchBranchBlock(
+        self: *IrBuilder,
+        branch: Exec.Ast.CallableMatchBranch,
+        callee: Ast.Var,
+        result_ty: Exec.Type.TypeId,
+    ) LowerResourceError!Ast.BlockId {
+        var saved = std.ArrayList(SavedValueBinding).empty;
+        defer {
+            self.restoreValueBindings(saved.items);
+            saved.deinit(self.allocator);
+        }
+
+        var stmts = std.ArrayList(Ast.StmtId).empty;
+        defer stmts.deinit(self.allocator);
+
+        if (branch.capture_payload) |payload_ref| {
+            const payload_ty = branch.capture_payload_ty orelse irInvariant("IR lowering callable_match branch has capture payload value without payload type");
+            const payload = try self.freshVar(try self.layoutForType(payload_ty));
+            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
+                .bind = payload,
+                .expr = try self.output.store.addExpr(.{ .get_union_struct = .{
+                    .value = callee,
+                    .tag_discriminant = @intCast(@intFromEnum(branch.member.member_index)),
+                } }),
+            } }));
+            try self.pushValueBinding(payload_ref, payload, &saved);
+        } else if (branch.capture_payload_ty != null) {
+            irInvariant("IR lowering callable_match branch has payload type without payload value");
+        }
+
+        const args = try self.lowerDirectCallArgSpan(branch.executable_proc, branch.direct_args, &stmts);
         defer if (args.len > 0) self.allocator.free(args);
         const direct_call: Ast.Expr = .{ .call_direct = .{
             .proc = branch.executable_proc,
             .args = try self.output.store.addVarSpan(args),
         } };
-        if (branch.result_bridge) |result_bridge| {
-            const raw_result = try self.bindAnonymous(try self.procReturnLayout(branch.executable_proc), direct_call, stmts);
-            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .bridge = .{
+        const raw_result = try self.bindAnonymous(try self.procReturnLayout(branch.executable_proc), direct_call, &stmts);
+        const result = if (branch.result_bridge) |result_bridge|
+            try self.bindAnonymous(try self.layoutForType(result_ty), .{ .bridge = .{
                 .value = raw_result,
                 .plan = try self.lowerBridgePlan(result_bridge),
-            } }, stmts);
-        }
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), direct_call, stmts);
+            } }, &stmts)
+        else
+            raw_result;
+
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(stmts.items),
+            .term = .{ .value = result },
+        });
     }
 
     fn lowerSourceMatch(
@@ -1237,6 +1314,30 @@ const IrBuilder = struct {
         return .{ .local = node };
     }
 
+    fn callableSetLayout(self: *IrBuilder, callable_set: Exec.Type.CallableSetType) LowerResourceError!Ast.LayoutRef {
+        if (callable_set.members.len == 0) irInvariant("IR lowering callable-set type had no members");
+        const variants = try self.allocator.alloc(Ast.LayoutRef, callable_set.members.len);
+        defer self.allocator.free(variants);
+        var seen = try self.allocator.alloc(bool, callable_set.members.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (callable_set.members) |member| {
+            const index: usize = @intCast(@intFromEnum(member.member));
+            if (index >= callable_set.members.len) irInvariant("IR lowering callable-set member index exceeded member count");
+            if (seen[index]) irInvariant("IR lowering callable-set type saw duplicate member index");
+            variants[index] = if (member.payload_ty) |payload_ty| try self.layoutForType(payload_ty) else .{ .canonical = .zst };
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering callable-set type did not provide every member payload layout");
+        }
+
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        self.output.layouts.setNode(node, .{ .tag_union = try self.output.layouts.appendRefs(self.allocator, variants) });
+        return .{ .local = node };
+    }
+
     fn layoutForType(self: *IrBuilder, ty: Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
         return switch (self.input.types.getType(ty)) {
             .placeholder => irInvariant("IR lowering received executable placeholder type"),
@@ -1266,7 +1367,7 @@ const IrBuilder = struct {
             },
             .record => |record| try self.recordLayout(record),
             .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
-            .callable_set => .{ .canonical = .opaque_ptr },
+            .callable_set => |callable_set| try self.callableSetLayout(callable_set),
             .erased_fn => |erased| try self.erasedFnLayout(erased),
         };
     }
