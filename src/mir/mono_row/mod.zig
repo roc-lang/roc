@@ -679,6 +679,10 @@ const BodyFinalizer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .as => |as| .{ .as = .{
+                .pattern = try self.lowerPat(as.pattern),
+                .symbol = as.symbol,
+            } },
             .var_ => |symbol| .{ .var_ = symbol },
             .wildcard => .wildcard,
             .tag => |tag| blk: {

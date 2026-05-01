@@ -771,6 +771,17 @@ const BodySolver = struct {
         const pat = self.input.getPat(pat_id);
         const ty = try self.type_importer.importType(pat.ty);
         const value = try self.newValue(ty);
+        return try self.lowerPatScopedWithValue(pat_id, ty, value, saved);
+    }
+
+    fn lowerPatScopedWithValue(
+        self: *BodySolver,
+        pat_id: Lifted.Ast.PatId,
+        ty: Type.TypeVarId,
+        value: repr.ValueInfoId,
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.PatId {
+        const pat = self.input.getPat(pat_id);
         return try self.output.addPat(.{ .ty = ty, .value_info = value, .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .int_lit => |literal| .{ .int_lit = literal },
@@ -779,17 +790,16 @@ const BodySolver = struct {
             .dec_lit => |literal| .{ .dec_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
+            .as => |as| blk: {
+                const binding = try self.bindPatternSymbol(as.symbol, value, saved);
+                break :blk .{ .as = .{
+                    .pattern = try self.lowerPatScopedWithValue(as.pattern, ty, value, saved),
+                    .symbol = as.symbol,
+                    .binding_info = binding,
+                } };
+            },
             .var_ => |symbol| blk: {
-                const binding = try self.value_store.addBinding(.{
-                    .symbol = symbol,
-                    .value = value,
-                    .root = self.valueRoot(value),
-                });
-                const previous = try self.env.fetchPut(symbol, binding);
-                try saved.append(self.allocator, .{
-                    .symbol = symbol,
-                    .previous = if (previous) |entry| entry.value else null,
-                });
+                const binding = try self.bindPatternSymbol(symbol, value, saved);
                 break :blk .{ .var_ = .{
                     .symbol = symbol,
                     .binding_info = binding,
@@ -801,6 +811,25 @@ const BodySolver = struct {
                 .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
             } },
         } });
+    }
+
+    fn bindPatternSymbol(
+        self: *BodySolver,
+        symbol: Ast.Symbol,
+        value: repr.ValueInfoId,
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!repr.BindingInfoId {
+        const binding = try self.value_store.addBinding(.{
+            .symbol = symbol,
+            .value = value,
+            .root = self.valueRoot(value),
+        });
+        const previous = try self.env.fetchPut(symbol, binding);
+        try saved.append(self.allocator, .{
+            .symbol = symbol,
+            .previous = if (previous) |entry| entry.value else null,
+        });
+        return binding;
     }
 
     fn restoreBindings(self: *BodySolver, saved: *std.ArrayList(SavedBinding), start: usize) void {

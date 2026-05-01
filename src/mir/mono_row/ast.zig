@@ -71,6 +71,10 @@ pub const Pat = struct {
             tag: TagId,
             payloads: Span(TagPayloadPattern),
         },
+        as: struct {
+            pattern: PatId,
+            symbol: Symbol,
+        },
         var_: Symbol,
         wildcard,
     };

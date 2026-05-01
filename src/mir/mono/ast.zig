@@ -62,6 +62,10 @@ pub const Pat = struct {
             discriminant: u16,
             args: Span(PatId),
         },
+        as: struct {
+            pattern: PatId,
+            symbol: Symbol,
+        },
         var_: Symbol,
         wildcard,
     };

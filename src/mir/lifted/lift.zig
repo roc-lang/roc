@@ -916,6 +916,10 @@ const BodyLifter = struct {
         const pat = self.input.getPat(pat_id);
         switch (pat.data) {
             .var_ => |symbol| try self.bindSymbol(symbol, bound, restorations),
+            .as => |as| {
+                try self.bindSymbol(as.symbol, bound, restorations);
+                try self.bindPatternSymbols(as.pattern, bound, restorations);
+            },
             .tag => |tag| {
                 for (self.input.sliceTagPayloadPatternSpan(tag.payloads)) |payload| {
                     try self.bindPatternSymbols(payload.pattern, bound, restorations);
@@ -970,6 +974,10 @@ const BodyLifter = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .as => |as| .{ .as = .{
+                .pattern = try self.lowerPat(as.pattern),
+                .symbol = as.symbol,
+            } },
             .var_ => |symbol| .{ .var_ = symbol },
             .wildcard => .wildcard,
             .tag => |tag| .{ .tag = .{

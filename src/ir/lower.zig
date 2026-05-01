@@ -675,21 +675,14 @@ const IrBuilder = struct {
         for (branch_ids) |branch_id| {
             const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
             const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-            switch (pat.data) {
-                .tag => needs_discriminant = true,
-                .wildcard, .bind, .bool_lit, .int_lit => {},
-                else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
-            }
+            if (self.sourceMatchPatternNeedsDiscriminant(pat)) needs_discriminant = true;
         }
         if (!needs_discriminant) return scrutinee;
 
         for (branch_ids) |branch_id| {
             const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
             const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-            switch (pat.data) {
-                .tag, .wildcard, .bind => {},
-                else => irInvariant("IR lowering source_match cannot mix tag tests with non-tag literal tests"),
-            }
+            if (!self.sourceMatchPatternCanUseTagSubject(pat)) irInvariant("IR lowering source_match cannot mix tag tests with non-tag literal tests");
         }
 
         return try self.bindExpr(
@@ -700,8 +693,26 @@ const IrBuilder = struct {
         );
     }
 
+    fn sourceMatchPatternNeedsDiscriminant(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
+        return switch (pat.data) {
+            .as => |as| self.sourceMatchPatternNeedsDiscriminant(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
+            .tag => true,
+            .wildcard, .bind, .bool_lit, .int_lit => false,
+            else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
+        };
+    }
+
+    fn sourceMatchPatternCanUseTagSubject(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
+        return switch (pat.data) {
+            .as => |as| self.sourceMatchPatternCanUseTagSubject(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
+            .tag, .wildcard, .bind => true,
+            else => false,
+        };
+    }
+
     fn sourceMatchPatternSwitchValue(self: *IrBuilder, pat: Exec.Ast.Pat) ?u64 {
         return switch (pat.data) {
+            .as => |as| self.sourceMatchPatternSwitchValue(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
             .wildcard, .bind => null,
             .tag => |tag| @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
             .bool_lit => |value| @as(u64, if (value) 1 else 0),
@@ -817,6 +828,11 @@ const IrBuilder = struct {
             .dec_lit,
             .str_lit,
             => {},
+            .as => |as| {
+                try self.pushValueBinding(as.bind, value, saved);
+                const child_pat = self.input.ast.pats.items[@intFromEnum(as.pattern)];
+                try self.bindSourceMatchPatternValues(child_pat, value, stmts, saved);
+            },
             .bind => |bind| try self.pushValueBinding(bind, value, saved),
             .tag => |tag| {
                 const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];

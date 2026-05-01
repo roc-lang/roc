@@ -2016,8 +2016,12 @@ const BodyLowerer = struct {
         return switch (pattern.data) {
             .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .var_ = try self.symbolForBinder(binder) } }),
             .as => |as| {
-                _ = try self.symbolForBinder(as.binder);
-                return try self.lowerPattern(ty, as.pattern);
+                const symbol = try self.symbolForBinder(as.binder);
+                const nested = try self.lowerPattern(ty, as.pattern);
+                return try self.program.ast.addPat(.{ .ty = ty, .data = .{ .as = .{
+                    .pattern = nested,
+                    .symbol = symbol,
+                } } });
             },
             .applied_tag => |tag| blk: {
                 const tag_name = try self.tagLabel(tag.name);

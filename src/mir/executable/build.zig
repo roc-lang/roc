@@ -1328,7 +1328,18 @@ const BodyBuilder = struct {
         saved: *std.ArrayList(SavedBinding),
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.pats.items[@intFromEnum(pat_id)];
-        return try self.output.addPat(.{ .ty = try self.type_lowerer.lowerType(pat.ty), .data = switch (pat.data) {
+        const ty = try self.type_lowerer.lowerType(pat.ty);
+        return try self.lowerPatScopedWithType(pat_id, ty, saved);
+    }
+
+    fn lowerPatScopedWithType(
+        self: *BodyBuilder,
+        pat_id: LambdaSolved.Ast.PatId,
+        ty: Type.TypeId,
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.PatId {
+        const pat = self.input.pats.items[@intFromEnum(pat_id)];
+        return try self.output.addPat(.{ .ty = ty, .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .int_lit => |literal| .{ .int_lit = literal },
             .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
@@ -1336,13 +1347,15 @@ const BodyBuilder = struct {
             .dec_lit => |literal| .{ .dec_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .wildcard => .wildcard,
+            .as => |as| blk: {
+                const value = try self.bindPatternValue(as.binding_info, saved);
+                break :blk .{ .as = .{
+                    .pattern = try self.lowerPatScopedWithType(as.pattern, ty, saved),
+                    .bind = value,
+                } };
+            },
             .var_ => |var_| blk: {
-                const value = self.output.freshValueRef();
-                const previous = try self.env.fetchPut(var_.binding_info, value);
-                try saved.append(self.allocator, .{
-                    .binding = var_.binding_info,
-                    .previous = if (previous) |entry| entry.value else null,
-                });
+                const value = try self.bindPatternValue(var_.binding_info, saved);
                 break :blk .{ .bind = value };
             },
             .tag => |tag| .{ .tag = .{
@@ -1351,6 +1364,20 @@ const BodyBuilder = struct {
                 .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
             } },
         } });
+    }
+
+    fn bindPatternValue(
+        self: *BodyBuilder,
+        binding: repr.BindingInfoId,
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const value = self.output.freshValueRef();
+        const previous = try self.env.fetchPut(binding, value);
+        try saved.append(self.allocator, .{
+            .binding = binding,
+            .previous = if (previous) |entry| entry.value else null,
+        });
+        return value;
     }
 
     fn restoreBindings(self: *BodyBuilder, saved: *std.ArrayList(SavedBinding), start: usize) void {
