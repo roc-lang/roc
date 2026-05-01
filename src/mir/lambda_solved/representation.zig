@@ -63,6 +63,7 @@ pub const ErasedFnAbiKey = struct {
 pub const ErasedFnSigKey = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     abi: ErasedFnAbiKey,
+    capture_ty: ?CanonicalExecValueTypeKey = null,
 };
 
 pub const CallableSetMemberRef = struct {
@@ -186,8 +187,10 @@ pub const BoxBoundary = struct {
 pub const ProcValueErasePlan = struct {
     source: ValueInfoId,
     proc_value: canonical.ProcedureCallableRef,
+    erased_fn_sig_key: ErasedFnSigKey,
     executable_specialization_key: ExecutableSpecializationKey,
     capture_shape_key: CaptureShapeKey,
+    capture_slots: []const CallableSetCaptureSlot = &.{},
     provenance: []const BoxBoundaryId,
 };
 
@@ -359,6 +362,7 @@ pub const RepresentationStore = struct {
                 .erase_proc_value => |erase| {
                     var key = erase.executable_specialization_key;
                     deinitExecutableSpecializationKey(self.allocator, &key);
+                    if (erase.capture_slots.len > 0) self.allocator.free(erase.capture_slots);
                     if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
                 },
                 .finite,

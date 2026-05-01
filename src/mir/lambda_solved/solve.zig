@@ -942,7 +942,7 @@ const BodySolver = struct {
             .finite => |key| .{ .finite = key },
             .already_erased => |sig| .{ .erased = sig },
             .erase_finite_set => |adapter| .{ .erased = adapter.erased_fn_sig_key },
-            .erase_proc_value => lambdaInvariant("lambda-solved erased proc-value call is missing explicit erased function signature metadata"),
+            .erase_proc_value => |erase| .{ .erased = erase.erased_fn_sig_key },
         };
     }
 
