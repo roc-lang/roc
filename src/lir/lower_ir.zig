@@ -28,7 +28,6 @@ pub const Result = struct {
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     proc_map: std.ArrayList(ProcMapEntry),
-    local_env: std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId),
 
     pub fn deinit(self: *Result) void {
         self.proc_map.deinit(self.store.allocator);
@@ -226,12 +225,63 @@ const Lowerer = struct {
                 .condition = try self.lowerVar(value),
                 .next = next,
             } }),
-            .switch_,
+            .switch_ => |switch_| try self.lowerSwitch(switch_, next),
             .break_,
             .for_list,
             .while_,
             => lirInvariant("lir.lower_ir reached IR statement form whose LIR lowering is still missing"),
         };
+    }
+
+    fn lowerSwitch(self: *Lowerer, switch_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
+        const input_branches = self.input.store.sliceBranchSpan(switch_.branches);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, input_branches.len);
+        defer self.allocator.free(branches);
+
+        const join_local = if (switch_.join) |join| try self.localForVar(join) else null;
+        for (input_branches, 0..) |branch_id, i| {
+            const branch = self.input.store.getBranch(branch_id);
+            branches[i] = .{
+                .value = branch.value,
+                .body = try self.lowerBlockWithContinuation(branch.block, join_local, next),
+            };
+        }
+
+        return try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = try self.lowerVar(switch_.cond),
+            .branches = try self.store.addCFSwitchBranches(branches),
+            .default_branch = try self.lowerBlockWithContinuation(switch_.default_block, join_local, next),
+        } });
+    }
+
+    fn lowerBlockWithContinuation(
+        self: *Lowerer,
+        block_id: ir.Ast.BlockId,
+        join_local: ?LIR.LocalId,
+        continuation: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const block = self.input.store.getBlock(block_id);
+        var next = switch (block.term) {
+            .return_ => |ret| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(ret) } }),
+            .value => |value| blk: {
+                const join = join_local orelse break :blk continuation;
+                break :blk try self.store.addCFStmt(.{ .set_local = .{
+                    .target = join,
+                    .value = try self.lowerVar(value),
+                    .next = continuation,
+                } });
+            },
+            .crash => |msg| try self.store.addCFStmt(.{ .crash = .{ .msg = try self.lowerProgramLiteral(msg) } }),
+            .runtime_error, .@"unreachable" => try self.store.addCFStmt(.{ .runtime_error = {} }),
+        };
+
+        const stmts = self.input.store.sliceStmtSpan(block.stmts);
+        var i = stmts.len;
+        while (i > 0) {
+            i -= 1;
+            next = try self.lowerStmt(stmts[i], next);
+        }
+        return next;
     }
 
     fn lowerExprInto(self: *Lowerer, target: LIR.LocalId, expr: ir.Ast.Expr, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
