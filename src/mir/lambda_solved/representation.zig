@@ -638,6 +638,16 @@ pub const ValueInfoStore = struct {
     }
 
     pub fn deinit(self: *ValueInfoStore) void {
+        for (self.values.items) |value| {
+            if (value.aggregate) |aggregate| {
+                switch (aggregate) {
+                    .record => |fields| if (fields.len > 0) self.allocator.free(fields),
+                    .tuple => |elems| if (elems.len > 0) self.allocator.free(elems),
+                    .tag => |tag| if (tag.payloads.len > 0) self.allocator.free(tag.payloads),
+                    .list => |list| if (list.elems.len > 0) self.allocator.free(list.elems),
+                }
+            }
+        }
         self.value_ids.deinit(self.allocator);
         self.joins.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);

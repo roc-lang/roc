@@ -422,18 +422,28 @@ const BodySolver = struct {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .const_ref => |const_ref| .{ .const_ref = const_ref },
-            .tag => |tag| .{ .tag = .{
-                .union_shape = tag.union_shape,
-                .tag = tag.tag,
-                .eval_order = try self.lowerTagPayloadEvalSpan(tag.eval_order),
-                .assembly_order = try self.lowerTagPayloadAssemblySpan(tag.assembly_order),
-                .constructor_ty = try self.type_importer.importType(tag.constructor_ty),
-            } },
-            .record => |record| .{ .record = .{
-                .shape = record.shape,
-                .eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order),
-                .assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order),
-            } },
+            .tag => |tag| blk: {
+                const eval_order = try self.lowerTagPayloadEvalSpan(tag.eval_order);
+                const assembly_order = try self.lowerTagPayloadAssemblySpan(tag.assembly_order);
+                try self.publishTagAggregate(value, tag.union_shape, tag.tag, assembly_order);
+                break :blk .{ .tag = .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                    .eval_order = eval_order,
+                    .assembly_order = assembly_order,
+                    .constructor_ty = try self.type_importer.importType(tag.constructor_ty),
+                } };
+            },
+            .record => |record| blk: {
+                const eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order);
+                const assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order);
+                try self.publishRecordAggregate(value, assembly_order);
+                break :blk .{ .record = .{
+                    .shape = record.shape,
+                    .eval_order = eval_order,
+                    .assembly_order = assembly_order,
+                } };
+            },
             .nominal_reinterpret => |backing| .{ .nominal_reinterpret = try self.lowerExpr(backing) },
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record);
@@ -541,7 +551,11 @@ const BodySolver = struct {
                 .stmts = try self.lowerStmtSpan(block.stmts),
                 .final_expr = try self.lowerExpr(block.final_expr),
             } },
-            .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
+            .tuple => |items| blk: {
+                const lowered_items = try self.lowerExprSpanWithValues(items);
+                try self.publishTupleAggregate(value, lowered_items.values);
+                break :blk .{ .tuple = lowered_items.exprs };
+            },
             .tag_payload => |payload| blk: {
                 const tag_union = try self.lowerExpr(payload.tag_union);
                 const projection = try self.value_store.addProjection(.{
@@ -570,7 +584,11 @@ const BodySolver = struct {
                     .projection_info = projection,
                 } };
             },
-            .list => |items| .{ .list = try self.lowerExprSpan(items) },
+            .list => |items| blk: {
+                const lowered_items = try self.lowerExprSpanWithValues(items);
+                try self.publishListAggregate(value, lowered_items.values);
+                break :blk .{ .list = lowered_items.exprs };
+            },
             .unit => .unit,
             .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
             .crash => |literal| .{ .crash = literal },
@@ -917,6 +935,91 @@ const BodySolver = struct {
             };
         }
         return try self.output.addTagPayloadAssemblySpan(output_items);
+    }
+
+    fn publishRecordAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        assembly_order: Ast.Span(Ast.RecordFieldAssembly),
+    ) Allocator.Error!void {
+        const assemblies = self.output.record_field_assemblies.items[assembly_order.start..][0..assembly_order.len];
+        const fields = try self.allocator.alloc(repr.FieldValueInfo, assemblies.len);
+        errdefer if (fields.len > 0) self.allocator.free(fields);
+
+        for (assemblies, 0..) |field, i| {
+            fields[i] = .{
+                .field = field.field,
+                .value = self.exprValue(field.value),
+            };
+        }
+        self.publishAggregate(value, .{ .record = fields });
+    }
+
+    fn publishTupleAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        elems: repr.Span(repr.ValueInfoId),
+    ) Allocator.Error!void {
+        const elem_values = self.value_store.sliceValueSpan(elems);
+        const infos = try self.allocator.alloc(repr.ElemValueInfo, elem_values.len);
+        errdefer if (infos.len > 0) self.allocator.free(infos);
+
+        for (elem_values, 0..) |elem, i| {
+            infos[i] = .{
+                .index = @intCast(i),
+                .value = elem,
+            };
+        }
+        self.publishAggregate(value, .{ .tuple = infos });
+    }
+
+    fn publishTagAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        union_shape: MonoRow.TagUnionShapeId,
+        tag_id: MonoRow.TagId,
+        assembly_order: Ast.Span(Ast.TagPayloadAssembly),
+    ) Allocator.Error!void {
+        const assemblies = self.output.tag_payload_assemblies.items[assembly_order.start..][0..assembly_order.len];
+        const payloads = try self.allocator.alloc(repr.TagPayloadValueInfo, assemblies.len);
+        errdefer if (payloads.len > 0) self.allocator.free(payloads);
+
+        for (assemblies, 0..) |payload, i| {
+            payloads[i] = .{
+                .payload = payload.payload,
+                .value = self.exprValue(payload.value),
+            };
+        }
+        self.publishAggregate(value, .{ .tag = .{
+            .union_shape = union_shape,
+            .tag = tag_id,
+            .payloads = payloads,
+        } });
+    }
+
+    fn publishListAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        elems: repr.Span(repr.ValueInfoId),
+    ) Allocator.Error!void {
+        const elem_values = self.value_store.sliceValueSpan(elems);
+        const owned_elems = try self.allocator.dupe(repr.ValueInfoId, elem_values);
+        errdefer if (owned_elems.len > 0) self.allocator.free(owned_elems);
+
+        self.publishAggregate(value, .{ .list = .{
+            .elem_root = self.representation_store.reserveRoot(),
+            .elems = owned_elems,
+        } });
+    }
+
+    fn publishAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        aggregate: repr.AggregateValueInfo,
+    ) void {
+        const value_info = &self.value_store.values.items[@intFromEnum(value)];
+        if (value_info.aggregate != null) lambdaInvariant("lambda-solved value published aggregate metadata twice");
+        value_info.aggregate = aggregate;
     }
 
     fn lowerTagPayloadPatternSpan(
