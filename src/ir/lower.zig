@@ -859,6 +859,26 @@ const IrBuilder = struct {
                     try self.bindSourceMatchPatternValues(child_pat, child_value, stmts, saved);
                 }
             },
+            .record => |record| {
+                if (record.rest != null) irInvariant("IR lowering record rest pattern requires executable decision-plan materialization");
+                const field_patterns = self.input.ast.record_field_patterns.items[record.fields.start..][0..record.fields.len];
+                for (field_patterns) |field_pattern| {
+                    const child_pat = self.input.ast.pats.items[@intFromEnum(field_pattern.pattern)];
+                    const field = self.input.row_shapes.recordField(field_pattern.field);
+                    const direct = try self.output.store.addBridgePlan(.direct);
+                    const child_value = try self.bindExpr(
+                        self.freshInternalValueRef(),
+                        try self.layoutForType(child_pat.ty),
+                        .{ .get_struct_field = .{
+                            .record = value,
+                            .field_index = @intCast(field.logical_index),
+                            .field_bridge_plan = direct,
+                        } },
+                        stmts,
+                    );
+                    try self.bindSourceMatchPatternValues(child_pat, child_value, stmts, saved);
+                }
+            },
             .tag => |tag| {
                 const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_ids.len == 0) return;

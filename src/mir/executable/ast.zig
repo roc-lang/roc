@@ -69,6 +69,11 @@ pub const Pat = struct {
             tag: row.TagId,
             payloads: Span(TagPayloadPattern),
         },
+        record: struct {
+            shape: row.RecordShapeId,
+            fields: Span(RecordFieldPattern),
+            rest: ?PatId = null,
+        },
         nominal: PatId,
         tuple: Span(PatId),
         as: struct {
@@ -84,6 +89,8 @@ pub const TagPayloadPattern = struct {
     payload: row.TagPayloadId,
     pattern: PatId,
 };
+
+pub const RecordFieldPattern = row.Ast.RecordFieldPattern;
 
 pub const Branch = struct {
     pat: PatId,
@@ -336,6 +343,7 @@ pub const Store = struct {
     pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
     bridge_plans: std.ArrayList(BridgePlan),
     tag_payload_patterns: std.ArrayList(TagPayloadPattern),
+    record_field_patterns: std.ArrayList(RecordFieldPattern),
     typed_values: std.ArrayList(TypedValue),
     record_field_exprs: std.ArrayList(RecordFieldExpr),
     tag_payload_exprs: std.ArrayList(TagPayloadExpr),
@@ -361,6 +369,7 @@ pub const Store = struct {
             .pattern_decision_plans = .empty,
             .bridge_plans = .empty,
             .tag_payload_patterns = .empty,
+            .record_field_patterns = .empty,
             .typed_values = .empty,
             .record_field_exprs = .empty,
             .tag_payload_exprs = .empty,
@@ -371,6 +380,7 @@ pub const Store = struct {
         self.tag_payload_exprs.deinit(self.allocator);
         self.record_field_exprs.deinit(self.allocator);
         self.typed_values.deinit(self.allocator);
+        self.record_field_patterns.deinit(self.allocator);
         self.tag_payload_patterns.deinit(self.allocator);
         self.bridge_plans.deinit(self.allocator);
         self.pattern_decision_plans.deinit(self.allocator);
@@ -468,6 +478,13 @@ pub const Store = struct {
         if (values.len == 0) return Span(TagPayloadPattern).empty();
         const start: u32 = @intCast(self.tag_payload_patterns.items.len);
         try self.tag_payload_patterns.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordFieldPatternSpan(self: *Store, values: []const RecordFieldPattern) std.mem.Allocator.Error!Span(RecordFieldPattern) {
+        if (values.len == 0) return Span(RecordFieldPattern).empty();
+        const start: u32 = @intCast(self.record_field_patterns.items.len);
+        try self.record_field_patterns.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

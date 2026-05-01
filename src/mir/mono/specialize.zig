@@ -2045,6 +2045,34 @@ const BodyLowerer = struct {
                     .data = .{ .nominal = try self.lowerPattern(backing, nominal.backing_pattern) },
                 });
             },
+            .record_destructure => |destructs| blk: {
+                const fields = try self.allocator.alloc(Ast.RecordFieldPattern, destructs.len);
+                defer self.allocator.free(fields);
+                var field_count: usize = 0;
+                var rest: ?Ast.PatId = null;
+                for (destructs) |destruct| {
+                    switch (destruct.kind) {
+                        .required, .sub_pattern => |field_pattern| {
+                            const label = destruct.label;
+                            fields[field_count] = .{
+                                .field = label,
+                                .pattern = try self.lowerPattern(self.recordFieldType(ty, label), field_pattern),
+                            };
+                            field_count += 1;
+                        },
+                        .rest => |rest_pattern| {
+                            if (rest != null) invariantViolation("mono body lowering record pattern had duplicate rest binders");
+                            const rest_checked = self.checkedPattern(rest_pattern);
+                            const rest_ty = try self.type_instantiator.lowerTemplateType(rest_checked.ty);
+                            rest = try self.lowerPattern(rest_ty, rest_pattern);
+                        },
+                    }
+                }
+                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .record = .{
+                    .fields = try self.program.ast.addRecordFieldPatternSpan(fields[0..field_count]),
+                    .rest = rest,
+                } } });
+            },
             .tuple => |items| blk: {
                 const item_types = self.tupleElementTypes(ty, items.len);
                 const lowered = try self.allocator.alloc(Ast.PatId, items.len);
@@ -2062,6 +2090,22 @@ const BodyLowerer = struct {
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
             else => invariantViolation("mono body lowering reached pattern form whose lowering is still missing"),
+        };
+    }
+
+    fn recordFieldType(
+        self: *BodyLowerer,
+        record_ty: Type.TypeId,
+        field_name: canonical.RecordFieldLabelId,
+    ) Type.TypeId {
+        return switch (self.program.types.getType(record_ty)) {
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (field.name == field_name) return field.ty;
+                }
+                invariantViolation("mono body lowering could not find record pattern field in resolved record type");
+            },
+            else => invariantViolation("mono body lowering expected a resolved record type for record pattern"),
         };
     }
 

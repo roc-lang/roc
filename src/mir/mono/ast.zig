@@ -62,6 +62,10 @@ pub const Pat = struct {
             discriminant: u16,
             args: Span(PatId),
         },
+        record: struct {
+            fields: Span(RecordFieldPattern),
+            rest: ?PatId = null,
+        },
         nominal: PatId,
         tuple: Span(PatId),
         as: struct {
@@ -71,6 +75,11 @@ pub const Pat = struct {
         var_: Symbol,
         wildcard,
     };
+};
+
+pub const RecordFieldPattern = struct {
+    field: canonical.RecordFieldLabelId,
+    pattern: PatId,
 };
 
 /// Public struct `LetFn`.
@@ -291,6 +300,7 @@ pub const Store = struct {
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
     field_exprs: std.ArrayList(FieldExpr),
+    record_field_patterns: std.ArrayList(RecordFieldPattern),
     capture_args: std.ArrayList(CaptureArg),
     typed_symbols: std.ArrayList(TypedSymbol),
 
@@ -307,6 +317,7 @@ pub const Store = struct {
             .stmt_ids = .empty,
             .branch_ids = .empty,
             .field_exprs = .empty,
+            .record_field_patterns = .empty,
             .capture_args = .empty,
             .typed_symbols = .empty,
         };
@@ -323,6 +334,7 @@ pub const Store = struct {
         self.stmt_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
+        self.record_field_patterns.deinit(self.allocator);
         self.capture_args.deinit(self.allocator);
         self.typed_symbols.deinit(self.allocator);
     }
@@ -432,6 +444,18 @@ pub const Store = struct {
     pub fn sliceFieldExprSpan(self: *const Store, span: Span(FieldExpr)) []const FieldExpr {
         if (span.len == 0) return &.{};
         return self.field_exprs.items[span.start..][0..span.len];
+    }
+
+    pub fn addRecordFieldPatternSpan(self: *Store, values: []const RecordFieldPattern) std.mem.Allocator.Error!Span(RecordFieldPattern) {
+        if (values.len == 0) return Span(RecordFieldPattern).empty();
+        const start: u32 = @intCast(self.record_field_patterns.items.len);
+        try self.record_field_patterns.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceRecordFieldPatternSpan(self: *const Store, span: Span(RecordFieldPattern)) []const RecordFieldPattern {
+        if (span.len == 0) return &.{};
+        return self.record_field_patterns.items[span.start..][0..span.len];
     }
 
     pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {

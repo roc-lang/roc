@@ -679,6 +679,14 @@ const BodyFinalizer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .record => |record| blk: {
+                const shape = try self.shapes.internRecordShapeFromType(self.types, pat.ty);
+                break :blk .{ .record = .{
+                    .shape = shape,
+                    .fields = try self.lowerRecordFieldPatternSpan(shape, record.fields),
+                    .rest = if (record.rest) |rest| try self.lowerPat(rest) else null,
+                } };
+            },
             .nominal => |child| .{ .nominal = try self.lowerPat(child) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
             .as => |as| .{ .as = .{
@@ -708,6 +716,24 @@ const BodyFinalizer = struct {
                 } };
             },
         } });
+    }
+
+    fn lowerRecordFieldPatternSpan(
+        self: *BodyFinalizer,
+        shape: Ast.RecordShapeId,
+        span: Mono.Ast.Span(Mono.Ast.RecordFieldPattern),
+    ) Allocator.Error!Ast.Span(Ast.RecordFieldPattern) {
+        const input_items = self.input.sliceRecordFieldPatternSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.RecordFieldPattern).empty();
+        const output_items = try self.allocator.alloc(Ast.RecordFieldPattern, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |field, i| {
+            output_items[i] = .{
+                .field = self.recordFieldId(shape, field.field),
+                .pattern = try self.lowerPat(field.pattern),
+            };
+        }
+        return try self.output.addRecordFieldPatternSpan(output_items);
     }
 
     fn lowerPatSpan(self: *BodyFinalizer, span: Mono.Ast.Span(Mono.Ast.PatId)) Allocator.Error!Ast.Span(Ast.PatId) {

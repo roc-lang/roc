@@ -1349,6 +1349,11 @@ const BodyBuilder = struct {
             .wildcard => .wildcard,
             .nominal => |child| .{ .nominal = try self.lowerPatScoped(child, saved) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpanScoped(items, saved) },
+            .record => |record| .{ .record = .{
+                .shape = record.shape,
+                .fields = try self.lowerRecordFieldPatternSpanScoped(record.fields, saved),
+                .rest = if (record.rest) |rest| try self.lowerPatScoped(rest, saved) else null,
+            } },
             .as => |as| blk: {
                 const value = try self.bindPatternValue(as.binding_info, saved);
                 break :blk .{ .as = .{
@@ -1395,6 +1400,24 @@ const BodyBuilder = struct {
             output_items[i] = try self.lowerPatScoped(item, saved);
         }
         return try self.output.addPatSpan(output_items);
+    }
+
+    fn lowerRecordFieldPatternSpanScoped(
+        self: *BodyBuilder,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldPattern),
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.Span(Ast.RecordFieldPattern) {
+        if (span.len == 0) return Ast.Span(Ast.RecordFieldPattern).empty();
+        const input_items = self.input.record_field_patterns.items[span.start..][0..span.len];
+        const output_items = try self.allocator.alloc(Ast.RecordFieldPattern, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |field, i| {
+            output_items[i] = .{
+                .field = field.field,
+                .pattern = try self.lowerPatScoped(field.pattern, saved),
+            };
+        }
+        return try self.output.addRecordFieldPatternSpan(output_items);
     }
 
     fn restoreBindings(self: *BodyBuilder, saved: *std.ArrayList(SavedBinding), start: usize) void {

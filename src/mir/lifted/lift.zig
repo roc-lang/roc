@@ -921,6 +921,12 @@ const BodyLifter = struct {
                 try self.bindPatternSymbols(as.pattern, bound, restorations);
             },
             .nominal => |child| try self.bindPatternSymbols(child, bound, restorations),
+            .record => |record| {
+                for (self.input.sliceRecordFieldPatternSpan(record.fields)) |field| {
+                    try self.bindPatternSymbols(field.pattern, bound, restorations);
+                }
+                if (record.rest) |rest| try self.bindPatternSymbols(rest, bound, restorations);
+            },
             .tuple => |items| {
                 for (self.input.slicePatSpan(items)) |item| {
                     try self.bindPatternSymbols(item, bound, restorations);
@@ -981,6 +987,11 @@ const BodyLifter = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .nominal => |child| .{ .nominal = try self.lowerPat(child) },
+            .record => |record| .{ .record = .{
+                .shape = record.shape,
+                .fields = try self.lowerRecordFieldPatternSpan(record.fields),
+                .rest = if (record.rest) |rest| try self.lowerPat(rest) else null,
+            } },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),
@@ -1083,6 +1094,20 @@ const BodyLifter = struct {
             };
         }
         return try self.output.addTagPayloadPatternSpan(output_items);
+    }
+
+    fn lowerRecordFieldPatternSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.RecordFieldPattern)) Allocator.Error!Ast.Span(Ast.RecordFieldPattern) {
+        const input_items = self.input.sliceRecordFieldPatternSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.RecordFieldPattern).empty();
+        const output_items = try self.allocator.alloc(Ast.RecordFieldPattern, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |field, i| {
+            output_items[i] = .{
+                .field = field.field,
+                .pattern = try self.lowerPat(field.pattern),
+            };
+        }
+        return try self.output.addRecordFieldPatternSpan(output_items);
     }
 
     fn lowerTypedSymbolSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedSymbol) {
