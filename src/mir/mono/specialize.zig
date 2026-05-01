@@ -198,6 +198,7 @@ const CheckedTemplateLookup = struct {
     checked_types: checked_artifact.CheckedTypeStoreView,
     checked_bodies: checked_artifact.CheckedBodyStoreView,
     resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
+    nested_proc_sites: *const checked_artifact.NestedProcSiteTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
 
@@ -211,6 +212,7 @@ fn checkedTemplateForKey(
             .checked_types = input.root.artifact.checked_types.view(),
             .checked_bodies = input.root.artifact.checked_bodies.view(),
             .resolved_value_refs = &input.root.artifact.resolved_value_refs,
+            .nested_proc_sites = &input.root.artifact.nested_proc_sites,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
     }
@@ -226,6 +228,7 @@ fn checkedTemplateForKey(
                     .checked_types = imported.checked_types,
                     .checked_bodies = imported.checked_bodies,
                     .resolved_value_refs = imported.resolved_value_refs,
+                    .nested_proc_sites = imported.nested_proc_sites,
                     .template = exported.template_data,
                 };
             }
@@ -245,6 +248,7 @@ fn checkedTemplateForKey(
                     .checked_types = related.checked_types,
                     .checked_bodies = related.checked_bodies,
                     .resolved_value_refs = related.resolved_value_refs,
+                    .nested_proc_sites = related.nested_proc_sites,
                     .template = exported.template_data,
                 };
             }
@@ -1354,7 +1358,7 @@ const BodyLowerer = struct {
             .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr),
             .record => |record| try self.lowerRecord(ty, record),
             .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
-            .lambda => |lambda| try self.lowerClosureExpr(ty, lambda.args, lambda.body),
+            .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .local_function, lambda.args, lambda.body),
             .call => |call| try self.lowerCall(ty, expr_id, call),
             .structural_eq => |eq| try self.lowerStructuralEq(ty, eq),
             .unary_not => |child| blk: {
@@ -1368,7 +1372,7 @@ const BodyLowerer = struct {
                 _ = tag.closure_name;
                 break :blk try self.lowerTag(ty, try self.tagLabel(tag.name), &.{});
             },
-            .closure => |closure| try self.lowerCheckedClosureExpr(ty, closure),
+            .closure => |closure| try self.lowerCheckedClosureExpr(ty, expr_id, closure),
             .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, try self.recordFieldLabel(access.field_name)),
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
@@ -1608,12 +1612,15 @@ const BodyLowerer = struct {
     fn lowerClosureExpr(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        site_expr: checked_artifact.CheckedExprId,
+        site_kind: checked_artifact.NestedProcKind,
         arg_patterns: []const checked_artifact.CheckedPatternId,
         body_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
         const args = try self.lowerParamSpan(arg_patterns);
         const body = try self.lowerExpr(body_expr);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
+            .site = self.nestedProcSite(site_expr, site_kind),
             .args = args,
             .body = body,
         } });
@@ -1622,13 +1629,14 @@ const BodyLowerer = struct {
     fn lowerCheckedClosureExpr(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        expr_id: checked_artifact.CheckedExprId,
         closure: anytype,
     ) Allocator.Error!Ast.ExprId {
         _ = closure.captures;
         _ = closure.tag_name;
         const lambda_expr = self.checkedExpr(closure.lambda);
         return switch (lambda_expr.data) {
-            .lambda => |lambda| try self.lowerClosureExpr(ty, lambda.args, lambda.body),
+            .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .closure, lambda.args, lambda.body),
             else => invariantViolation("mono body lowering expected closure expression to reference a checked lambda"),
         };
     }
@@ -2053,6 +2061,9 @@ const BodyLowerer = struct {
         return switch (statement.data) {
             .decl => |decl| blk: {
                 const bind = try self.lowerParamPattern(decl.pattern);
+                if (try self.lowerLocalFunctionDecl(bind, decl.expr)) |local_fn| {
+                    break :blk try self.program.ast.addStmt(.{ .local_fn = local_fn });
+                }
                 const body = try self.lowerExpr(decl.expr);
                 break :blk try self.program.ast.addStmt(.{ .decl = .{ .bind = bind, .body = body } });
             },
@@ -2103,6 +2114,37 @@ const BodyLowerer = struct {
             .iterable = try self.lowerExpr(iterable),
             .body = try self.lowerExpr(body),
         } });
+    }
+
+    fn lowerLocalFunctionDecl(
+        self: *BodyLowerer,
+        bind: Ast.TypedSymbol,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?Ast.LetFn {
+        const expr = self.checkedExpr(expr_id);
+        return switch (expr.data) {
+            .lambda => |lambda| .{
+                .site = self.nestedProcSite(expr_id, .local_function),
+                .recursive = false,
+                .bind = bind,
+                .args = try self.lowerParamSpan(lambda.args),
+                .body = try self.lowerExpr(lambda.body),
+            },
+            .closure => |closure| blk: {
+                const lambda_expr = self.checkedExpr(closure.lambda);
+                switch (lambda_expr.data) {
+                    .lambda => |lambda| break :blk .{
+                        .site = self.nestedProcSite(expr_id, .closure),
+                        .recursive = false,
+                        .bind = bind,
+                        .args = try self.lowerParamSpan(lambda.args),
+                        .body = try self.lowerExpr(lambda.body),
+                    },
+                    else => invariantViolation("mono body lowering expected local closure declaration to reference a checked lambda"),
+                }
+            },
+            else => null,
+        };
     }
 
     fn lowerCheckedStringLiteral(
@@ -2193,6 +2235,24 @@ const BodyLowerer = struct {
         const raw = @intFromEnum(id);
         if (raw >= self.template_lookup.resolved_value_refs.records.len) invariantViolation("mono body lowering received resolved value ref id outside table");
         return self.template_lookup.resolved_value_refs.records[raw];
+    }
+
+    fn nestedProcSite(
+        self: *const BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        kind: checked_artifact.NestedProcKind,
+    ) canonical.NestedProcSiteId {
+        const refs = self.template_lookup.nested_proc_sites.template_refs;
+        const start = self.template_lookup.template.nested_proc_sites.start;
+        const len = self.template_lookup.template.nested_proc_sites.len;
+        if (start + len > refs.len) invariantViolation("mono body lowering received nested procedure site ref outside table");
+        for (refs[start..][0..len]) |site_id| {
+            const raw = @intFromEnum(site_id);
+            if (raw >= self.template_lookup.nested_proc_sites.sites.len) invariantViolation("mono body lowering received nested procedure site outside table");
+            const site = self.template_lookup.nested_proc_sites.sites[raw];
+            if (site.kind == kind and site.checked_expr != null and site.checked_expr.? == expr_id) return site_id;
+        }
+        invariantViolation("mono body lowering could not find published nested procedure site for closure/local function");
     }
 
     fn procedureUseForExpr(

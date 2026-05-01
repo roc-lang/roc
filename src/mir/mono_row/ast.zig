@@ -45,6 +45,14 @@ pub const TypedSymbol = struct {
     symbol: Symbol,
 };
 
+pub const LetFn = struct {
+    site: canonical.NestedProcSiteId,
+    recursive: bool,
+    bind: TypedSymbol,
+    args: Span(TypedSymbol),
+    body: ExprId,
+};
+
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
@@ -143,6 +151,7 @@ pub const Expr = struct {
             rest: ExprId,
         },
         clos: struct {
+            site: canonical.NestedProcSiteId,
             args: Span(TypedSymbol),
             body: ExprId,
         },
@@ -204,6 +213,7 @@ pub const Expr = struct {
 };
 
 pub const Stmt = union(enum) {
+    local_fn: LetFn,
     decl: struct {
         bind: TypedSymbol,
         body: ExprId,

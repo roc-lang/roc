@@ -68,6 +68,7 @@ pub const Pat = struct {
 
 /// Public struct `LetFn`.
 pub const LetFn = struct {
+    site: ?canonical.NestedProcSiteId = null,
     recursive: bool,
     bind: TypedSymbol,
     args: Span(TypedSymbol),
@@ -142,6 +143,7 @@ pub const Expr = struct {
             rest: ExprId,
         },
         clos: struct {
+            site: canonical.NestedProcSiteId,
             args: Span(TypedSymbol),
             body: ExprId,
         },

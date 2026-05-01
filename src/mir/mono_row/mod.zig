@@ -492,6 +492,7 @@ const BodyFinalizer = struct {
             } },
             .bool_not => |child| .{ .bool_not = try self.lowerExpr(child) },
             .clos => |clos| .{ .clos = .{
+                .site = clos.site,
                 .args = try self.lowerTypedSymbolSpan(clos.args),
                 .body = try self.lowerExpr(clos.body),
             } },
@@ -564,7 +565,24 @@ const BodyFinalizer = struct {
                 .body = try self.lowerExpr(let_val.body),
                 .rest = try self.lowerExpr(let_.rest),
             } },
-            .let_fn => rowInvariant("row-finalized mono cannot preserve local function lets until lifted procedure identity is implemented"),
+            .let_fn => |let_fn| blk: {
+                const stmt = try self.output.addStmt(.{ .local_fn = try self.lowerLetFn(let_fn) });
+                const stmts = try self.output.addStmtSpan(&.{stmt});
+                break :blk .{ .block = .{
+                    .stmts = stmts,
+                    .final_expr = try self.lowerExpr(let_.rest),
+                } };
+            },
+        };
+    }
+
+    fn lowerLetFn(self: *BodyFinalizer, let_fn: Mono.Ast.LetFn) Allocator.Error!Ast.LetFn {
+        return .{
+            .site = let_fn.site orelse rowInvariant("row finalization received local function without a nested procedure site"),
+            .recursive = let_fn.recursive,
+            .bind = let_fn.bind,
+            .args = try self.lowerTypedSymbolSpan(let_fn.args),
+            .body = try self.lowerExpr(let_fn.body),
         };
     }
 
@@ -692,6 +710,7 @@ const BodyFinalizer = struct {
     fn lowerStmt(self: *BodyFinalizer, stmt_id: Mono.Ast.StmtId) Allocator.Error!Ast.StmtId {
         const stmt = self.input.getStmt(stmt_id);
         return try self.output.addStmt(switch (stmt) {
+            .local_fn => |local_fn| .{ .local_fn = try self.lowerLetFn(local_fn) },
             .decl => |decl| .{ .decl = .{
                 .bind = decl.bind,
                 .body = try self.lowerExpr(decl.body),
@@ -719,8 +738,6 @@ const BodyFinalizer = struct {
                 .cond = try self.lowerExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),
             } },
-            .local_fn,
-            => rowInvariant("row finalization reached a mono statement form whose lowering is still missing"),
         });
     }
 
