@@ -835,14 +835,6 @@ pub const Interpreter = struct {
         while (remaining > 0) : (remaining -= 1) {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_symbol => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @intFromEnum(current),
-                        stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
                 .assign_ref => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
@@ -919,7 +911,6 @@ pub const Interpreter = struct {
                 else => debugPrint("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
             }
             current = switch (stmt) {
-                .assign_symbol => |assign| assign.next,
                 .assign_ref => |assign| assign.next,
                 .assign_literal => |assign| assign.next,
                 .assign_call => |assign| assign.next,
@@ -1138,7 +1129,6 @@ pub const Interpreter = struct {
     fn collectJoinPoints(self: *LirInterpreter, join_points: *JoinPointMap, stmt_id: CFStmtId) Error!void {
         const stmt = self.store.getCFStmt(stmt_id);
         switch (stmt) {
-            .assign_symbol => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_ref => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
@@ -1190,10 +1180,6 @@ pub const Interpreter = struct {
         while (true) {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_symbol => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalAssignSymbol(assign.symbol, self.store.getLocal(assign.target).layout_idx));
-                    current = assign.next;
-                },
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
@@ -1536,14 +1522,6 @@ pub const Interpreter = struct {
             visited.put(stmt_id, {}) catch return;
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
-                .assign_symbol => |assign| {
-                    debugPrint("    {d}: assign_symbol target={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(assign.next),
-                    });
-                    stack.append(self.allocator, assign.next) catch return;
-                },
                 .assign_ref => |assign| {
                     debugPrint("    {d}: assign_ref target={d} op={any} next={d}\n", .{
                         @intFromEnum(stmt_id),
@@ -1802,13 +1780,6 @@ pub const Interpreter = struct {
                 },
             },
         };
-    }
-
-    fn evalAssignSymbol(self: *LirInterpreter, symbol: Symbol, _: layout_mod.Idx) Error!Value {
-        return self.invariantFailedError(
-            "LIR/interpreter TODO: assign_symbol for symbol {d} is not implemented yet",
-            .{symbol.raw()},
-        );
     }
 
     fn materializeLocalValue(

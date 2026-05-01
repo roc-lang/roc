@@ -1723,10 +1723,6 @@ fn collectProcLocals(
     if (gop.found_existing) return;
 
     switch (self.store.getCFStmt(stmt_id)) {
-        .assign_symbol => |assign| {
-            try recordProcLocal(locals, assign.target);
-            try self.collectProcLocals(assign.next, locals, visited);
-        },
         .assign_ref => |assign| {
             try recordProcLocal(locals, assign.target);
             try recordRefOpLocals(locals, assign.op);
@@ -4884,12 +4880,6 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
     const stmt = self.store.getCFStmt(stmt_id);
     switch (stmt) {
-        .assign_symbol => |assign| {
-            std.debug.panic(
-                "WasmCodeGen invariant violated: assign_symbol for symbol {d} is not implemented in statement-only wasm codegen yet",
-                .{assign.symbol.raw()},
-            );
-        },
         .assign_ref => |assign| {
             try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);

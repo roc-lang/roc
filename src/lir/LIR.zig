@@ -160,11 +160,6 @@ pub const CFSwitchBranchSpan = extern struct {
 
 /// Single canonical statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
-    assign_symbol: struct {
-        target: LocalId,
-        symbol: Symbol,
-        next: CFStmtId,
-    },
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
