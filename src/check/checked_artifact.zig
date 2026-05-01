@@ -6383,12 +6383,14 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
 
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
+    canonical_names: *const canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
     resolved_value_refs: *const ResolvedValueRefTable,
     nested_proc_sites: *const NestedProcSiteTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -6412,12 +6414,14 @@ pub const LoweringModuleView = struct {
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .key = artifact.key,
+        .canonical_names = &artifact.canonical_names,
         .module_identity = artifact.module_identity,
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
         .resolved_value_refs = &artifact.resolved_value_refs,
         .nested_proc_sites = &artifact.nested_proc_sites,
+        .static_dispatch_plans = &artifact.static_dispatch_plans,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),

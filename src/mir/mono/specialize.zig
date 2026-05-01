@@ -20,6 +20,7 @@ const debug = @import("../debug_verify.zig");
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
+const static_dispatch = check.StaticDispatchRegistry;
 
 pub const MonoProcHandle = enum(u32) { _ };
 
@@ -1020,11 +1021,11 @@ const BodyLowerer = struct {
                 const backing = try self.lowerExpr(nominal.backing_expr);
                 break :blk try self.program.ast.addExpr(ty, .{ .nominal_reinterpret = backing });
             },
+            .dispatch_call => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked dispatch call reached mono without a StaticDispatchCallPlan")),
+            .method_eq => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked method equality reached mono without a StaticDispatchCallPlan")),
+            .type_dispatch_call => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan")),
             .method_call,
-            .dispatch_call,
-            .method_eq,
             .type_method_call,
-            .type_dispatch_call,
             .hosted_lambda,
             => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
             .dbg => |child| blk: {
@@ -1286,6 +1287,57 @@ const BodyLowerer = struct {
         const structural = try self.program.ast.addExpr(ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
         if (!eq.negated) return structural;
         return try self.program.ast.addExpr(ty, .{ .bool_not = structural });
+    }
+
+    fn lowerStaticDispatch(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan = self.staticDispatchPlan(plan_id);
+        const callable_ty = try self.type_instantiator.lowerTemplateType(plan.callable_ty);
+        const callable = switch (self.program.types.getType(callable_ty)) {
+            .func => |func| func,
+            else => invariantViolation("mono static dispatch callable type did not resolve to a fixed-arity function"),
+        };
+        if (callable.args.len != plan.args.len) invariantViolation("mono static dispatch argument count did not match callable arity");
+
+        const lowered_args = try self.lowerExprSpan(plan.args);
+        const arg_items = self.program.ast.sliceExprSpan(lowered_args);
+        for (arg_items, callable.args) |arg, expected_arg_ty| {
+            const actual_arg_ty = self.program.ast.getExpr(arg).ty;
+            if (!self.program.types.equalIds(actual_arg_ty, expected_arg_ty)) {
+                invariantViolation("mono static dispatch argument type did not match callable type");
+            }
+        }
+
+        const dispatcher_ty = try self.type_instantiator.lowerTemplateType(plan.dispatcher_ty);
+        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_ty);
+        const registry = methodRegistryForKey(self.input, self.template_lookup.artifact) orelse {
+            debug.invariant(false, "mono static dispatch invariant violated: method registry artifact was not available");
+            unreachable;
+        };
+        const target = registry.lookup(.{
+            .owner = owner,
+            .method = plan.method,
+        });
+
+        if (target) |_| {
+            invariantViolation("mono static dispatch target specialization is not implemented yet");
+        }
+
+        return switch (plan.result_mode) {
+            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .equality => |equality| blk: {
+                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
+                if (plan.args.len != 2) invariantViolation("mono static dispatch equality did not have exactly two operands");
+                const lhs = arg_items[0];
+                const rhs = arg_items[1];
+                const structural = try self.program.ast.addExpr(ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
+                if (!equality.negated) break :blk structural;
+                break :blk try self.program.ast.addExpr(ty, .{ .bool_not = structural });
+            },
+        };
     }
 
     fn lowerIf(
@@ -1681,6 +1733,16 @@ const BodyLowerer = struct {
         return self.template_lookup.checked_bodies.statements[raw];
     }
 
+    fn staticDispatchPlan(self: *const BodyLowerer, id: checked_artifact.StaticDispatchPlanId) static_dispatch.StaticDispatchCallPlan {
+        const table = staticDispatchPlansForKey(self.input, self.template_lookup.artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: static dispatch plan artifact was not available");
+            unreachable;
+        };
+        const raw = @intFromEnum(id);
+        if (raw >= table.plans.len) invariantViolation("mono body lowering received static dispatch plan id outside table");
+        return table.plans[raw];
+    }
+
     fn resolvedValueRef(self: *const BodyLowerer, id: checked_artifact.ResolvedValueRefId) checked_artifact.ResolvedValueRefRecord {
         const raw = @intFromEnum(id);
         if (raw >= self.template_lookup.resolved_value_refs.records.len) invariantViolation("mono body lowering received resolved value ref id outside table");
@@ -1899,6 +1961,83 @@ fn topLevelProcedureBindingsForKey(
         }
     }
     return null;
+}
+
+fn staticDispatchPlansForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const static_dispatch.StaticDispatchPlanTable {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return &input.root.artifact.static_dispatch_plans;
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.static_dispatch_plans;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.static_dispatch_plans;
+        }
+    }
+    return null;
+}
+
+fn methodRegistryForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const static_dispatch.MethodRegistry {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return &input.root.artifact.method_registry;
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.method_registry;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.method_registry;
+        }
+    }
+    return null;
+}
+
+fn methodOwnerForDispatcherType(
+    types: *const Type.Store,
+    ty: Type.TypeId,
+) static_dispatch.MethodOwner {
+    return switch (types.getTypePreservingNominal(ty)) {
+        .nominal => |nominal| .{ .nominal = nominal.nominal },
+        .primitive => |prim| .{ .builtin = switch (prim) {
+            .bool => .bool,
+            .str => .str,
+            .u8 => .u8,
+            .i8 => .i8,
+            .u16 => .u16,
+            .i16 => .i16,
+            .u32 => .u32,
+            .i32 => .i32,
+            .u64 => .u64,
+            .i64 => .i64,
+            .u128 => .u128,
+            .i128 => .i128,
+            .f32 => .f32,
+            .f64 => .f64,
+            .dec => .dec,
+            .erased => invariantViolation("mono static dispatch reached erased function representation before lambda solving"),
+        } },
+        .list => .{ .builtin = .list },
+        .box => .{ .builtin = .box },
+        .link => unreachable,
+        .placeholder,
+        .unbd,
+        .func,
+        .tuple,
+        .tag_union,
+        .record,
+        => invariantViolation("mono static dispatch dispatcher type did not resolve to an allowed method owner"),
+    };
 }
 
 fn verifyProgram(program: *const Program) void {

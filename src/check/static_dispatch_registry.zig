@@ -76,6 +76,13 @@ pub const MethodRegistryEntry = struct {
 pub const MethodRegistry = struct {
     entries: []MethodRegistryEntry = &.{},
 
+    pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+        for (self.entries) |entry| {
+            if (methodKeyEql(entry.key, key)) return entry.target;
+        }
+        return null;
+    }
+
     pub fn deinit(self: *MethodRegistry, allocator: Allocator) void {
         allocator.free(self.entries);
         self.* = .{};
@@ -156,6 +163,24 @@ pub const MethodRegistry = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 };
+
+fn methodKeyEql(a: MethodKey, b: MethodKey) bool {
+    return methodOwnerEql(a.owner, b.owner) and a.method == b.method;
+}
+
+fn methodOwnerEql(a: MethodOwner, b: MethodOwner) bool {
+    return switch (a) {
+        .nominal => |a_nominal| switch (b) {
+            .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
+                a_nominal.type_name == b_nominal.type_name,
+            else => false,
+        },
+        .builtin => |a_builtin| switch (b) {
+            .builtin => |b_builtin| a_builtin == b_builtin,
+            else => false,
+        },
+    };
+}
 
 pub const StaticDispatchResultMode = union(enum) {
     value,
