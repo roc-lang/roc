@@ -199,6 +199,7 @@ const CheckedTemplateLookup = struct {
     checked_bodies: checked_artifact.CheckedBodyStoreView,
     resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
     nested_proc_sites: *const checked_artifact.NestedProcSiteTable,
+    hosted_procs: *const checked_artifact.HostedProcTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
 
@@ -213,6 +214,7 @@ fn checkedTemplateForKey(
             .checked_bodies = input.root.artifact.checked_bodies.view(),
             .resolved_value_refs = &input.root.artifact.resolved_value_refs,
             .nested_proc_sites = &input.root.artifact.nested_proc_sites,
+            .hosted_procs = &input.root.artifact.hosted_procs,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
     }
@@ -229,6 +231,7 @@ fn checkedTemplateForKey(
                     .checked_bodies = imported.checked_bodies,
                     .resolved_value_refs = imported.resolved_value_refs,
                     .nested_proc_sites = imported.nested_proc_sites,
+                    .hosted_procs = imported.hosted_procs,
                     .template = exported.template_data,
                 };
             }
@@ -249,6 +252,7 @@ fn checkedTemplateForKey(
                     .checked_bodies = related.checked_bodies,
                     .resolved_value_refs = related.resolved_value_refs,
                     .nested_proc_sites = related.nested_proc_sites,
+                    .hosted_procs = related.hosted_procs,
                     .template = exported.template_data,
                 };
             }
