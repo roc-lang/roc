@@ -2416,8 +2416,26 @@ const BodyLowerer = struct {
                 .{ .platform_required = required },
                 requested_key,
             ),
-            .promoted => |_| invariantViolation("mono body lowering reached promoted procedure use before promoted procedure templates were published"),
+            .promoted => |promoted| self.templateFromPromotedProcedure(promoted),
         };
+    }
+
+    fn templateFromPromotedProcedure(
+        self: *const BodyLowerer,
+        promoted: checked_artifact.PromotedProcedureRef,
+    ) canonical.ProcedureTemplateRef {
+        if (self.input.root.artifact.module_identity.module_idx == promoted.module_idx) {
+            if (promotedProcedureTemplate(&self.input.root.artifact.promoted_procedures, promoted)) |template| return template;
+        }
+        for (self.input.imports) |view| {
+            if (view.module_identity.module_idx != promoted.module_idx) continue;
+            if (promotedProcedureTemplate(view.promoted_procedures, promoted)) |template| return template;
+        }
+        for (self.input.root.relation_artifacts) |view| {
+            if (view.module_identity.module_idx != promoted.module_idx) continue;
+            if (promotedProcedureTemplate(view.promoted_procedures, promoted)) |template| return template;
+        }
+        invariantViolation("mono body lowering could not find promoted procedure in published artifact views");
     }
 
     fn templateFromTopLevelBinding(
@@ -2513,6 +2531,16 @@ const BodyLowerer = struct {
         unreachable;
     }
 };
+
+fn promotedProcedureTemplate(
+    table: *const checked_artifact.PromotedProcedureTable,
+    ref: checked_artifact.PromotedProcedureRef,
+) ?canonical.ProcedureTemplateRef {
+    for (table.procedures) |procedure| {
+        if (canonical.procedureValueRefEql(procedure.proc, ref.proc)) return procedure.template;
+    }
+    return null;
+}
 
 fn invariantViolation(comptime message: []const u8) noreturn {
     debug.invariant(false, message);
