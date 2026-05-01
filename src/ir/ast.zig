@@ -116,6 +116,10 @@ pub const Expr = union(enum) {
         proc: ProcRef,
         args: Span(Var),
     },
+    structural_eq: struct {
+        lhs: Var,
+        rhs: Var,
+    },
     call_erased: struct {
         func: Var,
         args: Span(Var),

@@ -175,6 +175,10 @@ pub const Expr = struct {
             record: ExprId,
             field: row.RecordFieldId,
         },
+        structural_eq: struct {
+            lhs: ExprId,
+            rhs: ExprId,
+        },
         bridge: struct {
             bridge: BridgeId,
             value: ExecutableValueRef,

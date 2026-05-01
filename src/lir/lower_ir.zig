@@ -455,6 +455,18 @@ const Lowerer = struct {
                 .args = try self.lowerVarSpan(call.args),
                 .next = next,
             } }),
+            .structural_eq => |eq| blk: {
+                const args = [_]LIR.LocalId{
+                    try self.lowerVar(eq.lhs),
+                    try self.lowerVar(eq.rhs),
+                };
+                break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = .num_is_eq,
+                    .args = try self.store.addLocalSpan(&args),
+                    .next = next,
+                } });
+            },
             .call_low_level => |call| try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = call.op,

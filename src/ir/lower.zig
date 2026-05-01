@@ -263,6 +263,7 @@ const IrBuilder = struct {
             .return_ => |child| try self.lowerExpr(child, stmts),
             .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
             .call_direct => |call| try self.lowerCallDirect(expr, call, stmts),
+            .structural_eq => |eq| try self.lowerStructuralEq(expr, eq, stmts),
             .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
@@ -331,6 +332,20 @@ const IrBuilder = struct {
             irInvariant("IR lowering captured callable_set_value requires closure layout lowering");
         }
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .fn_ptr = callable.selected_executable_proc }, stmts);
+    }
+
+    fn lowerStructuralEq(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        eq: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const lhs = try self.lowerExpr(eq.lhs, stmts);
+        const rhs = try self.lowerExpr(eq.rhs, stmts);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .structural_eq = .{
+            .lhs = lhs,
+            .rhs = rhs,
+        } }, stmts);
     }
 
     fn lowerCallableMatch(

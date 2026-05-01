@@ -519,6 +519,18 @@ const BodyBuilder = struct {
                     } },
                 );
             },
+            .structural_eq => |eq| blk: {
+                const lhs = try self.lowerExpr(eq.lhs);
+                const rhs = try self.lowerExpr(eq.rhs);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .structural_eq = .{
+                        .lhs = lhs,
+                        .rhs = rhs,
+                    } },
+                );
+            },
             .low_level => |low_level| blk: {
                 const args = try self.lowerExprIds(low_level.args);
                 break :blk try self.output.addExpr(
@@ -588,7 +600,6 @@ const BodyBuilder = struct {
             },
             .for_ => |for_| try self.lowerForExpr(expr.ty, for_),
             .capture_ref,
-            .structural_eq,
             => executableInvariant("executable MIR reached lambda-solved expression form whose executable lowering is still missing"),
             .call_value => |call| try self.lowerCallValue(expr.ty, call),
             .call_proc => |call| try self.lowerCallProc(expr.ty, call),
