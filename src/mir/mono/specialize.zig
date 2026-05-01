@@ -1277,6 +1277,7 @@ const BodyLowerer = struct {
             .proc = canonical.mirProcedureRefFromMono(reserved.proc),
             .debug_name = null,
             .value = .{ .fn_ = .{
+                .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
                 .recursive = false,
                 .bind = bind,
                 .args = args,
@@ -1619,8 +1620,10 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         const args = try self.lowerParamSpan(arg_patterns);
         const body = try self.lowerExpr(body_expr);
+        const source_fn_ty = try self.sourceFnTypeKey(site_expr);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
             .site = self.nestedProcSite(site_expr, site_kind),
+            .source_fn_ty = source_fn_ty,
             .args = args,
             .body = body,
         } });
@@ -2125,6 +2128,7 @@ const BodyLowerer = struct {
         return switch (expr.data) {
             .lambda => |lambda| .{
                 .site = self.nestedProcSite(expr_id, .local_function),
+                .source_fn_ty = try self.sourceFnTypeKey(expr_id),
                 .recursive = false,
                 .bind = bind,
                 .args = try self.lowerParamSpan(lambda.args),
@@ -2135,6 +2139,7 @@ const BodyLowerer = struct {
                 switch (lambda_expr.data) {
                     .lambda => |lambda| break :blk .{
                         .site = self.nestedProcSite(expr_id, .closure),
+                        .source_fn_ty = try self.sourceFnTypeKey(expr_id),
                         .recursive = false,
                         .bind = bind,
                         .args = try self.lowerParamSpan(lambda.args),
@@ -2253,6 +2258,14 @@ const BodyLowerer = struct {
             if (site.kind == kind and site.checked_expr != null and site.checked_expr.? == expr_id) return site_id;
         }
         invariantViolation("mono body lowering could not find published nested procedure site for closure/local function");
+    }
+
+    fn sourceFnTypeKey(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!canonical.CanonicalTypeKey {
+        const concrete = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(expr_id).ty);
+        return self.program.concrete_source_types.key(concrete);
     }
 
     fn procedureUseForExpr(

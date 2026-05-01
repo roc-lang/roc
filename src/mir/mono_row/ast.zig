@@ -47,6 +47,7 @@ pub const TypedSymbol = struct {
 
 pub const LetFn = struct {
     site: canonical.NestedProcSiteId,
+    source_fn_ty: canonical.CanonicalTypeKey,
     recursive: bool,
     bind: TypedSymbol,
     args: Span(TypedSymbol),
@@ -152,6 +153,7 @@ pub const Expr = struct {
         },
         clos: struct {
             site: canonical.NestedProcSiteId,
+            source_fn_ty: canonical.CanonicalTypeKey,
             args: Span(TypedSymbol),
             body: ExprId,
         },

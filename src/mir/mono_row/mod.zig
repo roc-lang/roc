@@ -493,6 +493,7 @@ const BodyFinalizer = struct {
             .bool_not => |child| .{ .bool_not = try self.lowerExpr(child) },
             .clos => |clos| .{ .clos = .{
                 .site = clos.site,
+                .source_fn_ty = clos.source_fn_ty,
                 .args = try self.lowerTypedSymbolSpan(clos.args),
                 .body = try self.lowerExpr(clos.body),
             } },
@@ -579,6 +580,7 @@ const BodyFinalizer = struct {
     fn lowerLetFn(self: *BodyFinalizer, let_fn: Mono.Ast.LetFn) Allocator.Error!Ast.LetFn {
         return .{
             .site = let_fn.site orelse rowInvariant("row finalization received local function without a nested procedure site"),
+            .source_fn_ty = let_fn.source_fn_ty,
             .recursive = let_fn.recursive,
             .bind = let_fn.bind,
             .args = try self.lowerTypedSymbolSpan(let_fn.args),
