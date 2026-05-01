@@ -2105,7 +2105,7 @@ const BodyLowerer = struct {
             .frac_f64_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = value } }),
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
-            else => invariantViolation("mono body lowering reached pattern form whose lowering is still missing"),
+            .pending => invariantViolation("mono body lowering reached an unresolved checked pattern"),
         };
     }
 
