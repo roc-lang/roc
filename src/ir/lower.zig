@@ -65,6 +65,7 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
         .output = &program,
         .value_env = std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var).init(allocator),
         .expr_map = std.AutoHashMap(Exec.Ast.ExprId, Ast.Var).init(allocator),
+        .proc_def_index = std.AutoHashMap(Exec.Ast.ExecutableProcId, usize).init(allocator),
         .next_internal_value_ref = input.ast.next_value_ref,
     };
     defer lowerer.deinit();
@@ -82,18 +83,28 @@ const IrBuilder = struct {
     output: *Program,
     value_env: std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var),
     expr_map: std.AutoHashMap(Exec.Ast.ExprId, Ast.Var),
+    proc_def_index: std.AutoHashMap(Exec.Ast.ExecutableProcId, usize),
     next_internal_value_ref: u32,
 
     fn deinit(self: *IrBuilder) void {
+        self.proc_def_index.deinit();
         self.expr_map.deinit();
         self.value_env.deinit();
     }
 
     fn lowerAllDefs(self: *IrBuilder) LowerResourceError!void {
+        try self.buildProcDefIndex();
         for (self.input.ast.defs.items) |def| {
             self.value_env.clearRetainingCapacity();
             self.expr_map.clearRetainingCapacity();
             try self.lowerDef(def);
+        }
+    }
+
+    fn buildProcDefIndex(self: *IrBuilder) LowerResourceError!void {
+        try self.proc_def_index.ensureTotalCapacity(@intCast(self.input.ast.defs.items.len));
+        for (self.input.ast.defs.items, 0..) |def, i| {
+            self.proc_def_index.putAssumeCapacity(def.proc, i);
         }
     }
 
@@ -269,8 +280,15 @@ const IrBuilder = struct {
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
+            .bridge => |bridge_expr| blk: {
+                const value = self.value_env.get(bridge_expr.value) orelse irInvariant("IR lowering bridge source value was not bound");
+                const bridge_plan = try self.lowerBridgePlan(bridge_expr.bridge);
+                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .bridge = .{
+                    .value = value,
+                    .plan = bridge_plan,
+                } }, stmts);
+            },
             .const_ref,
-            .bridge,
             .call_erased,
             .packed_erased_fn,
             .crash,
@@ -313,12 +331,20 @@ const IrBuilder = struct {
         call: Exec.Ast.CallDirectPlan,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const args = try self.lowerDirectCallArgSpan(call.direct_args);
+        const args = try self.lowerDirectCallArgSpan(call.executable_proc, call.direct_args, stmts);
         defer if (args.len > 0) self.allocator.free(args);
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_direct = .{
+        const direct_call: Ast.Expr = .{ .call_direct = .{
             .proc = call.executable_proc,
             .args = try self.output.store.addVarSpan(args),
-        } }, stmts);
+        } };
+        if (call.result_bridge) |result_bridge| {
+            const raw_result = try self.bindAnonymous(try self.procReturnLayout(call.executable_proc), direct_call, stmts);
+            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .bridge = .{
+                .value = raw_result,
+                .plan = try self.lowerBridgePlan(result_bridge),
+            } }, stmts);
+        }
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), direct_call, stmts);
     }
 
     fn lowerCallableSetValue(
@@ -381,12 +407,20 @@ const IrBuilder = struct {
         const branch_ids = self.input.ast.callable_match_branches.items[callable_match.branches.start..][0..callable_match.branches.len];
         if (branch_ids.len != 1) irInvariant("IR lowering multi-branch callable_match requires callable payload dispatch lowering");
         const branch = branch_ids[0];
-        const args = try self.lowerDirectCallArgSpan(branch.direct_args);
+        const args = try self.lowerDirectCallArgSpan(branch.executable_proc, branch.direct_args, stmts);
         defer if (args.len > 0) self.allocator.free(args);
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_direct = .{
+        const direct_call: Ast.Expr = .{ .call_direct = .{
             .proc = branch.executable_proc,
             .args = try self.output.store.addVarSpan(args),
-        } }, stmts);
+        } };
+        if (branch.result_bridge) |result_bridge| {
+            const raw_result = try self.bindAnonymous(try self.procReturnLayout(branch.executable_proc), direct_call, stmts);
+            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .bridge = .{
+                .value = raw_result,
+                .plan = try self.lowerBridgePlan(result_bridge),
+            } }, stmts);
+        }
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), direct_call, stmts);
     }
 
     fn lowerSourceMatch(
@@ -868,16 +902,96 @@ const IrBuilder = struct {
 
     fn lowerDirectCallArgSpan(
         self: *IrBuilder,
+        proc: Exec.Ast.ExecutableProcId,
         span: Exec.Ast.Span(Exec.Ast.DirectCallArg),
+        stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError![]const Ast.Var {
         if (span.len == 0) return &.{};
         const input_items = self.input.ast.direct_call_args.items[span.start..][0..span.len];
         const values = try self.allocator.alloc(Ast.Var, input_items.len);
         for (input_items, 0..) |arg, i| {
-            if (arg.bridge != null) irInvariant("IR lowering direct call argument bridges are not implemented yet");
-            values[i] = self.value_env.get(arg.value) orelse irInvariant("IR lowering direct call argument value was not bound");
+            const source = self.value_env.get(arg.value) orelse irInvariant("IR lowering direct call argument value was not bound");
+            values[i] = if (arg.bridge) |bridge| blk: {
+                break :blk try self.bindAnonymous(
+                    try self.procArgLayout(proc, i),
+                    .{ .bridge = .{
+                        .value = source,
+                        .plan = try self.lowerBridgePlan(bridge),
+                    } },
+                    stmts,
+                );
+            } else source;
         }
         return values;
+    }
+
+    fn lowerBridgePlan(self: *IrBuilder, bridge_id: Exec.Ast.BridgeId) LowerResourceError!Ast.BridgePlanId {
+        const bridge = self.input.ast.getBridgePlan(bridge_id);
+        const lowered: Ast.BridgePlan = switch (bridge) {
+            .direct => .direct,
+            .zst => .zst,
+            .list_reinterpret => .list_reinterpret,
+            .nominal_reinterpret => .nominal_reinterpret,
+            .box_unbox => |child| .{ .box_unbox = try self.lowerBridgePlan(child) },
+            .box_box => |child| .{ .box_box = try self.lowerBridgePlan(child) },
+            .struct_ => |children| .{ .struct_ = try self.lowerBridgePlanSpan(children) },
+            .tag_union => |children| .{ .tag_union = try self.lowerBridgePlanSpan(children) },
+            .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
+                .source_payload = try self.layoutForType(singleton.source_payload),
+                .target_discriminant = singleton.target_discriminant,
+                .payload_plan = if (singleton.payload_plan) |payload| try self.lowerBridgePlan(payload) else null,
+            } },
+            .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
+                .target_payload = try self.layoutForType(singleton.target_payload),
+                .source_discriminant = singleton.source_discriminant,
+                .payload_plan = if (singleton.payload_plan) |payload| try self.lowerBridgePlan(payload) else null,
+            } },
+        };
+        return try self.output.store.addBridgePlan(lowered);
+    }
+
+    fn lowerBridgePlanSpan(
+        self: *IrBuilder,
+        span: Exec.Ast.Span(Exec.Ast.BridgeId),
+    ) LowerResourceError!Ast.Span(Ast.BridgePlanId) {
+        const input_items = self.input.ast.sliceBridgePlanSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.BridgePlanId).empty();
+        const lowered = try self.allocator.alloc(Ast.BridgePlanId, input_items.len);
+        defer self.allocator.free(lowered);
+        for (input_items, 0..) |bridge_id, i| {
+            lowered[i] = try self.lowerBridgePlan(bridge_id);
+        }
+        return try self.output.store.addBridgePlanSpan(lowered);
+    }
+
+    fn procDef(self: *const IrBuilder, proc: Exec.Ast.ExecutableProcId) Exec.Ast.Def {
+        const index = self.proc_def_index.get(proc) orelse irInvariant("IR lowering referenced executable proc with no definition");
+        return self.input.ast.defs.items[index];
+    }
+
+    fn procArgLayout(
+        self: *IrBuilder,
+        proc: Exec.Ast.ExecutableProcId,
+        arg_index: usize,
+    ) LowerResourceError!Ast.LayoutRef {
+        const def = self.procDef(proc);
+        const args = switch (def.value) {
+            .fn_ => |fn_| self.input.ast.typed_values.items[fn_.args.start..][0..fn_.args.len],
+            .hosted_fn => |hosted| self.input.ast.typed_values.items[hosted.args.start..][0..hosted.args.len],
+        };
+        if (arg_index >= args.len) irInvariant("IR lowering direct call argument exceeded target procedure arity");
+        return try self.layoutForType(args[arg_index].ty);
+    }
+
+    fn procReturnLayout(
+        self: *IrBuilder,
+        proc: Exec.Ast.ExecutableProcId,
+    ) LowerResourceError!Ast.LayoutRef {
+        const def = self.procDef(proc);
+        return switch (def.value) {
+            .fn_ => |fn_| try self.layoutForType(self.input.ast.getExpr(fn_.body).ty),
+            .hosted_fn => |hosted| try self.layoutForType(hosted.ret_ty),
+        };
     }
 
     fn bindExpr(

@@ -111,6 +111,27 @@ pub const CallableCaptureRecord = struct {
     record_tmp: ExecutableValueRef,
 };
 
+pub const BridgePlan = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: BridgeId,
+    box_box: BridgeId,
+    struct_: Span(BridgeId),
+    tag_union: Span(BridgeId),
+    singleton_to_tag_union: struct {
+        source_payload: TypeId,
+        target_discriminant: u16,
+        payload_plan: ?BridgeId,
+    },
+    tag_union_to_singleton: struct {
+        target_payload: TypeId,
+        source_discriminant: u16,
+        payload_plan: ?BridgeId,
+    },
+};
+
 pub const CallableSetValue = struct {
     construction_plan: repr.CallableSetConstructionPlanId,
     callable_set_key: repr.CanonicalCallableSetKey,
@@ -296,11 +317,13 @@ pub const Store = struct {
     expr_ids: std.ArrayList(ExprId),
     pat_ids: std.ArrayList(PatId),
     branch_ids: std.ArrayList(BranchId),
+    bridge_ids: std.ArrayList(BridgeId),
     value_refs: std.ArrayList(ExecutableValueRef),
     capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
     pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
+    bridge_plans: std.ArrayList(BridgePlan),
     tag_payload_patterns: std.ArrayList(TagPayloadPattern),
     typed_values: std.ArrayList(TypedValue),
     record_field_exprs: std.ArrayList(RecordFieldExpr),
@@ -318,11 +341,13 @@ pub const Store = struct {
             .expr_ids = .empty,
             .pat_ids = .empty,
             .branch_ids = .empty,
+            .bridge_ids = .empty,
             .value_refs = .empty,
             .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
             .pattern_decision_plans = .empty,
+            .bridge_plans = .empty,
             .tag_payload_patterns = .empty,
             .typed_values = .empty,
             .record_field_exprs = .empty,
@@ -335,6 +360,7 @@ pub const Store = struct {
         self.record_field_exprs.deinit(self.allocator);
         self.typed_values.deinit(self.allocator);
         self.tag_payload_patterns.deinit(self.allocator);
+        self.bridge_plans.deinit(self.allocator);
         self.pattern_decision_plans.deinit(self.allocator);
         for (self.callable_match_branches.items) |*branch| {
             repr.deinitExecutableSpecializationKey(self.allocator, &branch.executable_specialization_key);
@@ -343,6 +369,7 @@ pub const Store = struct {
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
+        self.bridge_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.pat_ids.deinit(self.allocator);
         self.expr_ids.deinit(self.allocator);
@@ -400,6 +427,28 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.pattern_decision_plans.items.len);
         try self.pattern_decision_plans.append(self.allocator, plan);
         return @enumFromInt(idx);
+    }
+
+    pub fn addBridgePlan(self: *Store, plan: BridgePlan) std.mem.Allocator.Error!BridgeId {
+        const idx: u32 = @intCast(self.bridge_plans.items.len);
+        try self.bridge_plans.append(self.allocator, plan);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getBridgePlan(self: *const Store, id: BridgeId) BridgePlan {
+        return self.bridge_plans.items[@intFromEnum(id)];
+    }
+
+    pub fn addBridgePlanSpan(self: *Store, ids: []const BridgeId) std.mem.Allocator.Error!Span(BridgeId) {
+        if (ids.len == 0) return Span(BridgeId).empty();
+        const start: u32 = @intCast(self.bridge_ids.items.len);
+        try self.bridge_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn sliceBridgePlanSpan(self: *const Store, span: Span(BridgeId)) []const BridgeId {
+        if (span.len == 0) return &.{};
+        return self.bridge_ids.items[span.start..][0..span.len];
     }
 
     pub fn addTagPayloadPatternSpan(self: *Store, values: []const TagPayloadPattern) std.mem.Allocator.Error!Span(TagPayloadPattern) {
