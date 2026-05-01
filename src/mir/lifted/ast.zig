@@ -250,6 +250,10 @@ pub const Store = struct {
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
     tag_payload_patterns: std.ArrayList(TagPayloadPattern),
+    record_field_evals: std.ArrayList(RecordFieldEval),
+    record_field_assemblies: std.ArrayList(RecordFieldAssembly),
+    tag_payload_evals: std.ArrayList(TagPayloadEval),
+    tag_payload_assemblies: std.ArrayList(TagPayloadAssembly),
     capture_slots: std.ArrayList(CaptureSlot),
     capture_args: std.ArrayList(CaptureArg),
     typed_symbols: std.ArrayList(TypedSymbol),
@@ -267,6 +271,10 @@ pub const Store = struct {
             .stmt_ids = .empty,
             .branch_ids = .empty,
             .tag_payload_patterns = .empty,
+            .record_field_evals = .empty,
+            .record_field_assemblies = .empty,
+            .tag_payload_evals = .empty,
+            .tag_payload_assemblies = .empty,
             .capture_slots = .empty,
             .capture_args = .empty,
             .typed_symbols = .empty,
@@ -277,6 +285,10 @@ pub const Store = struct {
         self.typed_symbols.deinit(self.allocator);
         self.capture_args.deinit(self.allocator);
         self.capture_slots.deinit(self.allocator);
+        self.tag_payload_assemblies.deinit(self.allocator);
+        self.tag_payload_evals.deinit(self.allocator);
+        self.record_field_assemblies.deinit(self.allocator);
+        self.record_field_evals.deinit(self.allocator);
         self.tag_payload_patterns.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -295,11 +307,79 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
+    pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
+        const idx: u32 = @intCast(self.stmts.items.len);
+        try self.stmts.append(self.allocator, stmt);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addExprSpan(self: *Store, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
+        if (ids.len == 0) return Span(ExprId).empty();
+        const start: u32 = @intCast(self.expr_ids.items.len);
+        try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addStmtSpan(self: *Store, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+        if (ids.len == 0) return Span(StmtId).empty();
+        const start: u32 = @intCast(self.stmt_ids.items.len);
+        try self.stmt_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {
+        if (values.len == 0) return Span(CaptureArg).empty();
+        const start: u32 = @intCast(self.capture_args.items.len);
+        try self.capture_args.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordFieldEvalSpan(self: *Store, values: []const RecordFieldEval) std.mem.Allocator.Error!Span(RecordFieldEval) {
+        if (values.len == 0) return Span(RecordFieldEval).empty();
+        const start: u32 = @intCast(self.record_field_evals.items.len);
+        try self.record_field_evals.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordFieldAssemblySpan(self: *Store, values: []const RecordFieldAssembly) std.mem.Allocator.Error!Span(RecordFieldAssembly) {
+        if (values.len == 0) return Span(RecordFieldAssembly).empty();
+        const start: u32 = @intCast(self.record_field_assemblies.items.len);
+        try self.record_field_assemblies.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addTagPayloadEvalSpan(self: *Store, values: []const TagPayloadEval) std.mem.Allocator.Error!Span(TagPayloadEval) {
+        if (values.len == 0) return Span(TagPayloadEval).empty();
+        const start: u32 = @intCast(self.tag_payload_evals.items.len);
+        try self.tag_payload_evals.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addTagPayloadAssemblySpan(self: *Store, values: []const TagPayloadAssembly) std.mem.Allocator.Error!Span(TagPayloadAssembly) {
+        if (values.len == 0) return Span(TagPayloadAssembly).empty();
+        const start: u32 = @intCast(self.tag_payload_assemblies.items.len);
+        try self.tag_payload_assemblies.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {
+        if (values.len == 0) return Span(TypedSymbol).empty();
+        const start: u32 = @intCast(self.typed_symbols.items.len);
+        try self.typed_symbols.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addCaptureSlotSpan(self: *Store, values: []const CaptureSlot) std.mem.Allocator.Error!Span(CaptureSlot) {
         if (values.len == 0) return Span(CaptureSlot).empty();
         const start: u32 = @intCast(self.capture_slots.items.len);
         try self.capture_slots.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
+        const idx: u32 = @intCast(self.defs.items.len);
+        try self.defs.append(self.allocator, def);
+        return @enumFromInt(idx);
     }
 };
 

@@ -354,11 +354,21 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
+    pub fn sliceStmtSpan(self: *const Store, span: Span(StmtId)) []const StmtId {
+        if (span.len == 0) return &.{};
+        return self.stmt_ids.items[span.start..][0..span.len];
+    }
+
     pub fn addRecordFieldEvalSpan(self: *Store, values: []const RecordFieldEval) std.mem.Allocator.Error!Span(RecordFieldEval) {
         if (values.len == 0) return Span(RecordFieldEval).empty();
         const start: u32 = @intCast(self.record_field_evals.items.len);
         try self.record_field_evals.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceRecordFieldEvalSpan(self: *const Store, span: Span(RecordFieldEval)) []const RecordFieldEval {
+        if (span.len == 0) return &.{};
+        return self.record_field_evals.items[span.start..][0..span.len];
     }
 
     pub fn addRecordFieldAssemblySpan(self: *Store, values: []const RecordFieldAssembly) std.mem.Allocator.Error!Span(RecordFieldAssembly) {
@@ -368,11 +378,45 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn sliceRecordFieldAssemblySpan(self: *const Store, span: Span(RecordFieldAssembly)) []const RecordFieldAssembly {
+        if (span.len == 0) return &.{};
+        return self.record_field_assemblies.items[span.start..][0..span.len];
+    }
+
+    pub fn addTagPayloadEvalSpan(self: *Store, values: []const TagPayloadEval) std.mem.Allocator.Error!Span(TagPayloadEval) {
+        if (values.len == 0) return Span(TagPayloadEval).empty();
+        const start: u32 = @intCast(self.tag_payload_evals.items.len);
+        try self.tag_payload_evals.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceTagPayloadEvalSpan(self: *const Store, span: Span(TagPayloadEval)) []const TagPayloadEval {
+        if (span.len == 0) return &.{};
+        return self.tag_payload_evals.items[span.start..][0..span.len];
+    }
+
+    pub fn addTagPayloadAssemblySpan(self: *Store, values: []const TagPayloadAssembly) std.mem.Allocator.Error!Span(TagPayloadAssembly) {
+        if (values.len == 0) return Span(TagPayloadAssembly).empty();
+        const start: u32 = @intCast(self.tag_payload_assemblies.items.len);
+        try self.tag_payload_assemblies.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceTagPayloadAssemblySpan(self: *const Store, span: Span(TagPayloadAssembly)) []const TagPayloadAssembly {
+        if (span.len == 0) return &.{};
+        return self.tag_payload_assemblies.items[span.start..][0..span.len];
+    }
+
     pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {
         if (values.len == 0) return Span(CaptureArg).empty();
         const start: u32 = @intCast(self.capture_args.items.len);
         try self.capture_args.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceCaptureArgSpan(self: *const Store, span: Span(CaptureArg)) []const CaptureArg {
+        if (span.len == 0) return &.{};
+        return self.capture_args.items[span.start..][0..span.len];
     }
 
     pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {
@@ -382,10 +426,19 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn sliceTypedSymbolSpan(self: *const Store, span: Span(TypedSymbol)) []const TypedSymbol {
+        if (span.len == 0) return &.{};
+        return self.typed_symbols.items[span.start..][0..span.len];
+    }
+
     pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
         const idx: u32 = @intCast(self.defs.items.len);
         try self.defs.append(self.allocator, def);
         return @enumFromInt(idx);
+    }
+
+    pub fn getDef(self: *const Store, id: DefId) Def {
+        return self.defs.items[@intFromEnum(id)];
     }
 };
 
