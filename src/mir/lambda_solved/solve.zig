@@ -940,7 +940,7 @@ const BodySolver = struct {
         const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
         return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
             .finite => |key| .{ .finite = key },
-            .already_erased => |sig| .{ .erased = sig },
+            .already_erased => |erased| .{ .erased = erased.sig_key },
             .erase_finite_set => |adapter| .{ .erased = adapter.erased_fn_sig_key },
             .erase_proc_value => |erase| .{ .erased = erase.erased_fn_sig_key },
         };

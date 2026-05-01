@@ -194,6 +194,12 @@ pub const ProcValueErasePlan = struct {
     provenance: []const BoxBoundaryId,
 };
 
+pub const AlreadyErasedCallablePlan = struct {
+    sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    provenance: []const BoxBoundaryId = &.{},
+};
+
 pub const ErasedAdapterKey = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,
@@ -203,7 +209,7 @@ pub const ErasedAdapterKey = struct {
 
 pub const CallableValueEmissionPlan = union(enum) {
     finite: CanonicalCallableSetKey,
-    already_erased: ErasedFnSigKey,
+    already_erased: AlreadyErasedCallablePlan,
     erase_proc_value: ProcValueErasePlan,
     erase_finite_set: ErasedAdapterKey,
 };
@@ -215,7 +221,7 @@ pub const CallableValueSource = union(enum) {
         fn_ty: canonical.CanonicalTypeKey,
     },
     finite_set: CanonicalCallableSetKey,
-    already_erased: ErasedFnSigKey,
+    already_erased: AlreadyErasedCallablePlan,
     erased_adapter: ErasedAdapterKey,
 };
 
@@ -359,6 +365,9 @@ pub const RepresentationStore = struct {
     pub fn deinit(self: *RepresentationStore) void {
         for (self.callable_emission_plans) |plan| {
             switch (plan) {
+                .already_erased => |erased| {
+                    if (erased.provenance.len > 0) self.allocator.free(erased.provenance);
+                },
                 .erase_proc_value => |erase| {
                     var key = erase.executable_specialization_key;
                     deinitExecutableSpecializationKey(self.allocator, &key);
@@ -366,7 +375,6 @@ pub const RepresentationStore = struct {
                     if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
                 },
                 .finite,
-                .already_erased,
                 .erase_finite_set,
                 => {},
             }
