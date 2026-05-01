@@ -193,7 +193,7 @@ pub const Expr = struct {
         },
         source_match: SourceMatch,
         if_: struct {
-            cond: ExecutableValueRef,
+            cond: ExprId,
             then_body: ExprId,
             else_body: ExprId,
         },

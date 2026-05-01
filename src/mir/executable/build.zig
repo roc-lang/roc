@@ -460,7 +460,7 @@ const BodyBuilder = struct {
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .if_ = .{
-                        .cond = self.exprValue(cond),
+                        .cond = cond,
                         .then_body = then_body,
                         .else_body = else_body,
                     } },

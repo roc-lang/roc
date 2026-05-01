@@ -217,6 +217,7 @@ const IrBuilder = struct {
                 } }, stmts);
             },
             .return_ => |child| try self.lowerExpr(child, stmts),
+            .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
             .tag,
             .const_ref,
             .bridge,
@@ -226,8 +227,8 @@ const IrBuilder = struct {
             .callable_match,
             .packed_erased_fn,
             .source_match,
-            .if_,
             .tag_payload,
+            .for_,
             .crash,
             .runtime_error,
             => irInvariant("IR lowering reached executable expression form whose IR lowering is still missing"),
@@ -236,6 +237,30 @@ const IrBuilder = struct {
         try self.expr_map.put(expr_id, lowered);
         try self.value_env.put(expr.value, lowered);
         return lowered;
+    }
+
+    fn lowerIfExpr(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        if_: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const cond = try self.lowerExpr(if_.cond, stmts);
+        const then_block = try self.lowerExprToBlock(if_.then_body);
+        const else_block = try self.lowerExprToBlock(if_.else_body);
+        const result = try self.freshVar(try self.layoutForType(expr.ty));
+        const branches = [_]Ast.Branch{.{
+            .value = 1,
+            .block = then_block,
+        }};
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+            .cond = cond,
+            .branches = try self.output.store.addBranchSpan(&branches),
+            .default_block = else_block,
+            .join = result,
+        } }));
+        try self.value_env.put(expr.value, result);
+        return result;
     }
 
     fn lowerStmtSpan(
@@ -281,9 +306,12 @@ const IrBuilder = struct {
             .crash,
             .return_,
             .break_,
+            .for_,
+            .while_,
             => irInvariant("IR lowering reached statement control flow that needs block splitting"),
         }
     }
+
 
     fn lowerRecordFields(
         self: *IrBuilder,
