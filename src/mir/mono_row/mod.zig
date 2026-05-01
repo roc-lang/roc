@@ -25,7 +25,6 @@ pub const TagPayloadId = ids.TagPayloadId;
 
 pub const RecordField = struct {
     label: canonical.RecordFieldLabelId,
-    ty: TypeId,
     logical_index: u32,
 };
 
@@ -34,7 +33,6 @@ pub const RecordShape = struct {
 };
 
 pub const TagPayload = struct {
-    ty: TypeId,
     logical_index: u32,
 };
 
@@ -129,7 +127,6 @@ pub const Store = struct {
             const field_id: RecordFieldId = @enumFromInt(@as(u32, @intCast(self.record_fields.items.len)));
             try self.record_fields.append(self.allocator, .{
                 .label = field.name,
-                .ty = field.ty,
                 .logical_index = @intCast(i),
             });
             try self.record_shape_fields.append(self.allocator, field_id);
@@ -153,10 +150,9 @@ pub const Store = struct {
         const tag_start: u32 = @intCast(self.tag_union_tags.items.len);
         for (source_tags, 0..) |source_tag, tag_i| {
             const payload_start: u32 = @intCast(self.tag_payload_ids.items.len);
-            for (source_tag.args, 0..) |payload_ty, payload_i| {
+            for (0..source_tag.args.len) |payload_i| {
                 const payload_id: TagPayloadId = @enumFromInt(@as(u32, @intCast(self.tag_payloads.items.len)));
                 try self.tag_payloads.append(self.allocator, .{
-                    .ty = payload_ty,
                     .logical_index = @intCast(payload_i),
                 });
                 try self.tag_payload_ids.append(self.allocator, payload_id);
@@ -214,10 +210,7 @@ pub const Store = struct {
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.writer(self.allocator).print("record:{d}|", .{fields.len});
         for (fields) |field| {
-            try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
-                @intFromEnum(field.name),
-                @intFromEnum(field.ty),
-            });
+            try self.scratch_key.writer(self.allocator).print("{d}|", .{@intFromEnum(field.name)});
         }
     }
 
@@ -229,10 +222,6 @@ pub const Store = struct {
                 @intFromEnum(source_tag.name),
                 source_tag.args.len,
             });
-            for (source_tag.args) |payload_ty| {
-                try self.scratch_key.writer(self.allocator).print("{d},", .{@intFromEnum(payload_ty)});
-            }
-            try self.scratch_key.append(self.allocator, '|');
         }
     }
 };
