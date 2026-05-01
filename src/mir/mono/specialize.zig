@@ -2448,9 +2448,8 @@ fn checkedTemplateFromCallableTemplate(
 ) canonical.ProcedureTemplateRef {
     return switch (template) {
         .checked => |checked| checked,
-        .lifted,
-        .synthetic,
-        => invariantViolation("mono specialization expected a checked procedure template before lifting or synthetic wrapper lowering"),
+        .synthetic => |synthetic| synthetic.template,
+        .lifted => invariantViolation("mono specialization received a lifted procedure template before lifted MIR"),
     };
 }
 
@@ -2528,8 +2527,9 @@ fn templateFromTopLevelBinding(
     return switch (binding.body) {
         .direct_template => |direct| switch (direct.template) {
             .checked => |template| template,
-            .lifted, .synthetic => {
-                debug.invariant(false, "mono specialization invariant violated: root procedure binding must have a checked template before mono lowering");
+            .synthetic => |synthetic| synthetic.template,
+            .lifted => {
+                debug.invariant(false, "mono specialization invariant violated: root procedure binding cannot reference a lifted template before lifted MIR");
                 unreachable;
             },
         },

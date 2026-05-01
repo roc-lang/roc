@@ -5014,9 +5014,16 @@ fn buildProcedureBindingClosure(
                 template_ref,
                 checked_templates.get(template_ref.template),
             ),
-            .lifted, .synthetic => {
+            .synthetic => |synthetic| buildImportedTemplateClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                synthetic.template,
+                checked_templates.get(synthetic.template.template),
+            ),
+            .lifted => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: exported checked binding cannot reference lifted or synthetic templates before mono", .{});
+                    std.debug.panic("checked artifact invariant violated: exported checked binding cannot reference lifted templates before mono", .{});
                 }
                 unreachable;
             },
@@ -6290,8 +6297,13 @@ pub const CheckedModuleArtifact = struct {
                                     std.debug.assert(template.proc_base == direct.proc_value.proc_base);
                                     std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &direct.proc_value.artifact.bytes));
                                 },
-                                .lifted, .synthetic => std.debug.panic(
-                                    "checked artifact invariant violated: direct top-level binding cannot use lifted or synthetic template",
+                                .synthetic => |synthetic| {
+                                    std.debug.assert(synthetic.template.proc_base == direct.proc_value.proc_base);
+                                    std.debug.assert(std.mem.eql(u8, &synthetic.template.artifact.bytes, &direct.proc_value.artifact.bytes));
+                                    std.debug.assert(@intFromEnum(synthetic.template.template) < self.checked_procedure_templates.templates.len);
+                                },
+                                .lifted => std.debug.panic(
+                                    "checked artifact invariant violated: direct top-level binding cannot use lifted template before mono",
                                     .{},
                                 ),
                             }
