@@ -4242,6 +4242,7 @@ pub const TopLevelValueKind = union(enum) {
 
 pub const TopLevelValueEntry = struct {
     module_idx: u32,
+    def: CIR.Def.Idx,
     pattern: CIR.Pattern.Idx,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     value: TopLevelValueKind,
@@ -4326,6 +4327,7 @@ pub const TopLevelValueTable = struct {
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
+                .def = def_idx,
                 .pattern = def.pattern.idx,
                 .source_scheme = source_scheme,
                 .value = value,
@@ -4338,6 +4340,13 @@ pub const TopLevelValueTable = struct {
     pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
         for (self.entries) |entry| {
             if (entry.pattern == pattern) return entry;
+        }
+        return null;
+    }
+
+    pub fn lookupByDef(self: *const TopLevelValueTable, def: CIR.Def.Idx) ?TopLevelValueEntry {
+        for (self.entries) |entry| {
+            if (entry.def == def) return entry;
         }
         return null;
     }

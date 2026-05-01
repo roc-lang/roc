@@ -159,12 +159,12 @@ pub fn run(
     );
 
     for (roots) |root| {
-        const template = templateForRoot(input, root) orelse continue;
         const requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(
             input.root.artifact.key,
             input.root.artifact.checked_types.view(),
             root.checked_type,
         );
+        const template = templateForRoot(input, root, &program.concrete_source_types, requested_fn_ty) orelse continue;
         const request = MonoSpecializationRequest{
             .template = template,
             .requested_fn_ty = requested_fn_ty,
@@ -2523,10 +2523,27 @@ fn checkedTypesForKey(
 fn templateForRoot(
     input: Input,
     root: checked_artifact.RootRequest,
+    concrete_source_types: *const ConcreteSourceType.Store,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
 ) ?canonical.ProcedureTemplateRef {
     const artifact = input.root.artifact;
+    const requested_key = concrete_source_types.key(requested_fn_ty);
     switch (root.source) {
-        .def => |def_idx| return artifact.checked_procedure_templates.lookupByDef(def_idx),
+        .def => |def_idx| {
+            if (artifact.checked_procedure_templates.lookupByDef(def_idx)) |template| return template;
+            const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse return null;
+            return switch (top_level.value) {
+                .const_ref => null,
+                .procedure_binding => |binding_ref| templateFromRootTopLevelBinding(
+                    input,
+                    input.root.artifact.key,
+                    &artifact.top_level_procedure_bindings,
+                    binding_ref,
+                    .{ .top_level = binding_ref },
+                    requested_key,
+                ),
+            };
+        },
         .required_binding => |binding_id| {
             const binding = artifact.platform_required_bindings.lookupByBindingId(binding_id) orelse {
                 debug.invariantFmt(
@@ -2538,7 +2555,7 @@ fn templateForRoot(
             };
             return switch (binding.value_use) {
                 .const_value => null,
-                .procedure_value => |proc_use| templateForProcedureUse(input, proc_use),
+                .procedure_value => |proc_use| templateForProcedureUse(input, proc_use, requested_key),
             };
         },
         .expr, .statement => return null,
@@ -2548,20 +2565,29 @@ fn templateForRoot(
 fn templateForProcedureUse(
     input: Input,
     proc_use: checked_artifact.ProcedureUseTemplate,
+    requested_key: canonical.CanonicalTypeKey,
 ) ?canonical.ProcedureTemplateRef {
     return switch (proc_use.binding) {
-        .top_level => |binding_ref| templateFromTopLevelBinding(
+        .top_level => |binding_ref| templateFromRootTopLevelBinding(
+            input,
+            input.root.artifact.key,
             &input.root.artifact.top_level_procedure_bindings,
             binding_ref,
+            .{ .top_level = binding_ref },
+            requested_key,
         ),
         .platform_required => |required| {
             const bindings = topLevelProcedureBindingsForKey(input, required.artifact) orelse {
                 debug.invariant(false, "mono specialization invariant violated: platform-required procedure binding references unavailable app artifact");
                 unreachable;
             };
-            return templateFromTopLevelBinding(
+            return templateFromRootTopLevelBinding(
+                input,
+                required.artifact,
                 bindings,
                 required.procedure_binding,
+                .{ .platform_required = required },
+                requested_key,
             );
         },
         .hosted => |hosted| hosted.template,
@@ -2572,25 +2598,53 @@ fn templateForProcedureUse(
     };
 }
 
-fn templateFromTopLevelBinding(
+fn templateFromRootTopLevelBinding(
+    input: Input,
+    owner: checked_artifact.CheckedModuleArtifactKey,
     bindings: *const checked_artifact.TopLevelProcedureBindingTable,
     binding_ref: checked_artifact.TopLevelProcedureBindingRef,
+    binding_key: checked_artifact.ProcedureBindingRef,
+    requested_key: canonical.CanonicalTypeKey,
 ) ?canonical.ProcedureTemplateRef {
     const binding = bindings.get(binding_ref);
     return switch (binding.body) {
-        .direct_template => |direct| switch (direct.template) {
-            .checked => |template| template,
-            .synthetic => |synthetic| synthetic.template,
-            .lifted => {
-                debug.invariant(false, "mono specialization invariant violated: root procedure binding cannot reference a lifted template before lifted MIR");
+        .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
+        .callable_eval_template => templateFromCallableBindingInstanceForRoot(input, owner, binding_key, requested_key),
+    };
+}
+
+fn templateFromCallableBindingInstanceForRoot(
+    input: Input,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    binding: checked_artifact.ProcedureBindingRef,
+    requested_key: canonical.CanonicalTypeKey,
+) canonical.ProcedureTemplateRef {
+    const store = callableBindingInstancesForKey(input, owner) orelse {
+        debug.invariant(false, "mono specialization invariant violated: root callable-eval binding instance owner artifact was not available");
+        unreachable;
+    };
+    const key = checked_artifact.CallableBindingInstantiationKey{
+        .binding = binding,
+        .requested_source_fn_ty = requested_key,
+    };
+    for (store.instances) |record| {
+        if (!checked_artifact.callableBindingInstantiationKeyEql(record.key, key)) continue;
+        const instance = switch (record.state) {
+            .evaluated => |evaluated| evaluated,
+            .reserved, .evaluating => {
+                debug.invariant(false, "mono specialization invariant violated: root callable-eval binding instance was not sealed before lowering");
                 unreachable;
             },
-        },
-        .callable_eval_template => {
-            debug.invariant(false, "mono specialization invariant violated: callable-eval platform-required roots need a sealed concrete callable binding instance before mono lowering");
+        };
+        if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &requested_key.bytes)) {
+            debug.invariant(false, "mono specialization invariant violated: root callable-eval instance source function type disagrees with requested type");
             unreachable;
-        },
-    };
+        }
+        return checkedTemplateFromCallableTemplate(instance.proc_value.template);
+    }
+
+    debug.invariant(false, "mono specialization invariant violated: root callable-eval procedure binding had no sealed concrete instance for requested function type");
+    unreachable;
 }
 
 fn topLevelProcedureBindingsForKey(
