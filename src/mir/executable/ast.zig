@@ -127,6 +127,7 @@ pub const CallableMatchBranch = struct {
 };
 
 pub const SourceMatch = struct {
+    scrutinee_exprs: Span(ExprId),
     scrutinees: Span(ExecutableValueRef),
     decision_plan: PatternDecisionPlanId,
     branches: Span(BranchId),

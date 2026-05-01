@@ -442,8 +442,10 @@ const BodyBuilder = struct {
             .match_ => |match_| blk: {
                 _ = match_.join_info;
                 const cond = try self.lowerExpr(match_.cond);
+                const scrutinee_exprs = [_]Ast.ExprId{cond};
                 const scrutinees = [_]Ast.ExecutableValueRef{self.exprValue(cond)};
                 const lowered_branches = try self.lowerBranchSpan(match_.branches);
+                const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
                 const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
                 const decision_plan = try self.output.addPatternDecisionPlan(.{
                     .scrutinees = scrutinee_span,
@@ -453,6 +455,7 @@ const BodyBuilder = struct {
                     try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .source_match = .{
+                        .scrutinee_exprs = scrutinee_expr_span,
                         .scrutinees = scrutinee_span,
                         .decision_plan = decision_plan,
                         .branches = lowered_branches,
