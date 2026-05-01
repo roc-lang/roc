@@ -170,6 +170,7 @@ pub const Expr = struct {
         },
         list: Span(ExprId),
         return_: ExprId,
+        crash: ProgramLiteralId,
         runtime_error,
         for_: struct {
             patt: PatId,

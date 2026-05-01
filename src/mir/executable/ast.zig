@@ -188,6 +188,7 @@ pub const Expr = struct {
         },
         list: Span(ExecutableValueRef),
         return_: ExecutableValueRef,
+        crash: ProgramLiteralId,
         runtime_error,
     };
 };

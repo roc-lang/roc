@@ -60,7 +60,7 @@ pub const Proc = struct {
     proc: canonical.MonoSpecializedProcRef,
     local_handle: MonoProcHandle,
     fn_ty: Type.TypeId,
-    body: ?Ast.DefId = null,
+    body: Ast.DefId,
 };
 
 pub const Program = struct {
@@ -104,12 +104,14 @@ pub const Program = struct {
         key: canonical.MonoSpecializationKey,
         reserved: ReservedMonoProc,
         fn_ty: Type.TypeId,
+        body: Ast.DefId,
     ) Allocator.Error!void {
         try self.procs.append(self.allocator, .{
             .key = key,
             .proc = reserved.proc,
             .local_handle = reserved.local_handle,
             .fn_ty = fn_ty,
+            .body = body,
         });
     }
 
@@ -119,6 +121,15 @@ pub const Program = struct {
     ) Allocator.Error!Ast.Symbol {
         return try self.symbols.add(base.Ident.Idx.NONE, .{ .checked_pattern_binder = .{
             .binder_idx = @intFromEnum(binder),
+        } });
+    }
+
+    pub fn addProcSymbol(
+        self: *Program,
+        handle: MonoProcHandle,
+    ) Allocator.Error!Ast.Symbol {
+        return try self.symbols.add(base.Ident.Idx.NONE, .{ .specialized_top_level_def = .{
+            .source_symbol = @intFromEnum(handle),
         } });
     }
 };
@@ -160,7 +171,10 @@ pub fn run(
         defer type_instantiator.deinit();
         try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
         const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
-        try program.addProc(key, reserved, fn_ty);
+        var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator);
+        defer body_lowerer.deinit();
+        const body = try body_lowerer.lowerTemplateBody(reserved, fn_ty);
+        try program.addProc(key, reserved, fn_ty, body);
         queue.markLowered(key);
     }
 
@@ -172,6 +186,7 @@ const CheckedTemplateLookup = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     checked_types: checked_artifact.CheckedTypeStoreView,
     checked_bodies: checked_artifact.CheckedBodyStoreView,
+    resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
 
@@ -184,6 +199,7 @@ fn checkedTemplateForKey(
             .artifact = input.root.artifact.key,
             .checked_types = input.root.artifact.checked_types.view(),
             .checked_bodies = input.root.artifact.checked_bodies.view(),
+            .resolved_value_refs = &input.root.artifact.resolved_value_refs,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
     }
@@ -198,6 +214,7 @@ fn checkedTemplateForKey(
                     .artifact = imported.key,
                     .checked_types = imported.checked_types,
                     .checked_bodies = imported.checked_bodies,
+                    .resolved_value_refs = imported.resolved_value_refs,
                     .template = exported.template_data,
                 };
             }
@@ -216,6 +233,7 @@ fn checkedTemplateForKey(
                     .artifact = related.key,
                     .checked_types = related.checked_types,
                     .checked_bodies = related.checked_bodies,
+                    .resolved_value_refs = related.resolved_value_refs,
                     .template = exported.template_data,
                 };
             }
@@ -796,6 +814,517 @@ const TypeInstantiator = struct {
         const raw = @intFromEnum(ref.ty);
         if (raw >= checked_types.payloads.len) invariantViolation("mono specialization concrete type id was outside published payloads");
         return checked_types.payloads[raw];
+    }
+};
+
+const BodyLowerer = struct {
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    template_lookup: CheckedTemplateLookup,
+    type_instantiator: *TypeInstantiator,
+    local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
+
+    fn init(
+        allocator: Allocator,
+        input: Input,
+        program: *Program,
+        template_lookup: CheckedTemplateLookup,
+        type_instantiator: *TypeInstantiator,
+    ) BodyLowerer {
+        return .{
+            .allocator = allocator,
+            .input = input,
+            .program = program,
+            .template_lookup = template_lookup,
+            .type_instantiator = type_instantiator,
+            .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
+        };
+    }
+
+    fn deinit(self: *BodyLowerer) void {
+        self.local_symbols.deinit();
+    }
+
+    fn lowerTemplateBody(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.DefId {
+        return switch (self.template_lookup.template.body) {
+            .checked_body => |body_id| try self.lowerCheckedBody(reserved, fn_ty, body_id),
+            .promoted_callable_wrapper,
+            .hosted_wrapper,
+            .intrinsic_wrapper,
+            .entry_wrapper,
+            => invariantViolation("mono body lowering reached a wrapper template before wrapper lowering was implemented"),
+        };
+    }
+
+    fn lowerCheckedBody(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        body_id: checked_artifact.CheckedBodyId,
+    ) Allocator.Error!Ast.DefId {
+        const body = self.checkedBody(body_id);
+        const root = self.checkedExpr(body.root_expr);
+        return switch (root.data) {
+            .lambda => |lambda| try self.lowerLambdaDef(reserved, fn_ty, lambda.args, lambda.body),
+            .closure => |closure| blk: {
+                const lambda_expr = self.checkedExpr(closure.lambda);
+                switch (lambda_expr.data) {
+                    .lambda => |lambda| break :blk try self.lowerLambdaDef(reserved, fn_ty, lambda.args, lambda.body),
+                    else => invariantViolation("mono body lowering expected checked closure to reference a lambda body"),
+                }
+            },
+            .hosted_lambda => invariantViolation("mono body lowering reached hosted lambda before hosted procedure lowering was implemented"),
+            .anno_only => invariantViolation("mono body lowering reached annotation-only procedure body without checked backing expression"),
+            else => invariantViolation("mono body lowering expected a checked procedure body to be a lambda-like expression"),
+        };
+    }
+
+    fn lowerLambdaDef(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        arg_patterns: []const checked_artifact.CheckedPatternId,
+        body_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.DefId {
+        const args = try self.lowerParamSpan(arg_patterns);
+        const body = try self.lowerExpr(body_expr);
+        const bind = Ast.TypedSymbol{
+            .ty = fn_ty,
+            .symbol = try self.program.addProcSymbol(reserved.local_handle),
+        };
+        return try self.program.ast.addDef(.{
+            .proc = reserved.proc.proc,
+            .debug_name = null,
+            .value = .{ .fn_ = .{
+                .recursive = false,
+                .bind = bind,
+                .args = args,
+                .body = body,
+            } },
+        });
+    }
+
+    fn lowerParamSpan(
+        self: *BodyLowerer,
+        patterns: []const checked_artifact.CheckedPatternId,
+    ) Allocator.Error!Ast.Span(Ast.TypedSymbol) {
+        if (patterns.len == 0) return Ast.Span(Ast.TypedSymbol).empty();
+        const args = try self.allocator.alloc(Ast.TypedSymbol, patterns.len);
+        defer self.allocator.free(args);
+        for (patterns, 0..) |pattern, i| {
+            args[i] = try self.lowerParamPattern(pattern);
+        }
+        return try self.program.ast.addTypedSymbolSpan(args);
+    }
+
+    fn lowerParamPattern(
+        self: *BodyLowerer,
+        pattern_id: checked_artifact.CheckedPatternId,
+    ) Allocator.Error!Ast.TypedSymbol {
+        const pattern = self.checkedPattern(pattern_id);
+        const binder = self.binderForSimplePattern(pattern.data);
+        return .{
+            .ty = try self.type_instantiator.lowerTemplateType(pattern.ty),
+            .symbol = try self.symbolForBinder(binder),
+        };
+    }
+
+    fn binderForSimplePattern(
+        self: *BodyLowerer,
+        data: checked_artifact.CheckedPatternData,
+    ) checked_artifact.PatternBinderId {
+        _ = self;
+        return switch (data) {
+            .assign => |binder| binder,
+            .as => |as| as.binder,
+            else => invariantViolation("mono body lowering requires destructuring parameters to be lowered into explicit local bindings before procedure entry"),
+        };
+    }
+
+    fn symbolForBinder(
+        self: *BodyLowerer,
+        binder: checked_artifact.PatternBinderId,
+    ) Allocator.Error!Ast.Symbol {
+        if (self.local_symbols.get(binder)) |symbol| return symbol;
+        const symbol = try self.program.addPatternBinderSymbol(binder);
+        try self.local_symbols.put(binder, symbol);
+        return symbol;
+    }
+
+    fn lowerExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.checkedExpr(expr_id);
+        const ty = try self.type_instantiator.lowerTemplateType(expr.ty);
+        return switch (expr.data) {
+            .num => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
+            .typed_int => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
+            .frac_f32 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f32_lit = frac.value }),
+            .frac_f64 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f64_lit = frac.value }),
+            .dec, .dec_small, .typed_frac => invariantViolation("mono body lowering reached decimal or typed fractional literal before numeric literal lowering was completed"),
+            .str_segment => |literal| try self.program.ast.addExpr(ty, .{ .str_lit = try self.lowerCheckedStringLiteral(literal) }),
+            .str => |segments| try self.lowerStringExpr(ty, segments),
+            .bytes_literal => invariantViolation("mono body lowering reached bytes literal before bytes literal lowering was implemented"),
+            .lookup_local => |lookup| try self.lowerResolvedLookup(ty, lookup.resolved orelse invariantViolation("checked lookup_local reached mono without a resolved value ref")),
+            .lookup_external => |ref_id| try self.lowerResolvedLookup(ty, ref_id orelse invariantViolation("checked lookup_external reached mono without a resolved value ref")),
+            .lookup_required => |ref_id| try self.lowerResolvedLookup(ty, ref_id orelse invariantViolation("checked lookup_required reached mono without a resolved value ref")),
+            .list => |items| try self.lowerList(ty, items),
+            .empty_list => try self.program.ast.addExpr(ty, .{ .list = Ast.Span(Ast.ExprId).empty() }),
+            .tuple => |items| try self.lowerTuple(ty, items),
+            .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr),
+            .record => |record| try self.lowerRecord(ty, record),
+            .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
+            .lambda => |lambda| try self.lowerClosureExpr(ty, lambda.args, lambda.body),
+            .call => |call| try self.lowerCall(ty, call),
+            .structural_eq => |eq| try self.lowerStructuralEq(ty, eq),
+            .unary_not => |child| blk: {
+                const value = try self.lowerExpr(child);
+                break :blk try self.program.ast.addExpr(ty, .{ .bool_not = value });
+            },
+            .if_,
+            .match_,
+            .tag,
+            .zero_argument_tag,
+            .closure,
+            .nominal,
+            .binop,
+            .unary_minus,
+            .field_access,
+            .method_call,
+            .dispatch_call,
+            .method_eq,
+            .type_method_call,
+            .type_dispatch_call,
+            .tuple_access,
+            .dbg,
+            .expect,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
+            .runtime_error => try self.program.ast.addExpr(ty, .runtime_error),
+            .crash => |literal| try self.program.ast.addExpr(ty, .{ .crash = try self.lowerCheckedStringLiteral(literal) }),
+            .ellipsis, .anno_only, .pending => invariantViolation("mono body lowering received a non-runtime checked expression form"),
+        };
+    }
+
+    fn lowerStringExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        segments: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (segments.len != 1) invariantViolation("mono body lowering reached interpolated string before string concatenation lowering was implemented");
+        const segment = self.checkedExpr(segments[0]);
+        return switch (segment.data) {
+            .str_segment => |literal| try self.program.ast.addExpr(ty, .{ .str_lit = try self.lowerCheckedStringLiteral(literal) }),
+            else => invariantViolation("mono body lowering expected string expression segment to be a string segment"),
+        };
+    }
+
+    fn lowerResolvedLookup(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        ref_id: checked_artifact.ResolvedValueRefId,
+    ) Allocator.Error!Ast.ExprId {
+        const record = self.resolvedValueRef(ref_id);
+        return switch (record.ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            => |local| try self.program.ast.addExpr(ty, .{ .var_ = try self.symbolForBinder(local.binder) }),
+            .top_level_const,
+            .imported_const,
+            .platform_required_const,
+            => |const_use| try self.program.ast.addExpr(ty, .{ .const_ref = const_use.const_ref }),
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => |proc_use| try self.program.ast.addExpr(ty, .{ .proc_value = .{
+                .proc = self.procedureValueForUse(proc_use),
+                .captures = Ast.Span(Ast.CaptureArg).empty(),
+                .fn_ty = ty,
+            } }),
+            .platform_required_declaration => invariantViolation("mono body lowering reached platform-required declaration lookup as a runtime value"),
+        };
+    }
+
+    fn lowerList(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        items: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const span = try self.lowerExprSpan(items);
+        return try self.program.ast.addExpr(ty, .{ .list = span });
+    }
+
+    fn lowerTuple(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        items: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const span = try self.lowerExprSpan(items);
+        return try self.program.ast.addExpr(ty, .{ .tuple = span });
+    }
+
+    fn lowerBlock(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        statements: []const checked_artifact.CheckedStatementId,
+        final_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const stmt_span = try self.lowerStmtSpan(statements);
+        const final = try self.lowerExpr(final_expr);
+        return try self.program.ast.addExpr(ty, .{ .block = .{
+            .stmts = stmt_span,
+            .final_expr = final,
+        } });
+    }
+
+    fn lowerRecord(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        record: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        if (record.ext != null) invariantViolation("mono body lowering reached record update before record extension lowering was implemented");
+        if (record.fields.len == 0) return try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() });
+        const fields = try self.allocator.alloc(Ast.FieldExpr, record.fields.len);
+        defer self.allocator.free(fields);
+        for (record.fields, 0..) |field, i| {
+            fields[i] = .{
+                .field = field.label,
+                .value = try self.lowerExpr(field.value),
+            };
+        }
+        return try self.program.ast.addExpr(ty, .{ .record = try self.program.ast.addFieldExprSpan(fields) });
+    }
+
+    fn lowerClosureExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        arg_patterns: []const checked_artifact.CheckedPatternId,
+        body_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const args = try self.lowerParamSpan(arg_patterns);
+        const body = try self.lowerExpr(body_expr);
+        return try self.program.ast.addExpr(ty, .{ .clos = .{
+            .args = args,
+            .body = body,
+        } });
+    }
+
+    fn lowerCall(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        call: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        _ = call.called_via;
+        const func = try self.lowerExpr(call.func);
+        const args = try self.lowerExprSpan(call.args);
+        const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
+        return try self.program.ast.addExpr(ty, .{ .call_value = .{
+            .func = func,
+            .args = args,
+            .requested_fn_ty = func_ty,
+        } });
+    }
+
+    fn lowerStructuralEq(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        eq: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const lhs = try self.lowerExpr(eq.lhs);
+        const rhs = try self.lowerExpr(eq.rhs);
+        const structural = try self.program.ast.addExpr(ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
+        if (!eq.negated) return structural;
+        return try self.program.ast.addExpr(ty, .{ .bool_not = structural });
+    }
+
+    fn lowerExprSpan(
+        self: *BodyLowerer,
+        exprs: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (exprs.len == 0) return Ast.Span(Ast.ExprId).empty();
+        const lowered = try self.allocator.alloc(Ast.ExprId, exprs.len);
+        defer self.allocator.free(lowered);
+        for (exprs, 0..) |expr, i| {
+            lowered[i] = try self.lowerExpr(expr);
+        }
+        return try self.program.ast.addExprSpan(lowered);
+    }
+
+    fn lowerStmtSpan(
+        self: *BodyLowerer,
+        statements: []const checked_artifact.CheckedStatementId,
+    ) Allocator.Error!Ast.Span(Ast.StmtId) {
+        if (statements.len == 0) return Ast.Span(Ast.StmtId).empty();
+        const lowered = try self.allocator.alloc(Ast.StmtId, statements.len);
+        defer self.allocator.free(lowered);
+        for (statements, 0..) |statement, i| {
+            lowered[i] = try self.lowerStmt(statement);
+        }
+        return try self.program.ast.addStmtSpan(lowered);
+    }
+
+    fn lowerStmt(
+        self: *BodyLowerer,
+        statement_id: checked_artifact.CheckedStatementId,
+    ) Allocator.Error!Ast.StmtId {
+        const statement = self.checkedStatement(statement_id);
+        return switch (statement.data) {
+            .decl => |decl| blk: {
+                const bind = try self.lowerParamPattern(decl.pattern);
+                const body = try self.lowerExpr(decl.expr);
+                break :blk try self.program.ast.addStmt(.{ .decl = .{ .bind = bind, .body = body } });
+            },
+            .var_ => |var_| blk: {
+                const bind = try self.lowerParamPattern(var_.pattern);
+                const body = try self.lowerExpr(var_.expr);
+                break :blk try self.program.ast.addStmt(.{ .var_decl = .{ .bind = bind, .body = body } });
+            },
+            .reassign => invariantViolation("mono body lowering reached reassignment before mutable version lowering was implemented"),
+            .dbg => |expr| try self.program.ast.addStmt(.{ .debug = try self.lowerExpr(expr) }),
+            .expr => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(expr) }),
+            .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerExpr(expr) }),
+            .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
+            .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerExpr(ret.expr) }),
+            .for_,
+            .while_,
+            => invariantViolation("mono body lowering reached statement form whose lowering is still missing"),
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            .pending,
+            => invariantViolation("mono body lowering received a non-runtime checked statement form"),
+        };
+    }
+
+    fn lowerCheckedStringLiteral(
+        self: *BodyLowerer,
+        literal: checked_artifact.CheckedStringLiteralId,
+    ) Allocator.Error!ids.ProgramLiteralId {
+        const raw = @intFromEnum(literal);
+        if (raw >= self.template_lookup.checked_bodies.string_literals.len) {
+            invariantViolation("mono body lowering received a checked string literal outside the owning checked body store");
+        }
+        return try self.program.literal_pool.intern(self.template_lookup.checked_bodies.string_literals[raw]);
+    }
+
+    fn checkedBody(self: *const BodyLowerer, id: checked_artifact.CheckedBodyId) checked_artifact.CheckedBody {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_lookup.checked_bodies.bodies.len) invariantViolation("mono body lowering received body id outside checked body store");
+        return self.template_lookup.checked_bodies.bodies[raw];
+    }
+
+    fn checkedExpr(self: *const BodyLowerer, id: checked_artifact.CheckedExprId) checked_artifact.CheckedExpr {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_lookup.checked_bodies.exprs.len) invariantViolation("mono body lowering received expr id outside checked body store");
+        return self.template_lookup.checked_bodies.exprs[raw];
+    }
+
+    fn checkedPattern(self: *const BodyLowerer, id: checked_artifact.CheckedPatternId) checked_artifact.CheckedPattern {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_lookup.checked_bodies.patterns.len) invariantViolation("mono body lowering received pattern id outside checked body store");
+        return self.template_lookup.checked_bodies.patterns[raw];
+    }
+
+    fn checkedStatement(self: *const BodyLowerer, id: checked_artifact.CheckedStatementId) checked_artifact.CheckedStatement {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_lookup.checked_bodies.statements.len) invariantViolation("mono body lowering received statement id outside checked body store");
+        return self.template_lookup.checked_bodies.statements[raw];
+    }
+
+    fn resolvedValueRef(self: *const BodyLowerer, id: checked_artifact.ResolvedValueRefId) checked_artifact.ResolvedValueRefRecord {
+        const raw = @intFromEnum(id);
+        if (raw >= self.template_lookup.resolved_value_refs.records.len) invariantViolation("mono body lowering received resolved value ref id outside table");
+        return self.template_lookup.resolved_value_refs.records[raw];
+    }
+
+    fn procedureValueForUse(
+        self: *const BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+    ) canonical.ProcedureValueRef {
+        return switch (use.binding) {
+            .top_level => |binding_ref| self.directProcedureBinding(
+                topLevelProcedureBindingsForKey(self.input, self.template_lookup.artifact) orelse {
+                    debug.invariant(false, "mono body lowering invariant violated: template artifact has no top-level procedure binding table");
+                    unreachable;
+                },
+                binding_ref,
+            ).proc_value,
+            .imported => |imported| self.importedProcedureBinding(imported).proc_value,
+            .hosted => |hosted| hosted.proc,
+            .platform_required => |required| self.directProcedureBinding(
+                topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
+                    debug.invariant(false, "mono body lowering invariant violated: platform-required artifact has no procedure binding table");
+                    unreachable;
+                },
+                required.procedure_binding,
+            ).proc_value,
+            .promoted => |promoted| promoted.proc,
+        };
+    }
+
+    fn directProcedureBinding(
+        self: *const BodyLowerer,
+        bindings: *const checked_artifact.TopLevelProcedureBindingTable,
+        binding_ref: checked_artifact.TopLevelProcedureBindingRef,
+    ) checked_artifact.DirectProcedureBinding {
+        _ = self;
+        const binding = bindings.get(binding_ref);
+        return switch (binding.body) {
+            .direct_template => |direct| direct,
+            .callable_eval_template => invariantViolation("mono body lowering reached callable-eval procedure binding before callable instance sealing was implemented"),
+        };
+    }
+
+    fn importedProcedureBinding(
+        self: *const BodyLowerer,
+        imported: checked_artifact.ImportedProcedureBindingRef,
+    ) checked_artifact.DirectProcedureBinding {
+        for (self.input.imports) |view| {
+            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.module_idx == imported.module_idx and
+                    binding.binding.def == imported.def and
+                    binding.binding.pattern == imported.pattern)
+                {
+                    return switch (binding.body) {
+                        .direct_template => |direct| direct,
+                        .callable_eval_template => invariantViolation("mono body lowering reached imported callable-eval binding before callable instance sealing was implemented"),
+                    };
+                }
+            }
+        }
+        for (self.input.root.relation_artifacts) |view| {
+            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.module_idx == imported.module_idx and
+                    binding.binding.def == imported.def and
+                    binding.binding.pattern == imported.pattern)
+                {
+                    return switch (binding.body) {
+                        .direct_template => |direct| direct,
+                        .callable_eval_template => invariantViolation("mono body lowering reached relation callable-eval binding before callable instance sealing was implemented"),
+                    };
+                }
+            }
+        }
+        invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
     }
 };
 

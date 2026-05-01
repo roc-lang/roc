@@ -1069,7 +1069,7 @@ pub const CheckedPatternBinder = struct {
 
 pub const CheckedStringLiteralId = enum(u32) { _ };
 
-pub const CheckedRecordField = struct {
+pub const CheckedRecordExprField = struct {
     label: canonical.RecordFieldLabelId,
     value: CheckedExprId,
 };
@@ -1229,7 +1229,7 @@ pub const CheckedExprData = union(enum) {
         called_via: base.CalledVia,
     },
     record: struct {
-        fields: []const CheckedRecordField,
+        fields: []const CheckedRecordExprField,
         ext: ?CheckedExprId,
     },
     empty_record,
@@ -1933,10 +1933,10 @@ const CheckedBodyPayloadCopier = struct {
         return out;
     }
 
-    fn copyRecordFields(self: *@This(), span: CIR.RecordField.Span) Allocator.Error![]const CheckedRecordField {
+    fn copyRecordFields(self: *@This(), span: CIR.RecordField.Span) Allocator.Error![]const CheckedRecordExprField {
         const source = self.module.sliceRecordFields(span);
         if (source.len == 0) return &.{};
-        const out = try self.allocator.alloc(CheckedRecordField, source.len);
+        const out = try self.allocator.alloc(CheckedRecordExprField, source.len);
         for (source, 0..) |field_idx, i| {
             const field = self.module.getRecordField(field_idx);
             out[i] = .{
@@ -6386,6 +6386,7 @@ pub const ImportedModuleView = struct {
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
+    resolved_value_refs: *const ResolvedValueRefTable,
     nested_proc_sites: *const NestedProcSiteTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
@@ -6414,6 +6415,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .resolved_value_refs = &artifact.resolved_value_refs,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
