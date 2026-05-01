@@ -166,6 +166,7 @@ pub const Stmt = union(enum) {
     },
     debug: Var,
     expect: Var,
+    return_: Var,
     break_,
     for_list: struct {
         elem: Var,

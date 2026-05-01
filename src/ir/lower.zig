@@ -691,10 +691,13 @@ const IrBuilder = struct {
                 const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .expect = value }));
             },
+            .return_ => |value_ref| {
+                const value = self.value_env.get(value_ref) orelse irInvariant("IR lowering reached return value before it was bound");
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .return_ = value }));
+            },
             .for_ => |for_| try self.appendForList(for_, stmts),
             .break_ => try stmts.append(self.allocator, try self.output.store.addStmt(.break_)),
             .crash,
-            .return_,
             .while_,
             => irInvariant("IR lowering reached statement control flow that needs block splitting"),
         }

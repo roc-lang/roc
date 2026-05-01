@@ -235,6 +235,7 @@ const Lowerer = struct {
                 .condition = try self.lowerVar(value),
                 .next = next,
             } }),
+            .return_ => |value| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
             .switch_ => |switch_| try self.lowerSwitch(switch_, next),
             .break_ => try self.store.addCFStmt(.loop_break),
             .for_list => |for_list| try self.lowerForList(for_list, next),
