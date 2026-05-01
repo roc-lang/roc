@@ -73,7 +73,7 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     input.row_shapes = MonoRow.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
-    var type_lowerer = TypeLowerer.init(allocator, &input.types, &program.types);
+    var type_lowerer = TypeLowerer.init(allocator, &input.types, &program.types, &program.row_shapes);
     defer type_lowerer.deinit();
 
     for (input.procs.items, 0..) |proc, i| {
@@ -116,13 +116,20 @@ const TypeLowerer = struct {
     allocator: Allocator,
     input: *const LambdaSolved.Type.Store,
     output: *Type.Store,
+    row_shapes: *MonoRow.Store,
     active: std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId),
 
-    fn init(allocator: Allocator, input: *const LambdaSolved.Type.Store, output: *Type.Store) TypeLowerer {
+    fn init(
+        allocator: Allocator,
+        input: *const LambdaSolved.Type.Store,
+        output: *Type.Store,
+        row_shapes: *MonoRow.Store,
+    ) TypeLowerer {
         return .{
             .allocator = allocator,
             .input = input,
             .output = output,
+            .row_shapes = row_shapes,
             .active = std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId).init(allocator),
         };
     }
@@ -163,8 +170,8 @@ const TypeLowerer = struct {
                     break :blk .{ .tuple = try self.allocator.dupe(Type.TypeId, items) };
                 },
                 .func => executableInvariant("executable type lowering requires solved callable representation for function type"),
-                .record => executableInvariant("executable type lowering requires row-finalized record shape metadata"),
-                .tag_union => executableInvariant("executable type lowering requires row-finalized tag-union shape metadata"),
+                .record => |record| try self.lowerRecordType(record.fields),
+                .tag_union => |tag_union| try self.lowerTagUnionType(tag_union.tags),
             },
         };
 
@@ -173,12 +180,80 @@ const TypeLowerer = struct {
         return target;
     }
 
-    fn lowerRecordType(self: *TypeLowerer, shape: MonoRow.RecordShapeId) Allocator.Error!Type.TypeId {
-        return try self.output.addType(.{ .record = shape });
+    fn lowerRecordType(self: *TypeLowerer, span: LambdaSolved.Type.Span(LambdaSolved.Type.Field)) Allocator.Error!Type.Content {
+        const source_fields = self.input.sliceFields(span);
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, source_fields.len);
+        defer self.allocator.free(labels);
+        for (source_fields, 0..) |field, i| {
+            labels[i] = field.name;
+        }
+
+        const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != source_fields.len) executableInvariant("executable type lowering record shape arity mismatch");
+
+        const fields = try self.allocator.alloc(Type.RecordFieldType, source_fields.len);
+        errdefer self.allocator.free(fields);
+        for (source_fields, 0..) |field, i| {
+            fields[i] = .{
+                .field = shape_fields[i],
+                .ty = try self.lowerType(field.ty),
+            };
+        }
+
+        return .{ .record = .{
+            .shape = shape,
+            .fields = fields,
+        } };
     }
 
-    fn lowerTagUnionType(self: *TypeLowerer, shape: MonoRow.TagUnionShapeId) Allocator.Error!Type.TypeId {
-        return try self.output.addType(.{ .tag_union = shape });
+    fn lowerTagUnionType(self: *TypeLowerer, span: LambdaSolved.Type.Span(LambdaSolved.Type.Tag)) Allocator.Error!Type.Content {
+        const source_tags = self.input.sliceTags(span);
+        const descriptors = try self.allocator.alloc(MonoRow.TagShapeDescriptor, source_tags.len);
+        defer self.allocator.free(descriptors);
+        for (source_tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = tag.args.len,
+            };
+        }
+
+        const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+        const shape_tags = self.row_shapes.tagUnionTags(shape);
+        if (shape_tags.len != source_tags.len) executableInvariant("executable type lowering tag-union shape arity mismatch");
+
+        const tags = try self.allocator.alloc(Type.TagType, source_tags.len);
+        for (tags) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (tags[0..source_tags.len]) |tag| {
+                if (tag.payloads.len > 0) self.allocator.free(tag.payloads);
+            }
+            self.allocator.free(tags);
+        }
+        for (source_tags, 0..) |source_tag, i| {
+            const source_payload_tys = self.input.sliceTypeVarSpan(source_tag.args);
+            const shape_payloads = self.row_shapes.tagPayloads(shape_tags[i]);
+            if (shape_payloads.len != source_payload_tys.len) executableInvariant("executable type lowering tag payload arity mismatch");
+
+            const payloads = try self.allocator.alloc(Type.TagPayloadType, source_payload_tys.len);
+            errdefer self.allocator.free(payloads);
+            for (source_payload_tys, 0..) |payload_ty, payload_i| {
+                payloads[payload_i] = .{
+                    .payload = shape_payloads[payload_i],
+                    .ty = try self.lowerType(payload_ty),
+                };
+            }
+
+            tags[i] = .{
+                .tag = shape_tags[i],
+                .payloads = payloads,
+            };
+        }
+
+        return .{ .tag_union = .{
+            .shape = shape,
+            .tags = tags,
+        } };
     }
 };
 
@@ -304,7 +379,7 @@ const BodyBuilder = struct {
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.assembly_order);
                 break :blk try self.output.addExpr(
-                    try self.type_lowerer.lowerRecordType(record.shape),
+                    try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .record = .{
                         .shape = record.shape,
@@ -315,7 +390,7 @@ const BodyBuilder = struct {
             .tag => |tag| blk: {
                 const payloads = try self.lowerTagPayloadValues(tag.assembly_order);
                 break :blk try self.output.addExpr(
-                    try self.type_lowerer.lowerTagUnionType(tag.union_shape),
+                    try self.type_lowerer.lowerType(expr.ty),
                     self.output.freshValueRef(),
                     .{ .tag = .{
                         .union_shape = tag.union_shape,
@@ -710,6 +785,7 @@ const BodyBuilder = struct {
             values[i] = .{
                 .payload = payload.payload,
                 .expr = lowered,
+                .ty = self.output.getExpr(lowered).ty,
                 .value = self.exprValue(lowered),
             };
         }

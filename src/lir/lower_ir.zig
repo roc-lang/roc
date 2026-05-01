@@ -316,6 +316,27 @@ const Lowerer = struct {
                 .elems = try self.lowerVarSpan(list.elems),
                 .next = next,
             } }),
+            .make_union => |tag| try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .discriminant = tag.discriminant,
+                .payload = if (tag.payload) |payload| try self.lowerVar(payload) else null,
+                .next = next,
+            } }),
+            .get_union_id => |source| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .discriminant = .{
+                    .source = try self.lowerVar(source),
+                } },
+                .next = next,
+            } }),
+            .get_union_struct => |payload| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .tag_payload_struct = .{
+                    .source = try self.lowerVar(payload.value),
+                    .tag_discriminant = payload.tag_discriminant,
+                } },
+                .next = next,
+            } }),
             .get_struct_field => |field| try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .field = .{
@@ -337,9 +358,6 @@ const Lowerer = struct {
                 .next = next,
             } }),
             .bridge,
-            .make_union,
-            .get_union_id,
-            .get_union_struct,
             .layout_size,
             .call_erased,
             => lirInvariant("lir.lower_ir reached IR expression form whose LIR lowering is still missing"),

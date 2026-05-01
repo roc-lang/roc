@@ -22,6 +22,31 @@ pub const ErasedFnType = struct {
     capture_shape: repr.CaptureShapeKey,
 };
 
+pub const RecordFieldType = struct {
+    field: row.RecordFieldId,
+    ty: TypeId,
+};
+
+pub const RecordType = struct {
+    shape: row.RecordShapeId,
+    fields: []const RecordFieldType,
+};
+
+pub const TagPayloadType = struct {
+    payload: row.TagPayloadId,
+    ty: TypeId,
+};
+
+pub const TagType = struct {
+    tag: row.TagId,
+    payloads: []const TagPayloadType,
+};
+
+pub const TagUnionType = struct {
+    shape: row.TagUnionShapeId,
+    tags: []const TagType,
+};
+
 pub const Content = union(enum) {
     placeholder,
     link: TypeId,
@@ -33,8 +58,8 @@ pub const Content = union(enum) {
     list: TypeId,
     box: TypeId,
     tuple: []const TypeId,
-    record: row.RecordShapeId,
-    tag_union: row.TagUnionShapeId,
+    record: RecordType,
+    tag_union: TagUnionType,
     callable_set: CallableSetType,
     erased_fn: ErasedFnType,
 };
@@ -62,6 +87,15 @@ pub const Store = struct {
         switch (content) {
             .tuple => |items| {
                 if (items.len > 0) self.allocator.free(items);
+            },
+            .record => |record| {
+                if (record.fields.len > 0) self.allocator.free(record.fields);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    if (tag.payloads.len > 0) self.allocator.free(tag.payloads);
+                }
+                if (tag_union.tags.len > 0) self.allocator.free(tag_union.tags);
             },
             else => {},
         }

@@ -161,8 +161,15 @@ const IrBuilder = struct {
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.fields, stmts);
                 defer if (fields.len > 0) self.allocator.free(fields);
-                const layout = try self.structLayout(fields);
+                const layout = try self.layoutForType(expr.ty);
                 break :blk try self.bindExpr(expr.value, layout, .{ .make_struct = try self.output.store.addVarSpan(fields) }, stmts);
+            },
+            .tag => |tag| blk: {
+                const payload = try self.lowerTagPayloadForConstruction(tag.tag, tag.payloads, stmts);
+                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
+                    .discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
+                    .payload = payload,
+                } }, stmts);
             },
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record, stmts);
@@ -208,6 +215,7 @@ const IrBuilder = struct {
                     .field_bridge_plan = direct,
                 } }, stmts);
             },
+            .tag_payload => |payload| try self.lowerTagPayload(expr, payload, stmts),
             .low_level => |low_level| blk: {
                 const args = try self.lowerVarSpanFromExprSpan(low_level.args, stmts);
                 defer if (args.len > 0) self.allocator.free(args);
@@ -235,7 +243,6 @@ const IrBuilder = struct {
             .callable_match,
             .packed_erased_fn,
             .source_match,
-            .tag_payload,
             .for_,
             .crash,
             .runtime_error,
@@ -335,6 +342,75 @@ const IrBuilder = struct {
         return values;
     }
 
+    fn lowerTagPayloadForConstruction(
+        self: *IrBuilder,
+        tag_id: mir.MonoRow.TagId,
+        span: Exec.Ast.Span(Exec.Ast.TagPayloadExpr),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!?Ast.Var {
+        const expected_payloads = self.input.row_shapes.tagPayloads(tag_id);
+        if (expected_payloads.len == 0) return null;
+
+        const payload_vars = try self.allocator.alloc(Ast.Var, expected_payloads.len);
+        defer self.allocator.free(payload_vars);
+        var seen = try self.allocator.alloc(bool, expected_payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        const input_items = self.input.ast.tag_payload_exprs.items[span.start..][0..span.len];
+        for (input_items) |payload| {
+            const payload_info = self.input.row_shapes.tagPayload(payload.payload);
+            if (payload_info.tag != tag_id) irInvariant("IR lowering tag construction payload belonged to a different tag");
+            const logical_index = payload_info.logical_index;
+            if (logical_index >= payload_vars.len) irInvariant("IR lowering tag construction payload index exceeded tag arity");
+            if (seen[logical_index]) irInvariant("IR lowering tag construction saw duplicate payload slot");
+            payload_vars[logical_index] = try self.lowerExpr(payload.expr, stmts);
+            seen[logical_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering tag construction did not provide every payload slot");
+        }
+
+        if (payload_vars.len == 1) return payload_vars[0];
+        const payload_layout = try self.structLayout(payload_vars);
+        return try self.bindAnonymous(payload_layout, .{
+            .make_struct = try self.output.store.addVarSpan(payload_vars),
+        }, stmts);
+    }
+
+    fn lowerTagPayload(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        payload: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const tag_union = try self.lowerExpr(payload.tag_union, stmts);
+        const payload_info = self.input.row_shapes.tagPayload(payload.payload);
+        const tag_info = self.input.row_shapes.tag(payload_info.tag);
+        const tag_payloads = self.input.row_shapes.tagPayloads(payload_info.tag);
+        if (tag_payloads.len == 0) irInvariant("IR lowering tag payload projection targeted a nullary tag");
+
+        if (tag_payloads.len == 1) {
+            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_union_struct = .{
+                .value = tag_union,
+                .tag_discriminant = @intCast(tag_info.logical_index),
+            } }, stmts);
+        }
+
+        const tag_union_expr = self.input.ast.getExpr(payload.tag_union);
+        const payload_struct_layout = try self.payloadStructLayoutForTag(tag_union_expr.ty, payload_info.tag);
+        const payload_struct = try self.bindAnonymous(payload_struct_layout, .{ .get_union_struct = .{
+            .value = tag_union,
+            .tag_discriminant = @intCast(tag_info.logical_index),
+        } }, stmts);
+        const direct = try self.output.store.addBridgePlan(.direct);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
+            .record = payload_struct,
+            .field_index = @intCast(payload_info.logical_index),
+            .field_bridge_plan = direct,
+        } }, stmts);
+    }
+
     fn lowerVarSpanFromExprSpan(
         self: *IrBuilder,
         span: Exec.Ast.Span(Exec.Ast.ExprId),
@@ -363,6 +439,21 @@ const IrBuilder = struct {
             .expr = expr_id,
         } }));
         try self.value_env.put(value_ref, bind);
+        return bind;
+    }
+
+    fn bindAnonymous(
+        self: *IrBuilder,
+        layout: Ast.LayoutRef,
+        expr: Ast.Expr,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const bind = try self.freshVar(layout);
+        const expr_id = try self.output.store.addExpr(expr);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
+            .bind = bind,
+            .expr = expr_id,
+        } }));
         return bind;
     }
 
@@ -397,6 +488,107 @@ const IrBuilder = struct {
         return .{ .local = node };
     }
 
+    fn structLayoutFromTypes(self: *IrBuilder, types: []const Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
+        if (types.len == 0) return .{ .canonical = .zst };
+        const vars = try self.allocator.alloc(Ast.Var, types.len);
+        defer self.allocator.free(vars);
+        for (types, 0..) |ty, i| {
+            vars[i] = .{
+                .layout = try self.layoutForType(ty),
+                .symbol = symbol_mod.Symbol.none,
+            };
+        }
+        return try self.structLayout(vars);
+    }
+
+    fn payloadLayout(self: *IrBuilder, payloads: []const Exec.Type.TagPayloadType) LowerResourceError!Ast.LayoutRef {
+        if (payloads.len == 0) return .{ .canonical = .zst };
+        if (payloads.len == 1) return try self.layoutForType(payloads[0].ty);
+
+        const payload_types = try self.allocator.alloc(Exec.Type.TypeId, payloads.len);
+        defer self.allocator.free(payload_types);
+        var seen = try self.allocator.alloc(bool, payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (payloads) |payload| {
+            const payload_info = self.input.row_shapes.tagPayload(payload.payload);
+            if (payload_info.logical_index >= payloads.len) irInvariant("IR lowering payload type logical index exceeded tag arity");
+            if (seen[payload_info.logical_index]) irInvariant("IR lowering payload type saw duplicate payload logical index");
+            payload_types[payload_info.logical_index] = payload.ty;
+            seen[payload_info.logical_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering payload type did not provide every payload slot");
+        }
+        return try self.structLayoutFromTypes(payload_types);
+    }
+
+    fn payloadStructLayoutForTag(
+        self: *IrBuilder,
+        tag_union_ty: Exec.Type.TypeId,
+        tag_id: mir.MonoRow.TagId,
+    ) LowerResourceError!Ast.LayoutRef {
+        return switch (self.input.types.getType(tag_union_ty)) {
+            .link => |next| try self.payloadStructLayoutForTag(next, tag_id),
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    if (tag.tag == tag_id) break :blk try self.payloadLayout(tag.payloads);
+                }
+                irInvariant("IR lowering tag payload projection did not find payload tag in union type");
+            },
+            else => irInvariant("IR lowering tag payload projection expected tag-union source type"),
+        };
+    }
+
+    fn recordLayout(self: *IrBuilder, record: Exec.Type.RecordType) LowerResourceError!Ast.LayoutRef {
+        if (record.fields.len == 0) return .{ .canonical = .zst };
+        const graph_fields = try self.allocator.alloc(Layout.Field, record.fields.len);
+        defer self.allocator.free(graph_fields);
+        var seen = try self.allocator.alloc(bool, record.fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (record.fields) |field| {
+            const field_info = self.input.row_shapes.recordField(field.field);
+            if (field_info.logical_index >= record.fields.len) irInvariant("IR lowering record field logical index exceeded record arity");
+            if (seen[field_info.logical_index]) irInvariant("IR lowering record type saw duplicate field logical index");
+            graph_fields[field_info.logical_index] = .{
+                .index = @intCast(field_info.logical_index),
+                .child = try self.layoutForType(field.ty),
+            };
+            seen[field_info.logical_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering record type did not provide every field");
+        }
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        self.output.layouts.setNode(node, .{ .struct_ = try self.output.layouts.appendFields(self.allocator, graph_fields) });
+        return .{ .local = node };
+    }
+
+    fn tagUnionLayout(self: *IrBuilder, tag_union: Exec.Type.TagUnionType) LowerResourceError!Ast.LayoutRef {
+        if (tag_union.tags.len == 0) return .{ .canonical = .zst };
+        const variants = try self.allocator.alloc(Ast.LayoutRef, tag_union.tags.len);
+        defer self.allocator.free(variants);
+        var seen = try self.allocator.alloc(bool, tag_union.tags.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (tag_union.tags) |tag| {
+            const tag_info = self.input.row_shapes.tag(tag.tag);
+            if (tag_info.logical_index >= tag_union.tags.len) irInvariant("IR lowering tag logical index exceeded tag-union arity");
+            if (seen[tag_info.logical_index]) irInvariant("IR lowering tag-union type saw duplicate tag logical index");
+            variants[tag_info.logical_index] = try self.payloadLayout(tag.payloads);
+            seen[tag_info.logical_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering tag-union type did not provide every tag variant");
+        }
+
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        self.output.layouts.setNode(node, .{ .tag_union = try self.output.layouts.appendRefs(self.allocator, variants) });
+        return .{ .local = node };
+    }
+
     fn layoutForType(self: *IrBuilder, ty: Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
         return switch (self.input.types.getType(ty)) {
             .placeholder => irInvariant("IR lowering received executable placeholder type"),
@@ -426,8 +618,8 @@ const IrBuilder = struct {
                 }
                 break :blk try self.structLayout(vars);
             },
-            .record,
-            .tag_union,
+            .record => |record| try self.recordLayout(record),
+            .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
             .callable_set,
             .erased_fn,
             => irInvariant("IR lowering requires executable layout metadata for this type"),

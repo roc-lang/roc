@@ -49,6 +49,7 @@ pub const RecordFieldExpr = struct {
 pub const TagPayloadExpr = struct {
     payload: row.TagPayloadId,
     expr: ExprId,
+    ty: TypeId,
     value: ExecutableValueRef,
 };
 

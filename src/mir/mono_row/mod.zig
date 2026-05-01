@@ -33,6 +33,7 @@ pub const RecordShape = struct {
 };
 
 pub const TagPayload = struct {
+    tag: TagId,
     logical_index: u32,
 };
 
@@ -114,8 +115,13 @@ pub const Store = struct {
         };
     }
 
+    pub const TagShapeDescriptor = struct {
+        name: canonical.TagLabelId,
+        payload_arity: u32,
+    };
+
     pub fn internRecordShape(self: *Store, fields: MonoType.Fields) Allocator.Error!RecordShapeId {
-        try self.buildRecordKey(fields);
+        try self.buildRecordKeyFromMonoFields(fields);
         if (self.record_shape_by_key.get(self.scratch_key.items)) |shape_id| return shape_id;
 
         const shape_id: RecordShapeId = @enumFromInt(@as(u32, @intCast(self.record_shapes.items.len)));
@@ -139,8 +145,33 @@ pub const Store = struct {
         return shape_id;
     }
 
+    pub fn internRecordShapeFromLabels(self: *Store, labels: []const canonical.RecordFieldLabelId) Allocator.Error!RecordShapeId {
+        try self.buildRecordKeyFromLabels(labels);
+        if (self.record_shape_by_key.get(self.scratch_key.items)) |shape_id| return shape_id;
+
+        const shape_id: RecordShapeId = @enumFromInt(@as(u32, @intCast(self.record_shapes.items.len)));
+        const key = try self.allocator.dupe(u8, self.scratch_key.items);
+        errdefer self.allocator.free(key);
+
+        const start: u32 = @intCast(self.record_shape_fields.items.len);
+        for (labels, 0..) |label, i| {
+            const field_id: RecordFieldId = @enumFromInt(@as(u32, @intCast(self.record_fields.items.len)));
+            try self.record_fields.append(self.allocator, .{
+                .label = label,
+                .logical_index = @intCast(i),
+            });
+            try self.record_shape_fields.append(self.allocator, field_id);
+        }
+
+        try self.record_shapes.append(self.allocator, .{
+            .fields = .{ .start = start, .len = @intCast(labels.len) },
+        });
+        try self.record_shape_by_key.put(key, shape_id);
+        return shape_id;
+    }
+
     pub fn internTagUnionShape(self: *Store, source_tags: MonoType.Tags) Allocator.Error!TagUnionShapeId {
-        try self.buildTagUnionKey(source_tags);
+        try self.buildTagUnionKeyFromMonoTags(source_tags);
         if (self.tag_union_shape_by_key.get(self.scratch_key.items)) |shape_id| return shape_id;
 
         const shape_id: TagUnionShapeId = @enumFromInt(@as(u32, @intCast(self.tag_union_shapes.items.len)));
@@ -150,19 +181,56 @@ pub const Store = struct {
         const tag_start: u32 = @intCast(self.tag_union_tags.items.len);
         for (source_tags, 0..) |source_tag, tag_i| {
             const payload_start: u32 = @intCast(self.tag_payload_ids.items.len);
+            const tag_id: TagId = @enumFromInt(@as(u32, @intCast(self.tags.items.len)));
             for (0..source_tag.args.len) |payload_i| {
                 const payload_id: TagPayloadId = @enumFromInt(@as(u32, @intCast(self.tag_payloads.items.len)));
                 try self.tag_payloads.append(self.allocator, .{
+                    .tag = tag_id,
                     .logical_index = @intCast(payload_i),
                 });
                 try self.tag_payload_ids.append(self.allocator, payload_id);
             }
 
-            const tag_id: TagId = @enumFromInt(@as(u32, @intCast(self.tags.items.len)));
             try self.tags.append(self.allocator, .{
                 .label = source_tag.name,
                 .logical_index = @intCast(tag_i),
                 .payloads = .{ .start = payload_start, .len = @intCast(source_tag.args.len) },
+            });
+            try self.tag_union_tags.append(self.allocator, tag_id);
+        }
+
+        try self.tag_union_shapes.append(self.allocator, .{
+            .tags = .{ .start = tag_start, .len = @intCast(source_tags.len) },
+        });
+        try self.tag_union_shape_by_key.put(key, shape_id);
+        return shape_id;
+    }
+
+    pub fn internTagUnionShapeFromDescriptors(self: *Store, source_tags: []const TagShapeDescriptor) Allocator.Error!TagUnionShapeId {
+        try self.buildTagUnionKeyFromDescriptors(source_tags);
+        if (self.tag_union_shape_by_key.get(self.scratch_key.items)) |shape_id| return shape_id;
+
+        const shape_id: TagUnionShapeId = @enumFromInt(@as(u32, @intCast(self.tag_union_shapes.items.len)));
+        const key = try self.allocator.dupe(u8, self.scratch_key.items);
+        errdefer self.allocator.free(key);
+
+        const tag_start: u32 = @intCast(self.tag_union_tags.items.len);
+        for (source_tags, 0..) |source_tag, tag_i| {
+            const payload_start: u32 = @intCast(self.tag_payload_ids.items.len);
+            const tag_id: TagId = @enumFromInt(@as(u32, @intCast(self.tags.items.len)));
+            for (0..source_tag.payload_arity) |payload_i| {
+                const payload_id: TagPayloadId = @enumFromInt(@as(u32, @intCast(self.tag_payloads.items.len)));
+                try self.tag_payloads.append(self.allocator, .{
+                    .tag = tag_id,
+                    .logical_index = @intCast(payload_i),
+                });
+                try self.tag_payload_ids.append(self.allocator, payload_id);
+            }
+
+            try self.tags.append(self.allocator, .{
+                .label = source_tag.name,
+                .logical_index = @intCast(tag_i),
+                .payloads = .{ .start = payload_start, .len = @intCast(source_tag.payload_arity) },
             });
             try self.tag_union_tags.append(self.allocator, tag_id);
         }
@@ -206,7 +274,7 @@ pub const Store = struct {
         return self.tag_payloads.items[@intFromEnum(id)];
     }
 
-    fn buildRecordKey(self: *Store, fields: MonoType.Fields) Allocator.Error!void {
+    fn buildRecordKeyFromMonoFields(self: *Store, fields: MonoType.Fields) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.writer(self.allocator).print("record:{d}|", .{fields.len});
         for (fields) |field| {
@@ -214,13 +282,32 @@ pub const Store = struct {
         }
     }
 
-    fn buildTagUnionKey(self: *Store, source_tags: MonoType.Tags) Allocator.Error!void {
+    fn buildRecordKeyFromLabels(self: *Store, labels: []const canonical.RecordFieldLabelId) Allocator.Error!void {
+        self.scratch_key.clearRetainingCapacity();
+        try self.scratch_key.writer(self.allocator).print("record:{d}|", .{labels.len});
+        for (labels) |label| {
+            try self.scratch_key.writer(self.allocator).print("{d}|", .{@intFromEnum(label)});
+        }
+    }
+
+    fn buildTagUnionKeyFromMonoTags(self: *Store, source_tags: MonoType.Tags) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.writer(self.allocator).print("tag_union:{d}|", .{source_tags.len});
         for (source_tags) |source_tag| {
             try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
                 @intFromEnum(source_tag.name),
                 source_tag.args.len,
+            });
+        }
+    }
+
+    fn buildTagUnionKeyFromDescriptors(self: *Store, source_tags: []const TagShapeDescriptor) Allocator.Error!void {
+        self.scratch_key.clearRetainingCapacity();
+        try self.scratch_key.writer(self.allocator).print("tag_union:{d}|", .{source_tags.len});
+        for (source_tags) |source_tag| {
+            try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
+                @intFromEnum(source_tag.name),
+                source_tag.payload_arity,
             });
         }
     }
