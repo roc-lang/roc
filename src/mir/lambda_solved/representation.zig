@@ -15,6 +15,7 @@ pub const ValueInfoId = enum(u32) { _ };
 pub const BindingInfoId = enum(u32) { _ };
 pub const ProjectionInfoId = enum(u32) { _ };
 pub const CallSiteInfoId = enum(u32) { _ };
+pub const JoinInfoId = enum(u32) { _ };
 pub const BoxBoundaryId = enum(u32) { _ };
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
@@ -306,6 +307,19 @@ pub const CallSiteInfo = struct {
     dispatch: ?CallSiteDispatch = null,
 };
 
+pub const JoinKind = enum {
+    if_expr,
+    match_expr,
+    loop_expr,
+};
+
+pub const JoinInfo = struct {
+    result: ValueInfoId,
+    inputs: Span(ValueInfoId),
+    root: RepRootId,
+    kind: JoinKind,
+};
+
 pub const ProcPublicValueRoots = struct {
     params: Span(ValueInfoId),
     ret: ValueInfoId,
@@ -441,6 +455,7 @@ pub const ValueInfoStore = struct {
     bindings: std.ArrayList(BindingInfo),
     projections: std.ArrayList(ProjectionInfo),
     call_sites: std.ArrayList(CallSiteInfo),
+    joins: std.ArrayList(JoinInfo),
     value_ids: std.ArrayList(ValueInfoId),
 
     pub fn init(allocator: std.mem.Allocator) ValueInfoStore {
@@ -450,12 +465,14 @@ pub const ValueInfoStore = struct {
             .bindings = .empty,
             .projections = .empty,
             .call_sites = .empty,
+            .joins = .empty,
             .value_ids = .empty,
         };
     }
 
     pub fn deinit(self: *ValueInfoStore) void {
         self.value_ids.deinit(self.allocator);
+        self.joins.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
         self.bindings.deinit(self.allocator);
@@ -484,6 +501,12 @@ pub const ValueInfoStore = struct {
     pub fn addCallSite(self: *ValueInfoStore, call_site: CallSiteInfo) std.mem.Allocator.Error!CallSiteInfoId {
         const id: CallSiteInfoId = @enumFromInt(@as(u32, @intCast(self.call_sites.items.len)));
         try self.call_sites.append(self.allocator, call_site);
+        return id;
+    }
+
+    pub fn addJoin(self: *ValueInfoStore, join: JoinInfo) std.mem.Allocator.Error!JoinInfoId {
+        const id: JoinInfoId = @enumFromInt(@as(u32, @intCast(self.joins.items.len)));
+        try self.joins.append(self.allocator, join);
         return id;
     }
 

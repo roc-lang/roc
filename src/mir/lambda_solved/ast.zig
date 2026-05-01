@@ -60,6 +60,7 @@ pub const Pat = struct {
             payloads: Span(TagPayloadPattern),
         },
         var_: Symbol,
+        wildcard,
     };
 };
 
@@ -167,11 +168,13 @@ pub const Expr = struct {
             cond: ExprId,
             branches: Span(BranchId),
             is_try_suffix: bool,
+            join_info: repr.JoinInfoId,
         },
         if_: struct {
             cond: ExprId,
             then_body: ExprId,
             else_body: ExprId,
+            join_info: repr.JoinInfoId,
         },
         block: struct {
             stmts: Span(StmtId),
@@ -331,6 +334,18 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
+    pub fn addPat(self: *Store, pat: Pat) std.mem.Allocator.Error!PatId {
+        const idx: u32 = @intCast(self.pats.items.len);
+        try self.pats.append(self.allocator, pat);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addBranch(self: *Store, branch: Branch) std.mem.Allocator.Error!BranchId {
+        const idx: u32 = @intCast(self.branches.items.len);
+        try self.branches.append(self.allocator, branch);
+        return @enumFromInt(idx);
+    }
+
     pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
         const idx: u32 = @intCast(self.defs.items.len);
         try self.defs.append(self.allocator, def);
@@ -356,6 +371,13 @@ pub const Store = struct {
         const start: u32 = @intCast(self.branch_ids.items.len);
         try self.branch_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addTagPayloadPatternSpan(self: *Store, values: []const TagPayloadPattern) std.mem.Allocator.Error!Span(TagPayloadPattern) {
+        if (values.len == 0) return Span(TagPayloadPattern).empty();
+        const start: u32 = @intCast(self.tag_payload_patterns.items.len);
+        try self.tag_payload_patterns.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addCaptureArgSpan(self: *Store, values: []const CaptureArg) std.mem.Allocator.Error!Span(CaptureArg) {

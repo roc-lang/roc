@@ -64,6 +64,7 @@ pub const Pat = struct {
             payloads: Span(PatId),
         },
         bind: ExecutableValueRef,
+        wildcard,
     };
 };
 

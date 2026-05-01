@@ -987,27 +987,41 @@ const BodyLowerer = struct {
                 const value = try self.lowerExpr(child);
                 break :blk try self.program.ast.addExpr(ty, .{ .bool_not = value });
             },
-            .if_,
-            .match_,
-            .tag,
-            .zero_argument_tag,
+            .if_ => |if_| try self.lowerIf(ty, if_.branches, if_.final_else),
+            .match_ => |match_| try self.lowerMatch(ty, match_),
+            .tag => |tag| try self.lowerTag(ty, tag.name, tag.args),
+            .zero_argument_tag => |tag| blk: {
+                _ = tag.closure_name;
+                break :blk try self.lowerTag(ty, tag.name, &.{});
+            },
+            .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, access.field_name),
+            .tuple_access => |access| blk: {
+                const tuple = try self.lowerExpr(access.tuple);
+                break :blk try self.program.ast.addExpr(ty, .{ .tuple_access = .{
+                    .tuple = tuple,
+                    .elem_index = access.elem_index,
+                } });
+            },
+            .return_ => |ret| blk: {
+                _ = ret.lambda;
+                _ = ret.context;
+                const child = try self.lowerExpr(ret.expr);
+                break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
+            },
+            .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
+            .run_low_level => |run| try self.lowerRunLowLevel(ty, run.op, run.args),
             .closure,
             .nominal,
             .binop,
             .unary_minus,
-            .field_access,
             .method_call,
             .dispatch_call,
             .method_eq,
             .type_method_call,
             .type_dispatch_call,
-            .tuple_access,
             .dbg,
             .expect,
-            .return_,
-            .for_,
             .hosted_lambda,
-            .run_low_level,
             => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
             .runtime_error => try self.program.ast.addExpr(ty, .runtime_error),
             .crash => |literal| try self.program.ast.addExpr(ty, .{ .crash = try self.lowerCheckedStringLiteral(literal) }),
@@ -1151,6 +1165,186 @@ const BodyLowerer = struct {
         return try self.program.ast.addExpr(ty, .{ .bool_not = structural });
     }
 
+    fn lowerIf(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        branches: []const checked_artifact.CheckedIfBranch,
+        final_else: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        var current = try self.lowerExpr(final_else);
+        var i = branches.len;
+        while (i > 0) {
+            i -= 1;
+            current = try self.program.ast.addExpr(ty, .{ .if_ = .{
+                .cond = try self.lowerExpr(branches[i].cond),
+                .then_body = try self.lowerExpr(branches[i].body),
+                .else_body = current,
+            } });
+        }
+        return current;
+    }
+
+    fn lowerMatch(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        match_: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const cond = try self.lowerExpr(match_.cond);
+        if (match_.branches.len == 0) invariantViolation("mono body lowering received a checked match with no branches");
+
+        const branches = try self.allocator.alloc(Ast.Branch, match_.branches.len);
+        defer self.allocator.free(branches);
+        const cond_ty = self.program.ast.getExpr(cond).ty;
+        for (match_.branches, 0..) |branch, i| {
+            if (branch.guard != null) invariantViolation("mono body lowering reached match guard before guarded pattern decision lowering was implemented");
+            if (branch.patterns.len != 1) invariantViolation("mono body lowering reached multi-scrutinee match before match decision lowering was implemented");
+            branches[i] = .{
+                .pat = try self.lowerPattern(cond_ty, branch.patterns[0].pattern),
+                .body = try self.lowerExpr(branch.value),
+            };
+        }
+
+        return try self.program.ast.addExpr(ty, .{ .match_ = .{
+            .cond = cond,
+            .branches = try self.program.ast.addBranchSpan(branches),
+            .is_try_suffix = match_.is_try_suffix,
+        } });
+    }
+
+    fn lowerTag(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        name: canonical.TagLabelId,
+        args: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const tag_info = self.tagInfoForUnionType(ty, name);
+        if (tag_info.payload_count != args.len) invariantViolation("mono body lowering tag constructor arity did not match its resolved type");
+        return try self.program.ast.addExpr(ty, .{ .tag = .{
+            .name = name,
+            .discriminant = tag_info.discriminant,
+            .args = try self.lowerExprSpan(args),
+            .constructor_ty = ty,
+        } });
+    }
+
+    fn lowerFieldAccess(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        receiver: checked_artifact.CheckedExprId,
+        field_name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!Ast.ExprId {
+        const record = try self.lowerExpr(receiver);
+        const record_ty = self.program.ast.getExpr(record).ty;
+        return try self.program.ast.addExpr(ty, .{ .access = .{
+            .record = record,
+            .field = field_name,
+            .field_index = self.recordFieldIndex(record_ty, field_name),
+        } });
+    }
+
+    fn lowerForExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        pattern: checked_artifact.CheckedPatternId,
+        iterable: checked_artifact.CheckedExprId,
+        body: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const pattern_ty = try self.type_instantiator.lowerTemplateType(self.checkedPattern(pattern).ty);
+        return try self.program.ast.addExpr(ty, .{ .for_ = .{
+            .patt = try self.lowerPattern(pattern_ty, pattern),
+            .iterable = try self.lowerExpr(iterable),
+            .body = try self.lowerExpr(body),
+        } });
+    }
+
+    fn lowerRunLowLevel(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        op: base.LowLevel,
+        args: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.program.ast.addExpr(ty, .{ .low_level = .{
+            .op = op,
+            .args = try self.lowerExprSpan(args),
+            .source_constraint_ty = ty,
+        } });
+    }
+
+    fn lowerPattern(
+        self: *BodyLowerer,
+        expected_ty: Type.TypeId,
+        pattern_id: checked_artifact.CheckedPatternId,
+    ) Allocator.Error!Ast.PatId {
+        const pattern = self.checkedPattern(pattern_id);
+        const ty = try self.type_instantiator.lowerTemplateType(pattern.ty);
+        if (!self.program.types.equalIds(ty, expected_ty)) invariantViolation("mono body lowering pattern type did not match its scrutinee type");
+        return switch (pattern.data) {
+            .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .var_ = try self.symbolForBinder(binder) } }),
+            .as => |as| {
+                _ = try self.symbolForBinder(as.binder);
+                return try self.lowerPattern(ty, as.pattern);
+            },
+            .applied_tag => |tag| blk: {
+                const tag_info = self.tagInfoForUnionType(ty, tag.name);
+                if (tag_info.payload_count != tag.args.len) invariantViolation("mono body lowering tag pattern arity did not match its resolved type");
+                const args = try self.allocator.alloc(Ast.PatId, tag.args.len);
+                defer self.allocator.free(args);
+                for (tag.args, 0..) |arg, i| {
+                    args[i] = try self.lowerPattern(tag_info.payload_types[i], arg);
+                }
+                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tag = .{
+                    .name = tag.name,
+                    .discriminant = tag_info.discriminant,
+                    .args = try self.program.ast.addPatSpan(args),
+                } } });
+            },
+            .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
+            else => invariantViolation("mono body lowering reached pattern form whose lowering is still missing"),
+        };
+    }
+
+    const TagInfo = struct {
+        discriminant: u16,
+        payload_count: usize,
+        payload_types: []const Type.TypeId,
+    };
+
+    fn tagInfoForUnionType(
+        self: *BodyLowerer,
+        union_ty: Type.TypeId,
+        name: canonical.TagLabelId,
+    ) TagInfo {
+        return switch (self.program.types.getType(union_ty)) {
+            .tag_union => |tag_union| {
+                for (tag_union.tags, 0..) |tag, i| {
+                    if (tag.name == name) return .{
+                        .discriminant = @intCast(i),
+                        .payload_count = tag.args.len,
+                        .payload_types = tag.args,
+                    };
+                }
+                invariantViolation("mono body lowering could not find tag constructor in resolved union type");
+            },
+            else => invariantViolation("mono body lowering expected a resolved tag-union type"),
+        };
+    }
+
+    fn recordFieldIndex(
+        self: *BodyLowerer,
+        record_ty: Type.TypeId,
+        field_name: canonical.RecordFieldLabelId,
+    ) u16 {
+        return switch (self.program.types.getType(record_ty)) {
+            .record => |record| {
+                for (record.fields, 0..) |field, i| {
+                    if (field.name == field_name) return @intCast(i);
+                }
+                invariantViolation("mono body lowering could not find field in resolved record type");
+            },
+            else => invariantViolation("mono body lowering expected a resolved record type"),
+        };
+    }
+
     fn lowerExprSpan(
         self: *BodyLowerer,
         exprs: []const checked_artifact.CheckedExprId,
@@ -1199,9 +1393,12 @@ const BodyLowerer = struct {
             .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerExpr(expr) }),
             .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
             .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerExpr(ret.expr) }),
-            .for_,
-            .while_,
-            => invariantViolation("mono body lowering reached statement form whose lowering is still missing"),
+            .break_ => try self.program.ast.addStmt(.break_),
+            .for_ => |for_| try self.lowerForStmt(for_.pattern, for_.expr, for_.body),
+            .while_ => |while_| try self.program.ast.addStmt(.{ .while_ = .{
+                .cond = try self.lowerExpr(while_.cond),
+                .body = try self.lowerExpr(while_.body),
+            } }),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -1211,6 +1408,20 @@ const BodyLowerer = struct {
             .pending,
             => invariantViolation("mono body lowering received a non-runtime checked statement form"),
         };
+    }
+
+    fn lowerForStmt(
+        self: *BodyLowerer,
+        pattern: checked_artifact.CheckedPatternId,
+        iterable: checked_artifact.CheckedExprId,
+        body: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.StmtId {
+        const pattern_ty = try self.type_instantiator.lowerTemplateType(self.checkedPattern(pattern).ty);
+        return try self.program.ast.addStmt(.{ .for_ = .{
+            .patt = try self.lowerPattern(pattern_ty, pattern),
+            .iterable = try self.lowerExpr(iterable),
+            .body = try self.lowerExpr(body),
+        } });
     }
 
     fn lowerCheckedStringLiteral(

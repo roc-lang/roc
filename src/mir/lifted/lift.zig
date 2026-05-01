@@ -226,14 +226,47 @@ const BodyLifter = struct {
             .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
-            .let_,
-            .match_,
-            .if_,
-            .for_,
-            => liftInvariant("lifted MIR reached row-finalized expression form whose lowering is still missing"),
+            .match_ => |match_| .{ .match_ = .{
+                .cond = try self.lowerExpr(match_.cond),
+                .branches = try self.lowerBranchSpan(match_.branches),
+                .is_try_suffix = match_.is_try_suffix,
+            } },
+            .if_ => |if_| .{ .if_ = .{
+                .cond = try self.lowerExpr(if_.cond),
+                .then_body = try self.lowerExpr(if_.then_body),
+                .else_body = try self.lowerExpr(if_.else_body),
+            } },
+            .for_ => |for_| .{ .for_ = .{
+                .patt = try self.lowerPat(for_.patt),
+                .iterable = try self.lowerExpr(for_.iterable),
+                .body = try self.lowerExpr(for_.body),
+            } },
+            .let_ => liftInvariant("lifted MIR reached row-finalized let expression before let lowering was implemented"),
         });
         try self.expr_map.put(expr_id, lowered);
         return lowered;
+    }
+
+    fn lowerPat(self: *BodyLifter, pat_id: MonoRow.Ast.PatId) Allocator.Error!Ast.PatId {
+        const pat = self.input.getPat(pat_id);
+        return try self.output.addPat(.{ .ty = pat.ty, .data = switch (pat.data) {
+            .bool_lit => |value| .{ .bool_lit = value },
+            .var_ => |symbol| .{ .var_ = symbol },
+            .wildcard => .wildcard,
+            .tag => |tag| .{ .tag = .{
+                .union_shape = tag.union_shape,
+                .tag = tag.tag,
+                .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads),
+            } },
+        } });
+    }
+
+    fn lowerBranch(self: *BodyLifter, branch_id: MonoRow.Ast.BranchId) Allocator.Error!Ast.BranchId {
+        const branch = self.input.getBranch(branch_id);
+        return try self.output.addBranch(.{
+            .pat = try self.lowerPat(branch.pat),
+            .body = try self.lowerExpr(branch.body),
+        });
     }
 
     fn lowerStmt(self: *BodyLifter, stmt_id: MonoRow.Ast.StmtId) Allocator.Error!Ast.StmtId {
@@ -257,9 +290,15 @@ const BodyLifter = struct {
             .crash => |literal| .{ .crash = literal },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .break_ => .break_,
-            .for_,
-            .while_,
-            => liftInvariant("lifted MIR reached row-finalized statement form whose lowering is still missing"),
+            .for_ => |for_| .{ .for_ = .{
+                .patt = try self.lowerPat(for_.patt),
+                .iterable = try self.lowerExpr(for_.iterable),
+                .body = try self.lowerExpr(for_.body),
+            } },
+            .while_ => |while_| .{ .while_ = .{
+                .cond = try self.lowerExpr(while_.cond),
+                .body = try self.lowerExpr(while_.body),
+            } },
         });
     }
 
@@ -283,6 +322,31 @@ const BodyLifter = struct {
             output_items[i] = try self.lowerStmt(stmt);
         }
         return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerBranchSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.BranchId)) Allocator.Error!Ast.Span(Ast.BranchId) {
+        const input_items = self.input.sliceBranchSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.BranchId).empty();
+        const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |branch, i| {
+            output_items[i] = try self.lowerBranch(branch);
+        }
+        return try self.output.addBranchSpan(output_items);
+    }
+
+    fn lowerTagPayloadPatternSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.TagPayloadPattern)) Allocator.Error!Ast.Span(Ast.TagPayloadPattern) {
+        const input_items = self.input.sliceTagPayloadPatternSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.TagPayloadPattern).empty();
+        const output_items = try self.allocator.alloc(Ast.TagPayloadPattern, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |payload, i| {
+            output_items[i] = .{
+                .payload = payload.payload,
+                .pattern = try self.lowerPat(payload.pattern),
+            };
+        }
+        return try self.output.addTagPayloadPatternSpan(output_items);
     }
 
     fn lowerTypedSymbolSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedSymbol) {

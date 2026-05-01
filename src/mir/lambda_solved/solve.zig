@@ -541,13 +541,119 @@ const BodySolver = struct {
             .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
-            .match_,
-            .if_,
-            .for_,
-            => lambdaInvariant("lambda-solved MIR reached lifted expression form whose value-flow lowering is still missing"),
+            .match_ => |match_| blk: {
+                const cond = try self.lowerExpr(match_.cond);
+                const lowered_branches = try self.lowerBranchSpan(match_.branches);
+                const branch_values = try self.valuesForBranches(lowered_branches);
+                const join_info = try self.value_store.addJoin(.{
+                    .result = value,
+                    .inputs = branch_values,
+                    .root = self.valueRoot(value),
+                    .kind = .match_expr,
+                });
+                break :blk .{ .match_ = .{
+                    .cond = cond,
+                    .branches = lowered_branches,
+                    .is_try_suffix = match_.is_try_suffix,
+                    .join_info = join_info,
+                } };
+            },
+            .if_ => |if_| blk: {
+                const cond = try self.lowerExpr(if_.cond);
+                const then_body = try self.lowerExpr(if_.then_body);
+                const else_body = try self.lowerExpr(if_.else_body);
+                const inputs = [_]repr.ValueInfoId{ self.exprValue(then_body), self.exprValue(else_body) };
+                const join_info = try self.value_store.addJoin(.{
+                    .result = value,
+                    .inputs = try self.value_store.addValueSpan(&inputs),
+                    .root = self.valueRoot(value),
+                    .kind = .if_expr,
+                });
+                break :blk .{ .if_ = .{
+                    .cond = cond,
+                    .then_body = then_body,
+                    .else_body = else_body,
+                    .join_info = join_info,
+                } };
+            },
+            .for_ => |for_| try self.lowerForExpr(value, for_),
         });
         try self.expr_map.put(expr_id, lowered);
         return lowered;
+    }
+
+    const SavedBinding = struct {
+        symbol: Ast.Symbol,
+        previous: ?repr.BindingInfoId,
+    };
+
+    fn lowerPatScoped(
+        self: *BodySolver,
+        pat_id: Lifted.Ast.PatId,
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.PatId {
+        const pat = self.input.getPat(pat_id);
+        const ty = try self.type_importer.importType(pat.ty);
+        const value = try self.newValue(ty);
+        return try self.output.addPat(.{ .ty = ty, .value_info = value, .data = switch (pat.data) {
+            .bool_lit => |literal| .{ .bool_lit = literal },
+            .wildcard => .wildcard,
+            .var_ => |symbol| blk: {
+                const binding = try self.value_store.addBinding(.{
+                    .symbol = symbol,
+                    .value = value,
+                    .root = self.valueRoot(value),
+                });
+                const previous = try self.env.fetchPut(symbol, binding);
+                try saved.append(self.allocator, .{
+                    .symbol = symbol,
+                    .previous = if (previous) |entry| entry.value else null,
+                });
+                break :blk .{ .var_ = symbol };
+            },
+            .tag => |tag| .{ .tag = .{
+                .union_shape = tag.union_shape,
+                .tag = tag.tag,
+                .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
+            } },
+        } });
+    }
+
+    fn restoreBindings(self: *BodySolver, saved: *std.ArrayList(SavedBinding), start: usize) void {
+        while (saved.items.len > start) {
+            const binding = saved.pop().?;
+            if (binding.previous) |previous| {
+                self.env.put(binding.symbol, previous) catch unreachable;
+            } else {
+                _ = self.env.remove(binding.symbol);
+            }
+        }
+    }
+
+    fn lowerBranch(self: *BodySolver, branch_id: Lifted.Ast.BranchId) Allocator.Error!Ast.BranchId {
+        const branch = self.input.getBranch(branch_id);
+        var saved = std.ArrayList(SavedBinding).empty;
+        defer saved.deinit(self.allocator);
+        const pat = try self.lowerPatScoped(branch.pat, &saved);
+        defer self.restoreBindings(&saved, 0);
+        const body = try self.lowerExpr(branch.body);
+        return try self.output.addBranch(.{
+            .pat = pat,
+            .body = body,
+        });
+    }
+
+    fn lowerForExpr(self: *BodySolver, value: repr.ValueInfoId, for_: anytype) Allocator.Error!Ast.Expr.Data {
+        _ = value;
+        var saved = std.ArrayList(SavedBinding).empty;
+        defer saved.deinit(self.allocator);
+        const patt = try self.lowerPatScoped(for_.patt, &saved);
+        defer self.restoreBindings(&saved, 0);
+        return .{ .for_ = .{
+            .patt = patt,
+            .iterable = try self.lowerExpr(for_.iterable),
+            .body = try self.lowerExpr(for_.body),
+        } };
     }
 
     fn lowerStmt(self: *BodySolver, stmt_id: Lifted.Ast.StmtId) Allocator.Error!Ast.StmtId {
@@ -604,9 +710,21 @@ const BodySolver = struct {
             .crash => |literal| .{ .crash = literal },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .break_ => .break_,
-            .for_,
-            .while_,
-            => lambdaInvariant("lambda-solved MIR reached lifted statement form whose value-flow lowering is still missing"),
+            .for_ => |for_| blk: {
+                var saved = std.ArrayList(SavedBinding).empty;
+                defer saved.deinit(self.allocator);
+                const patt = try self.lowerPatScoped(for_.patt, &saved);
+                defer self.restoreBindings(&saved, 0);
+                break :blk .{ .for_ = .{
+                    .patt = patt,
+                    .iterable = try self.lowerExpr(for_.iterable),
+                    .body = try self.lowerExpr(for_.body),
+                } };
+            },
+            .while_ => |while_| .{ .while_ = .{
+                .cond = try self.lowerExpr(while_.cond),
+                .body = try self.lowerExpr(while_.body),
+            } },
         });
     }
 
@@ -648,6 +766,28 @@ const BodySolver = struct {
             output_items[i] = try self.lowerStmt(stmt);
         }
         return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerBranchSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.BranchId)) Allocator.Error!Ast.Span(Ast.BranchId) {
+        const input_items = self.input.sliceBranchSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.BranchId).empty();
+        const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |branch, i| {
+            output_items[i] = try self.lowerBranch(branch);
+        }
+        return try self.output.addBranchSpan(output_items);
+    }
+
+    fn valuesForBranches(self: *BodySolver, span: Ast.Span(Ast.BranchId)) Allocator.Error!repr.Span(repr.ValueInfoId) {
+        if (span.len == 0) return repr.Span(repr.ValueInfoId).empty();
+        const branch_ids = self.output.branch_ids.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(repr.ValueInfoId, branch_ids.len);
+        defer self.allocator.free(values);
+        for (branch_ids, 0..) |branch_id, i| {
+            values[i] = self.exprValue(self.output.branches.items[@intFromEnum(branch_id)].body);
+        }
+        return try self.value_store.addValueSpan(values);
     }
 
     fn lowerCaptureArgSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!Ast.Span(Ast.CaptureArg) {
@@ -720,6 +860,24 @@ const BodySolver = struct {
             };
         }
         return try self.output.addTagPayloadAssemblySpan(output_items);
+    }
+
+    fn lowerTagPayloadPatternSpan(
+        self: *BodySolver,
+        span: Lifted.Ast.Span(Lifted.Ast.TagPayloadPattern),
+        saved: *std.ArrayList(SavedBinding),
+    ) Allocator.Error!Ast.Span(Ast.TagPayloadPattern) {
+        const input_items = self.input.sliceTagPayloadPatternSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.TagPayloadPattern).empty();
+        const output_items = try self.allocator.alloc(Ast.TagPayloadPattern, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |payload, i| {
+            output_items[i] = .{
+                .payload = payload.payload,
+                .pattern = try self.lowerPatScoped(payload.pattern, saved),
+            };
+        }
+        return try self.output.addTagPayloadPatternSpan(output_items);
     }
 
     fn newValue(self: *BodySolver, ty: Type.TypeVarId) Allocator.Error!repr.ValueInfoId {

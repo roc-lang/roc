@@ -57,6 +57,7 @@ pub const Pat = struct {
             args: Span(PatId),
         },
         var_: Symbol,
+        wildcard,
     };
 };
 

@@ -447,14 +447,28 @@ const BodyFinalizer = struct {
             .runtime_error => .runtime_error,
             .record => |fields| try self.lowerRecord(expr.ty, fields),
             .access => |access| try self.lowerAccess(access),
-            .tag,
-            .let_,
-            .match_,
-            .if_,
-            .tag_payload,
-            .tuple_access,
-            .for_,
-            => rowInvariant("row finalization reached a mono expression form whose row rewrite is still missing"),
+            .tag => |tag| try self.lowerTag(expr.ty, tag),
+            .match_ => |match_| .{ .match_ = .{
+                .cond = try self.lowerExpr(match_.cond),
+                .branches = try self.lowerBranchSpan(match_.branches),
+                .is_try_suffix = match_.is_try_suffix,
+            } },
+            .if_ => |if_| .{ .if_ = .{
+                .cond = try self.lowerExpr(if_.cond),
+                .then_body = try self.lowerExpr(if_.then_body),
+                .else_body = try self.lowerExpr(if_.else_body),
+            } },
+            .tag_payload => |payload| try self.lowerTagPayload(payload),
+            .tuple_access => |access| .{ .tuple_access = .{
+                .tuple = try self.lowerExpr(access.tuple),
+                .elem_index = access.elem_index,
+            } },
+            .for_ => |for_| .{ .for_ = .{
+                .patt = try self.lowerPat(for_.patt),
+                .iterable = try self.lowerExpr(for_.iterable),
+                .body = try self.lowerExpr(for_.body),
+            } },
+            .let_ => rowInvariant("row finalization reached mono let expression before let lowering was implemented"),
         });
     }
 
@@ -491,6 +505,79 @@ const BodyFinalizer = struct {
         } };
     }
 
+    fn lowerTag(self: *BodyFinalizer, tag_ty: TypeId, tag: anytype) Allocator.Error!Ast.Expr.Data {
+        const shape = try self.shapes.internTagUnionShapeFromType(self.types, tag_ty);
+        const tag_id = self.tagId(shape, tag.name, tag.discriminant);
+        const payload_ids = self.shapes.tagPayloads(tag_id);
+        const mono_args = self.input.sliceExprSpan(tag.args);
+        if (payload_ids.len != mono_args.len) rowInvariant("row finalization tag payload count did not match finalized shape");
+
+        const evals = try self.allocator.alloc(Ast.TagPayloadEval, mono_args.len);
+        defer self.allocator.free(evals);
+        const assemblies = try self.allocator.alloc(Ast.TagPayloadAssembly, mono_args.len);
+        defer self.allocator.free(assemblies);
+        for (mono_args, 0..) |arg, i| {
+            const value = try self.lowerExpr(arg);
+            evals[i] = .{ .payload = payload_ids[i], .value = value };
+            assemblies[i] = .{ .payload = payload_ids[i], .value = value };
+        }
+        return .{ .tag = .{
+            .union_shape = shape,
+            .tag = tag_id,
+            .eval_order = try self.output.addTagPayloadEvalSpan(evals),
+            .assembly_order = try self.output.addTagPayloadAssemblySpan(assemblies),
+            .constructor_ty = tag.constructor_ty,
+        } };
+    }
+
+    fn lowerTagPayload(self: *BodyFinalizer, payload: anytype) Allocator.Error!Ast.Expr.Data {
+        const tag_union_expr = self.input.getExpr(payload.tag_union);
+        const shape = try self.shapes.internTagUnionShapeFromType(self.types, tag_union_expr.ty);
+        const tag_id = self.tagId(shape, payload.tag_name, payload.tag_discriminant);
+        const payload_id = self.tagPayloadId(tag_id, payload.payload_index);
+        return .{ .tag_payload = .{
+            .tag_union = try self.lowerExpr(payload.tag_union),
+            .payload = payload_id,
+        } };
+    }
+
+    fn lowerPat(self: *BodyFinalizer, pat_id: Mono.Ast.PatId) Allocator.Error!Ast.PatId {
+        const pat = self.input.getPat(pat_id);
+        return try self.output.addPat(.{ .ty = pat.ty, .data = switch (pat.data) {
+            .bool_lit => |value| .{ .bool_lit = value },
+            .var_ => |symbol| .{ .var_ = symbol },
+            .wildcard => .wildcard,
+            .tag => |tag| blk: {
+                const shape = try self.shapes.internTagUnionShapeFromType(self.types, pat.ty);
+                const tag_id = self.tagId(shape, tag.name, tag.discriminant);
+                const payload_ids = self.shapes.tagPayloads(tag_id);
+                const mono_args = self.input.slicePatSpan(tag.args);
+                if (payload_ids.len != mono_args.len) rowInvariant("row finalization tag pattern payload count did not match finalized shape");
+                const payloads = try self.allocator.alloc(Ast.TagPayloadPattern, mono_args.len);
+                defer self.allocator.free(payloads);
+                for (mono_args, 0..) |arg, i| {
+                    payloads[i] = .{
+                        .payload = payload_ids[i],
+                        .pattern = try self.lowerPat(arg),
+                    };
+                }
+                break :blk .{ .tag = .{
+                    .union_shape = shape,
+                    .tag = tag_id,
+                    .payloads = try self.output.addTagPayloadPatternSpan(payloads),
+                } };
+            },
+        } });
+    }
+
+    fn lowerBranch(self: *BodyFinalizer, branch_id: Mono.Ast.BranchId) Allocator.Error!Ast.BranchId {
+        const branch = self.input.getBranch(branch_id);
+        return try self.output.addBranch(.{
+            .pat = try self.lowerPat(branch.pat),
+            .body = try self.lowerExpr(branch.body),
+        });
+    }
+
     fn lowerStmt(self: *BodyFinalizer, stmt_id: Mono.Ast.StmtId) Allocator.Error!Ast.StmtId {
         const stmt = self.input.getStmt(stmt_id);
         return try self.output.addStmt(switch (stmt) {
@@ -512,8 +599,15 @@ const BodyFinalizer = struct {
             .crash => |literal| .{ .crash = literal },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .break_ => .break_,
-            .for_,
-            .while_,
+            .for_ => |for_| .{ .for_ = .{
+                .patt = try self.lowerPat(for_.patt),
+                .iterable = try self.lowerExpr(for_.iterable),
+                .body = try self.lowerExpr(for_.body),
+            } },
+            .while_ => |while_| .{ .while_ = .{
+                .cond = try self.lowerExpr(while_.cond),
+                .body = try self.lowerExpr(while_.body),
+            } },
             .local_fn,
             => rowInvariant("row finalization reached a mono statement form whose lowering is still missing"),
         });
@@ -545,6 +639,20 @@ const BodyFinalizer = struct {
             output_items[i] = try self.lowerStmt(stmt);
         }
         return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerBranchSpan(
+        self: *BodyFinalizer,
+        span: Mono.Ast.Span(Mono.Ast.BranchId),
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
+        const input_items = self.input.sliceBranchSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.BranchId).empty();
+        const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |branch, i| {
+            output_items[i] = try self.lowerBranch(branch);
+        }
+        return try self.output.addBranchSpan(output_items);
     }
 
     fn lowerTypedSymbolSpan(
@@ -588,6 +696,34 @@ const BodyFinalizer = struct {
             if (self.shapes.recordField(field_id).label == label) return field_id;
         }
         rowInvariant("row finalization could not find record field label in finalized shape");
+    }
+
+    fn tagId(
+        self: *const BodyFinalizer,
+        shape: TagUnionShapeId,
+        label: canonical.TagLabelId,
+        discriminant: u16,
+    ) TagId {
+        for (self.shapes.tagUnionTags(shape)) |tag_id| {
+            const tag = self.shapes.tag(tag_id);
+            if (tag.label == label) {
+                if (tag.logical_index != @as(u32, discriminant)) rowInvariant("row finalization tag discriminant disagreed with finalized shape");
+                return tag_id;
+            }
+        }
+        rowInvariant("row finalization could not find tag label in finalized shape");
+    }
+
+    fn tagPayloadId(
+        self: *const BodyFinalizer,
+        tag_id: TagId,
+        payload_index: u16,
+    ) TagPayloadId {
+        for (self.shapes.tagPayloads(tag_id)) |payload_id| {
+            const payload = self.shapes.tagPayload(payload_id);
+            if (payload.logical_index == @as(u32, payload_index)) return payload_id;
+        }
+        rowInvariant("row finalization could not find payload index in finalized tag");
     }
 };
 

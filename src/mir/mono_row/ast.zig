@@ -57,6 +57,7 @@ pub const Pat = struct {
             payloads: Span(TagPayloadPattern),
         },
         var_: Symbol,
+        wildcard,
     };
 };
 
@@ -325,6 +326,26 @@ pub const Store = struct {
         return self.exprs.items[@intFromEnum(id)];
     }
 
+    pub fn addPat(self: *Store, pat: Pat) std.mem.Allocator.Error!PatId {
+        const idx: u32 = @intCast(self.pats.items.len);
+        try self.pats.append(self.allocator, pat);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getPat(self: *const Store, id: PatId) Pat {
+        return self.pats.items[@intFromEnum(id)];
+    }
+
+    pub fn addBranch(self: *Store, branch: Branch) std.mem.Allocator.Error!BranchId {
+        const idx: u32 = @intCast(self.branches.items.len);
+        try self.branches.append(self.allocator, branch);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getBranch(self: *const Store, id: BranchId) Branch {
+        return self.branches.items[@intFromEnum(id)];
+    }
+
     pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
         const idx: u32 = @intCast(self.stmts.items.len);
         try self.stmts.append(self.allocator, stmt);
@@ -347,6 +368,18 @@ pub const Store = struct {
         return self.expr_ids.items[span.start..][0..span.len];
     }
 
+    pub fn addPatSpan(self: *Store, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
+        if (ids.len == 0) return Span(PatId).empty();
+        const start: u32 = @intCast(self.pat_ids.items.len);
+        try self.pat_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn slicePatSpan(self: *const Store, span: Span(PatId)) []const PatId {
+        if (span.len == 0) return &.{};
+        return self.pat_ids.items[span.start..][0..span.len];
+    }
+
     pub fn addStmtSpan(self: *Store, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
         if (ids.len == 0) return Span(StmtId).empty();
         const start: u32 = @intCast(self.stmt_ids.items.len);
@@ -357,6 +390,30 @@ pub const Store = struct {
     pub fn sliceStmtSpan(self: *const Store, span: Span(StmtId)) []const StmtId {
         if (span.len == 0) return &.{};
         return self.stmt_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addBranchSpan(self: *Store, ids: []const BranchId) std.mem.Allocator.Error!Span(BranchId) {
+        if (ids.len == 0) return Span(BranchId).empty();
+        const start: u32 = @intCast(self.branch_ids.items.len);
+        try self.branch_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn sliceBranchSpan(self: *const Store, span: Span(BranchId)) []const BranchId {
+        if (span.len == 0) return &.{};
+        return self.branch_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addTagPayloadPatternSpan(self: *Store, values: []const TagPayloadPattern) std.mem.Allocator.Error!Span(TagPayloadPattern) {
+        if (values.len == 0) return Span(TagPayloadPattern).empty();
+        const start: u32 = @intCast(self.tag_payload_patterns.items.len);
+        try self.tag_payload_patterns.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceTagPayloadPatternSpan(self: *const Store, span: Span(TagPayloadPattern)) []const TagPayloadPattern {
+        if (span.len == 0) return &.{};
+        return self.tag_payload_patterns.items[span.start..][0..span.len];
     }
 
     pub fn addRecordFieldEvalSpan(self: *Store, values: []const RecordFieldEval) std.mem.Allocator.Error!Span(RecordFieldEval) {
