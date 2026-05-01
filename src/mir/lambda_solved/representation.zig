@@ -350,6 +350,32 @@ pub const RepresentationStore = struct {
     }
 
     pub fn deinit(self: *RepresentationStore) void {
+        for (self.callable_emission_plans) |plan| {
+            switch (plan) {
+                .erase_proc_value => |erase| {
+                    var key = erase.executable_specialization_key;
+                    deinitExecutableSpecializationKey(self.allocator, &key);
+                    if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
+                },
+                .finite,
+                .already_erased,
+                .erase_finite_set,
+                => {},
+            }
+        }
+        if (self.callable_emission_plans.len > 0) self.allocator.free(self.callable_emission_plans);
+        for (self.callable_construction_plans) |plan| {
+            if (plan.capture_values.len > 0) self.allocator.free(plan.capture_values);
+        }
+        if (self.callable_construction_plans.len > 0) self.allocator.free(self.callable_construction_plans);
+        for (self.callable_set_descriptors) |descriptor| {
+            for (descriptor.members) |member| {
+                if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
+            }
+            if (descriptor.members.len > 0) self.allocator.free(descriptor.members);
+        }
+        if (self.callable_set_descriptors.len > 0) self.allocator.free(self.callable_set_descriptors);
+        if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         self.* = RepresentationStore.init(self.allocator);
     }
 
@@ -399,6 +425,148 @@ pub const RepresentationStore = struct {
             if (member.member == member_id) return member;
         }
         return null;
+    }
+
+    pub fn addSingletonProcValueCallable(
+        self: *RepresentationStore,
+        names: *const canonical.CanonicalNameStore,
+        types: *const type_mod.Store,
+        value_store: *const ValueInfoStore,
+        result: ValueInfoId,
+        whole_function_root: RepRootId,
+        proc: canonical.MonoSpecializedProcRef,
+        capture_values: []const ValueInfoId,
+    ) std.mem.Allocator.Error!CallableValueInfo {
+        const source_fn_ty = proc.specialization.requested_mono_fn_ty;
+        const capture_shape_key = try captureShapeKeyForValueSlice(
+            self.allocator,
+            names,
+            types,
+            value_store,
+            capture_values,
+        );
+        const capture_slots = try self.captureSlotsForValues(
+            names,
+            types,
+            value_store,
+            capture_values,
+        );
+        var descriptor_owned = false;
+        errdefer if (!descriptor_owned and capture_slots.len > 0) self.allocator.free(capture_slots);
+
+        const proc_callable = canonical.ProcedureCallableRef{
+            .template = .{ .checked = proc.specialization.template },
+            .source_fn_ty = source_fn_ty,
+        };
+        const callable_set_key = singletonCallableSetKey(proc_callable, capture_shape_key, capture_slots);
+        const member_id: CallableSetMemberId = @enumFromInt(0);
+        if (self.callableSetDescriptor(callable_set_key) == null) {
+            const members = try self.allocator.dupe(CanonicalCallableSetMember, &.{.{
+                .member = member_id,
+                .proc_value = proc_callable,
+                .capture_slots = capture_slots,
+                .capture_shape_key = capture_shape_key,
+            }});
+            errdefer if (!descriptor_owned) self.allocator.free(members);
+            try self.appendCallableSetDescriptor(.{
+                .key = callable_set_key,
+                .members = members,
+            });
+            descriptor_owned = true;
+        } else {
+            if (capture_slots.len > 0) self.allocator.free(capture_slots);
+            descriptor_owned = true;
+        }
+        const emission_plan = try self.appendCallableEmissionPlan(.{ .finite = callable_set_key });
+        const construction_plan = try self.appendCallableConstructionPlan(.{
+            .result = result,
+            .source_fn_ty = source_fn_ty,
+            .callable_set_key = callable_set_key,
+            .selected_member = member_id,
+            .capture_values = capture_values,
+        });
+        const construction = self.callableConstructionPlan(construction_plan);
+        return .{
+            .whole_function_root = whole_function_root,
+            .callable_root = self.reserveRoot(),
+            .source = .{ .proc_value = .{
+                .proc = proc,
+                .captures = construction.capture_values,
+                .fn_ty = source_fn_ty,
+            } },
+            .emission_plan = emission_plan,
+            .construction_plan = construction_plan,
+        };
+    }
+
+    fn appendCallableEmissionPlan(
+        self: *RepresentationStore,
+        plan: CallableValueEmissionPlan,
+    ) std.mem.Allocator.Error!CallableValueEmissionPlanId {
+        const old = self.callable_emission_plans;
+        const next = try self.allocator.alloc(CallableValueEmissionPlan, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) self.allocator.free(old);
+        const id: CallableValueEmissionPlanId = @enumFromInt(@as(u32, @intCast(old.len)));
+        next[old.len] = plan;
+        self.callable_emission_plans = next;
+        return id;
+    }
+
+    fn appendCallableConstructionPlan(
+        self: *RepresentationStore,
+        plan: CallableSetConstructionPlan,
+    ) std.mem.Allocator.Error!CallableSetConstructionPlanId {
+        const old = self.callable_construction_plans;
+        const next = try self.allocator.alloc(CallableSetConstructionPlan, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) self.allocator.free(old);
+        const id: CallableSetConstructionPlanId = @enumFromInt(@as(u32, @intCast(old.len)));
+        next[old.len] = .{
+            .result = plan.result,
+            .source_fn_ty = plan.source_fn_ty,
+            .callable_set_key = plan.callable_set_key,
+            .selected_member = plan.selected_member,
+            .capture_values = if (plan.capture_values.len == 0)
+                &.{}
+            else
+                try self.allocator.dupe(ValueInfoId, plan.capture_values),
+        };
+        self.callable_construction_plans = next;
+        return id;
+    }
+
+    fn appendCallableSetDescriptor(
+        self: *RepresentationStore,
+        descriptor: CanonicalCallableSetDescriptor,
+    ) std.mem.Allocator.Error!void {
+        const old = self.callable_set_descriptors;
+        const next = try self.allocator.alloc(CanonicalCallableSetDescriptor, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) self.allocator.free(old);
+        next[old.len] = descriptor;
+        self.callable_set_descriptors = next;
+    }
+
+    fn captureSlotsForValues(
+        self: *RepresentationStore,
+        names: *const canonical.CanonicalNameStore,
+        types: *const type_mod.Store,
+        value_store: *const ValueInfoStore,
+        values: []const ValueInfoId,
+    ) std.mem.Allocator.Error![]const CallableSetCaptureSlot {
+        if (values.len == 0) return &.{};
+        const slots = try self.allocator.alloc(CallableSetCaptureSlot, values.len);
+        errdefer self.allocator.free(slots);
+        for (values, 0..) |value, i| {
+            const exec_key = try execValueTypeKeyForValue(self.allocator, names, types, value_store, value);
+            slots[i] = .{
+                .slot = @intCast(i),
+                .source_ty = .{ .bytes = exec_key.bytes },
+                .exec_value_ty = exec_key,
+            };
+        }
+        return slots;
     }
 
     pub fn verifyCallableConstructionPlan(
@@ -638,14 +806,47 @@ pub fn captureShapeKeyForValues(
     value_store: *const ValueInfoStore,
     values: Span(ValueInfoId),
 ) std.mem.Allocator.Error!CaptureShapeKey {
+    return try captureShapeKeyForValueSlice(
+        allocator,
+        names,
+        types,
+        value_store,
+        value_store.sliceValueSpan(values),
+    );
+}
+
+pub fn captureShapeKeyForValueSlice(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    types: *const type_mod.Store,
+    value_store: *const ValueInfoStore,
+    values: []const ValueInfoId,
+) std.mem.Allocator.Error!CaptureShapeKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "capture_shape");
-    const captures = value_store.sliceValueSpan(values);
-    writeHashU32(&hasher, @intCast(captures.len));
-    for (captures, 0..) |capture, i| {
+    writeHashU32(&hasher, @intCast(values.len));
+    for (values, 0..) |capture, i| {
         writeHashU32(&hasher, @intCast(i));
         const key = try execValueTypeKeyForValue(allocator, names, types, value_store, capture);
         hasher.update(&key.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn singletonCallableSetKey(
+    proc_callable: canonical.ProcedureCallableRef,
+    capture_shape_key: CaptureShapeKey,
+    capture_slots: []const CallableSetCaptureSlot,
+) CanonicalCallableSetKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "singleton_callable_set");
+    writeProcedureCallableRef(&hasher, proc_callable);
+    hasher.update(&capture_shape_key.bytes);
+    writeHashU32(&hasher, @intCast(capture_slots.len));
+    for (capture_slots) |slot| {
+        writeHashU32(&hasher, slot.slot);
+        hasher.update(&slot.source_ty.bytes);
+        hasher.update(&slot.exec_value_ty.bytes);
     }
     return .{ .bytes = hasher.finalResult() };
 }
@@ -774,6 +975,52 @@ const ExecValueTypeKeyBuilder = struct {
 
 fn writeHashTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
     writeHashBytes(hasher, tag);
+}
+
+fn writeProcedureCallableRef(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    ref: canonical.ProcedureCallableRef,
+) void {
+    writeCallableProcedureTemplateRef(hasher, ref.template);
+    hasher.update(&ref.source_fn_ty.bytes);
+}
+
+fn writeCallableProcedureTemplateRef(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    ref: canonical.CallableProcedureTemplateRef,
+) void {
+    switch (ref) {
+        .checked => |checked| {
+            hasher.update(&[_]u8{0});
+            writeProcedureTemplateRef(hasher, checked);
+        },
+        .lifted => |lifted| {
+            hasher.update(&[_]u8{1});
+            writeMonoSpecializationKey(hasher, lifted.owner_mono_specialization);
+            writeHashU32(hasher, @as(u32, @intCast(@intFromEnum(lifted.site))));
+        },
+        .synthetic => |synthetic| {
+            hasher.update(&[_]u8{2});
+            writeProcedureTemplateRef(hasher, synthetic.template);
+        },
+    }
+}
+
+fn writeMonoSpecializationKey(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    key: canonical.MonoSpecializationKey,
+) void {
+    writeProcedureTemplateRef(hasher, key.template);
+    hasher.update(&key.requested_mono_fn_ty.bytes);
+}
+
+fn writeProcedureTemplateRef(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    ref: canonical.ProcedureTemplateRef,
+) void {
+    hasher.update(&ref.artifact.bytes);
+    writeHashU32(hasher, @as(u32, @intCast(@intFromEnum(ref.proc_base))));
+    writeHashU32(hasher, @as(u32, @intCast(@intFromEnum(ref.template))));
 }
 
 fn writeHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {

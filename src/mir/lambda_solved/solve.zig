@@ -115,6 +115,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .allocator = allocator,
             .input = &input.ast,
             .output = &program.ast,
+            .canonical_names = &program.canonical_names,
             .type_importer = &type_importer,
             .representation_store = &program.solve_sessions.items[i].representation_store,
             .value_store = &program.value_stores.items[i],
@@ -268,6 +269,7 @@ const BodySolver = struct {
     allocator: Allocator,
     input: *const Lifted.Ast.Store,
     output: *Ast.Store,
+    canonical_names: *const canonical.CanonicalNameStore,
     type_importer: *TypeImporter,
     representation_store: *repr.RepresentationStore,
     value_store: *repr.ValueInfoStore,
@@ -509,11 +511,24 @@ const BodySolver = struct {
                     .call_site = call_site,
                 } };
             },
-            .proc_value => |proc_value| .{ .proc_value = .{
-                .proc = proc_value.proc,
-                .captures = try self.lowerCaptureArgSpan(proc_value.captures),
-                .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
-            } },
+            .proc_value => |proc_value| blk: {
+                const captures = try self.lowerCaptureArgSpanWithValues(proc_value.captures);
+                const callable = try self.representation_store.addSingletonProcValueCallable(
+                    self.canonical_names,
+                    self.type_importer.output,
+                    self.value_store,
+                    value,
+                    self.valueRoot(value),
+                    proc_value.proc,
+                    self.value_store.sliceValueSpan(captures.values),
+                );
+                self.value_store.values.items[@intFromEnum(value)].callable = callable;
+                break :blk .{ .proc_value = .{
+                    .proc = proc_value.proc,
+                    .captures = captures.args,
+                    .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
+                } };
+            },
             .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,
@@ -815,20 +830,35 @@ const BodySolver = struct {
         return try self.value_store.addValueSpan(values);
     }
 
-    fn lowerCaptureArgSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!Ast.Span(Ast.CaptureArg) {
+    const LoweredCaptureArgs = struct {
+        args: Ast.Span(Ast.CaptureArg),
+        values: repr.Span(repr.ValueInfoId),
+    };
+
+    fn lowerCaptureArgSpanWithValues(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!LoweredCaptureArgs {
         const input_items = self.input.sliceCaptureArgSpan(span);
-        if (input_items.len == 0) return Ast.Span(Ast.CaptureArg).empty();
+        if (input_items.len == 0) return .{
+            .args = Ast.Span(Ast.CaptureArg).empty(),
+            .values = repr.Span(repr.ValueInfoId).empty(),
+        };
         const output_items = try self.allocator.alloc(Ast.CaptureArg, input_items.len);
         defer self.allocator.free(output_items);
+        const values = try self.allocator.alloc(repr.ValueInfoId, input_items.len);
+        defer self.allocator.free(values);
         for (input_items, 0..) |capture, i| {
             const expr = try self.lowerExpr(capture.expr);
+            const value = self.exprValue(expr);
             output_items[i] = .{
                 .slot = capture.slot,
-                .value_info = self.exprValue(expr),
+                .value_info = value,
                 .expr = expr,
             };
+            values[i] = value;
         }
-        return try self.output.addCaptureArgSpan(output_items);
+        return .{
+            .args = try self.output.addCaptureArgSpan(output_items),
+            .values = try self.value_store.addValueSpan(values),
+        };
     }
 
     fn lowerRecordFieldEvalSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldEval)) Allocator.Error!Ast.Span(Ast.RecordFieldEval) {
