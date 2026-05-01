@@ -162,11 +162,13 @@ pub const Expr = struct {
             func: ExprId,
             args: Span(ExprId),
             requested_fn_ty: TypeId,
+            requested_source_fn_ty: canonical.CanonicalTypeKey,
         },
         call_proc: struct {
             proc: canonical.MirProcedureRef,
             args: Span(ExprId),
             requested_fn_ty: TypeId,
+            requested_source_fn_ty: canonical.CanonicalTypeKey,
         },
         proc_value: struct {
             proc: canonical.MirProcedureRef,

@@ -502,11 +502,13 @@ const BodyFinalizer = struct {
                 .func = try self.lowerExpr(call.func),
                 .args = try self.lowerExprSpan(call.args),
                 .requested_fn_ty = call.requested_fn_ty,
+                .requested_source_fn_ty = call.requested_source_fn_ty,
             } },
             .call_proc => |call| .{ .call_proc = .{
                 .proc = call.proc,
                 .args = try self.lowerExprSpan(call.args),
                 .requested_fn_ty = call.requested_fn_ty,
+                .requested_source_fn_ty = call.requested_source_fn_ty,
             } },
             .proc_value => |proc_value| .{ .proc_value = .{
                 .proc = proc_value.proc,

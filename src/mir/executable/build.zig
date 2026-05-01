@@ -1589,6 +1589,12 @@ const BodyBuilder = struct {
         }
 
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
+        if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
+            executableInvariant("executable call_proc call-site requested source type differs from expression");
+        }
+        if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, call_site.requested_source_fn_ty)) {
+            executableInvariant("executable call_proc target specialization source type differs from call site");
+        }
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
         const result_value = self.output.freshValueRef();
         const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_direct = .{
@@ -1821,6 +1827,9 @@ const BodyBuilder = struct {
         const func = try self.lowerExpr(call.func);
         const func_value = self.exprValue(func);
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
+        if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
+            executableInvariant("executable call_value call-site requested source type differs from expression");
+        }
         const callable_set_key = switch (call_site.dispatch orelse executableInvariant("executable call_value reached call site without resolved dispatch")) {
             .finite => |key| key,
             .erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call_site, sig_key),
@@ -1862,7 +1871,7 @@ const BodyBuilder = struct {
             } });
         }
 
-        const requested_source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
+        const requested_source_fn_ty = call_site.requested_source_fn_ty;
         const branches = try self.allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
         defer self.allocator.free(branches);
         for (descriptor.members, 0..) |member, i| {
@@ -1873,6 +1882,9 @@ const BodyBuilder = struct {
             const executable_proc = self.proc_map.get(target) orelse executableInvariant("executable call_value member target was not reserved");
             const target_instance_id = self.proc_instance_map.get(target) orelse executableInvariant("executable call_value member target has no representation instance");
             const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
+            if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, requested_source_fn_ty)) {
+                executableInvariant("executable call_value member target specialization source type differs from call site");
+            }
             const capture_arg_len: usize = if (member.capture_slots.len == 0) 0 else 1;
             const capture_payload_ty = try self.lowerCallableSetMemberPayloadType(member);
             const capture_payload = if (capture_payload_ty != null) self.output.freshValueRef() else null;
@@ -1926,6 +1938,12 @@ const BodyBuilder = struct {
         call_site: repr.CallSiteInfo,
         sig_key: repr.ErasedFnSigKey,
     ) Allocator.Error!Ast.ExprId {
+        if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
+            executableInvariant("executable erased call_value call-site requested source type differs from expression");
+        }
+        if (!repr.canonicalTypeKeyEql(sig_key.source_fn_ty, call_site.requested_source_fn_ty)) {
+            executableInvariant("executable erased call_value signature source type differs from call site");
+        }
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
         const callable = func_value_info.callable orelse executableInvariant("executable erased call_value callee has no callable metadata");

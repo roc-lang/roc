@@ -621,12 +621,14 @@ const BodySolver = struct {
                     .args = lowered_args.values,
                     .result = value,
                     .requested_fn_root = self.representation_store.reserveRoot(),
+                    .requested_source_fn_ty = call.requested_source_fn_ty,
                     .dispatch = self.callSiteDispatchForCallee(callee_value),
                 });
                 break :blk .{ .call_value = .{
                     .func = func,
                     .args = lowered_args.exprs,
                     .requested_fn_ty = requested_fn_ty,
+                    .requested_source_fn_ty = call.requested_source_fn_ty,
                     .call_site = call_site,
                 } };
             },
@@ -638,11 +640,13 @@ const BodySolver = struct {
                     .args = lowered_args.values,
                     .result = value,
                     .requested_fn_root = self.representation_store.reserveRoot(),
+                    .requested_source_fn_ty = call.requested_source_fn_ty,
                 });
                 break :blk .{ .call_proc = .{
                     .proc = call.proc,
                     .args = lowered_args.exprs,
                     .requested_fn_ty = requested_fn_ty,
+                    .requested_source_fn_ty = call.requested_source_fn_ty,
                     .call_site = call_site,
                 } };
             },

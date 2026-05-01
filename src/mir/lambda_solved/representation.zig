@@ -317,6 +317,7 @@ pub const CallSiteInfo = struct {
     args: Span(ValueInfoId),
     result: ValueInfoId,
     requested_fn_root: RepRootId,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
     dispatch: ?CallSiteDispatch = null,
 };
 

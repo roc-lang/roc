@@ -1709,21 +1709,25 @@ const BodyLowerer = struct {
         if (self.procedureUseForExpr(call.func)) |proc_use| {
             const args = try self.lowerExprSpan(call.args);
             const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
+            const requested_source_fn_ty = try self.sourceFnTypeKey(call.func);
             const proc = try self.reserveProcedureUse(proc_use, self.checkedExpr(call.func).ty, .{ .call_proc = call_expr });
             return try self.program.ast.addExpr(ty, .{ .call_proc = .{
                 .proc = proc,
                 .args = args,
                 .requested_fn_ty = func_ty,
+                .requested_source_fn_ty = requested_source_fn_ty,
             } });
         }
 
         const func = try self.lowerExpr(call.func);
         const args = try self.lowerExprSpan(call.args);
         const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
+        const requested_source_fn_ty = try self.sourceFnTypeKey(call.func);
         return try self.program.ast.addExpr(ty, .{ .call_value = .{
             .func = func,
             .args = args,
             .requested_fn_ty = func_ty,
+            .requested_source_fn_ty = requested_source_fn_ty,
         } });
     }
 
@@ -1778,6 +1782,7 @@ const BodyLowerer = struct {
                 .proc = canonical.mirProcedureRefFromMono(reserved.proc),
                 .args = lowered_args,
                 .requested_fn_ty = callable_ty,
+                .requested_source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
             } });
             return switch (plan.result_mode) {
                 .value => call_expr,
