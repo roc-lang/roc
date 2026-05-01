@@ -1595,7 +1595,14 @@ const BodyLowerer = struct {
                 const body = try self.lowerExpr(var_.expr);
                 break :blk try self.program.ast.addStmt(.{ .var_decl = .{ .bind = bind, .body = body } });
             },
-            .reassign => invariantViolation("mono body lowering reached reassignment before mutable version lowering was implemented"),
+            .reassign => |reassign| blk: {
+                const bind = try self.lowerParamPattern(reassign.pattern);
+                const body = try self.lowerExpr(reassign.expr);
+                break :blk try self.program.ast.addStmt(.{ .reassign = .{
+                    .target = bind.symbol,
+                    .body = body,
+                } });
+            },
             .dbg => |expr| try self.program.ast.addStmt(.{ .debug = try self.lowerExpr(expr) }),
             .expr => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(expr) }),
             .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerExpr(expr) }),
