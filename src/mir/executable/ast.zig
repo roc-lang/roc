@@ -169,6 +169,7 @@ pub const Expr = struct {
             shape: row.RecordShapeId,
             fields: Span(RecordFieldExpr),
         },
+        nominal_reinterpret: ExprId,
         access: struct {
             record: ExprId,
             field: row.RecordFieldId,

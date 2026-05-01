@@ -522,6 +522,7 @@ const BodyFinalizer = struct {
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
             .record => |fields| try self.lowerRecord(expr.ty, fields),
+            .nominal_reinterpret => |backing| .{ .nominal_reinterpret = try self.lowerExpr(backing) },
             .access => |access| try self.lowerAccess(access),
             .tag => |tag| try self.lowerTag(expr.ty, tag),
             .match_ => |match_| .{ .match_ = .{

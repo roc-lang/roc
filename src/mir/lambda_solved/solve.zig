@@ -414,6 +414,7 @@ const BodySolver = struct {
                 .eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order),
                 .assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order),
             } },
+            .nominal_reinterpret => |backing| .{ .nominal_reinterpret = try self.lowerExpr(backing) },
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record);
                 const projection = try self.value_store.addProjection(.{

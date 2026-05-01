@@ -387,6 +387,14 @@ const BodyBuilder = struct {
                     } },
                 );
             },
+            .nominal_reinterpret => |backing| blk: {
+                const lowered_backing = try self.lowerExpr(backing);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .nominal_reinterpret = lowered_backing },
+                );
+            },
             .tag => |tag| blk: {
                 const payloads = try self.lowerTagPayloadValues(tag.assembly_order);
                 break :blk try self.output.addExpr(

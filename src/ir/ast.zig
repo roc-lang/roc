@@ -104,6 +104,7 @@ pub const Expr = union(enum) {
         field_index: u16,
         field_bridge_plan: BridgePlanId,
     },
+    nominal_reinterpret: Var,
     bridge: struct {
         value: Var,
         plan: BridgePlanId,

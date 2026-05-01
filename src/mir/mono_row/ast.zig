@@ -127,6 +127,7 @@ pub const Expr = struct {
             eval_order: Span(RecordFieldEval),
             assembly_order: Span(RecordFieldAssembly),
         },
+        nominal_reinterpret: ExprId,
         access: struct {
             record: ExprId,
             field: RecordFieldId,

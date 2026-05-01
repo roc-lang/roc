@@ -1015,7 +1015,11 @@ const BodyLowerer = struct {
             .unary_minus => |child| try self.lowerUnaryMinus(ty, child),
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
             .run_low_level => |run| try self.lowerRunLowLevel(ty, run.op, run.args),
-            .nominal,
+            .nominal => |nominal| blk: {
+                _ = nominal.backing_type;
+                const backing = try self.lowerExpr(nominal.backing_expr);
+                break :blk try self.program.ast.addExpr(ty, .{ .nominal_reinterpret = backing });
+            },
             .method_call,
             .dispatch_call,
             .method_eq,

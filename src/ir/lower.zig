@@ -164,6 +164,12 @@ const IrBuilder = struct {
                 const layout = try self.layoutForType(expr.ty);
                 break :blk try self.bindExpr(expr.value, layout, .{ .make_struct = try self.output.store.addVarSpan(fields) }, stmts);
             },
+            .nominal_reinterpret => |backing| blk: {
+                const lowered_backing = try self.lowerExpr(backing, stmts);
+                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{
+                    .nominal_reinterpret = lowered_backing,
+                }, stmts);
+            },
             .tag => |tag| blk: {
                 const payload = try self.lowerTagPayloadForConstruction(tag.tag, tag.payloads, stmts);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{

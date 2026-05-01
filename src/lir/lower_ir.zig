@@ -345,6 +345,13 @@ const Lowerer = struct {
                 } },
                 .next = next,
             } }),
+            .nominal_reinterpret => |backing| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{
+                    .backing_ref = try self.lowerVar(backing),
+                } },
+                .next = next,
+            } }),
             .call_direct => |call| try self.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
                 .proc = self.lirProcForExecutable(call.proc) orelse lirInvariant("lir.lower_ir reached call_direct before proc placeholder"),

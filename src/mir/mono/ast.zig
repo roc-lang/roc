@@ -125,6 +125,7 @@ pub const Expr = struct {
             constructor_ty: TypeId,
         },
         record: Span(FieldExpr),
+        nominal_reinterpret: ExprId,
         access: struct {
             record: ExprId,
             field: canonical.RecordFieldLabelId,
