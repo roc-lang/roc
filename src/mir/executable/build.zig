@@ -429,6 +429,14 @@ const BodyBuilder = struct {
                     .{ .return_ = lowered_child },
                 );
             },
+            .bool_not => |child| blk: {
+                const lowered_child = try self.lowerExpr(child);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .bool_not = lowered_child },
+                );
+            },
             .crash => |literal| try self.addValueExpr(expr.ty, .{ .crash = literal }),
             .runtime_error => try self.addValueExpr(expr.ty, .runtime_error),
             .match_ => |match_| blk: {
@@ -469,7 +477,6 @@ const BodyBuilder = struct {
             .for_ => |for_| try self.lowerForExpr(expr.ty, for_),
             .capture_ref,
             .structural_eq,
-            .bool_not,
             .call_value,
             .call_proc,
             .proc_value,

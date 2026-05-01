@@ -211,6 +211,7 @@ pub const Expr = struct {
             elem_index: u32,
         },
         list: Span(ExprId),
+        bool_not: ExprId,
         return_: ExprId,
         crash: ProgramLiteralId,
         runtime_error,

@@ -216,6 +216,14 @@ const IrBuilder = struct {
                     .args = try self.output.store.addVarSpan(args),
                 } }, stmts);
             },
+            .bool_not => |child| blk: {
+                const arg = try self.lowerExpr(child, stmts);
+                const args = [_]Ast.Var{arg};
+                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
+                    .op = .bool_not,
+                    .args = try self.output.store.addVarSpan(&args),
+                } }, stmts);
+            },
             .return_ => |child| try self.lowerExpr(child, stmts),
             .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
             .tag,
