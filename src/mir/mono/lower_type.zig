@@ -8,9 +8,11 @@ const builtin = @import("builtin");
 const check = @import("check");
 
 const Type = @import("type.zig");
+const ArtifactNames = @import("../artifact_names.zig");
 
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
+const canonical = check.CanonicalNames;
 
 const CheckedTypeId = checked_artifact.CheckedTypeId;
 
@@ -18,6 +20,8 @@ pub const Lowerer = struct {
     allocator: Allocator,
     source: checked_artifact.CheckedTypeStoreView,
     dest: *Type.Store,
+    name_resolver: ?*ArtifactNames.ArtifactNameResolver = null,
+    artifact: ?checked_artifact.CheckedModuleArtifactKey = null,
     lowered: std.AutoHashMap(CheckedTypeId, Type.TypeId),
 
     pub fn init(
@@ -29,6 +33,25 @@ pub const Lowerer = struct {
             .allocator = allocator,
             .source = source,
             .dest = dest,
+            .name_resolver = null,
+            .artifact = null,
+            .lowered = std.AutoHashMap(CheckedTypeId, Type.TypeId).init(allocator),
+        };
+    }
+
+    pub fn initWithResolver(
+        allocator: Allocator,
+        source: checked_artifact.CheckedTypeStoreView,
+        dest: *Type.Store,
+        name_resolver: *ArtifactNames.ArtifactNameResolver,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+    ) Lowerer {
+        return .{
+            .allocator = allocator,
+            .source = source,
+            .dest = dest,
+            .name_resolver = name_resolver,
+            .artifact = artifact,
             .lowered = std.AutoHashMap(CheckedTypeId, Type.TypeId).init(allocator),
         };
     }
@@ -92,16 +115,16 @@ pub const Lowerer = struct {
         defer source_fields.deinit(self.allocator);
 
         try self.collectRecordFields(record.fields, record.ext, &source_fields);
-        std.mem.sort(checked_artifact.CheckedRecordField, source_fields.items, {}, recordFieldLessThan);
 
         const fields = try self.allocator.alloc(Type.Field, source_fields.items.len);
         errdefer self.allocator.free(fields);
         for (source_fields.items, 0..) |field, i| {
             fields[i] = .{
-                .name = field.name,
+                .name = try self.recordFieldLabel(field.name),
                 .ty = try self.lowerChecked(field.ty),
             };
         }
+        std.mem.sort(Type.Field, fields, {}, typeFieldLessThan);
 
         return .{ .record = .{ .fields = fields } };
     }
@@ -143,7 +166,6 @@ pub const Lowerer = struct {
         defer source_tags.deinit(self.allocator);
 
         try self.collectTags(tag_union.tags, tag_union.ext, &source_tags);
-        std.mem.sort(checked_artifact.CheckedTag, source_tags.items, {}, tagLessThan);
 
         const tags = try self.allocator.alloc(Type.Tag, source_tags.items.len);
         @memset(tags, .{ .name = @enumFromInt(0), .args = &.{} });
@@ -156,10 +178,11 @@ pub const Lowerer = struct {
 
         for (source_tags.items, 0..) |tag, i| {
             tags[i] = .{
-                .name = tag.name,
+                .name = try self.tagLabel(tag.name),
                 .args = try self.lowerTypeIds(tag.args),
             };
         }
+        std.mem.sort(Type.Tag, tags, {}, typeTagLessThan);
 
         return .{ .tag_union = .{ .tags = tags } };
     }
@@ -220,8 +243,8 @@ pub const Lowerer = struct {
 
         return .{ .nominal = .{
             .nominal = .{
-                .module_name = nominal.origin_module,
-                .type_name = nominal.name,
+                .module_name = try self.moduleName(nominal.origin_module),
+                .type_name = try self.typeName(nominal.name),
             },
             .is_opaque = nominal.is_opaque,
             .args = try self.lowerTypeIds(nominal.args),
@@ -238,13 +261,37 @@ pub const Lowerer = struct {
         }
         return out;
     }
+
+    fn moduleName(self: *Lowerer, id: canonical.ModuleNameId) Allocator.Error!canonical.ModuleNameId {
+        const resolver = self.name_resolver orelse return id;
+        const artifact = self.artifact orelse invariantViolation("mono type lowering had a name resolver without an artifact key");
+        return try resolver.moduleName(artifact, id);
+    }
+
+    fn typeName(self: *Lowerer, id: canonical.TypeNameId) Allocator.Error!canonical.TypeNameId {
+        const resolver = self.name_resolver orelse return id;
+        const artifact = self.artifact orelse invariantViolation("mono type lowering had a name resolver without an artifact key");
+        return try resolver.typeName(artifact, id);
+    }
+
+    fn recordFieldLabel(self: *Lowerer, id: canonical.RecordFieldLabelId) Allocator.Error!canonical.RecordFieldLabelId {
+        const resolver = self.name_resolver orelse return id;
+        const artifact = self.artifact orelse invariantViolation("mono type lowering had a name resolver without an artifact key");
+        return try resolver.recordFieldLabel(artifact, id);
+    }
+
+    fn tagLabel(self: *Lowerer, id: canonical.TagLabelId) Allocator.Error!canonical.TagLabelId {
+        const resolver = self.name_resolver orelse return id;
+        const artifact = self.artifact orelse invariantViolation("mono type lowering had a name resolver without an artifact key");
+        return try resolver.tagLabel(artifact, id);
+    }
 };
 
-fn recordFieldLessThan(_: void, a: checked_artifact.CheckedRecordField, b: checked_artifact.CheckedRecordField) bool {
+fn typeFieldLessThan(_: void, a: Type.Field, b: Type.Field) bool {
     return @intFromEnum(a.name) < @intFromEnum(b.name);
 }
 
-fn tagLessThan(_: void, a: checked_artifact.CheckedTag, b: checked_artifact.CheckedTag) bool {
+fn typeTagLessThan(_: void, a: Type.Tag, b: Type.Tag) bool {
     return @intFromEnum(a.name) < @intFromEnum(b.name);
 }
 

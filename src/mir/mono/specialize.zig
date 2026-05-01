@@ -12,6 +12,7 @@ const symbol_mod = @import("symbol");
 
 const Ast = @import("ast.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
+const ArtifactNames = @import("../artifact_names.zig");
 const ids = @import("../ids.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
@@ -67,6 +68,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
+    canonical_names: canonical.CanonicalNameStore,
     concrete_source_types: ConcreteSourceType.Store,
     literal_pool: ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
@@ -79,6 +81,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .root_artifact_key = .{},
+            .canonical_names = canonical.CanonicalNameStore.init(allocator),
             .concrete_source_types = ConcreteSourceType.Store.init(allocator),
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
@@ -97,6 +100,7 @@ pub const Program = struct {
         self.symbols.deinit();
         self.literal_pool.deinit();
         self.concrete_source_types.deinit();
+        self.canonical_names.deinit();
         self.* = Program.init(self.allocator);
     }
 
@@ -146,6 +150,12 @@ pub fn run(
 
     var queue = Queue.init(allocator);
     defer queue.deinit();
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
 
     for (roots) |root| {
         const template = templateForRoot(input, root) orelse continue;
@@ -168,11 +178,11 @@ pub fn run(
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
         const template_lookup = checkedTemplateForKey(input, key.template);
-        var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types);
+        var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types, &name_resolver, template_lookup.artifact);
         defer type_instantiator.deinit();
         try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
         const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
-        var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator);
+        var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator, &name_resolver);
         defer body_lowerer.deinit();
         const body = try body_lowerer.lowerTemplateBody(reserved, fn_ty);
         try program.addProc(key, reserved, fn_ty, body);
@@ -252,6 +262,8 @@ const TypeInstantiator = struct {
     input: Input,
     program: *Program,
     template_types: checked_artifact.CheckedTypeStoreView,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    template_artifact: checked_artifact.CheckedModuleArtifactKey,
     substitutions: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
     lowered_template: std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId),
 
@@ -260,12 +272,16 @@ const TypeInstantiator = struct {
         input: Input,
         program: *Program,
         template_types: checked_artifact.CheckedTypeStoreView,
+        name_resolver: *ArtifactNames.ArtifactNameResolver,
+        template_artifact: checked_artifact.CheckedModuleArtifactKey,
     ) TypeInstantiator {
         return .{
             .allocator = allocator,
             .input = input,
             .program = program,
             .template_types = template_types,
+            .name_resolver = name_resolver,
+            .template_artifact = template_artifact,
             .substitutions = std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
             .lowered_template = std.AutoHashMap(checked_artifact.CheckedTypeId, Type.TypeId).init(allocator),
         };
@@ -343,7 +359,7 @@ const TypeInstantiator = struct {
         errdefer self.allocator.free(out);
         for (fields, 0..) |field, i| {
             out[i] = .{
-                .name = field.name,
+                .name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name),
                 .ty = try self.lowerTemplateType(field.ty),
             };
         }
@@ -373,7 +389,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         for (fields) |field| {
             try out.append(self.allocator, .{
-                .name = field.name,
+                .name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name),
                 .ty = try self.lowerTemplateType(field.ty),
             });
         }
@@ -389,7 +405,7 @@ const TypeInstantiator = struct {
             .record_unbound => |ext_fields| {
                 for (ext_fields) |field| {
                     try out.append(self.allocator, .{
-                        .name = field.name,
+                        .name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name),
                         .ty = try self.lowerTemplateType(field.ty),
                     });
                 }
@@ -411,7 +427,7 @@ const TypeInstantiator = struct {
             .record_unbound => |fields| {
                 for (fields) |field| {
                     try out.append(self.allocator, .{
-                        .name = field.name,
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
                         .ty = try self.lowerConcreteRef(try self.concreteChildRef(ref, field.ty)),
                     });
                 }
@@ -419,7 +435,7 @@ const TypeInstantiator = struct {
             .record => |record| {
                 for (record.fields) |field| {
                     try out.append(self.allocator, .{
-                        .name = field.name,
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
                         .ty = try self.lowerConcreteRef(try self.concreteChildRef(ref, field.ty)),
                     });
                 }
@@ -455,7 +471,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         for (tags) |tag| {
             try out.append(self.allocator, .{
-                .name = tag.name,
+                .name = try self.name_resolver.tagLabel(self.template_artifact, tag.name),
                 .args = try self.lowerTemplateTypeIds(tag.args),
             });
         }
@@ -484,7 +500,7 @@ const TypeInstantiator = struct {
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| {
                     try out.append(self.allocator, .{
-                        .name = tag.name,
+                        .name = try self.tagNameForConcreteRef(ref, tag.name),
                         .args = try self.lowerConcreteTypeIds(ref, tag.args),
                     });
                 }
@@ -542,8 +558,8 @@ const TypeInstantiator = struct {
 
         return .{ .nominal = .{
             .nominal = .{
-                .module_name = nominal.origin_module,
-                .type_name = nominal.name,
+                .module_name = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
+                .type_name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
             },
             .is_opaque = nominal.is_opaque,
             .args = try self.lowerTemplateTypeIds(nominal.args),
@@ -559,7 +575,13 @@ const TypeInstantiator = struct {
             debug.invariant(false, "mono specialization invariant violated: concrete type ref artifact was not available");
             unreachable;
         };
-        var lowerer = LowerType.Lowerer.init(self.allocator, checked_types, &self.program.types);
+        var lowerer = LowerType.Lowerer.initWithResolver(
+            self.allocator,
+            checked_types,
+            &self.program.types,
+            self.name_resolver,
+            ref.artifact,
+        );
         defer lowerer.deinit();
         return try lowerer.lowerChecked(ref.ty);
     }
@@ -692,7 +714,8 @@ const TypeInstantiator = struct {
         concrete_fields: []const checked_artifact.CheckedRecordField,
     ) Allocator.Error!void {
         for (fields) |field| {
-            const concrete_field = findRecordField(concrete_fields, field.name) orelse {
+            const expected_name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name);
+            const concrete_field = (try self.findConcreteRecordField(concrete, concrete_fields, expected_name)) orelse {
                 invariantViolation("mono specialization record field was missing in concrete type");
             };
             try self.unifyTemplateWithConcrete(field.ty, try self.concreteChildRef(concrete, concrete_field.ty));
@@ -705,12 +728,18 @@ const TypeInstantiator = struct {
         concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         concrete: checked_artifact.CheckedNominalType,
     ) Allocator.Error!void {
-        if (template.builtin != concrete.builtin or
-            template.name != concrete.name or
-            template.origin_module != concrete.origin_module or
-            template.args.len != concrete.args.len)
-        {
+        if (template.builtin != concrete.builtin or template.args.len != concrete.args.len) {
             invariantViolation("mono specialization nominal mismatch");
+        }
+        if (template.builtin == null) {
+            const template_key = canonical.NominalTypeKey{
+                .module_name = try self.name_resolver.moduleName(self.template_artifact, template.origin_module),
+                .type_name = try self.name_resolver.typeName(self.template_artifact, template.name),
+            };
+            const concrete_key = try self.nominalKeyForConcreteRef(concrete_ref, concrete.origin_module, concrete.name);
+            if (template_key.module_name != concrete_key.module_name or template_key.type_name != concrete_key.type_name) {
+                invariantViolation("mono specialization nominal mismatch");
+            }
         }
         try self.unifyTypeLists(template.args, concrete_ref, concrete.args);
     }
@@ -722,7 +751,8 @@ const TypeInstantiator = struct {
         concrete: checked_artifact.CheckedTagUnionType,
     ) Allocator.Error!void {
         for (template.tags) |tag| {
-            const concrete_tag = findTag(concrete.tags, tag.name) orelse {
+            const expected_name = try self.name_resolver.tagLabel(self.template_artifact, tag.name);
+            const concrete_tag = (try self.findConcreteTag(concrete_ref, concrete.tags, expected_name)) orelse {
                 invariantViolation("mono specialization tag was missing in concrete type");
             };
             try self.unifyTypeLists(tag.args, concrete_ref, concrete_tag.args);
@@ -816,6 +846,90 @@ const TypeInstantiator = struct {
         if (raw >= checked_types.payloads.len) invariantViolation("mono specialization concrete type id was outside published payloads");
         return checked_types.payloads[raw];
     }
+
+    fn recordFieldNameForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        const root = self.program.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.recordFieldLabel(artifact_ref.artifact, name),
+            .local => name,
+        };
+    }
+
+    fn tagNameForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        const root = self.program.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.tagLabel(artifact_ref.artifact, name),
+            .local => name,
+        };
+    }
+
+    fn moduleNameForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.ModuleNameId,
+    ) Allocator.Error!canonical.ModuleNameId {
+        const root = self.program.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.moduleName(artifact_ref.artifact, name),
+            .local => name,
+        };
+    }
+
+    fn typeNameForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.TypeNameId,
+    ) Allocator.Error!canonical.TypeNameId {
+        const root = self.program.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.typeName(artifact_ref.artifact, name),
+            .local => name,
+        };
+    }
+
+    fn nominalKeyForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        module_name: canonical.ModuleNameId,
+        type_name: canonical.TypeNameId,
+    ) Allocator.Error!canonical.NominalTypeKey {
+        return .{
+            .module_name = try self.moduleNameForConcreteRef(ref, module_name),
+            .type_name = try self.typeNameForConcreteRef(ref, type_name),
+        };
+    }
+
+    fn findConcreteRecordField(
+        self: *TypeInstantiator,
+        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+        name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!?checked_artifact.CheckedRecordField {
+        for (fields) |field| {
+            if ((try self.recordFieldNameForConcreteRef(concrete, field.name)) == name) return field;
+        }
+        return null;
+    }
+
+    fn findConcreteTag(
+        self: *TypeInstantiator,
+        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
+        tags: []const checked_artifact.CheckedTag,
+        name: canonical.TagLabelId,
+    ) Allocator.Error!?checked_artifact.CheckedTag {
+        for (tags) |tag| {
+            if ((try self.tagNameForConcreteRef(concrete, tag.name)) == name) return tag;
+        }
+        return null;
+    }
 };
 
 const BodyLowerer = struct {
@@ -824,6 +938,7 @@ const BodyLowerer = struct {
     program: *Program,
     template_lookup: CheckedTemplateLookup,
     type_instantiator: *TypeInstantiator,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
     local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
 
     fn init(
@@ -832,6 +947,7 @@ const BodyLowerer = struct {
         program: *Program,
         template_lookup: CheckedTemplateLookup,
         type_instantiator: *TypeInstantiator,
+        name_resolver: *ArtifactNames.ArtifactNameResolver,
     ) BodyLowerer {
         return .{
             .allocator = allocator,
@@ -839,6 +955,7 @@ const BodyLowerer = struct {
             .program = program,
             .template_lookup = template_lookup,
             .type_instantiator = type_instantiator,
+            .name_resolver = name_resolver,
             .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
         };
     }
@@ -992,13 +1109,13 @@ const BodyLowerer = struct {
             },
             .if_ => |if_| try self.lowerIf(ty, if_.branches, if_.final_else),
             .match_ => |match_| try self.lowerMatch(ty, match_),
-            .tag => |tag| try self.lowerTag(ty, tag.name, tag.args),
+            .tag => |tag| try self.lowerTag(ty, try self.tagLabel(tag.name), tag.args),
             .zero_argument_tag => |tag| blk: {
                 _ = tag.closure_name;
-                break :blk try self.lowerTag(ty, tag.name, &.{});
+                break :blk try self.lowerTag(ty, try self.tagLabel(tag.name), &.{});
             },
             .closure => |closure| try self.lowerCheckedClosureExpr(ty, closure),
-            .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, access.field_name),
+            .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, try self.recordFieldLabel(access.field_name)),
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
                 break :blk try self.program.ast.addExpr(ty, .{ .tuple_access = .{
@@ -1162,7 +1279,7 @@ const BodyLowerer = struct {
         defer self.allocator.free(fields);
         for (record.fields, 0..) |field, i| {
             fields[i] = .{
-                .field = field.label,
+                .field = try self.recordFieldLabel(field.label),
                 .value = try self.lowerExpr(field.value),
             };
         }
@@ -1190,20 +1307,21 @@ const BodyLowerer = struct {
         var field_count: usize = 0;
 
         for (update_fields) |field| {
-            if (findRecordUpdateField(update_fields[0..field_count], field.label) != null) {
+            const label = try self.recordFieldLabel(field.label);
+            if (try self.recordUpdateHasRemappedField(update_fields[0..field_count], label)) {
                 invariantViolation("mono body lowering record update contained duplicate field labels");
             }
-            _ = self.recordFieldIndex(ty, field.label);
+            _ = self.recordFieldIndex(ty, label);
             if (field_count >= fields.len) invariantViolation("mono body lowering record update had more fields than its result type");
             fields[field_count] = .{
-                .field = field.label,
+                .field = label,
                 .value = try self.lowerExpr(field.value),
             };
             field_count += 1;
         }
 
         for (record_ty.fields) |field| {
-            if (findRecordUpdateField(update_fields, field.name) != null) continue;
+            if (try self.recordUpdateHasRemappedField(update_fields, field.name)) continue;
             if (field_count >= fields.len) invariantViolation("mono body lowering record update had more fields than its result type");
             fields[field_count] = .{
                 .field = field.name,
@@ -1313,14 +1431,8 @@ const BodyLowerer = struct {
 
         const dispatcher_ty = try self.type_instantiator.lowerTemplateType(plan.dispatcher_ty);
         const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_ty);
-        const registry = methodRegistryForKey(self.input, self.template_lookup.artifact) orelse {
-            debug.invariant(false, "mono static dispatch invariant violated: method registry artifact was not available");
-            unreachable;
-        };
-        const target = registry.lookup(.{
-            .owner = owner,
-            .method = plan.method,
-        });
+        const method = try self.methodName(plan.method);
+        const target = try self.lookupMethodTarget(owner, method);
 
         if (target) |_| {
             invariantViolation("mono static dispatch target specialization is not implemented yet");
@@ -1338,6 +1450,23 @@ const BodyLowerer = struct {
                 break :blk try self.program.ast.addExpr(ty, .{ .bool_not = structural });
             },
         };
+    }
+
+    fn lookupMethodTarget(
+        self: *BodyLowerer,
+        owner: static_dispatch.MethodOwner,
+        method: canonical.MethodNameId,
+    ) Allocator.Error!?static_dispatch.MethodTarget {
+        const registry = methodRegistryForKey(self.input, self.template_lookup.artifact) orelse {
+            debug.invariant(false, "mono static dispatch invariant violated: method registry artifact was not available");
+            unreachable;
+        };
+        for (registry.entries) |entry| {
+            const entry_owner = try self.name_resolver.methodOwner(self.template_lookup.artifact, entry.key.owner);
+            const entry_method = try self.name_resolver.methodName(self.template_lookup.artifact, entry.key.method);
+            if (methodOwnerEql(entry_owner, owner) and entry_method == method) return entry.target;
+        }
+        return null;
     }
 
     fn lowerIf(
@@ -1539,7 +1668,8 @@ const BodyLowerer = struct {
                 return try self.lowerPattern(ty, as.pattern);
             },
             .applied_tag => |tag| blk: {
-                const tag_info = self.tagInfoForUnionType(ty, tag.name);
+                const tag_name = try self.tagLabel(tag.name);
+                const tag_info = self.tagInfoForUnionType(ty, tag_name);
                 if (tag_info.payload_count != tag.args.len) invariantViolation("mono body lowering tag pattern arity did not match its resolved type");
                 const args = try self.allocator.alloc(Ast.PatId, tag.args.len);
                 defer self.allocator.free(args);
@@ -1547,7 +1677,7 @@ const BodyLowerer = struct {
                     args[i] = try self.lowerPattern(tag_info.payload_types[i], arg);
                 }
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tag = .{
-                    .name = tag.name,
+                    .name = tag_name,
                     .discriminant = tag_info.discriminant,
                     .args = try self.program.ast.addPatSpan(args),
                 } } });
@@ -1698,6 +1828,38 @@ const BodyLowerer = struct {
         return try self.program.literal_pool.intern(self.checkedStringLiteral(literal));
     }
 
+    fn recordFieldLabel(
+        self: *BodyLowerer,
+        label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        return try self.name_resolver.recordFieldLabel(self.template_lookup.artifact, label);
+    }
+
+    fn tagLabel(
+        self: *BodyLowerer,
+        label: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        return try self.name_resolver.tagLabel(self.template_lookup.artifact, label);
+    }
+
+    fn methodName(
+        self: *BodyLowerer,
+        method: canonical.MethodNameId,
+    ) Allocator.Error!canonical.MethodNameId {
+        return try self.name_resolver.methodName(self.template_lookup.artifact, method);
+    }
+
+    fn recordUpdateHasRemappedField(
+        self: *BodyLowerer,
+        fields: []const checked_artifact.CheckedRecordExprField,
+        label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if ((try self.recordFieldLabel(field.label)) == label) return true;
+        }
+        return false;
+    }
+
     fn checkedStringLiteral(
         self: *BodyLowerer,
         literal: checked_artifact.CheckedStringLiteralId,
@@ -1822,36 +1984,6 @@ const BodyLowerer = struct {
         invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
     }
 };
-
-fn findRecordField(
-    fields: []const checked_artifact.CheckedRecordField,
-    name: canonical.RecordFieldLabelId,
-) ?checked_artifact.CheckedRecordField {
-    for (fields) |field| {
-        if (field.name == name) return field;
-    }
-    return null;
-}
-
-fn findRecordUpdateField(
-    fields: []const checked_artifact.CheckedRecordExprField,
-    name: canonical.RecordFieldLabelId,
-) ?checked_artifact.CheckedRecordExprField {
-    for (fields) |field| {
-        if (field.label == name) return field;
-    }
-    return null;
-}
-
-fn findTag(
-    tags: []const checked_artifact.CheckedTag,
-    name: canonical.TagLabelId,
-) ?checked_artifact.CheckedTag {
-    for (tags) |tag| {
-        if (tag.name == name) return tag;
-    }
-    return null;
-}
 
 fn invariantViolation(comptime message: []const u8) noreturn {
     debug.invariant(false, message);
@@ -2037,6 +2169,20 @@ fn methodOwnerForDispatcherType(
         .tag_union,
         .record,
         => invariantViolation("mono static dispatch dispatcher type did not resolve to an allowed method owner"),
+    };
+}
+
+fn methodOwnerEql(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner) bool {
+    return switch (a) {
+        .nominal => |a_nominal| switch (b) {
+            .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
+                a_nominal.type_name == b_nominal.type_name,
+            else => false,
+        },
+        .builtin => |a_builtin| switch (b) {
+            .builtin => |b_builtin| a_builtin == b_builtin,
+            else => false,
+        },
     };
 }
 
