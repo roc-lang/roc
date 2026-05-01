@@ -74,6 +74,10 @@ pub const Pat = struct {
             fields: Span(RecordFieldPattern),
             rest: ?PatId = null,
         },
+        list: struct {
+            items: Span(PatId),
+            rest: ?ListRestPattern = null,
+        },
         nominal: PatId,
         tuple: Span(PatId),
         as: struct {
@@ -91,6 +95,10 @@ pub const TagPayloadPattern = struct {
 };
 
 pub const RecordFieldPattern = row.Ast.RecordFieldPattern;
+pub const ListRestPattern = struct {
+    index: u32,
+    pattern: ?PatId = null,
+};
 
 pub const Branch = struct {
     pat: PatId,

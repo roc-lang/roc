@@ -689,6 +689,13 @@ const BodyFinalizer = struct {
             },
             .nominal => |child| .{ .nominal = try self.lowerPat(child) },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
+            .list => |list| .{ .list = .{
+                .items = try self.lowerPatSpan(list.items),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |pattern| try self.lowerPat(pattern) else null,
+                } else null,
+            } },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),
                 .symbol = as.symbol,

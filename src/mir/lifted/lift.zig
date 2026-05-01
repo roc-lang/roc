@@ -932,6 +932,14 @@ const BodyLifter = struct {
                     try self.bindPatternSymbols(item, bound, restorations);
                 }
             },
+            .list => |list| {
+                for (self.input.slicePatSpan(list.items)) |item| {
+                    try self.bindPatternSymbols(item, bound, restorations);
+                }
+                if (list.rest) |rest| {
+                    if (rest.pattern) |pattern| try self.bindPatternSymbols(pattern, bound, restorations);
+                }
+            },
             .tag => |tag| {
                 for (self.input.sliceTagPayloadPatternSpan(tag.payloads)) |payload| {
                     try self.bindPatternSymbols(payload.pattern, bound, restorations);
@@ -993,6 +1001,13 @@ const BodyLifter = struct {
                 .rest = if (record.rest) |rest| try self.lowerPat(rest) else null,
             } },
             .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
+            .list => |list| .{ .list = .{
+                .items = try self.lowerPatSpan(list.items),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |pattern| try self.lowerPat(pattern) else null,
+                } else null,
+            } },
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPat(as.pattern),
                 .symbol = as.symbol,

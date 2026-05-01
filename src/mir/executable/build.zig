@@ -1354,6 +1354,13 @@ const BodyBuilder = struct {
                 .fields = try self.lowerRecordFieldPatternSpanScoped(record.fields, saved),
                 .rest = if (record.rest) |rest| try self.lowerPatScoped(rest, saved) else null,
             } },
+            .list => |list| .{ .list = .{
+                .items = try self.lowerPatSpanScoped(list.items, saved),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern) |pattern| try self.lowerPatScoped(pattern, saved) else null,
+                } else null,
+            } },
             .as => |as| blk: {
                 const value = try self.bindPatternValue(as.binding_info, saved);
                 break :blk .{ .as = .{

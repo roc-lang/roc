@@ -2082,6 +2082,22 @@ const BodyLowerer = struct {
                 }
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tuple = try self.program.ast.addPatSpan(lowered) } });
             },
+            .list => |list| blk: {
+                const elem_ty = self.listElementType(ty);
+                const lowered = try self.allocator.alloc(Ast.PatId, list.patterns.len);
+                defer self.allocator.free(lowered);
+                for (list.patterns, 0..) |item, i| {
+                    lowered[i] = try self.lowerPattern(elem_ty, item);
+                }
+                const rest: ?Ast.ListRestPattern = if (list.rest) |rest_info| .{
+                    .index = rest_info.index,
+                    .pattern = if (rest_info.pattern) |rest_pattern| try self.lowerPattern(ty, rest_pattern) else null,
+                } else null;
+                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .list = .{
+                    .items = try self.program.ast.addPatSpan(lowered),
+                    .rest = rest,
+                } } });
+            },
             .num_literal => |num| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .int_lit = num.value.toI128() } }),
             .small_dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.toRocDec().num } }),
             .dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.num } }),
@@ -2124,6 +2140,13 @@ const BodyLowerer = struct {
             },
             else => invariantViolation("mono body lowering expected a resolved tuple type"),
         }
+    }
+
+    fn listElementType(self: *BodyLowerer, list_ty: Type.TypeId) Type.TypeId {
+        return switch (self.program.types.getType(list_ty)) {
+            .list => |elem| elem,
+            else => invariantViolation("mono body lowering expected a resolved List(T) type"),
+        };
     }
 
     const TagInfo = struct {

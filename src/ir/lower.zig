@@ -879,6 +879,7 @@ const IrBuilder = struct {
                     try self.bindSourceMatchPatternValues(child_pat, child_value, stmts, saved);
                 }
             },
+            .list => irInvariant("IR lowering list pattern requires executable decision-plan materialization"),
             .tag => |tag| {
                 const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_ids.len == 0) return;
