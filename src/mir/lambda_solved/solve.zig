@@ -434,6 +434,54 @@ const BodySolver = struct {
             },
             else => {},
         }
+        switch (expr.data) {
+            .let_ => |let_| {
+                const body = try self.lowerExpr(let_.body);
+                const bind_ty = try self.type_importer.importType(let_.bind.ty);
+                const binding = try self.value_store.addBinding(.{
+                    .symbol = let_.bind.symbol,
+                    .value = self.exprValue(body),
+                    .root = self.valueRoot(self.exprValue(body)),
+                });
+                const previous = try self.env.fetchPut(let_.bind.symbol, binding);
+                defer {
+                    if (previous) |entry| {
+                        self.env.put(let_.bind.symbol, entry.value) catch unreachable;
+                    } else {
+                        _ = self.env.remove(let_.bind.symbol);
+                    }
+                }
+                const rest = try self.lowerExpr(let_.rest);
+                const lowered = try self.output.addExpr(ty, self.exprValue(rest), .{ .let_ = .{
+                    .bind = .{
+                        .ty = bind_ty,
+                        .symbol = let_.bind.symbol,
+                        .binding_info = binding,
+                    },
+                    .body = body,
+                    .rest = rest,
+                } });
+                try self.expr_map.put(expr_id, lowered);
+                return lowered;
+            },
+            .block => |block| {
+                const stmts = try self.lowerStmtSpan(block.stmts);
+                const final_expr = try self.lowerExpr(block.final_expr);
+                const lowered = try self.output.addExpr(ty, self.exprValue(final_expr), .{ .block = .{
+                    .stmts = stmts,
+                    .final_expr = final_expr,
+                } });
+                try self.expr_map.put(expr_id, lowered);
+                return lowered;
+            },
+            .inspect => |child| {
+                const lowered_child = try self.lowerExpr(child);
+                const lowered = try self.output.addExpr(ty, self.exprValue(lowered_child), .{ .inspect = lowered_child });
+                try self.expr_map.put(expr_id, lowered);
+                return lowered;
+            },
+            else => {},
+        }
 
         const value = try self.newValue(ty);
         const lowered = try self.output.addExpr(ty, value, switch (expr.data) {
@@ -489,32 +537,7 @@ const BodySolver = struct {
                 .rhs = try self.lowerExpr(eq.rhs),
             } },
             .bool_not => |child| .{ .bool_not = try self.lowerExpr(child) },
-            .let_ => |let_| blk: {
-                const body = try self.lowerExpr(let_.body);
-                const bind_ty = try self.type_importer.importType(let_.bind.ty);
-                const binding = try self.value_store.addBinding(.{
-                    .symbol = let_.bind.symbol,
-                    .value = self.exprValue(body),
-                    .root = self.valueRoot(self.exprValue(body)),
-                });
-                const previous = try self.env.fetchPut(let_.bind.symbol, binding);
-                defer {
-                    if (previous) |entry| {
-                        self.env.put(let_.bind.symbol, entry.value) catch unreachable;
-                    } else {
-                        _ = self.env.remove(let_.bind.symbol);
-                    }
-                }
-                break :blk .{ .let_ = .{
-                    .bind = .{
-                        .ty = bind_ty,
-                        .symbol = let_.bind.symbol,
-                        .binding_info = binding,
-                    },
-                    .body = body,
-                    .rest = try self.lowerExpr(let_.rest),
-                } };
-            },
+            .let_ => unreachable,
             .call_value => |call| blk: {
                 const func = try self.lowerExpr(call.func);
                 const lowered_args = try self.lowerExprSpanWithValues(call.args);
@@ -566,16 +589,13 @@ const BodySolver = struct {
                     .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
                 } };
             },
-            .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
+            .inspect => unreachable,
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,
                 .args = try self.lowerExprSpan(low_level.args),
                 .source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty),
             } },
-            .block => |block| .{ .block = .{
-                .stmts = try self.lowerStmtSpan(block.stmts),
-                .final_expr = try self.lowerExpr(block.final_expr),
-            } },
+            .block => unreachable,
             .tuple => |items| blk: {
                 const lowered_items = try self.lowerExprSpanWithValues(items);
                 try self.publishTupleAggregate(value, lowered_items.values);
