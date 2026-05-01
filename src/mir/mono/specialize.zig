@@ -1009,11 +1009,11 @@ const BodyLowerer = struct {
                 const child = try self.lowerExpr(ret.expr);
                 break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
             },
+            .binop => |binop| try self.lowerBinop(ty, binop),
+            .unary_minus => |child| try self.lowerUnaryMinus(ty, child),
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
             .run_low_level => |run| try self.lowerRunLowLevel(ty, run.op, run.args),
             .nominal,
-            .binop,
-            .unary_minus,
             .method_call,
             .dispatch_call,
             .method_eq,
@@ -1281,6 +1281,85 @@ const BodyLowerer = struct {
             .op = op,
             .args = try self.lowerExprSpan(args),
             .source_constraint_ty = ty,
+        } });
+    }
+
+    fn lowerBinop(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        binop: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (binop.op) {
+            .add => try self.lowerBinaryLowLevel(ty, .num_plus, binop.lhs, binop.rhs),
+            .sub => try self.lowerBinaryLowLevel(ty, .num_minus, binop.lhs, binop.rhs),
+            .mul => try self.lowerBinaryLowLevel(ty, .num_times, binop.lhs, binop.rhs),
+            .div => try self.lowerBinaryLowLevel(ty, .num_div_by, binop.lhs, binop.rhs),
+            .rem => try self.lowerBinaryLowLevel(ty, .num_rem_by, binop.lhs, binop.rhs),
+            .div_trunc => try self.lowerBinaryLowLevel(ty, .num_div_trunc_by, binop.lhs, binop.rhs),
+            .lt => try self.lowerBinaryLowLevel(ty, .num_is_lt, binop.lhs, binop.rhs),
+            .gt => try self.lowerBinaryLowLevel(ty, .num_is_gt, binop.lhs, binop.rhs),
+            .le => try self.lowerBinaryLowLevel(ty, .num_is_lte, binop.lhs, binop.rhs),
+            .ge => try self.lowerBinaryLowLevel(ty, .num_is_gte, binop.lhs, binop.rhs),
+            .eq => blk: {
+                const lhs = try self.lowerExpr(binop.lhs);
+                const rhs = try self.lowerExpr(binop.rhs);
+                break :blk try self.program.ast.addExpr(ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
+            },
+            .ne => blk: {
+                const lhs = try self.lowerExpr(binop.lhs);
+                const rhs = try self.lowerExpr(binop.rhs);
+                const eq = try self.program.ast.addExpr(ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
+                break :blk try self.program.ast.addExpr(ty, .{ .bool_not = eq });
+            },
+            .@"and" => blk: {
+                const false_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = false });
+                break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
+                    .cond = try self.lowerExpr(binop.lhs),
+                    .then_body = try self.lowerExpr(binop.rhs),
+                    .else_body = false_expr,
+                } });
+            },
+            .@"or" => blk: {
+                const true_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = true });
+                break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
+                    .cond = try self.lowerExpr(binop.lhs),
+                    .then_body = true_expr,
+                    .else_body = try self.lowerExpr(binop.rhs),
+                } });
+            },
+        };
+    }
+
+    fn lowerBinaryLowLevel(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        op: base.LowLevel,
+        lhs_expr: checked_artifact.CheckedExprId,
+        rhs_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const lhs = try self.lowerExpr(lhs_expr);
+        const rhs = try self.lowerExpr(rhs_expr);
+        const args = [_]Ast.ExprId{ lhs, rhs };
+        const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(lhs_expr).ty);
+        return try self.program.ast.addExpr(ty, .{ .low_level = .{
+            .op = op,
+            .args = try self.program.ast.addExprSpan(&args),
+            .source_constraint_ty = source_constraint_ty,
+        } });
+    }
+
+    fn lowerUnaryMinus(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        child_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const child = try self.lowerExpr(child_expr);
+        const args = [_]Ast.ExprId{child};
+        const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(child_expr).ty);
+        return try self.program.ast.addExpr(ty, .{ .low_level = .{
+            .op = .num_negate,
+            .args = try self.program.ast.addExprSpan(&args),
+            .source_constraint_ty = source_constraint_ty,
         } });
     }
 
