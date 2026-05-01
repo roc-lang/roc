@@ -763,11 +763,22 @@ pub const Coordinator = struct {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
                 const artifact = mod.checkedArtifact() orelse continue;
+                if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
                 try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
             }
         }
 
         return try views.toOwnedSlice(allocator);
+    }
+
+    fn rootRelationContainsArtifact(
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
+        }
+        return false;
     }
 
     /// Collect ModuleEnv pointers needed by LIR layout lowering.
@@ -787,6 +798,152 @@ pub const Coordinator = struct {
         }
 
         return try envs.toOwnedSlice(allocator);
+    }
+
+    pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
+        const platform_root = self.findRootModule(.platform) orelse return;
+
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing platform declaration artifact", .{});
+            }
+            unreachable;
+        };
+        const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
+
+        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
+            .platform_requirement_context = requirement_context,
+        });
+
+        const app_artifact = app_root.mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts missing app artifact after co-finalization", .{});
+            }
+            unreachable;
+        };
+
+        var relation = try check.CheckedArtifact.buildPlatformAppRelation(
+            self.gpa,
+            platform_declaration_artifact,
+            platform_root.mod.moduleEnv().?,
+            app_artifact,
+        );
+        defer relation.deinit(self.gpa);
+
+        try self.republishCheckedArtifact(platform_root.pkg, platform_root.mod, .{
+            .platform_app_relation = relation,
+        });
+    }
+
+    pub fn executableRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
+        if (self.findRootModule(.platform)) |platform_root| {
+            if (platform_root.mod.checkedArtifact()) |artifact| {
+                if (artifact.platform_required_bindings.bindings.len > 0 or artifact.root_requests.requests.len > 0) {
+                    return artifact;
+                }
+            }
+        }
+        return self.rootCheckedArtifact("app");
+    }
+
+    pub fn collectRelationArtifactViews(
+        self: *Coordinator,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
+                }
+                unreachable;
+            };
+            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
+        }
+
+        return try views.toOwnedSlice(allocator);
+    }
+
+    fn republishCheckedArtifact(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+        publication: compile_package.ArtifactPublicationInputs,
+    ) !void {
+        const env = mod.moduleEnv() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
+            }
+            unreachable;
+        };
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod);
+        defer self.gpa.free(imported_envs);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
+        defer self.gpa.free(imported_artifacts);
+
+        var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModule(
+            self.gpa,
+            env,
+            imported_envs,
+            imported_artifacts,
+            publication,
+        );
+        errdefer artifact.deinit(self.gpa);
+        mod.replaceCheckedArtifact(artifact);
+    }
+
+    const RootModuleRef = struct {
+        pkg: *PackageState,
+        mod: *ModuleState,
+    };
+
+    fn findRootModule(self: *Coordinator, kind: ModuleEnv.ModuleKind.Tag) ?RootModuleRef {
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const root_id = pkg.root_module_id orelse continue;
+            const mod = pkg.getModule(root_id) orelse continue;
+            const env = mod.moduleEnv() orelse continue;
+            if (moduleKindTag(env.module_kind) == kind) return .{ .pkg = pkg, .mod = mod };
+        }
+        return null;
+    }
+
+    fn moduleKindTag(kind: ModuleEnv.ModuleKind) ModuleEnv.ModuleKind.Tag {
+        return switch (kind) {
+            .type_module => .type_module,
+            .default_app => .default_app,
+            .app => .app,
+            .package => .package,
+            .platform => .platform,
+            .hosted => .hosted,
+            .deprecated_module => .deprecated_module,
+            .malformed => .malformed,
+        };
+    }
+
+    fn checkedArtifactByKey(
+        self: *Coordinator,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        if (std.mem.eql(u8, &self.builtin_modules.checked_artifact.key.bytes, &key.bytes)) {
+            return &self.builtin_modules.checked_artifact;
+        }
+
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+            }
+        }
+
+        return null;
     }
 
     fn appendImportedArtifactViewIfMissing(

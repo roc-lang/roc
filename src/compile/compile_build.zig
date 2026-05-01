@@ -558,6 +558,7 @@ pub const BuildEnv = struct {
 
         // Run coordinator loop
         try coord.coordinatorLoop();
+        try coord.finalizeExecutableArtifacts();
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
@@ -2093,6 +2094,17 @@ pub const BuildEnv = struct {
             }
         }
         return null;
+    }
+
+    pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
+        if (self.getPlatformSemanticData()) |platform| {
+            if (platform.checked_artifact) |artifact| {
+                if (artifact.platform_required_bindings.bindings.len > 0 or artifact.root_requests.requests.len > 0) {
+                    return platform;
+                }
+            }
+        }
+        return self.getAppSemanticData();
     }
 
     /// Drain reports and render them to a writer. Returns error/warning counts.

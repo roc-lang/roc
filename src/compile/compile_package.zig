@@ -337,6 +337,12 @@ pub const TypeCheckOutput = struct {
     }
 };
 
+pub const ArtifactPublicationInputs = struct {
+    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
+    platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
+    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+};
+
 /// Per-package module build orchestrator
 pub const PackageEnv = struct {
     gpa: Allocator,
@@ -1324,6 +1330,35 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
+        var checked_artifact = try publishCheckedArtifactFromCheckedModule(
+            gpa,
+            env,
+            imported_envs,
+            imported_artifacts,
+            .{
+                .platform_requirement_context = null,
+                .platform_app_relation = null,
+                .explicit_roots = &.{},
+            },
+        );
+        errdefer checked_artifact.deinit(gpa);
+
+        _ = target;
+        _ = io;
+
+        return .{
+            .checker = checker,
+            .checked_artifact = checked_artifact,
+        };
+    }
+
+    pub fn publishCheckedArtifactFromCheckedModule(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) !CheckedArtifact.CheckedModuleArtifact {
         var source_modules = try gpa.alloc(CheckedModuleSource, imported_envs.len + 1);
         defer gpa.free(source_modules);
         for (imported_envs, 0..) |imported_env, i| {
@@ -1337,24 +1372,18 @@ pub const PackageEnv = struct {
         var typed_modules = try CheckedModules.init(gpa, source_modules);
         defer typed_modules.deinit();
 
-        var checked_artifact = try CheckedArtifact.publishFromTypedModule(
+        return try CheckedArtifact.publishFromTypedModule(
             gpa,
             &typed_modules,
             checked_module_idx,
             .{
                 .module_env_storage = .{ .checked_source = env },
                 .imports = imported_artifacts,
+                .platform_requirement_context = publication.platform_requirement_context,
+                .platform_app_relation = publication.platform_app_relation,
+                .explicit_roots = publication.explicit_roots,
             },
         );
-        errdefer checked_artifact.deinit(gpa);
-
-        _ = target;
-        _ = io;
-
-        return .{
-            .checker = checker,
-            .checked_artifact = checked_artifact,
-        };
     }
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {

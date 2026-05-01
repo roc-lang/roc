@@ -569,7 +569,10 @@ fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
 }
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
-    const store = module.typeStoreConst();
+    return sourceVarIsFunction(module.typeStoreConst(), var_);
+}
+
+fn sourceVarIsFunction(store: *const types.Store, var_: Var) bool {
     var current = var_;
     while (true) {
         const resolved = store.resolveVar(current);
@@ -4172,7 +4175,7 @@ pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Pla
 pub fn buildPlatformAppRelation(
     allocator: Allocator,
     platform_declaration_artifact: *const CheckedModuleArtifact,
-    platform_module: TypedCIR.Module,
+    platform_module_env: *const ModuleEnv,
     app_artifact: *const CheckedModuleArtifact,
 ) Allocator.Error!PlatformAppRelation {
     const declarations = platform_declaration_artifact.platform_required_declarations.declarations;
@@ -4196,15 +4199,15 @@ pub fn buildPlatformAppRelation(
 
         const requested_source_ty = try canonical_type_keys.fromVar(
             allocator,
-            platform_module.typeStoreConst(),
-            platform_module.identStoreConst(),
+            &platform_module_env.types,
+            platform_module_env.getIdentStoreConst(),
             ModuleEnv.varFrom(declaration.type_anno),
         );
         const app_value_ref = TopLevelValueRef{
             .artifact = app_artifact.key,
             .pattern = app_value.pattern,
         };
-        const required_ty_is_function = sourceTypeIsFunction(platform_module, ModuleEnv.varFrom(declaration.type_anno));
+        const required_ty_is_function = sourceVarIsFunction(&platform_module_env.types, ModuleEnv.varFrom(declaration.type_anno));
 
         bindings[i] = .{
             .declaration = declaration.id,

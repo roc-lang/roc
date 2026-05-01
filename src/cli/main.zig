@@ -2438,16 +2438,20 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
         return sharedMemoryResult(&shm, counts);
     }
 
-    const root_artifact = coord.rootCheckedArtifact("app");
+    try coord.finalizeExecutableArtifacts();
+
+    const root_artifact = coord.executableRootCheckedArtifact();
     const imported_artifacts = try coord.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try coord.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
     const module_envs = try coord.collectModuleEnvViews(ctx.gpa);
     defer ctx.gpa.free(module_envs);
 
     const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         shm_allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(root_artifact),
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
         .{ .requests = root_artifact.root_requests.requests },
