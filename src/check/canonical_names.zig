@@ -53,6 +53,11 @@ pub const MonoSpecializedProcRef = struct {
     specialization: MonoSpecializationKey,
 };
 
+pub const MirProcedureRef = struct {
+    proc: ProcedureValueRef,
+    callable: ProcedureCallableRef,
+};
+
 pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
         a.proc_base == b.proc_base;
@@ -74,6 +79,21 @@ pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedPr
         monoSpecializationKeyEql(a.specialization, b.specialization);
 }
 
+pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
+    return .{
+        .proc = proc.proc,
+        .callable = .{
+            .template = .{ .checked = proc.specialization.template },
+            .source_fn_ty = proc.specialization.requested_mono_fn_ty,
+        },
+    };
+}
+
+pub fn mirProcedureRefEql(a: MirProcedureRef, b: MirProcedureRef) bool {
+    return procedureValueRefEql(a.proc, b.proc) and
+        procedureCallableRefEql(a.callable, b.callable);
+}
+
 pub const LiftedProcedureTemplateRef = struct {
     owner_mono_specialization: MonoSpecializationKey,
     site: NestedProcSiteId,
@@ -93,6 +113,25 @@ pub const ProcedureCallableRef = struct {
     template: CallableProcedureTemplateRef,
     source_fn_ty: CanonicalTypeKey,
 };
+
+pub fn procedureCallableRefEql(a: ProcedureCallableRef, b: ProcedureCallableRef) bool {
+    return callableProcedureTemplateRefEql(a.template, b.template) and
+        std.mem.eql(u8, &a.source_fn_ty.bytes, &b.source_fn_ty.bytes);
+}
+
+pub fn callableProcedureTemplateRefEql(a: CallableProcedureTemplateRef, b: CallableProcedureTemplateRef) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .checked => |left| procedureTemplateRefEql(left, b.checked),
+        .lifted => |left| liftedProcedureTemplateRefEql(left, b.lifted),
+        .synthetic => |left| procedureTemplateRefEql(left.template, b.synthetic.template),
+    };
+}
+
+pub fn liftedProcedureTemplateRefEql(a: LiftedProcedureTemplateRef, b: LiftedProcedureTemplateRef) bool {
+    return monoSpecializationKeyEql(a.owner_mono_specialization, b.owner_mono_specialization) and
+        a.site == b.site;
+}
 
 pub const CanonicalTypeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,

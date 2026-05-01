@@ -18,7 +18,7 @@ const repr = LambdaSolved.Representation;
 
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
-    source_proc: canonical.MonoSpecializedProcRef,
+    source_proc: canonical.MirProcedureRef,
     body: Ast.DefId,
 };
 
@@ -77,9 +77,9 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     program.row_shapes = input.row_shapes;
     input.row_shapes = MonoRow.Store.init(allocator);
 
-    var proc_map = std.AutoHashMap(canonical.MonoSpecializedProcRef, Ast.ExecutableProcId).init(allocator);
+    var proc_map = std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId).init(allocator);
     defer proc_map.deinit();
-    var proc_instance_map = std.AutoHashMap(canonical.MonoSpecializedProcRef, repr.ProcRepresentationInstanceId).init(allocator);
+    var proc_instance_map = std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId).init(allocator);
     defer proc_instance_map.deinit();
     try proc_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
@@ -290,12 +290,12 @@ const BodyBuilder = struct {
     env: std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef),
     expr_map: std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId),
     executable_proc: Ast.ExecutableProcId,
-    source_proc: canonical.MonoSpecializedProcRef,
+    source_proc: canonical.MirProcedureRef,
     representation_instance: repr.ProcRepresentationInstanceId,
     proc_instance: *const repr.ProcRepresentationInstance,
     proc_instances: []const repr.ProcRepresentationInstance,
-    proc_map: *const std.AutoHashMap(canonical.MonoSpecializedProcRef, Ast.ExecutableProcId),
-    proc_instance_map: *const std.AutoHashMap(canonical.MonoSpecializedProcRef, repr.ProcRepresentationInstanceId),
+    proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
+    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
 
     fn deinit(self: *BodyBuilder) void {
         self.expr_map.deinit();
@@ -363,7 +363,7 @@ const BodyBuilder = struct {
     }
 
     fn executableSpecializationKey(self: *const BodyBuilder) Allocator.Error!repr.ExecutableSpecializationKey {
-        if (!canonical.monoSpecializedProcRefEql(self.proc_instance.proc, self.source_proc)) {
+        if (!canonical.mirProcedureRefEql(self.proc_instance.proc, self.source_proc)) {
             executableInvariant("executable build procedure instance does not match the source procedure being lowered");
         }
         return try repr.cloneExecutableSpecializationKey(self.allocator, self.proc_instance.executable_specialization_key);
@@ -886,7 +886,7 @@ const BodyBuilder = struct {
         const member = self.representation_store.callableSetMember(construction.callable_set_key, construction.selected_member) orelse {
             executableInvariant("executable proc_value construction selected a missing callable-set member");
         };
-        const selected_proc = sourceProcForCallable(member.proc_value);
+        const selected_proc = member.source_proc;
         const selected_executable_proc = self.proc_map.get(selected_proc) orelse executableInvariant("executable proc_value selected member target was not reserved");
 
         const capture_items = self.input.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
@@ -989,7 +989,7 @@ const BodyBuilder = struct {
             if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, requested_source_fn_ty)) {
                 executableInvariant("executable call_value callable-set member source type differs from call site");
             }
-            const target = sourceProcForCallable(member.proc_value);
+            const target = member.source_proc;
             const executable_proc = self.proc_map.get(target) orelse executableInvariant("executable call_value member target was not reserved");
             const target_instance_id = self.proc_instance_map.get(target) orelse executableInvariant("executable call_value member target has no representation instance");
             const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
@@ -1029,25 +1029,6 @@ const BodyBuilder = struct {
         } });
     }
 
-    fn sourceProcForCallable(proc_callable: canonical.ProcedureCallableRef) canonical.MonoSpecializedProcRef {
-        const template = switch (proc_callable.template) {
-            .checked => |checked| checked,
-            .lifted,
-            .synthetic,
-            => executableInvariant("executable callable member target is not a checked mono specialization"),
-        };
-        return .{
-            .proc = .{
-                .artifact = template.artifact,
-                .proc_base = template.proc_base,
-            },
-            .specialization = .{
-                .template = template,
-                .requested_mono_fn_ty = proc_callable.source_fn_ty,
-            },
-        };
-    }
-
     fn addValueExpr(self: *BodyBuilder, source_ty: LambdaSolved.Type.TypeVarId, data: Ast.Expr.Data) Allocator.Error!Ast.ExprId {
         return try self.output.addExpr(
             try self.type_lowerer.lowerType(source_ty),
@@ -1066,9 +1047,9 @@ fn executableInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
-fn executableProcForSource(program: *const Program, source_proc: canonical.MonoSpecializedProcRef) ?Ast.ExecutableProcId {
+fn executableProcForSource(program: *const Program, source_proc: canonical.MirProcedureRef) ?Ast.ExecutableProcId {
     for (program.procs.items) |proc| {
-        if (canonical.monoSpecializedProcRefEql(proc.source_proc, source_proc))
+        if (canonical.mirProcedureRefEql(proc.source_proc, source_proc))
         {
             return proc.executable_proc;
         }

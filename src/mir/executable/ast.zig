@@ -265,7 +265,7 @@ pub const FnDef = struct {
 
 pub const Def = struct {
     proc: ExecutableProcId,
-    source_proc: canonical.MonoSpecializedProcRef,
+    source_proc: canonical.MirProcedureRef,
     specialization_key: repr.ExecutableSpecializationKey,
     value: FnDef,
 };

@@ -315,7 +315,7 @@ pub const Store = struct {
 
 pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     local_handle: Mono.Specialize.MonoProcHandle,
     fn_ty: TypeId,
     body: Ast.DefId,
@@ -329,7 +329,7 @@ pub const Program = struct {
     types: Mono.Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
+    root_procs: std.ArrayList(canonical.MirProcedureRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{

@@ -59,7 +59,7 @@ pub const ReservedMonoProc = struct {
 
 pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     local_handle: MonoProcHandle,
     fn_ty: Type.TypeId,
     body: Ast.DefId,
@@ -75,7 +75,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
+    root_procs: std.ArrayList(canonical.MirProcedureRef),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -113,7 +113,7 @@ pub const Program = struct {
     ) Allocator.Error!void {
         try self.procs.append(self.allocator, .{
             .key = key,
-            .proc = reserved.proc,
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
             .local_handle = reserved.local_handle,
             .fn_ty = fn_ty,
             .body = body,
@@ -170,7 +170,7 @@ pub fn run(
             .reason = .{ .root = root },
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
-        try program.root_procs.append(allocator, reserved.proc);
+        try program.root_procs.append(allocator, canonical.mirProcedureRefFromMono(reserved.proc));
     }
 
     while (queue.pending.items.len != 0) {
@@ -1270,7 +1270,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = reserved.proc,
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .recursive = false,
@@ -1709,7 +1709,7 @@ const BodyLowerer = struct {
                 .reason = .{ .static_dispatch_target = plan_id },
             });
             const call_expr = try self.program.ast.addExpr(ty, .{ .call_proc = .{
-                .proc = reserved.proc,
+                .proc = canonical.mirProcedureRefFromMono(reserved.proc),
                 .args = lowered_args,
                 .requested_fn_ty = callable_ty,
             } });
@@ -2223,7 +2223,7 @@ const BodyLowerer = struct {
         use: checked_artifact.ProcedureUseTemplate,
         checked_fn_ty: checked_artifact.CheckedTypeId,
         reason: MonoSpecializationReason,
-    ) Allocator.Error!canonical.MonoSpecializedProcRef {
+    ) Allocator.Error!canonical.MirProcedureRef {
         const template = self.procedureTemplateForUse(use);
         const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(checked_fn_ty);
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
@@ -2231,7 +2231,7 @@ const BodyLowerer = struct {
             .requested_fn_ty = requested_fn_ty,
             .reason = reason,
         });
-        return reserved.proc;
+        return canonical.mirProcedureRefFromMono(reserved.proc);
     }
 
     fn procedureTemplateForUse(
@@ -2525,7 +2525,7 @@ fn verifyProgram(program: *const Program) void {
     for (program.root_procs.items) |root| {
         var found = false;
         for (program.procs.items) |proc| {
-            if (canonical.monoSpecializedProcRefEql(proc.proc, root))
+            if (canonical.mirProcedureRefEql(proc.proc, root))
             {
                 found = true;
                 break;

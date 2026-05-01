@@ -151,12 +151,12 @@ pub const Expr = struct {
             requested_fn_ty: TypeId,
         },
         call_proc: struct {
-            proc: canonical.MonoSpecializedProcRef,
+            proc: canonical.MirProcedureRef,
             args: Span(ExprId),
             requested_fn_ty: TypeId,
         },
         proc_value: struct {
-            proc: canonical.MonoSpecializedProcRef,
+            proc: canonical.MirProcedureRef,
             captures: Span(CaptureArg),
             fn_ty: TypeId,
         },
@@ -259,7 +259,7 @@ pub const DefVal = union(enum) {
 
 /// Public struct `Def`.
 pub const Def = struct {
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     debug_name: ?Symbol = null,
     value: DefVal,
 };

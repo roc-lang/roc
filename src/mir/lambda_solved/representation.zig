@@ -79,6 +79,7 @@ pub const CallableSetCaptureSlot = struct {
 pub const CanonicalCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
     capture_slots: []const CallableSetCaptureSlot,
     capture_shape_key: CaptureShapeKey,
 };
@@ -206,7 +207,7 @@ pub const CallableValueEmissionPlan = union(enum) {
 
 pub const CallableValueSource = union(enum) {
     proc_value: struct {
-        proc: canonical.MonoSpecializedProcRef,
+        proc: canonical.MirProcedureRef,
         captures: []const ValueInfoId,
         fn_ty: canonical.CanonicalTypeKey,
     },
@@ -434,10 +435,10 @@ pub const RepresentationStore = struct {
         value_store: *const ValueInfoStore,
         result: ValueInfoId,
         whole_function_root: RepRootId,
-        proc: canonical.MonoSpecializedProcRef,
+        proc: canonical.MirProcedureRef,
         capture_values: []const ValueInfoId,
     ) std.mem.Allocator.Error!CallableValueInfo {
-        const source_fn_ty = proc.specialization.requested_mono_fn_ty;
+        const source_fn_ty = proc.callable.source_fn_ty;
         const capture_shape_key = try captureShapeKeyForValueSlice(
             self.allocator,
             names,
@@ -454,16 +455,14 @@ pub const RepresentationStore = struct {
         var descriptor_owned = false;
         errdefer if (!descriptor_owned and capture_slots.len > 0) self.allocator.free(capture_slots);
 
-        const proc_callable = canonical.ProcedureCallableRef{
-            .template = .{ .checked = proc.specialization.template },
-            .source_fn_ty = source_fn_ty,
-        };
+        const proc_callable = proc.callable;
         const callable_set_key = singletonCallableSetKey(proc_callable, capture_shape_key, capture_slots);
         const member_id: CallableSetMemberId = @enumFromInt(0);
         if (self.callableSetDescriptor(callable_set_key) == null) {
             const members = try self.allocator.dupe(CanonicalCallableSetMember, &.{.{
                 .member = member_id,
                 .proc_value = proc_callable,
+                .source_proc = proc,
                 .capture_slots = capture_slots,
                 .capture_shape_key = capture_shape_key,
             }});
@@ -710,7 +709,7 @@ pub const RepresentationSolveSession = struct {
 };
 
 pub const ProcRepresentationInstance = struct {
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     executable_specialization_key: ExecutableSpecializationKey,
     solve_session: RepresentationSolveSessionId,
     value_store: ValueInfoStoreId,
@@ -722,7 +721,7 @@ pub fn executableSpecializationKeyForProc(
     names: *const canonical.CanonicalNameStore,
     types: *const type_mod.Store,
     value_store: *const ValueInfoStore,
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     roots: ProcPublicValueRoots,
 ) std.mem.Allocator.Error!ExecutableSpecializationKey {
     const params = value_store.sliceValueSpan(roots.params);
@@ -737,7 +736,7 @@ pub fn executableSpecializationKeyForProc(
 
     return .{
         .base = proc.proc.proc_base,
-        .requested_fn_ty = proc.specialization.requested_mono_fn_ty,
+        .requested_fn_ty = proc.callable.source_fn_ty,
         .exec_arg_tys = arg_keys,
         .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, types, value_store, roots.ret),
         .callable_repr_mode = .direct,

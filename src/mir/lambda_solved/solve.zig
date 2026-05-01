@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
 
 pub const Proc = struct {
-    proc: canonical.MonoSpecializedProcRef,
+    proc: canonical.MirProcedureRef,
     body: Ast.DefId,
     representation_instance: repr.ProcRepresentationInstanceId,
 };
@@ -29,7 +29,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    root_procs: std.ArrayList(canonical.MonoSpecializedProcRef),
+    root_procs: std.ArrayList(canonical.MirProcedureRef),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
     value_stores: std.ArrayList(repr.ValueInfoStore),
