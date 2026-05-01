@@ -77,6 +77,18 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     program.row_shapes = input.row_shapes;
     input.row_shapes = MonoRow.Store.init(allocator);
 
+    var proc_map = std.AutoHashMap(canonical.MonoSpecializedProcRef, Ast.ExecutableProcId).init(allocator);
+    defer proc_map.deinit();
+    var proc_instance_map = std.AutoHashMap(canonical.MonoSpecializedProcRef, repr.ProcRepresentationInstanceId).init(allocator);
+    defer proc_instance_map.deinit();
+    try proc_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+    try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+    for (input.procs.items, 0..) |proc, i| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
+        proc_map.putAssumeCapacity(proc.proc, executable_proc);
+        proc_instance_map.putAssumeCapacity(proc.proc, proc.representation_instance);
+    }
+
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
     var type_lowerer = TypeLowerer.init(allocator, &input.types, &program.types, &program.row_shapes);
     defer type_lowerer.deinit();
@@ -96,6 +108,9 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .source_proc = proc.proc,
             .representation_instance = proc.representation_instance,
             .proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)],
+            .proc_instances = input.proc_instances.items,
+            .proc_map = &proc_map,
+            .proc_instance_map = &proc_instance_map,
         };
         defer builder.deinit();
 
@@ -275,6 +290,9 @@ const BodyBuilder = struct {
     source_proc: canonical.MonoSpecializedProcRef,
     representation_instance: repr.ProcRepresentationInstanceId,
     proc_instance: *const repr.ProcRepresentationInstance,
+    proc_instances: []const repr.ProcRepresentationInstance,
+    proc_map: *const std.AutoHashMap(canonical.MonoSpecializedProcRef, Ast.ExecutableProcId),
+    proc_instance_map: *const std.AutoHashMap(canonical.MonoSpecializedProcRef, repr.ProcRepresentationInstanceId),
 
     fn deinit(self: *BodyBuilder) void {
         self.expr_map.deinit();
@@ -573,9 +591,9 @@ const BodyBuilder = struct {
             .capture_ref,
             .structural_eq,
             .call_value,
-            .call_proc,
             .proc_value,
             => executableInvariant("executable MIR reached lambda-solved expression form whose executable lowering is still missing"),
+            .call_proc => |call| try self.lowerCallProc(expr.ty, call),
             .inspect => |child| blk: {
                 const value = try self.lowerExpr(child);
                 const debug_stmt = try self.output.addStmt(.{ .debug = value });
@@ -807,6 +825,49 @@ const BodyBuilder = struct {
             };
         }
         return try self.output.addTagPayloadExprSpan(values);
+    }
+
+    fn lowerCallProc(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        call: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const target_proc = self.proc_map.get(call.proc) orelse executableInvariant("executable call_proc target was not reserved before body lowering");
+        const target_instance_id = self.proc_instance_map.get(call.proc) orelse executableInvariant("executable call_proc target has no representation instance");
+        const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
+
+        const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
+        const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_items.len);
+        defer self.allocator.free(direct_args);
+        const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len);
+        defer self.allocator.free(stmt_ids);
+
+        for (arg_items, 0..) |arg, i| {
+            const lowered = try self.lowerExpr(arg);
+            const value = self.exprValue(lowered);
+            direct_args[i] = .{ .value = value };
+            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+
+        const result_ty = try self.type_lowerer.lowerType(source_ty);
+        const result_value = self.output.freshValueRef();
+        const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_direct = .{
+            .source = call.proc.proc,
+            .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
+            .executable_proc = target_proc,
+            .direct_args = try self.output.addDirectCallArgSpan(direct_args),
+            .result_bridge = null,
+        } });
+
+        if (stmt_ids.len == 0) return final_call;
+
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_call,
+        } });
     }
 
     fn addValueExpr(self: *BodyBuilder, source_ty: LambdaSolved.Type.TypeVarId, data: Ast.Expr.Data) Allocator.Error!Ast.ExprId {

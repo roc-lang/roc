@@ -320,6 +320,9 @@ pub const Store = struct {
         self.typed_values.deinit(self.allocator);
         self.tag_payload_patterns.deinit(self.allocator);
         self.pattern_decision_plans.deinit(self.allocator);
+        for (self.callable_match_branches.items) |*branch| {
+            repr.deinitExecutableSpecializationKey(self.allocator, &branch.executable_specialization_key);
+        }
         self.callable_match_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
@@ -331,6 +334,12 @@ pub const Store = struct {
             repr.deinitExecutableSpecializationKey(self.allocator, &def.specialization_key);
         }
         self.defs.deinit(self.allocator);
+        for (self.exprs.items) |*expr| {
+            switch (expr.data) {
+                .call_direct => |*call| repr.deinitExecutableSpecializationKey(self.allocator, &call.executable_specialization_key),
+                else => {},
+            }
+        }
         self.stmts.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.pats.deinit(self.allocator);
