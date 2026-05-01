@@ -1455,10 +1455,7 @@ const BodyLowerer = struct {
             .dispatch_call => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked dispatch call reached mono without a StaticDispatchCallPlan")),
             .method_eq => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked method equality reached mono without a StaticDispatchCallPlan")),
             .type_dispatch_call => |plan| try self.lowerStaticDispatch(ty, plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan")),
-            .method_call,
-            .type_method_call,
-            .hosted_lambda,
-            => invariantViolation("mono body lowering reached a checked expression form whose lowering is still missing"),
+            .hosted_lambda => invariantViolation("mono body lowering reached hosted lambda as an expression; hosted lambdas must be published as procedure templates"),
             .dbg => |child| blk: {
                 const value = try self.lowerExpr(child);
                 break :blk try self.program.ast.addExpr(ty, .{ .inspect = value });

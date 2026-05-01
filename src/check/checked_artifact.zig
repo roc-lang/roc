@@ -1269,11 +1269,6 @@ pub const CheckedExprData = union(enum) {
         receiver: CheckedExprId,
         field_name: canonical.RecordFieldLabelId,
     },
-    method_call: struct {
-        receiver: CheckedExprId,
-        method_name: canonical.MethodNameId,
-        args: []const CheckedExprId,
-    },
     dispatch_call: ?StaticDispatchPlanId,
     structural_eq: struct {
         lhs: CheckedExprId,
@@ -1281,10 +1276,6 @@ pub const CheckedExprData = union(enum) {
         negated: bool,
     },
     method_eq: ?StaticDispatchPlanId,
-    type_method_call: struct {
-        method_name: canonical.MethodNameId,
-        args: []const CheckedExprId,
-    },
     type_dispatch_call: ?StaticDispatchPlanId,
     tuple_access: struct {
         tuple: CheckedExprId,
@@ -1785,11 +1776,10 @@ const CheckedBodyPayloadCopier = struct {
                 .receiver = self.checkedExpr(field.receiver),
                 .field_name = try self.names.internRecordFieldIdent(self.module.identStoreConst(), field.field_name),
             } },
-            .e_method_call => |method| .{ .method_call = .{
-                .receiver = self.checkedExpr(method.receiver),
-                .method_name = try self.names.internMethodIdent(self.module.identStoreConst(), method.method_name),
-                .args = try self.copyExprSpan(method.args),
-            } },
+            .e_method_call => checkedArtifactInvariant(
+                "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
+                .{},
+            ),
             .e_dispatch_call => .{ .dispatch_call = null },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
@@ -1797,10 +1787,10 @@ const CheckedBodyPayloadCopier = struct {
                 .negated = eq.negated,
             } },
             .e_method_eq => .{ .method_eq = null },
-            .e_type_method_call => |method| .{ .type_method_call = .{
-                .method_name = try self.names.internMethodIdent(self.module.identStoreConst(), method.method_name),
-                .args = try self.copyExprSpan(method.args),
-            } },
+            .e_type_method_call => checkedArtifactInvariant(
+                "type method call reached artifact publication after checking; expected explicit static-dispatch plan",
+                .{},
+            ),
             .e_type_dispatch_call => .{ .type_dispatch_call = null },
             .e_tuple_access => |access| .{ .tuple_access = .{
                 .tuple = self.checkedExpr(access.tuple),
@@ -2140,8 +2130,6 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .unary_not,
         => {},
         .field_access => {},
-        .method_call => |method| allocator.free(method.args),
-        .type_method_call => |method| allocator.free(method.args),
         .hosted_lambda => |hosted| allocator.free(hosted.args),
         .run_low_level => |run| allocator.free(run.args),
     }
@@ -3055,16 +3043,9 @@ const CheckedTemplateRefCollector = struct {
             .unary_minus => |child| try self.collectExpr(child),
             .unary_not => |child| try self.collectExpr(child),
             .field_access => |field| try self.collectExpr(field.receiver),
-            .method_call => |method| {
-                try self.collectExpr(method.receiver);
-                for (method.args) |arg| try self.collectExpr(arg);
-            },
             .structural_eq => |eq| {
                 try self.collectExpr(eq.lhs);
                 try self.collectExpr(eq.rhs);
-            },
-            .type_method_call => |method| {
-                for (method.args) |arg| try self.collectExpr(arg);
             },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
@@ -3555,16 +3536,9 @@ const NestedProcSiteBuilder = struct {
                 try self.scanExpr(ret.lambda, owner, true);
             },
             .field_access => |field| try self.scanExpr(field.receiver, owner, false),
-            .method_call => |method| {
-                try self.scanExpr(method.receiver, owner, false);
-                for (method.args) |arg| try self.scanExpr(arg, owner, false);
-            },
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
-            },
-            .type_method_call => |method| {
-                for (method.args) |arg| try self.scanExpr(arg, owner, false);
             },
             .tuple_access => |access| try self.scanExpr(access.tuple, owner, false),
             .for_ => |for_| {
