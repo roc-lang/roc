@@ -218,12 +218,13 @@ pub const FnDef = struct {
 pub const Def = struct {
     proc: ExecutableProcId,
     source_proc: canonical.ProcedureValueRef,
-    specialization_key: repr.ExecutableSpecializationKey,
+    specialization_key: ?repr.ExecutableSpecializationKey = null,
     value: FnDef,
 };
 
 pub const Store = struct {
     allocator: std.mem.Allocator,
+    next_value_ref: u32 = 0,
     exprs: std.ArrayList(Expr),
     pats: std.ArrayList(Pat),
     branches: std.ArrayList(Branch),
@@ -239,6 +240,7 @@ pub const Store = struct {
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .allocator = allocator,
+            .next_value_ref = 0,
             .exprs = .empty,
             .pats = .empty,
             .branches = .empty,
@@ -271,6 +273,63 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.exprs.items.len);
         try self.exprs.append(self.allocator, .{ .ty = ty, .value = value, .data = data });
         return @enumFromInt(idx);
+    }
+
+    pub fn freshValueRef(self: *Store) ExecutableValueRef {
+        const id: ExecutableValueRef = @enumFromInt(self.next_value_ref);
+        self.next_value_ref += 1;
+        return id;
+    }
+
+    pub fn getExpr(self: *const Store, id: ExprId) Expr {
+        return self.exprs.items[@intFromEnum(id)];
+    }
+
+    pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
+        const idx: u32 = @intCast(self.stmts.items.len);
+        try self.stmts.append(self.allocator, stmt);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {
+        const idx: u32 = @intCast(self.defs.items.len);
+        try self.defs.append(self.allocator, def);
+        return @enumFromInt(idx);
+    }
+
+    pub fn addExprSpan(self: *Store, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
+        if (ids.len == 0) return Span(ExprId).empty();
+        const start: u32 = @intCast(self.expr_ids.items.len);
+        try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addValueRefSpan(self: *Store, refs: []const ExecutableValueRef) std.mem.Allocator.Error!Span(ExecutableValueRef) {
+        if (refs.len == 0) return Span(ExecutableValueRef).empty();
+        const start: u32 = @intCast(self.value_refs.items.len);
+        try self.value_refs.appendSlice(self.allocator, refs);
+        return .{ .start = start, .len = @intCast(refs.len) };
+    }
+
+    pub fn addStmtSpan(self: *Store, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+        if (ids.len == 0) return Span(StmtId).empty();
+        const start: u32 = @intCast(self.stmt_ids.items.len);
+        try self.stmt_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addTypedValueSpan(self: *Store, values: []const TypedValue) std.mem.Allocator.Error!Span(TypedValue) {
+        if (values.len == 0) return Span(TypedValue).empty();
+        const start: u32 = @intCast(self.typed_values.items.len);
+        try self.typed_values.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addDirectCallArgSpan(self: *Store, values: []const DirectCallArg) std.mem.Allocator.Error!Span(DirectCallArg) {
+        if (values.len == 0) return Span(DirectCallArg).empty();
+        const start: u32 = @intCast(self.direct_call_args.items.len);
+        try self.direct_call_args.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
     }
 };
 

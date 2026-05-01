@@ -18,7 +18,7 @@ const repr = LambdaSolved.Representation;
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
     source_proc: canonical.MonoSpecializedProcRef,
-    body: ?Ast.DefId = null,
+    body: Ast.DefId,
 };
 
 pub const Program = struct {
@@ -67,11 +67,30 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     input.row_shapes = MonoRow.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
+    var type_lowerer = TypeLowerer.init(allocator, &input.types, &program.types);
+    defer type_lowerer.deinit();
+
     for (input.procs.items, 0..) |proc, i| {
-        program.procs.appendAssumeCapacity(.{
-            .executable_proc = @enumFromInt(@as(u32, @intCast(i))),
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
+        const value_store = &input.value_stores.items[@intFromEnum(proc.representation_instance)];
+        var builder = BodyBuilder{
+            .allocator = allocator,
+            .input = &input.ast,
+            .output = &program.ast,
+            .type_lowerer = &type_lowerer,
+            .value_store = value_store,
+            .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
+            .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
+            .executable_proc = executable_proc,
             .source_proc = proc.proc,
-            .body = null,
+            .representation_instance = proc.representation_instance,
+        };
+        defer builder.deinit();
+
+        program.procs.appendAssumeCapacity(.{
+            .executable_proc = executable_proc,
+            .source_proc = proc.proc,
+            .body = try builder.lowerDef(proc.body),
         });
     }
 
@@ -85,6 +104,451 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
 
     input.deinit();
     return program;
+}
+
+const TypeLowerer = struct {
+    allocator: Allocator,
+    input: *const LambdaSolved.Type.Store,
+    output: *Type.Store,
+    active: std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId),
+
+    fn init(allocator: Allocator, input: *const LambdaSolved.Type.Store, output: *Type.Store) TypeLowerer {
+        return .{
+            .allocator = allocator,
+            .input = input,
+            .output = output,
+            .active = std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeLowerer) void {
+        self.active.deinit();
+    }
+
+    fn lowerType(self: *TypeLowerer, source: LambdaSolved.Type.TypeVarId) Allocator.Error!Type.TypeId {
+        const root = self.input.unlinkConst(source);
+        if (self.active.get(root)) |existing| return existing;
+
+        const target = try self.output.addType(.placeholder);
+        try self.active.put(root, target);
+        errdefer _ = self.active.remove(root);
+
+        const lowered: Type.Content = switch (self.input.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => executableInvariant("executable type lowering received unresolved lambda-solved type"),
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.lowerType(nominal.backing),
+            } },
+            .content => |content| switch (content) {
+                .primitive => |prim| .{ .primitive = prim },
+                .list => |elem| .{ .list = try self.lowerType(elem) },
+                .box => |elem| .{ .box = try self.lowerType(elem) },
+                .tuple => |span| blk: {
+                    const source_items = self.input.sliceTypeVarSpan(span);
+                    const items = try self.allocator.alloc(Type.TypeId, source_items.len);
+                    defer self.allocator.free(items);
+                    for (source_items, 0..) |item, i| {
+                        items[i] = try self.lowerType(item);
+                    }
+                    break :blk .{ .tuple = try self.allocator.dupe(Type.TypeId, items) };
+                },
+                .func => executableInvariant("executable type lowering requires solved callable representation for function type"),
+                .record => executableInvariant("executable type lowering requires row-finalized record shape metadata"),
+                .tag_union => executableInvariant("executable type lowering requires row-finalized tag-union shape metadata"),
+            },
+        };
+
+        self.output.types.items[@intFromEnum(target)] = lowered;
+        _ = self.active.remove(root);
+        return target;
+    }
+
+    fn lowerRecordType(self: *TypeLowerer, shape: MonoRow.RecordShapeId) Allocator.Error!Type.TypeId {
+        return try self.output.addType(.{ .record = shape });
+    }
+
+    fn lowerTagUnionType(self: *TypeLowerer, shape: MonoRow.TagUnionShapeId) Allocator.Error!Type.TypeId {
+        return try self.output.addType(.{ .tag_union = shape });
+    }
+};
+
+const BodyBuilder = struct {
+    allocator: Allocator,
+    input: *const LambdaSolved.Ast.Store,
+    output: *Ast.Store,
+    type_lowerer: *TypeLowerer,
+    value_store: *const repr.ValueInfoStore,
+    env: std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef),
+    expr_map: std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId),
+    executable_proc: Ast.ExecutableProcId,
+    source_proc: canonical.MonoSpecializedProcRef,
+    representation_instance: repr.ProcRepresentationInstanceId,
+
+    fn deinit(self: *BodyBuilder) void {
+        self.expr_map.deinit();
+        self.env.deinit();
+    }
+
+    fn lowerDef(self: *BodyBuilder, def_id: LambdaSolved.Ast.DefId) Allocator.Error!Ast.DefId {
+        const def = self.input.defs.items[@intFromEnum(def_id)];
+        return try self.output.addDef(switch (def.value) {
+            .fn_ => |fn_| blk: {
+                const args = try self.lowerParamSpan(fn_.args);
+                const body = try self.lowerExpr(fn_.body);
+                break :blk .{
+                    .proc = self.executable_proc,
+                    .source_proc = def.proc,
+                    .specialization_key = self.executableSpecializationKey(),
+                    .value = .{
+                        .args = args,
+                        .body = body,
+                    },
+                };
+            },
+            .hosted_fn => |hosted| blk: {
+                const args = try self.lowerParamSpan(hosted.args);
+                const body = try self.output.addExpr(
+                    try self.type_lowerer.output.addType(.placeholder),
+                    self.output.freshValueRef(),
+                    .runtime_error,
+                );
+                break :blk .{
+                    .proc = self.executable_proc,
+                    .source_proc = def.proc,
+                    .specialization_key = self.executableSpecializationKey(),
+                    .value = .{
+                        .args = args,
+                        .body = body,
+                    },
+                };
+            },
+            .val => |expr| blk: {
+                const body = try self.lowerExpr(expr);
+                break :blk .{
+                    .proc = self.executable_proc,
+                    .source_proc = def.proc,
+                    .specialization_key = self.executableSpecializationKey(),
+                    .value = .{
+                        .args = Ast.Span(Ast.TypedValue).empty(),
+                        .body = body,
+                    },
+                };
+            },
+            .run => |run| blk: {
+                const body = try self.lowerExpr(run.body);
+                break :blk .{
+                    .proc = self.executable_proc,
+                    .source_proc = def.proc,
+                    .specialization_key = self.executableSpecializationKey(),
+                    .value = .{
+                        .args = Ast.Span(Ast.TypedValue).empty(),
+                        .body = body,
+                    },
+                };
+            },
+        });
+    }
+
+    fn executableSpecializationKey(self: *const BodyBuilder) ?repr.ExecutableSpecializationKey {
+        _ = self;
+        return null;
+    }
+
+    fn lowerParamSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
+        if (span.len == 0) return Ast.Span(Ast.TypedValue).empty();
+        const input_items = self.input.typed_symbols.items[span.start..][0..span.len];
+        const output_items = try self.allocator.alloc(Ast.TypedValue, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |param, i| {
+            const value = self.output.freshValueRef();
+            try self.env.put(param.binding_info, value);
+            output_items[i] = .{
+                .ty = try self.type_lowerer.lowerType(param.ty),
+                .value = value,
+            };
+        }
+        return try self.output.addTypedValueSpan(output_items);
+    }
+
+    fn lowerExpr(self: *BodyBuilder, expr_id: LambdaSolved.Ast.ExprId) Allocator.Error!Ast.ExprId {
+        if (self.expr_map.get(expr_id)) |existing| return existing;
+
+        const expr = self.input.exprs.items[@intFromEnum(expr_id)];
+        const lowered = switch (expr.data) {
+            .var_ => |var_| blk: {
+                const value = self.env.get(var_.binding_info) orelse executableInvariant("executable variable occurrence has no lowered binding value");
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    value,
+                    .{ .value_ref = value },
+                );
+            },
+            .int_lit => |literal| try self.addValueExpr(expr.ty, .{ .int_lit = literal }),
+            .frac_f32_lit => |literal| try self.addValueExpr(expr.ty, .{ .frac_f32_lit = literal }),
+            .frac_f64_lit => |literal| try self.addValueExpr(expr.ty, .{ .frac_f64_lit = literal }),
+            .dec_lit => |literal| try self.addValueExpr(expr.ty, .{ .dec_lit = literal }),
+            .str_lit => |literal| try self.addValueExpr(expr.ty, .{ .str_lit = literal }),
+            .bool_lit => |literal| try self.addValueExpr(expr.ty, .{ .bool_lit = literal }),
+            .unit => try self.addValueExpr(expr.ty, .unit),
+            .const_ref => |const_ref| try self.addValueExpr(expr.ty, .{ .const_ref = const_ref }),
+            .record => |record| blk: {
+                const fields = try self.lowerRecordFields(record.assembly_order);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerRecordType(record.shape),
+                    self.output.freshValueRef(),
+                    .{ .record = .{
+                        .shape = record.shape,
+                        .fields = fields,
+                    } },
+                );
+            },
+            .tag => |tag| blk: {
+                const payloads = try self.lowerTagPayloadValues(tag.assembly_order);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerTagUnionType(tag.union_shape),
+                    self.output.freshValueRef(),
+                    .{ .tag = .{
+                        .union_shape = tag.union_shape,
+                        .tag = tag.tag,
+                        .payloads = payloads,
+                    } },
+                );
+            },
+            .access => |access| blk: {
+                const record = try self.lowerExpr(access.record);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .access = .{
+                        .record = self.exprValue(record),
+                        .field = access.field,
+                    } },
+                );
+            },
+            .let_ => |let_| blk: {
+                const body = try self.lowerExpr(let_.body);
+                const previous = try self.env.fetchPut(let_.bind.binding_info, self.exprValue(body));
+                defer {
+                    if (previous) |entry| {
+                        self.env.put(let_.bind.binding_info, entry.value) catch unreachable;
+                    } else {
+                        _ = self.env.remove(let_.bind.binding_info);
+                    }
+                }
+                const rest = try self.lowerExpr(let_.rest);
+                const stmt = try self.output.addStmt(.{ .decl = .{
+                    .value = self.exprValue(body),
+                    .body = body,
+                } });
+                const stmt_span = try self.output.addStmtSpan(&.{stmt});
+                break :blk try self.output.addExpr(
+                    self.output.getExpr(rest).ty,
+                    self.exprValue(rest),
+                    .{ .block = .{
+                        .stmts = stmt_span,
+                        .final_expr = rest,
+                    } },
+                );
+            },
+            .block => |block| blk: {
+                const stmts = try self.lowerStmtSpan(block.stmts);
+                const final_expr = try self.lowerExpr(block.final_expr);
+                break :blk try self.output.addExpr(
+                    self.output.getExpr(final_expr).ty,
+                    self.exprValue(final_expr),
+                    .{ .block = .{
+                        .stmts = stmts,
+                        .final_expr = final_expr,
+                    } },
+                );
+            },
+            .tuple => |items| blk: {
+                const values = try self.lowerExprValues(items);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .tuple = values },
+                );
+            },
+            .list => |items| blk: {
+                const values = try self.lowerExprValues(items);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .list = values },
+                );
+            },
+            .tag_payload => |payload| blk: {
+                const tag_union = try self.lowerExpr(payload.tag_union);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .tag_payload = .{
+                        .tag_union = self.exprValue(tag_union),
+                        .payload = payload.payload,
+                    } },
+                );
+            },
+            .tuple_access => |access| blk: {
+                const tuple = try self.lowerExpr(access.tuple);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .tuple_access = .{
+                        .tuple = self.exprValue(tuple),
+                        .elem_index = access.elem_index,
+                    } },
+                );
+            },
+            .low_level => |low_level| blk: {
+                const args = try self.lowerExprValues(low_level.args);
+                break :blk try self.output.addExpr(
+                    try self.type_lowerer.lowerType(expr.ty),
+                    self.output.freshValueRef(),
+                    .{ .low_level = .{
+                        .op = low_level.op,
+                        .args = args,
+                    } },
+                );
+            },
+            .return_ => |child| blk: {
+                const lowered_child = try self.lowerExpr(child);
+                break :blk try self.output.addExpr(
+                    self.output.getExpr(lowered_child).ty,
+                    self.exprValue(lowered_child),
+                    .{ .return_ = self.exprValue(lowered_child) },
+                );
+            },
+            .crash => |literal| try self.addValueExpr(expr.ty, .{ .crash = literal }),
+            .runtime_error => try self.addValueExpr(expr.ty, .runtime_error),
+            .capture_ref,
+            .structural_eq,
+            .bool_not,
+            .call_value,
+            .call_proc,
+            .proc_value,
+            .inspect,
+            .match_,
+            .if_,
+            .for_,
+            => executableInvariant("executable MIR reached lambda-solved expression form whose executable lowering is still missing"),
+        };
+        try self.expr_map.put(expr_id, lowered);
+        return lowered;
+    }
+
+    fn lowerStmt(self: *BodyBuilder, stmt_id: LambdaSolved.Ast.StmtId) Allocator.Error!Ast.StmtId {
+        const stmt = self.input.stmts.items[@intFromEnum(stmt_id)];
+        return try self.output.addStmt(switch (stmt) {
+            .decl => |decl| blk: {
+                const body = try self.lowerExpr(decl.body);
+                try self.env.put(decl.bind.binding_info, self.exprValue(body));
+                break :blk .{ .decl = .{
+                    .value = self.exprValue(body),
+                    .body = body,
+                } };
+            },
+            .var_decl => |decl| blk: {
+                const body = try self.lowerExpr(decl.body);
+                try self.env.put(decl.bind.binding_info, self.exprValue(body));
+                break :blk .{ .decl = .{
+                    .value = self.exprValue(body),
+                    .body = body,
+                } };
+            },
+            .reassign => |reassign| blk: {
+                const body = try self.lowerExpr(reassign.body);
+                const target = self.env.get(reassign.version) orelse executableInvariant("executable reassignment target has no lowered binding value");
+                break :blk .{ .reassign = .{
+                    .target = target,
+                    .body = body,
+                } };
+            },
+            .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
+            .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
+            .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
+            .crash => |literal| .{ .crash = literal },
+            .return_ => |expr| blk: {
+                const body = try self.lowerExpr(expr);
+                break :blk .{ .return_ = self.exprValue(body) };
+            },
+            .break_ => .break_,
+            .for_,
+            .while_,
+            => executableInvariant("executable MIR reached lambda-solved statement form whose executable lowering is still missing"),
+        });
+    }
+
+    fn lowerStmtSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {
+        if (span.len == 0) return Ast.Span(Ast.StmtId).empty();
+        const input_items = self.input.stmt_ids.items[span.start..][0..span.len];
+        const output_items = try self.allocator.alloc(Ast.StmtId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |stmt, i| {
+            output_items[i] = try self.lowerStmt(stmt);
+        }
+        return try self.output.addStmtSpan(output_items);
+    }
+
+    fn lowerExprValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExecutableValueRef) {
+        if (span.len == 0) return Ast.Span(Ast.ExecutableValueRef).empty();
+        const input_items = self.input.expr_ids.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.ExecutableValueRef, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |expr, i| {
+            const lowered = try self.lowerExpr(expr);
+            values[i] = self.exprValue(lowered);
+        }
+        return try self.output.addValueRefSpan(values);
+    }
+
+    fn lowerRecordFields(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly)) Allocator.Error!Ast.Span(Ast.TypedValue) {
+        if (span.len == 0) return Ast.Span(Ast.TypedValue).empty();
+        const input_items = self.input.record_field_assemblies.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.TypedValue, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |field, i| {
+            const lowered = try self.lowerExpr(field.value);
+            values[i] = .{
+                .ty = self.output.getExpr(lowered).ty,
+                .value = self.exprValue(lowered),
+            };
+        }
+        return try self.output.addTypedValueSpan(values);
+    }
+
+    fn lowerTagPayloadValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly)) Allocator.Error!Ast.Span(Ast.ExecutableValueRef) {
+        if (span.len == 0) return Ast.Span(Ast.ExecutableValueRef).empty();
+        const input_items = self.input.tag_payload_assemblies.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.ExecutableValueRef, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |payload, i| {
+            const lowered = try self.lowerExpr(payload.value);
+            values[i] = self.exprValue(lowered);
+        }
+        return try self.output.addValueRefSpan(values);
+    }
+
+    fn addValueExpr(self: *BodyBuilder, source_ty: LambdaSolved.Type.TypeVarId, data: Ast.Expr.Data) Allocator.Error!Ast.ExprId {
+        return try self.output.addExpr(
+            try self.type_lowerer.lowerType(source_ty),
+            self.output.freshValueRef(),
+            data,
+        );
+    }
+
+    fn exprValue(self: *const BodyBuilder, expr: Ast.ExprId) Ast.ExecutableValueRef {
+        return self.output.getExpr(expr).value;
+    }
+};
+
+fn executableInvariant(comptime message: []const u8) noreturn {
+    debug.invariant(false, message);
+    unreachable;
 }
 
 fn executableProcForSource(program: *const Program, source_proc: canonical.MonoSpecializedProcRef) ?Ast.ExecutableProcId {

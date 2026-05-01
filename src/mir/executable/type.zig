@@ -51,8 +51,20 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        for (self.types.items) |content| {
+            self.freeOwnedContent(content);
+        }
         self.types.deinit(self.allocator);
         self.* = Store.init(self.allocator);
+    }
+
+    fn freeOwnedContent(self: *Store, content: Content) void {
+        switch (content) {
+            .tuple => |items| {
+                if (items.len > 0) self.allocator.free(items);
+            },
+            else => {},
+        }
     }
 
     pub fn addType(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
