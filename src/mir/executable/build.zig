@@ -81,12 +81,16 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     defer proc_map.deinit();
     var proc_instance_map = std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId).init(allocator);
     defer proc_instance_map.deinit();
+    var proc_exec_map = std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId).init(allocator);
+    defer proc_exec_map.deinit();
     try proc_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+    try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     for (input.procs.items, 0..) |proc, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
         proc_map.putAssumeCapacity(proc.proc, executable_proc);
         proc_instance_map.putAssumeCapacity(proc.proc, proc.representation_instance);
+        proc_exec_map.putAssumeCapacity(proc.representation_instance, executable_proc);
     }
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
@@ -113,6 +117,7 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .proc_instances = input.proc_instances.items,
             .proc_map = &proc_map,
             .proc_instance_map = &proc_instance_map,
+            .proc_exec_map = &proc_exec_map,
         };
         defer builder.deinit();
 
@@ -296,6 +301,7 @@ const BodyBuilder = struct {
     proc_instances: []const repr.ProcRepresentationInstance,
     proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
     proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
     capture_record_arg: ?Ast.TypedValue = null,
 
     fn deinit(self: *BodyBuilder) void {
@@ -369,6 +375,19 @@ const BodyBuilder = struct {
         return try repr.cloneExecutableSpecializationKey(self.allocator, self.proc_instance.executable_specialization_key);
     }
 
+    fn executableProcForSpecializationKey(
+        self: *const BodyBuilder,
+        key: repr.ExecutableSpecializationKey,
+    ) Ast.ExecutableProcId {
+        for (self.proc_instances, 0..) |instance, i| {
+            if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
+                const instance_id: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
+                return self.proc_exec_map.get(instance_id) orelse executableInvariant("executable specialization key matched an unreserved proc instance");
+            }
+        }
+        executableInvariant("executable specialization key was not reserved before body lowering");
+    }
+
     fn lowerExecutableValueType(
         self: *BodyBuilder,
         logical_ty: LambdaSolved.Type.TypeVarId,
@@ -382,14 +401,17 @@ const BodyBuilder = struct {
                 .already_erased => |erased| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erased.sig_key,
                     .capture_shape = erased.capture_shape_key,
+                    .capture_ty = try self.lowerAlreadyErasedCaptureType(erased),
                 } }),
                 .erase_proc_value => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erase.erased_fn_sig_key,
                     .capture_shape = erase.capture_shape_key,
+                    .capture_ty = try self.lowerProcValueErasedCaptureType(callable, erase),
                 } }),
                 .erase_finite_set => |adapter| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = adapter.erased_fn_sig_key,
                     .capture_shape = adapter.capture_shape_key,
+                    .capture_ty = try self.lowerFiniteSetAdapterCaptureType(adapter),
                 } }),
             };
         }
@@ -397,6 +419,70 @@ const BodyBuilder = struct {
             return try self.lowerAggregateExecutableValueType(aggregate);
         }
         return try self.type_lowerer.lowerType(logical_ty);
+    }
+
+    fn lowerAlreadyErasedCaptureType(
+        self: *BodyBuilder,
+        erased: repr.AlreadyErasedCallablePlan,
+    ) Allocator.Error!?Type.TypeId {
+        _ = self;
+        if (erased.sig_key.capture_ty == null) return null;
+        executableInvariant("executable already-erased callable requires published hidden capture type");
+    }
+
+    fn lowerProcValueErasedCaptureType(
+        self: *BodyBuilder,
+        callable: repr.CallableValueInfo,
+        erase: repr.ProcValueErasePlan,
+    ) Allocator.Error!?Type.TypeId {
+        if (erase.erased_fn_sig_key.capture_ty == null) {
+            if (erase.capture_slots.len != 0) executableInvariant("executable proc-value erase plan has captures but no hidden capture type");
+            return null;
+        }
+
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => executableInvariant("executable proc-value erase plan is attached to a non-proc callable source"),
+        };
+        if (source.captures.len != erase.capture_slots.len) {
+            executableInvariant("executable proc-value erase plan capture slots disagree with callable source captures");
+        }
+
+        const items: []Type.TypeId = if (erase.capture_slots.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(Type.TypeId, erase.capture_slots.len);
+        errdefer if (items.len > 0) self.allocator.free(items);
+
+        const seen: []bool = if (erase.capture_slots.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(bool, erase.capture_slots.len);
+        defer if (seen.len > 0) self.allocator.free(seen);
+        if (seen.len > 0) @memset(seen, false);
+
+        for (erase.capture_slots) |slot| {
+            const index: usize = @intCast(slot.slot);
+            if (index >= source.captures.len) executableInvariant("executable proc-value erase capture slot exceeds source capture arity");
+            if (seen[index]) executableInvariant("executable proc-value erase capture slot was duplicated");
+            const capture = source.captures[index];
+            const capture_info = self.value_store.values.items[@intFromEnum(capture)];
+            items[index] = try self.lowerExecutableValueType(capture_info.logical_ty, capture);
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) executableInvariant("executable proc-value erase plan did not provide every hidden capture slot");
+        }
+
+        return try self.type_lowerer.output.addType(.{ .tuple = items });
+    }
+
+    fn lowerFiniteSetAdapterCaptureType(
+        self: *BodyBuilder,
+        adapter: repr.ErasedAdapterKey,
+    ) Allocator.Error!?Type.TypeId {
+        if (adapter.erased_fn_sig_key.capture_ty == null) return null;
+        return try self.type_lowerer.output.addType(.{ .callable_set = .{ .key = adapter.callable_set_key } });
     }
 
     fn lowerAggregateExecutableValueType(
@@ -1046,12 +1132,20 @@ const BodyBuilder = struct {
     ) Allocator.Error!Ast.ExprId {
         const value_info = self.value_store.values.items[@intFromEnum(value_info_id)];
         const callable = value_info.callable orelse executableInvariant("executable proc_value reached value without callable metadata");
+        const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
+        switch (emission) {
+            .finite => {},
+            .erase_proc_value => |erase| return try self.lowerProcValueErased(source_ty, value_info_id, callable, proc_value, erase),
+            .already_erased,
+            .erase_finite_set,
+            => executableInvariant("executable proc_value reached erased emission that is not a proc-value erase plan"),
+        }
+
         const construction_id = callable.construction_plan orelse executableInvariant("executable proc_value reached finite callable value without construction metadata");
         const construction = self.representation_store.callableConstructionPlan(construction_id);
         if (construction.result != value_info_id) {
             executableInvariant("executable proc_value construction plan is attached to the wrong value");
         }
-        const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
         const emission_key = switch (emission) {
             .finite => |key| key,
             else => executableInvariant("executable proc_value construction plan does not have finite callable emission"),
@@ -1125,6 +1219,121 @@ const BodyBuilder = struct {
         } });
     }
 
+    fn lowerProcValueErased(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        value_info_id: repr.ValueInfoId,
+        callable: repr.CallableValueInfo,
+        proc_value: anytype,
+        erase: repr.ProcValueErasePlan,
+    ) Allocator.Error!Ast.ExprId {
+        if (erase.source != value_info_id) {
+            executableInvariant("executable proc-value erase plan is attached to the wrong value");
+        }
+        if (!canonical.procedureCallableRefEql(erase.proc_value, proc_value.proc.callable)) {
+            executableInvariant("executable proc-value erase plan procedure differs from proc_value expression");
+        }
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => executableInvariant("executable proc-value erase plan is attached to a non-proc callable source"),
+        };
+        if (!canonical.mirProcedureRefEql(source.proc, proc_value.proc)) {
+            executableInvariant("executable proc-value erase source procedure differs from proc_value expression");
+        }
+        if (!repr.canonicalTypeKeyEql(source.fn_ty, erase.proc_value.source_fn_ty)) {
+            executableInvariant("executable proc-value erase source function type differs from erase plan");
+        }
+        if (source.captures.len != erase.capture_slots.len) {
+            executableInvariant("executable proc-value erase source capture count differs from erase plan");
+        }
+
+        const capture_items = self.input.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
+        if (capture_items.len != erase.capture_slots.len) {
+            executableInvariant("executable proc-value erase capture arity does not match erase plan");
+        }
+
+        const result_ty = try self.lowerExecutableValueType(source_ty, value_info_id);
+        const capture_ty = self.erasedFnCaptureType(result_ty, erase.erased_fn_sig_key);
+        if ((capture_ty != null) != (erase.erased_fn_sig_key.capture_ty != null)) {
+            executableInvariant("executable proc-value erase capture type disagrees with erased signature");
+        }
+        if (capture_ty == null and erase.capture_slots.len != 0) {
+            executableInvariant("executable proc-value erase has captures but no hidden capture type");
+        }
+
+        const selected_executable_proc = self.executableProcForSpecializationKey(erase.executable_specialization_key);
+
+        const lowered_captures: []Ast.ExprId = if (capture_items.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(Ast.ExprId, capture_items.len);
+        defer if (lowered_captures.len > 0) self.allocator.free(lowered_captures);
+        const seen: []bool = if (capture_items.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(bool, capture_items.len);
+        defer if (seen.len > 0) self.allocator.free(seen);
+        if (seen.len > 0) @memset(seen, false);
+
+        const stmt_count = capture_items.len + (if (capture_ty != null) @as(usize, 1) else @as(usize, 0));
+        const stmt_ids: []Ast.StmtId = if (stmt_count == 0)
+            &.{}
+        else
+            try self.allocator.alloc(Ast.StmtId, stmt_count);
+        defer if (stmt_ids.len > 0) self.allocator.free(stmt_ids);
+
+        for (capture_items) |capture| {
+            const slot_index: usize = @intCast(capture.slot);
+            if (slot_index >= capture_items.len) executableInvariant("executable proc-value erase capture slot exceeded capture arity");
+            if (seen[slot_index]) executableInvariant("executable proc-value erase capture slot was duplicated");
+            if (erase.capture_slots[slot_index].slot != capture.slot) {
+                executableInvariant("executable proc-value erase capture slot differs from erase plan");
+            }
+            if (capture.value_info != source.captures[slot_index]) {
+                executableInvariant("executable proc-value erase capture value differs from callable source");
+            }
+            const lowered = try self.lowerExpr(capture.expr);
+            const value = self.exprValue(lowered);
+            lowered_captures[slot_index] = lowered;
+            stmt_ids[slot_index] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+            seen[slot_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) executableInvariant("executable proc-value erase plan did not provide every capture slot");
+        }
+
+        const capture_value: ?Ast.ExecutableValueRef = if (capture_ty) |ty| blk: {
+            const capture_expr = if (lowered_captures.len == 0)
+                try self.output.addExpr(ty, self.output.freshValueRef(), .unit)
+            else
+                try self.output.addExpr(ty, self.output.freshValueRef(), .{ .tuple = try self.output.addExprSpan(lowered_captures) });
+            const value = self.exprValue(capture_expr);
+            stmt_ids[capture_items.len] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = capture_expr,
+            } });
+            break :blk value;
+        } else null;
+
+        const result_value = self.output.freshValueRef();
+        const final_value = try self.output.addExpr(result_ty, result_value, .{ .packed_erased_fn = .{
+            .sig_key = erase.erased_fn_sig_key,
+            .code = selected_executable_proc,
+            .capture = capture_value,
+            .capture_ty = capture_ty,
+            .capture_shape = erase.capture_shape_key,
+        } });
+
+        if (stmt_ids.len == 0) return final_value;
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_value,
+        } });
+    }
+
     fn lowerCallValue(
         self: *BodyBuilder,
         source_ty: LambdaSolved.Type.TypeVarId,
@@ -1148,7 +1357,7 @@ const BodyBuilder = struct {
             .already_erased,
             .erase_proc_value,
             .erase_finite_set,
-            => executableInvariant("executable call_value erased callable lowering is not implemented yet"),
+            => executableInvariant("executable call_value finite dispatch reached erased callee emission"),
         }
         const descriptor = self.representation_store.callableSetDescriptor(callable_set_key) orelse {
             executableInvariant("executable call_value finite callable set has no descriptor");
@@ -1250,9 +1459,7 @@ const BodyBuilder = struct {
             .finite => executableInvariant("executable erased call_value reached finite callee emission"),
         }
 
-        if (sig_key.capture_ty != null) {
-            executableInvariant("executable call_value erased callable lowering requires hidden capture layout publication");
-        }
+        const capture_ty = self.erasedFnCaptureType(self.output.getExpr(func).ty, sig_key);
 
         const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
         const arg_values = try self.allocator.alloc(Ast.ExecutableValueRef, arg_items.len);
@@ -1279,12 +1486,35 @@ const BodyBuilder = struct {
             .func = func_value,
             .args = try self.output.addValueRefSpan(arg_values),
             .sig_key = sig_key,
+            .capture_ty = capture_ty,
         } });
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids),
             .final_expr = final_call,
         } });
+    }
+
+    fn erasedFnCaptureType(
+        self: *BodyBuilder,
+        func_ty: Type.TypeId,
+        sig_key: repr.ErasedFnSigKey,
+    ) ?Type.TypeId {
+        return switch (self.type_lowerer.output.getType(func_ty)) {
+            .link => |next| self.erasedFnCaptureType(next, sig_key),
+            .erased_fn => |erased| blk: {
+                if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
+                    executableInvariant("executable erased call callee type signature differs from call site");
+                }
+                const sig_has_capture = sig_key.capture_ty != null;
+                const type_has_capture = erased.capture_ty != null;
+                if (sig_has_capture != type_has_capture) {
+                    executableInvariant("executable erased call callee type hidden capture disagrees with signature");
+                }
+                break :blk erased.capture_ty;
+            },
+            else => executableInvariant("executable erased call callee is not an erased function value"),
+        };
     }
 
     fn addValueExpr(

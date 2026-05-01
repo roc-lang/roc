@@ -19,6 +19,7 @@ pub const CallableSetType = struct {
 pub const ErasedFnType = struct {
     sig_key: repr.ErasedFnSigKey,
     capture_shape: repr.CaptureShapeKey,
+    capture_ty: ?TypeId = null,
 };
 
 pub const RecordFieldType = struct {

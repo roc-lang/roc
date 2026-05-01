@@ -814,6 +814,18 @@ pub fn cloneExecutableSpecializationKey(
     };
 }
 
+pub fn executableSpecializationKeyEql(a: ExecutableSpecializationKey, b: ExecutableSpecializationKey) bool {
+    if (a.base != b.base) return false;
+    if (!canonicalTypeKeyEql(a.requested_fn_ty, b.requested_fn_ty)) return false;
+    if (a.exec_arg_tys.len != b.exec_arg_tys.len) return false;
+    for (a.exec_arg_tys, b.exec_arg_tys) |a_arg, b_arg| {
+        if (!canonicalExecValueTypeKeyEql(a_arg, b_arg)) return false;
+    }
+    if (!canonicalExecValueTypeKeyEql(a.exec_ret_ty, b.exec_ret_ty)) return false;
+    if (a.callable_repr_mode != b.callable_repr_mode) return false;
+    return captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+}
+
 pub fn deinitProcRepresentationInstance(
     allocator: std.mem.Allocator,
     instance: *ProcRepresentationInstance,

@@ -163,8 +163,10 @@ pub const PatternDecisionPlan = struct {
 
 pub const PackedErasedFn = struct {
     sig_key: repr.ErasedFnSigKey,
-    code: repr.ErasedAdapterKey,
-    capture: repr.CaptureShapeKey,
+    code: ExecutableProcId,
+    capture: ?ExecutableValueRef = null,
+    capture_ty: ?TypeId = null,
+    capture_shape: repr.CaptureShapeKey,
 };
 
 pub const Expr = struct {
@@ -209,6 +211,7 @@ pub const Expr = struct {
             func: ExecutableValueRef,
             args: Span(ExecutableValueRef),
             sig_key: repr.ErasedFnSigKey,
+            capture_ty: ?TypeId = null,
         },
         callable_set_value: CallableSetValue,
         callable_match: struct {

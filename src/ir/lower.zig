@@ -288,9 +288,9 @@ const IrBuilder = struct {
                     .plan = bridge_plan,
                 } }, stmts);
             },
+            .packed_erased_fn => |packed| try self.lowerPackedErasedFn(expr, packed, stmts),
             .call_erased => |call| try self.lowerCallErased(expr, call, stmts),
             .const_ref,
-            .packed_erased_fn,
             .crash,
             .runtime_error,
             => irInvariant("IR lowering reached executable expression form whose IR lowering is still missing"),
@@ -353,17 +353,58 @@ const IrBuilder = struct {
         call: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        if (call.sig_key.capture_ty != null) {
-            irInvariant("IR lowering call_erased requires explicit hidden capture layout");
+        const sig_has_capture = call.sig_key.capture_ty != null;
+        const type_has_capture = call.capture_ty != null;
+        if (sig_has_capture != type_has_capture) {
+            irInvariant("IR lowering call_erased hidden capture type disagrees with erased signature");
         }
         const func = self.value_env.get(call.func) orelse irInvariant("IR lowering call_erased function value was not bound");
         const args = try self.lowerVarSpanFromValueRefSpan(call.args);
         defer if (args.len > 0) self.allocator.free(args);
+        const capture_layout = if (call.capture_ty) |capture_ty| try self.layoutForType(capture_ty) else null;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_erased = .{
             .func = func,
             .args = try self.output.store.addVarSpan(args),
-            .capture_layout = null,
+            .capture_layout = capture_layout,
         } }, stmts);
+    }
+
+    fn lowerPackedErasedFn(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        packed: Exec.Ast.PackedErasedFn,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const field_count: usize = if (packed.capture_ty == null) 1 else 2;
+        const fields = try self.allocator.alloc(Ast.Var, field_count);
+        defer self.allocator.free(fields);
+
+        const fn_ptr = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .{ .fn_ptr = packed.code }, stmts);
+        fields[0] = fn_ptr;
+
+        if (packed.capture_ty) |capture_ty| {
+            const capture_ref = packed.capture orelse irInvariant("IR lowering packed erased fn has capture type but no capture value");
+            const capture = self.value_env.get(capture_ref) orelse irInvariant("IR lowering packed erased fn capture value was not bound");
+            const capture_layout = try self.layoutForType(capture_ty);
+            const capture_box_layout = try self.boxLayout(capture_layout);
+            const capture_box = try self.freshVar(capture_box_layout);
+            const direct = try self.output.store.addBridgePlan(.direct);
+            const box_plan = try self.output.store.addBridgePlan(.{ .box_box = direct });
+            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
+                .bind = capture_box,
+                .expr = try self.output.store.addExpr(.{ .bridge = .{
+                    .value = capture,
+                    .plan = box_plan,
+                } }),
+            } }));
+            fields[1] = capture_box;
+        } else if (packed.capture != null) {
+            irInvariant("IR lowering packed erased fn has capture value but no capture type");
+        }
+
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{
+            .make_struct = try self.output.store.addVarSpan(fields),
+        }, stmts);
     }
 
     fn lowerCallableSetValue(
@@ -1089,6 +1130,12 @@ const IrBuilder = struct {
         return .{ .local = node };
     }
 
+    fn boxLayout(self: *IrBuilder, child: Ast.LayoutRef) LowerResourceError!Ast.LayoutRef {
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        self.output.layouts.setNode(node, .{ .box = child });
+        return .{ .local = node };
+    }
+
     fn structLayoutFromTypes(self: *IrBuilder, types: []const Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
         if (types.len == 0) return .{ .canonical = .zst };
         const vars = try self.allocator.alloc(Ast.Var, types.len);
@@ -1204,9 +1251,7 @@ const IrBuilder = struct {
             },
             .box => |elem| blk: {
                 const child = try self.layoutForType(elem);
-                const node = try self.output.layouts.reserveNode(self.allocator);
-                self.output.layouts.setNode(node, .{ .box = child });
-                break :blk .{ .local = node };
+                break :blk try self.boxLayout(child);
             },
             .tuple => |items| blk: {
                 const vars = try self.allocator.alloc(Ast.Var, items.len);
@@ -1221,10 +1266,27 @@ const IrBuilder = struct {
             },
             .record => |record| try self.recordLayout(record),
             .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
-            .callable_set,
-            .erased_fn,
-            => .{ .canonical = .opaque_ptr },
+            .callable_set => .{ .canonical = .opaque_ptr },
+            .erased_fn => |erased| try self.erasedFnLayout(erased),
         };
+    }
+
+    fn erasedFnLayout(self: *IrBuilder, erased: Exec.Type.ErasedFnType) LowerResourceError!Ast.LayoutRef {
+        const field_count: usize = if (erased.capture_ty == null) 1 else 2;
+        const fields = try self.allocator.alloc(Ast.Var, field_count);
+        defer self.allocator.free(fields);
+
+        fields[0] = .{
+            .layout = .{ .canonical = .opaque_ptr },
+            .symbol = symbol_mod.Symbol.none,
+        };
+        if (erased.capture_ty) |capture_ty| {
+            fields[1] = .{
+                .layout = try self.boxLayout(try self.layoutForType(capture_ty)),
+                .symbol = symbol_mod.Symbol.none,
+            };
+        }
+        return try self.structLayout(fields);
     }
 
     fn listElementType(self: *IrBuilder, ty: Exec.Type.TypeId) Exec.Type.TypeId {

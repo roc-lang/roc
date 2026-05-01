@@ -480,6 +480,7 @@ const Lowerer = struct {
                 .capture_layout = if (call.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
                 .next = next,
             } }),
+            .packed_erased_fn => |packed| try self.lowerPackedErasedFnInto(target, packed, next),
             .layout_size => |layout_ref| blk: {
                 const layout_idx = try self.lowerLayoutRef(layout_ref);
                 const size = self.layouts.layoutSize(self.layouts.getLayout(layout_idx));
@@ -494,6 +495,49 @@ const Lowerer = struct {
             },
             .bridge => |bridge| try self.lowerBridgeExpr(target, bridge, next),
         };
+    }
+
+    fn lowerPackedErasedFnInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        packed: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const target_layout = self.store.getLocal(target).layout_idx;
+        const has_capture = packed.capture != null;
+        if (has_capture != (packed.capture_layout != null)) {
+            lirInvariant("lir.lower_ir packed erased fn capture value disagrees with capture layout");
+        }
+        const field_count: usize = if (has_capture) 2 else 1;
+        const fields = try self.allocator.alloc(LIR.LocalId, field_count);
+        defer self.allocator.free(fields);
+        for (fields, 0..) |*field, i| {
+            field.* = try self.store.addLocal(.{
+                .layout_idx = self.structFieldLayout(target_layout, i),
+            });
+        }
+
+        var current = try self.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = try self.store.addLocalSpan(fields),
+            .next = next,
+        } });
+
+        if (packed.capture) |capture| {
+            const args = [_]LIR.LocalId{try self.lowerVar(capture)};
+            current = try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = fields[1],
+                .op = .box_box,
+                .args = try self.store.addLocalSpan(&args),
+                .next = current,
+            } });
+        }
+
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = fields[0],
+            .value = .{ .proc_ref = self.lirProcForExecutable(packed.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder") },
+            .next = current,
+        } });
     }
 
     fn lowerBridgeExpr(

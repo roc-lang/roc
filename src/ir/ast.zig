@@ -125,6 +125,11 @@ pub const Expr = union(enum) {
         args: Span(Var),
         capture_layout: ?LayoutRef,
     },
+    packed_erased_fn: struct {
+        proc: ProcRef,
+        capture: ?Var,
+        capture_layout: ?LayoutRef,
+    },
     call_low_level: struct {
         op: base.LowLevel,
         args: Span(Var),
