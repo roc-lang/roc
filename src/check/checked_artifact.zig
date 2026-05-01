@@ -3329,6 +3329,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .export_name = export_name,
                 .kind = if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
                 .ordinal = @intFromEnum(def_idx),
+                .source_def_idx = @intFromEnum(def_idx),
             });
             const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(templates.items.len)));
             const template_ref = canonical.ProcedureTemplateRef{

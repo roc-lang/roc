@@ -114,11 +114,26 @@ pub const ProcBaseKind = enum {
     entry_wrapper,
 };
 
+pub const NestedProcSiteKey = struct {
+    owner_template: ProcedureTemplateRef,
+    site: NestedProcSiteId,
+};
+
 pub const ProcBaseKey = struct {
     module_name: ModuleNameId,
     export_name: ?ExportNameId,
     kind: ProcBaseKind,
     ordinal: u32,
+    /// Source definition ordinal within the checked CIR module, when this
+    /// procedure originates from a source definition.
+    source_def_idx: ?u32 = null,
+    /// Explicit nested source site for local functions, closures, and desugared
+    /// nested procedures. Null for ordinary top-level source procedures.
+    nested_proc_site: ?NestedProcSiteKey = null,
+    /// Owning mono specialization for lifted local procedures. This is part of
+    /// procedure identity because the same nested source site can be lifted from
+    /// different monomorphic owner instantiations.
+    owner_mono_specialization: ?MonoSpecializationKey = null,
 };
 
 pub const NominalTypeKey = struct {
@@ -260,12 +275,16 @@ pub const CanonicalNameStore = struct {
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.writer(self.allocator).print("proc:{d}:{s}:{d}:{d}|", .{
+        const writer = self.scratch_key.writer(self.allocator);
+        try writer.print("proc:{d}:{s}:{d}:{d}:{d}|", .{
             @intFromEnum(key.module_name),
             @tagName(key.kind),
             if (key.export_name) |name| @intFromEnum(name) else std.math.maxInt(u32),
             key.ordinal,
+            key.source_def_idx orelse std.math.maxInt(u32),
         });
+        try appendOptionalNestedProcSiteKey(&self.scratch_key, key.nested_proc_site, self.allocator);
+        try appendOptionalMonoSpecializationKey(&self.scratch_key, key.owner_mono_specialization, self.allocator);
 
         if (self.proc_base_by_key.get(self.scratch_key.items)) |existing| return existing;
 
@@ -333,6 +352,56 @@ fn internText(
     return id;
 }
 
+fn appendOptionalNestedProcSiteKey(
+    scratch: *std.ArrayList(u8),
+    maybe_key: ?NestedProcSiteKey,
+    allocator: Allocator,
+) Allocator.Error!void {
+    if (maybe_key) |key| {
+        try scratch.append(allocator, 1);
+        try appendProcedureTemplateRef(scratch, key.owner_template, allocator);
+        try scratch.writer(allocator).print("site:{d}|", .{@intFromEnum(key.site)});
+    } else {
+        try scratch.append(allocator, 0);
+    }
+}
+
+fn appendOptionalMonoSpecializationKey(
+    scratch: *std.ArrayList(u8),
+    maybe_key: ?MonoSpecializationKey,
+    allocator: Allocator,
+) Allocator.Error!void {
+    if (maybe_key) |key| {
+        try scratch.append(allocator, 1);
+        try appendMonoSpecializationKey(scratch, key, allocator);
+    } else {
+        try scratch.append(allocator, 0);
+    }
+}
+
+fn appendMonoSpecializationKey(
+    scratch: *std.ArrayList(u8),
+    key: MonoSpecializationKey,
+    allocator: Allocator,
+) Allocator.Error!void {
+    try appendProcedureTemplateRef(scratch, key.template, allocator);
+    try scratch.appendSlice(allocator, key.requested_mono_fn_ty.bytes[0..]);
+    try scratch.append(allocator, '|');
+}
+
+fn appendProcedureTemplateRef(
+    scratch: *std.ArrayList(u8),
+    ref: ProcedureTemplateRef,
+    allocator: Allocator,
+) Allocator.Error!void {
+    try scratch.writer(allocator).print("template:{d}:{d}:", .{
+        @intFromEnum(ref.proc_base),
+        @intFromEnum(ref.template),
+    });
+    try scratch.appendSlice(allocator, ref.artifact.bytes[0..]);
+    try scratch.append(allocator, '|');
+}
+
 fn freeStringHashMapKeys(comptime V: type, map: *std.StringHashMap(V), allocator: Allocator) void {
     var keys = map.keyIterator();
     while (keys.next()) |key| allocator.free(key.*);
@@ -345,4 +414,57 @@ test "canonical names dedupe by text" {
     const a = try names.internModuleName("Main");
     const b = try names.internModuleName("Main");
     try std.testing.expectEqual(a, b);
+}
+
+test "proc base identity includes nested owner mono specialization" {
+    var names = CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+
+    const module_name = try names.internModuleName("Main");
+    const owner_base = try names.internProcBase(.{
+        .module_name = module_name,
+        .export_name = null,
+        .kind = .checked_source,
+        .ordinal = 1,
+        .source_def_idx = 1,
+    });
+    const owner_template = ProcedureTemplateRef{
+        .artifact = .{ .bytes = [_]u8{1} ** 32 },
+        .proc_base = owner_base,
+        .template = @enumFromInt(0),
+    };
+
+    var i64_key = CanonicalTypeKey{};
+    i64_key.bytes[0] = 1;
+    var str_key = CanonicalTypeKey{};
+    str_key.bytes[0] = 2;
+
+    const nested_site = NestedProcSiteKey{
+        .owner_template = owner_template,
+        .site = @enumFromInt(0),
+    };
+    const lifted_i64 = try names.internProcBase(.{
+        .module_name = module_name,
+        .export_name = null,
+        .kind = .checked_source,
+        .ordinal = 2,
+        .nested_proc_site = nested_site,
+        .owner_mono_specialization = .{
+            .template = owner_template,
+            .requested_mono_fn_ty = i64_key,
+        },
+    });
+    const lifted_str = try names.internProcBase(.{
+        .module_name = module_name,
+        .export_name = null,
+        .kind = .checked_source,
+        .ordinal = 2,
+        .nested_proc_site = nested_site,
+        .owner_mono_specialization = .{
+            .template = owner_template,
+            .requested_mono_fn_ty = str_key,
+        },
+    });
+
+    try std.testing.expect(lifted_i64 != lifted_str);
 }

@@ -132,6 +132,7 @@ pub const MethodRegistry = struct {
                 .export_name = export_name,
                 .kind = .checked_source,
                 .ordinal = @intFromEnum(def_idx),
+                .source_def_idx = @intFromEnum(def_idx),
             });
 
             try entries.append(allocator, .{
