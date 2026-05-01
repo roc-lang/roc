@@ -27,9 +27,9 @@ pub const MonoProcHandle = enum(u32) { _ };
 
 pub const MonoSpecializationReason = union(enum) {
     root: checked_artifact.RootRequest,
-    call_proc: Ast.ExprId,
-    proc_value: Ast.ExprId,
-    static_dispatch_target: checked_artifact.RootSource,
+    call_proc: checked_artifact.CheckedExprId,
+    proc_value: checked_artifact.CheckedExprId,
+    static_dispatch_target: checked_artifact.StaticDispatchPlanId,
     comptime_dependency_summary: u32,
 };
 
@@ -182,7 +182,7 @@ pub fn run(
         defer type_instantiator.deinit();
         try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
         const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
-        var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator, &name_resolver);
+        var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator, &name_resolver, &queue);
         defer body_lowerer.deinit();
         const body = try body_lowerer.lowerTemplateBody(reserved, fn_ty);
         try program.addProc(key, reserved, fn_ty, body);
@@ -1190,6 +1190,7 @@ const BodyLowerer = struct {
     template_lookup: CheckedTemplateLookup,
     type_instantiator: *TypeInstantiator,
     name_resolver: *ArtifactNames.ArtifactNameResolver,
+    queue: *Queue,
     local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
 
     fn init(
@@ -1199,6 +1200,7 @@ const BodyLowerer = struct {
         template_lookup: CheckedTemplateLookup,
         type_instantiator: *TypeInstantiator,
         name_resolver: *ArtifactNames.ArtifactNameResolver,
+        queue: *Queue,
     ) BodyLowerer {
         return .{
             .allocator = allocator,
@@ -1207,6 +1209,7 @@ const BodyLowerer = struct {
             .template_lookup = template_lookup,
             .type_instantiator = type_instantiator,
             .name_resolver = name_resolver,
+            .queue = queue,
             .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
         };
     }
@@ -1352,7 +1355,7 @@ const BodyLowerer = struct {
             .record => |record| try self.lowerRecord(ty, record),
             .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
             .lambda => |lambda| try self.lowerClosureExpr(ty, lambda.args, lambda.body),
-            .call => |call| try self.lowerCall(ty, call),
+            .call => |call| try self.lowerCall(ty, expr_id, call),
             .structural_eq => |eq| try self.lowerStructuralEq(ty, eq),
             .unary_not => |child| blk: {
                 const value = try self.lowerExpr(child);
@@ -1479,7 +1482,7 @@ const BodyLowerer = struct {
             .platform_required_proc,
             .promoted_top_level_proc,
             => |proc_use| try self.program.ast.addExpr(ty, .{ .proc_value = .{
-                .proc = self.procedureValueForUse(proc_use),
+                .proc = try self.reserveProcedureUse(proc_use, record.checked_ty, .{ .proc_value = record.expr }),
                 .captures = Ast.Span(Ast.CaptureArg).empty(),
                 .fn_ty = ty,
             } }),
@@ -1633,9 +1636,21 @@ const BodyLowerer = struct {
     fn lowerCall(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        call_expr: checked_artifact.CheckedExprId,
         call: anytype,
     ) Allocator.Error!Ast.ExprId {
         _ = call.called_via;
+        if (self.procedureUseForExpr(call.func)) |proc_use| {
+            const args = try self.lowerExprSpan(call.args);
+            const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
+            const proc = try self.reserveProcedureUse(proc_use, self.checkedExpr(call.func).ty, .{ .call_proc = call_expr });
+            return try self.program.ast.addExpr(ty, .{ .call_proc = .{
+                .proc = proc,
+                .args = args,
+                .requested_fn_ty = func_ty,
+            } });
+        }
+
         const func = try self.lowerExpr(call.func);
         const args = try self.lowerExprSpan(call.args);
         const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
@@ -1685,8 +1700,26 @@ const BodyLowerer = struct {
         const method = try self.methodName(plan.method);
         const target = try self.lookupMethodTarget(owner, method);
 
-        if (target) |_| {
-            invariantViolation("mono static dispatch target specialization is not implemented yet");
+        if (target) |method_target| {
+            const template = method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template");
+            const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
+            const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+                .template = template,
+                .requested_fn_ty = requested_fn_ty,
+                .reason = .{ .static_dispatch_target = plan_id },
+            });
+            const call_expr = try self.program.ast.addExpr(ty, .{ .call_proc = .{
+                .proc = reserved.proc.proc,
+                .args = lowered_args,
+                .requested_fn_ty = callable_ty,
+            } });
+            return switch (plan.result_mode) {
+                .value => call_expr,
+                .equality => |equality| if (equality.negated)
+                    try self.program.ast.addExpr(ty, .{ .bool_not = call_expr })
+                else
+                    call_expr,
+            };
         }
 
         return switch (plan.result_mode) {
@@ -2162,28 +2195,67 @@ const BodyLowerer = struct {
         return self.template_lookup.resolved_value_refs.records[raw];
     }
 
-    fn procedureValueForUse(
+    fn procedureUseForExpr(
+        self: *const BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) ?checked_artifact.ProcedureUseTemplate {
+        const expr = self.checkedExpr(expr_id);
+        const ref_id = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved orelse return null,
+            .lookup_external => |maybe_ref| maybe_ref orelse return null,
+            .lookup_required => |maybe_ref| maybe_ref orelse return null,
+            else => return null,
+        };
+        const record = self.resolvedValueRef(ref_id);
+        return switch (record.ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => |proc_use| proc_use,
+            else => null,
+        };
+    }
+
+    fn reserveProcedureUse(
+        self: *BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+        checked_fn_ty: checked_artifact.CheckedTypeId,
+        reason: MonoSpecializationReason,
+    ) Allocator.Error!canonical.ProcedureValueRef {
+        const template = self.procedureTemplateForUse(use);
+        const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(checked_fn_ty);
+        const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+            .template = template,
+            .requested_fn_ty = requested_fn_ty,
+            .reason = reason,
+        });
+        return reserved.proc.proc;
+    }
+
+    fn procedureTemplateForUse(
         self: *const BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
-    ) canonical.ProcedureValueRef {
+    ) canonical.ProcedureTemplateRef {
         return switch (use.binding) {
-            .top_level => |binding_ref| self.directProcedureBinding(
+            .top_level => |binding_ref| checkedTemplateFromCallableTemplate(self.directProcedureBinding(
                 topLevelProcedureBindingsForKey(self.input, self.template_lookup.artifact) orelse {
                     debug.invariant(false, "mono body lowering invariant violated: template artifact has no top-level procedure binding table");
                     unreachable;
                 },
                 binding_ref,
-            ).proc_value,
-            .imported => |imported| self.importedProcedureBinding(imported).proc_value,
-            .hosted => |hosted| hosted.proc,
-            .platform_required => |required| self.directProcedureBinding(
+            ).template),
+            .imported => |imported| checkedTemplateFromCallableTemplate(self.importedProcedureBinding(imported).template),
+            .hosted => |_| invariantViolation("mono body lowering reached hosted procedure use before hosted procedure templates were published"),
+            .platform_required => |required| checkedTemplateFromCallableTemplate(self.directProcedureBinding(
                 topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
                     debug.invariant(false, "mono body lowering invariant violated: platform-required artifact has no procedure binding table");
                     unreachable;
                 },
                 required.procedure_binding,
-            ).proc_value,
-            .promoted => |promoted| promoted.proc,
+            ).template),
+            .promoted => |_| invariantViolation("mono body lowering reached promoted procedure use before promoted procedure templates were published"),
         };
     }
 
@@ -2239,6 +2311,17 @@ const BodyLowerer = struct {
 fn invariantViolation(comptime message: []const u8) noreturn {
     debug.invariant(false, message);
     unreachable;
+}
+
+fn checkedTemplateFromCallableTemplate(
+    template: canonical.CallableProcedureTemplateRef,
+) canonical.ProcedureTemplateRef {
+    return switch (template) {
+        .checked => |checked| checked,
+        .lifted,
+        .synthetic,
+        => invariantViolation("mono specialization expected a checked procedure template before lifting or synthetic wrapper lowering"),
+    };
 }
 
 fn checkedTypesForKey(
