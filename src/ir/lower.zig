@@ -269,7 +269,6 @@ const IrBuilder = struct {
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
-            .tag,
             .const_ref,
             .bridge,
             .call_erased,
