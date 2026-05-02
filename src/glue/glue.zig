@@ -5,27 +5,29 @@
 //!
 //! The pipeline:
 //! 1. Parse platform header to extract requires entries and type aliases
-//! 2. Compile the platform via BuildEnv with a synthetic app
-//! 3. Collect hosted functions and module type info
-//! 4. Build a type table from compiler type variables
-//! 5. Serialize everything into Roc C-ABI structs
-//! 6. Run the glue spec (e.g., ZigGlue.roc) via the interpreter
+//! 2. Compile the platform via BuildEnv with a synthetic app, publishing checked artifacts
+//! 3. Collect hosted functions and module type info from checked artifacts
+//! 4. Build the glue input type table from artifact-owned checked type data
+//! 5. Materialize the glue input as Roc C-ABI values
+//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run the LIR interpreter
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
+const check = @import("check");
 const can = @import("can");
-const reporting = @import("reporting");
 const echo_platform = @import("echo_platform");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
+const lir = @import("lir");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
-const Mode = compile.package.Mode;
 const RocTarget = roc_target.RocTarget;
+const CheckedArtifact = check.CheckedArtifact;
 
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
@@ -57,8 +59,8 @@ pub const GlueError = error{
     OutOfMemory,
 };
 
-/// Print platform glue information for a platform's main.roc file using full compilation path.
-/// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
+/// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
+/// Hosted function ordering comes from published `HostedProcTable` records.
 pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
     rocGlueInner(gpa, stderr, stdout, args, temp_dir) catch |err| {
         (switch (err) {
@@ -82,12 +84,440 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
 }
 
 fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
-    _ = gpa;
-    _ = stderr;
-    _ = stdout;
-    _ = args;
-    _ = temp_dir;
-    @compileError("Phase 2 must route glue generation through checked artifacts");
+    // 0. Validate glue spec file exists
+    std.fs.cwd().access(args.glue_spec, .{}) catch {
+        return error.GlueSpecNotFound;
+    };
+
+    // 1. Parse platform header to get requires entries and verify it's a platform file.
+    // Header parsing is still allowed here because it is parser-stage syntax handling,
+    // not post-check semantic recovery.
+    const platform_info = parsePlatformHeader(gpa, args.platform_path) catch |err| {
+        return switch (err) {
+            error.NotPlatformFile => error.NotPlatformFile,
+            error.FileNotFound => error.FileNotFound,
+            error.ParseFailed => error.ParseFailed,
+            else => error.ParseFailed,
+        };
+    };
+    defer platform_info.deinit(gpa);
+
+    // 2. Compile platform using BuildEnv by creating a synthetic app.
+    // BuildEnv publishes checked artifacts for both the synthetic app and the platform.
+    const platform_abs_path = std.fs.cwd().realpathAlloc(gpa, args.platform_path) catch {
+        return error.PlatformPathResolution;
+    };
+    defer gpa.free(platform_abs_path);
+
+    var app_source = std.ArrayList(u8).empty;
+    defer app_source.deinit(gpa);
+    const w = app_source.writer(gpa);
+
+    try w.print("app [", .{});
+
+    for (platform_info.type_aliases, 0..) |alias_name, i| {
+        if (i > 0) try w.print(", ", .{});
+        try w.print("{s}", .{alias_name});
+    }
+
+    for (platform_info.requires_entries, 0..) |entry, i| {
+        if (platform_info.type_aliases.len > 0 or i > 0) {
+            try w.print(", ", .{});
+        }
+        try w.print("{s}", .{entry.name});
+    }
+
+    try w.print("] {{ pf: platform \"", .{});
+    for (platform_abs_path) |ch| {
+        if (ch == '\\') {
+            try w.print("\\\\", .{});
+        } else {
+            try w.print("{c}", .{ch});
+        }
+    }
+    try w.print("\" }}\n\n", .{});
+
+    for (platform_info.type_aliases) |alias_name| {
+        try w.print("{s} : {{}}\n", .{alias_name});
+    }
+    if (platform_info.type_aliases.len > 0) {
+        try w.print("\n", .{});
+    }
+
+    for (platform_info.requires_entries) |entry| {
+        try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
+    }
+
+    const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(synthetic_app_path);
+
+    std.fs.cwd().writeFile(.{
+        .sub_path = synthetic_app_path,
+        .data = app_source.items,
+    }) catch {
+        return error.SyntheticAppWrite;
+    };
+
+    const cwd = std.process.getCwdAlloc(gpa) catch {
+        return error.BuildEnvInit;
+    };
+    defer gpa.free(cwd);
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd) catch {
+        return error.BuildEnvInit;
+    };
+    defer build_env.deinit();
+
+    build_env.build(synthetic_app_path) catch {
+        _ = build_env.renderDiagnostics(stderr);
+        return error.CompilationFailed;
+    };
+    _ = build_env.renderDiagnostics(stderr);
+
+    const modules = build_env.getModulesInSerializationOrder(gpa) catch {
+        return error.ModuleRetrieval;
+    };
+    defer gpa.free(modules);
+
+    const hosted_indices = collectHostedProcGlobalIndices(gpa, modules) catch {
+        return error.OutOfMemory;
+    };
+    defer {
+        for (hosted_indices) |index| gpa.free(index.sort_key);
+        gpa.free(hosted_indices);
+    }
+
+    // 3. Collect platform module type information from checked artifacts.
+    var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
+    defer {
+        for (collected_modules.items) |*mod_info| {
+            mod_info.deinit(gpa);
+        }
+        collected_modules.deinit(gpa);
+    }
+
+    var type_table = TypeTable.init(gpa);
+    defer type_table.deinit();
+
+    for (modules) |mod| {
+        if (mod.is_platform_sibling or mod.is_platform_main) {
+            const artifact = mod.semantic.checked_artifact orelse continue;
+            type_table.clearVarMap();
+            if (collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table)) |mod_info| {
+                collected_modules.append(gpa, mod_info) catch {};
+            }
+        }
+    }
+
+    // 4. Register platform entrypoint and provided-function type ids from the
+    // platform main artifact's published requires/provides metadata.
+    var entrypoint_type_ids = std.StringHashMap(u64).init(gpa);
+    defer entrypoint_type_ids.deinit();
+    var provides_type_ids = std.StringHashMap(u64).init(gpa);
+    defer provides_type_ids.deinit();
+
+    var provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+    defer {
+        for (provides_entries.items) |entry| {
+            gpa.free(entry.name);
+            gpa.free(entry.ffi_symbol);
+        }
+        provides_entries.deinit(gpa);
+    }
+
+    for (modules) |mod| {
+        if (!mod.is_platform_main) continue;
+        const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
+        const env = @constCast(artifact.moduleEnvConst());
+        type_table.clearVarMap();
+
+        for (artifact.provides_requires.provides) |provides_entry| {
+            try provides_entries.append(gpa, .{
+                .name = try gpa.dupe(u8, env.getIdent(provides_entry.ident)),
+                .ffi_symbol = try gpa.dupe(u8, env.getString(provides_entry.ffi_symbol)),
+            });
+        }
+
+        for (artifact.platform_required_declarations.declarations) |declaration| {
+            const name = artifact.canonical_names.exportNameText(declaration.platform_name);
+            const type_id = type_table.getOrInsert(env, ModuleEnv.varFrom(declaration.type_anno));
+            try entrypoint_type_ids.put(name, type_id);
+        }
+
+        for (provides_entries.items) |provides_entry| {
+            const def_idx = findTopLevelDefByName(artifact, provides_entry.name) orelse continue;
+            const type_id = type_table.getOrInsert(env, ModuleEnv.varFrom(def_idx));
+            try provides_type_ids.put(provides_entry.ffi_symbol, type_id);
+        }
+        break;
+    }
+
+    // 5. Compile glue spec through checked artifacts and lower to LIR.
+    const glue_spec_abs = std.fs.cwd().realpathAlloc(gpa, args.glue_spec) catch {
+        return error.GlueSpecNotFound;
+    };
+    defer gpa.free(glue_spec_abs);
+
+    const glue_cwd = std.process.getCwdAlloc(gpa) catch {
+        return error.BuildEnvInit;
+    };
+    defer gpa.free(glue_cwd);
+    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd) catch {
+        return error.BuildEnvInit;
+    };
+    defer glue_build_env.deinit();
+
+    glue_build_env.build(glue_spec_abs) catch {
+        _ = glue_build_env.renderDiagnostics(stderr);
+        return error.CompilationFailed;
+    };
+    _ = glue_build_env.renderDiagnostics(stderr);
+
+    const root_artifact = glue_build_env.executableRootCheckedArtifact();
+    const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(imported_artifacts);
+    const relation_artifacts = glue_build_env.collectRelationArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(relation_artifacts);
+    const module_envs = glue_build_env.collectModuleEnvViews(gpa) catch {
+        return error.ModuleRetrieval;
+    };
+    defer gpa.free(module_envs);
+
+    var lowered = lir.CheckedPipeline.lowerArtifactsToLir(
+        gpa,
+        .{
+            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    ) catch {
+        return error.OutOfMemory;
+    };
+    defer lowered.deinit();
+
+    const glue_proc = selectGlueSpecRootProc(&lowered) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("glue invariant violated: glue spec produced no callable platform root", .{});
+        }
+        unreachable;
+    };
+
+    // 6. Construct List(Types) as Roc C-ABI structs and invoke the LIR interpreter.
+    const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
+    var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
+
+    var interpreter = eval_mod.LirInterpreter.init(
+        gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    ) catch {
+        return error.OutOfMemory;
+    };
+    defer interpreter.deinit();
+
+    const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(arg_layouts);
+
+    var result_buf: ResultListFileStr = undefined;
+    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+    _ = interpreter.eval(.{
+        .proc_id = glue_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(&types_list),
+        .ret_ptr = @ptrCast(&result_buf),
+    }) catch |err| {
+        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
+
+    const glue_result = extractGlueResult(&result_buf);
+    if (glue_result.err_msg) |err_msg| {
+        stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
+        return error.CompilationFailed;
+    }
+
+    const files = glue_result.files;
+    if (files.len == 0) {
+        stdout.print("Glue spec returned 0 files.\n", .{}) catch {};
+        return;
+    }
+
+    std.fs.cwd().makePath(args.output_dir) catch {
+        stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
+        return error.CompilationFailed;
+    };
+
+    stdout.print("Glue spec returned {d} file(s):\n", .{files.len}) catch {};
+    for (files) |file| {
+        const file_name = file.name.asSlice();
+        const file_path = std.fs.path.join(gpa, &.{ args.output_dir, file_name }) catch {
+            return error.OutOfMemory;
+        };
+        defer gpa.free(file_path);
+
+        std.fs.cwd().writeFile(.{
+            .sub_path = file_path,
+            .data = file.content.asSlice(),
+        }) catch {
+            stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
+            return error.CompilationFailed;
+        };
+
+        stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
+    }
+}
+
+const HostedProcGlobalIndex = struct {
+    artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    def_idx: can.CIR.Def.Idx,
+    index: usize,
+    sort_key: []const u8,
+};
+
+fn checkedArtifactKeysEqual(
+    a: CheckedArtifact.CheckedModuleArtifactKey,
+    b: CheckedArtifact.CheckedModuleArtifactKey,
+) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn hostedProcSortKey(
+    allocator: Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    hosted: CheckedArtifact.HostedProc,
+) Allocator.Error![]const u8 {
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+    const local_name = artifact.canonical_names.externalSymbolNameText(hosted.external_symbol_name);
+    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
+    if (!std.mem.endsWith(u8, qualified, "!")) return qualified;
+
+    const stripped = try allocator.dupe(u8, qualified[0 .. qualified.len - 1]);
+    allocator.free(qualified);
+    return stripped;
+}
+
+fn collectHostedProcGlobalIndices(
+    allocator: Allocator,
+    modules: []const BuildEnv.CompiledModuleInfo,
+) Allocator.Error![]HostedProcGlobalIndex {
+    var indices = std.ArrayList(HostedProcGlobalIndex).empty;
+    errdefer {
+        for (indices.items) |index| allocator.free(index.sort_key);
+        indices.deinit(allocator);
+    }
+
+    for (modules) |mod| {
+        if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        for (artifact.hosted_procs.procs) |hosted| {
+            try indices.append(allocator, .{
+                .artifact_key = artifact.key,
+                .def_idx = hosted.def_idx,
+                .index = 0,
+                .sort_key = try hostedProcSortKey(allocator, artifact, hosted),
+            });
+        }
+    }
+
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedProcGlobalIndex, b: HostedProcGlobalIndex) bool {
+            return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
+                .lt => true,
+                .gt => false,
+                .eq => @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx),
+            };
+        }
+    };
+    std.mem.sort(HostedProcGlobalIndex, indices.items, {}, SortContext.lessThan);
+
+    for (indices.items, 0..) |*index, i| {
+        index.index = i;
+    }
+
+    return try indices.toOwnedSlice(allocator);
+}
+
+fn hostedGlobalIndexForDef(
+    indices: []const HostedProcGlobalIndex,
+    artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    def_idx: can.CIR.Def.Idx,
+) usize {
+    for (indices) |index| {
+        if (index.def_idx == def_idx and checkedArtifactKeysEqual(index.artifact_key, artifact_key)) {
+            return index.index;
+        }
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: hosted proc has no global index", .{});
+    }
+    unreachable;
+}
+
+fn findTopLevelDefByName(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    local_name: []const u8,
+) ?can.CIR.Def.Idx {
+    const env = artifact.moduleEnvConst();
+    const module_prefix = std.fmt.allocPrint(env.gpa, "{s}.", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)}) catch return null;
+    defer env.gpa.free(module_prefix);
+
+    for (artifact.top_level_values.entries) |entry| {
+        const def = env.store.getDef(entry.def);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const def_name = env.getIdent(pattern.assign.ident);
+        const candidate = if (std.mem.startsWith(u8, def_name, module_prefix))
+            def_name[module_prefix.len..]
+        else
+            def_name;
+        if (std.mem.eql(u8, candidate, local_name)) return entry.def;
+    }
+
+    return null;
+}
+
+fn selectGlueSpecRootProc(
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ?lir.LirProcSpecId {
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
+        if (metadata.kind == .provided_export) return root_proc;
+    }
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
+        if (metadata.kind == .platform_required_binding) return root_proc;
+    }
+    return null;
+}
+
+fn argLayoutsForProc(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) Allocator.Error![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(layout.Idx, arg_ids.len);
+    errdefer allocator.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    }
+
+    return arg_layouts;
 }
 
 
@@ -1582,15 +2012,15 @@ fn extractRecordFields(
     return result_list.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
 }
 
-/// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
+/// Collect type information from a published checked artifact.
 fn collectModuleTypeInfo(
     gpa: Allocator,
-    compiled_module: *const BuildEnv.CompiledModuleInfo,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
     module_name: []const u8,
-    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+    hosted_indices: []const HostedProcGlobalIndex,
     type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
-    const env = compiled_module.semantic.env;
+    const env = @constCast(artifact.moduleEnvConst());
 
     // Find main type
     var main_type_str: []const u8 = "";
@@ -1620,16 +2050,15 @@ fn collectModuleTypeInfo(
     }
 
     // Collect functions
-    const all_defs = env.store.sliceDefs(env.all_defs);
     var functions = std.ArrayList(CollectedModuleTypeInfo.CollectedFunctionInfo).empty;
     var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
 
     const module_prefix = std.fmt.allocPrint(gpa, "{s}.", .{module_name}) catch return null;
     defer gpa.free(module_prefix);
 
-    for (all_defs) |def_idx| {
+    for (artifact.top_level_values.entries) |entry| {
+        const def_idx = entry.def;
         const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
 
         const pattern = env.store.getPattern(def.pattern);
         if (pattern != .assign) continue;
@@ -1643,105 +2072,7 @@ fn collectModuleTypeInfo(
         else
             continue;
 
-        if (expr == .e_hosted_lambda) {
-            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
-                def_name[0 .. def_name.len - 1]
-            else
-                def_name;
-
-            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
-                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
-                    var type_writer = env.initTypeWriter() catch continue;
-                    defer type_writer.deinit();
-
-                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                    const type_var = ModuleEnv.varFrom(def_node_idx);
-
-                    type_writer.write(type_var, .one_line) catch continue;
-                    const type_str = type_writer.get();
-
-                    // Extract record fields from function arg and return types
-                    const resolved = env.types.resolveVar(type_var);
-                    var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-                    var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-
-                    if (resolved.desc.content.unwrapFunc()) |func| {
-                        // Extract return type record fields
-                        ret_fields = extractRecordFields(gpa, env, func.ret);
-
-                        // Extract arg type record fields (from the first arg if it's a record)
-                        const arg_vars = env.types.sliceVars(func.args);
-                        if (arg_vars.len == 1) {
-                            arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                        }
-                    } else {
-                        // May be a nominal wrapping a function
-                        switch (resolved.desc.content) {
-                            .structure => |flat_type| {
-                                switch (flat_type) {
-                                    .nominal_type => |nom| {
-                                        if (nom.vars.nonempty.count > 0) {
-                                            const backing_var = env.types.getNominalBackingVar(nom);
-                                            const backing_resolved = env.types.resolveVar(backing_var);
-                                            if (backing_resolved.desc.content.unwrapFunc()) |func| {
-                                                ret_fields = extractRecordFields(gpa, env, func.ret);
-                                                const arg_vars = env.types.sliceVars(func.args);
-                                                if (arg_vars.len == 1) {
-                                                    arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                                                }
-                                            }
-                                        }
-                                    },
-                                    else => {},
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    // Build type IDs for args and return type
-                    var arg_type_ids: []const u64 = &.{};
-                    var ret_type_id: u64 = 0;
-
-                    const func_content = blk: {
-                        if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
-                        // Check for nominal wrapping a function
-                        if (resolved.desc.content.unwrapNominalType()) |nom| {
-                            if (nom.vars.nonempty.count > 0) {
-                                const bv = env.types.getNominalBackingVar(nom);
-                                const br = env.types.resolveVar(bv);
-                                if (br.desc.content.unwrapFunc()) |func| break :blk func;
-                            }
-                        }
-                        break :blk null;
-                    };
-
-                    if (func_content) |func| {
-                        ret_type_id = type_table.getOrInsert(env, func.ret);
-                        const arg_vars_for_ids = env.types.sliceVars(func.args);
-                        if (arg_vars_for_ids.len > 0) {
-                            const ids = gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
-                            for (arg_vars_for_ids, 0..) |av, i| {
-                                ids[i] = type_table.getOrInsert(env, av);
-                            }
-                            arg_type_ids = ids;
-                        }
-                    } else {
-                        ret_type_id = type_table.insertUnit();
-                    }
-
-                    hosted_functions.append(gpa, .{
-                        .index = global_idx,
-                        .name = gpa.dupe(u8, local_name) catch continue,
-                        .type_str = gpa.dupe(u8, type_str) catch continue,
-                        .arg_fields = arg_fields,
-                        .ret_fields = ret_fields,
-                        .arg_type_ids = arg_type_ids,
-                        .ret_type_id = ret_type_id,
-                    }) catch continue;
-                    break;
-                }
-            }
-        } else if (expr == .e_lambda or def.annotation != null) {
+        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |_| {
             var type_writer = env.initTypeWriter() catch continue;
             defer type_writer.deinit();
 
@@ -1751,10 +2082,96 @@ fn collectModuleTypeInfo(
             type_writer.write(type_var, .one_line) catch continue;
             const type_str = type_writer.get();
 
-            functions.append(gpa, .{
+            // Extract record fields from function arg and return types.
+            const resolved = env.types.resolveVar(type_var);
+            var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+            var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+
+            if (resolved.desc.content.unwrapFunc()) |func| {
+                ret_fields = extractRecordFields(gpa, env, func.ret);
+                const arg_vars = env.types.sliceVars(func.args);
+                if (arg_vars.len == 1) {
+                    arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
+                }
+            } else {
+                switch (resolved.desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .nominal_type => |nom| {
+                                if (nom.vars.nonempty.count > 0) {
+                                    const backing_var = env.types.getNominalBackingVar(nom);
+                                    const backing_resolved = env.types.resolveVar(backing_var);
+                                    if (backing_resolved.desc.content.unwrapFunc()) |func| {
+                                        ret_fields = extractRecordFields(gpa, env, func.ret);
+                                        const arg_vars = env.types.sliceVars(func.args);
+                                        if (arg_vars.len == 1) {
+                                            arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            var arg_type_ids: []const u64 = &.{};
+            var ret_type_id: u64 = 0;
+
+            const func_content = blk: {
+                if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
+                if (resolved.desc.content.unwrapNominalType()) |nom| {
+                    if (nom.vars.nonempty.count > 0) {
+                        const bv = env.types.getNominalBackingVar(nom);
+                        const br = env.types.resolveVar(bv);
+                        if (br.desc.content.unwrapFunc()) |func| break :blk func;
+                    }
+                }
+                break :blk null;
+            };
+
+            if (func_content) |func| {
+                ret_type_id = type_table.getOrInsert(env, func.ret);
+                const arg_vars_for_ids = env.types.sliceVars(func.args);
+                if (arg_vars_for_ids.len > 0) {
+                    const ids = gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
+                    for (arg_vars_for_ids, 0..) |av, i| {
+                        ids[i] = type_table.getOrInsert(env, av);
+                    }
+                    arg_type_ids = ids;
+                }
+            } else {
+                ret_type_id = type_table.insertUnit();
+            }
+
+            hosted_functions.append(gpa, .{
+                .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
                 .name = gpa.dupe(u8, local_name) catch continue,
                 .type_str = gpa.dupe(u8, type_str) catch continue,
+                .arg_fields = arg_fields,
+                .ret_fields = ret_fields,
+                .arg_type_ids = arg_type_ids,
+                .ret_type_id = ret_type_id,
             }) catch continue;
+        } else switch (entry.value) {
+            .procedure_binding => {
+                var type_writer = env.initTypeWriter() catch continue;
+                defer type_writer.deinit();
+
+                const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+                const type_var = ModuleEnv.varFrom(def_node_idx);
+
+                type_writer.write(type_var, .one_line) catch continue;
+                const type_str = type_writer.get();
+
+                functions.append(gpa, .{
+                    .name = gpa.dupe(u8, local_name) catch continue,
+                    .type_str = gpa.dupe(u8, type_str) catch continue,
+                }) catch continue;
+            },
+            .const_ref => {},
         }
     }
 
