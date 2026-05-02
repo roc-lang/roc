@@ -8147,7 +8147,6 @@ stage chains:
 - CLI commands
 - eval pipeline
 - REPL
-- dev shim
 - interpreter shim
 - snapshot tool
 - glue
@@ -8175,9 +8174,9 @@ entrypoints for tools.
 
 ### Interpreter Shim Runtime Image Boundary
 
-`roc run`, `roc build --opt=interpreter`, the dev shim, and any interpreter-shim
-host path must split compilation from execution at ARC-inserted LIR, not at
-`ModuleEnv`, CIR, checked artifacts, MIR, or IR.
+`roc run` in all optimization modes, `roc build --opt=interpreter`, and any
+interpreter-shim host path must split compilation from execution at
+ARC-inserted LIR, not at `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
 
 The parent compiler process owns every semantic stage:
 
@@ -8211,12 +8210,12 @@ The child interpreter process must never:
 - create anything other than zero-copy views over the mapped LIR/runtime-layout
   arrays
 
-For IPC paths such as `roc run` and the dev shim, the transport mechanism must
-use the existing `SharedMemoryAllocator`/shared-memory coordination
-infrastructure. The payload is a viewable LIR runtime image, not a live or
-cached `ModuleEnv` and not a checked artifact. Shared memory is the allocator
-for the runtime image at this boundary. The child process turns offsets in the
-mapped region into read-only views.
+For IPC paths such as `roc run`, the transport mechanism must use the existing
+`SharedMemoryAllocator`/shared-memory coordination infrastructure. The payload
+is a viewable LIR runtime image, not a live or cached `ModuleEnv` and not a
+checked artifact. Shared memory is the allocator for the runtime image at this
+boundary. The child process turns offsets in the mapped region into read-only
+views.
 
 For embedded interpreter builds, any file-backed runtime image must preserve the
 same view-oriented contract: the embedded payload is made viewable as the LIR
@@ -10322,7 +10321,6 @@ Required pipeline call-site updates include:
 src/eval/pipeline.zig
 src/compile/runner.zig
 src/cli/main.zig
-src/dev_shim/main.zig
 src/snapshot_tool/main.zig
 src/eval/test/helpers.zig
 ```
@@ -11182,8 +11180,8 @@ source `Box(T)` or erased callable representation.
 
 ### 12. Rewire Public Pipelines
 
-Update eval, compile, CLI, dev shim, interpreter shim, snapshot tool, glue, REPL,
-and test helpers to call the checked-artifact public pipeline.
+Update eval, compile, CLI, interpreter shim, snapshot tool, glue, REPL, and
+test helpers to call the checked-artifact public pipeline.
 
 The public semantic lowering API must accept:
 
@@ -11212,10 +11210,10 @@ temporary checked artifacts with explicit `.repl_expr` or `.dev_expr` roots.
 Tests may build small artifacts directly, but semantic lowering tests must call
 the same checked-artifact public pipeline as production tools.
 
-For `roc run`, `roc build --opt=interpreter`, the dev shim, and the interpreter
-shim, move the semantic pipeline into the parent compiler process. The parent
-must call the checked-artifact public pipeline, run ARC insertion, and publish
-a target-specific viewable `LirRuntimeImage` through the existing shared-memory
+For `roc run`, `roc build --opt=interpreter`, and the interpreter shim, move
+the semantic pipeline into the parent compiler process. The parent must call
+the checked-artifact public pipeline, run ARC insertion, and publish a
+target-specific viewable `LirRuntimeImage` through the existing shared-memory
 handoff for IPC execution. Delete the old shared-memory/embedded
 `ModuleEnv` payload shape, `ModuleEnvHeader`, platform/app `CIR.Def.Idx`
 entrypoint tables, and child-side CIR-to-LIR lowering path. The child shim
@@ -13168,7 +13166,7 @@ The cutover is complete only when all of these are true:
 - target-specific constant materialization uses explicit layout,
   reference-counting, and storage plans outside the checked artifact cache
 - no public pipeline imports old top-level post-check modules
-- `roc run`, dev shim, and interpreter-shim IPC execution split at a viewable
+- `roc run` and interpreter-shim IPC execution split at a viewable
   ARC-inserted LIR runtime image allocated/published through the existing
   shared-memory infrastructure: the parent lowers through the checked-artifact
   public pipeline and publishes `LirRuntimeImage`; the child maps shared memory,
@@ -13176,7 +13174,7 @@ The cutover is complete only when all of these are true:
 - `roc build --opt=interpreter` keeps the same semantic split at ARC-inserted
   LIR and must not reintroduce child-side semantic lowering; any embedded
   runtime-image format must preserve view-oriented execution and must not
-  dictate the IPC handoff used by `roc run` and the dev shim
+  dictate the IPC handoff used by `roc run`
 - interpreter-shim transports contain no live or cached `ModuleEnv`, no CIR, no
   checked artifact, no MIR, no IR, no checker vars, no `CIR.Def.Idx` entrypoint
   tables, and no post-check lookup requests

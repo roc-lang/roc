@@ -501,7 +501,8 @@ pub const RequiredType = struct {
 };
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
-/// This is used when loading a ModuleEnv from shared memory at a different address.
+/// This is used by serialized compiler artifacts whose internal pointers are
+/// stored relative to the artifact buffer.
 pub fn relocate(self: *Self, offset: isize) void {
     // Relocate all sub-structures that contain pointers
     self.common.relocate(offset);

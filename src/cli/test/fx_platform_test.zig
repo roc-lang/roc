@@ -517,7 +517,7 @@ test "custom platform and package qualifiers work in roc run" {
     // - Package qualifier "hlp" importing hlp.Helper from a sibling package
     //
     // Two bugs were fixed:
-    // 1. setupSharedMemoryWithModuleEnv hardcoded "pf." when registering platform modules
+    // 1. Runtime-image publication hardcoded "pf." when registering platform modules
     // 2. Non-platform packages weren't loaded at all during IPC mode execution
     //
     // The test verifies the app runs correctly and produces expected output.
@@ -873,9 +873,8 @@ test "run aborts on parse errors by default" {
 
 test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors.
-    // TODO: remove Windows workaround once the dev shim handles crash-on-type-error on Windows.
-    // With --opt=dev (the default), the dev shim hangs in ReleaseFast on Windows when
-    // the JIT-compiled code hits the undefined-variable crash path. Needs investigation.
+    // TODO: remove Windows workaround once the shared LIR runtime-image path
+    // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
     const allocator = testing.allocator;
 

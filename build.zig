@@ -3939,38 +3939,9 @@ fn addMainExe(
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
 
-    // Create dev shim static library
-    // instead of the interpreter. Only supports x86_64/aarch64 (no wasm32).
-    const dev_shim_lib = b.addLibrary(.{
-        .name = "roc_dev_shim",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/dev_shim/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-        .linkage = .static,
-    });
-    configureBackend(dev_shim_lib, target);
-    roc_modules.addAll(dev_shim_lib);
-    dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    dev_shim_lib.addObjectFile(builtins_obj.getEmittedBin());
-    dev_shim_lib.bundle_compiler_rt = true;
-    const install_dev_shim = b.addInstallArtifact(dev_shim_lib, .{});
-    b.getInstallStep().dependOn(&install_dev_shim.step);
-    const copy_dev_shim = b.addUpdateSourceFiles();
-    const dev_shim_filename = if (target.result.os.tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
-    copy_dev_shim.addCopyFileToSource(dev_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", dev_shim_filename }));
-    exe.step.dependOn(&copy_dev_shim.step);
-    add_tracy(b, roc_modules.build_options, dev_shim_lib, b.graph.host, false, flag_enable_tracy);
-
     // Cross-compile builtins objects for all supported targets.
     // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.
-    // Note: interpreter and dev shims are only built for the native host target (above).
-    // Cross-compilation uses ObjectFileCompiler directly without shims.
+    // The interpreter shim is built only for the native host target above.
     const cross_compile_builtins_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
