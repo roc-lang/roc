@@ -209,7 +209,7 @@ fn evaluateCallableBindingRoot(
     defer interpreter.dropValue(result.value, ret_layout);
 
     const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
-    const callable = existingNoCaptureCallableResult(
+    const selected_callable = selectFiniteCallableResult(
         &artifact.comptime_plans,
         lowered.callable_set_descriptors,
         &lowered.lir_result.layouts,
@@ -217,6 +217,7 @@ fn evaluateCallableBindingRoot(
         ret_layout,
         result.value,
     );
+    const callable = existingProcedureFromSelectedCallableResult(selected_callable);
     if (!std.mem.eql(u8, &callable.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
@@ -238,14 +239,20 @@ fn evaluateCallableBindingRoot(
     });
 }
 
-fn existingNoCaptureCallableResult(
+const SelectedFiniteCallableResult = struct {
+    result_plan: checked_artifact.FiniteCallableResultPlan,
+    planned_member: checked_artifact.CallableResultMemberPlan,
+    descriptor_member: *const check.CanonicalNames.CanonicalCallableSetMember,
+};
+
+fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
     descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
     layouts: *const layout_mod.Store,
     result_plan_id: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
     value: Value,
-) check.CanonicalNames.ProcedureCallableRef {
+) SelectedFiniteCallableResult {
     const plan = plans.callableResult(result_plan_id);
     const finite = switch (plan) {
         .finite => |finite| finite,
@@ -264,9 +271,6 @@ fn existingNoCaptureCallableResult(
     const planned_member = callableResultMember(finite.members, selected_member_id) orelse {
         compileTimeFinalizationInvariant("compile-time callable result selected a member outside the result plan");
     };
-    if (planned_member.capture_slots.len != 0) {
-        compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
-    }
 
     const descriptor = callableSetDescriptor(descriptors, finite.callable_set_key) orelse {
         compileTimeFinalizationInvariant("compile-time callable result descriptor was not preserved");
@@ -274,13 +278,29 @@ fn existingNoCaptureCallableResult(
     const member = callableSetMember(descriptor, planned_member.member) orelse {
         compileTimeFinalizationInvariant("compile-time callable result selected missing descriptor member");
     };
-    if (member.capture_slots.len != 0) {
-        compileTimeFinalizationInvariant("descriptor member for no-capture callable result had captures");
-    }
     if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("compile-time callable descriptor member source type differs from result plan");
     }
-    return member.proc_value;
+    if (member.capture_slots.len != planned_member.capture_slots.len) {
+        compileTimeFinalizationInvariant("compile-time callable result member capture arity differs from descriptor");
+    }
+    return .{
+        .result_plan = finite,
+        .planned_member = planned_member,
+        .descriptor_member = member,
+    };
+}
+
+fn existingProcedureFromSelectedCallableResult(
+    selected: SelectedFiniteCallableResult,
+) check.CanonicalNames.ProcedureCallableRef {
+    if (selected.planned_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
+    }
+    if (selected.descriptor_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("descriptor member for no-capture callable result had captures");
+    }
+    return selected.descriptor_member.proc_value;
 }
 
 fn readCallableSetMemberDiscriminant(
@@ -485,7 +505,7 @@ const ComptimeReifier = struct {
                 .value = try self.values.addValue(.{ .callable = resolved }),
             },
             .finite => |result_plan| blk: {
-                const proc_value = existingNoCaptureCallableResult(
+                const selected_callable = selectFiniteCallableResult(
                     self.plans,
                     self.callable_set_descriptors,
                     self.layouts,
@@ -493,6 +513,7 @@ const ComptimeReifier = struct {
                     layout_idx,
                     value,
                 );
+                const proc_value = existingProcedureFromSelectedCallableResult(selected_callable);
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = proc_value.source_fn_ty }),
                     .value = try self.values.addValue(.{ .callable = .{ .finite = .{ .proc_value = proc_value } } }),
