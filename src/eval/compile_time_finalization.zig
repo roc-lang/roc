@@ -218,23 +218,35 @@ fn evaluateCallableBindingRoot(
     defer interpreter.dropValue(result.value, ret_layout);
 
     const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
-    const selected_callable = selectFiniteCallableResult(
-        &artifact.comptime_plans,
-        lowered.callable_set_descriptors,
-        &lowered.lir_result.layouts,
-        result_plan,
-        ret_layout,
-        result.value,
-    );
-    const callable = try publishCallableResult(
-        allocator,
-        artifact,
-        lowered,
-        pattern,
-        root.checked_type,
-        result_plan,
-        selected_callable,
-    );
+    const callable = switch (artifact.comptime_plans.callableResult(result_plan)) {
+        .finite => blk: {
+            const selected_callable = selectFiniteCallableResult(
+                &artifact.comptime_plans,
+                lowered.callable_set_descriptors,
+                &lowered.lir_result.layouts,
+                result_plan,
+                ret_layout,
+                result.value,
+            );
+            break :blk try publishCallableResult(
+                allocator,
+                artifact,
+                lowered,
+                pattern,
+                root.checked_type,
+                result_plan,
+                selected_callable,
+            );
+        },
+        .erased => |erased| try publishErasedCallableResult(
+            allocator,
+            artifact,
+            pattern,
+            root.checked_type,
+            result_plan,
+            erased,
+        ),
+    };
     if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
@@ -282,7 +294,7 @@ fn selectFiniteCallableResult(
     const plan = plans.callableResult(result_plan_id);
     const finite = switch (plan) {
         .finite => |finite| finite,
-        .erased => compileTimeFinalizationInvariant("erased compile-time callable promotion is not sealed yet"),
+        .erased => compileTimeFinalizationInvariant("finite callable selection received an erased callable result plan"),
     };
     if (finite.members.len == 0) {
         compileTimeFinalizationInvariant("finite compile-time callable result plan had no members");
@@ -436,6 +448,77 @@ fn promoteFiniteCallableResult(
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
+    };
+}
+
+fn publishErasedCallableResult(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    source_binding: CIR.Pattern.Idx,
+    checked_fn_root: checked_artifact.CheckedTypeId,
+    result_plan: checked_artifact.CallableResultPlanId,
+    erased: checked_artifact.ErasedCallableResultPlan,
+) Allocator.Error!PublishedCallableResult {
+    const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
+    const reserved = try artifact.reservePromotedCallableWrapper(
+        allocator,
+        source_binding,
+        checked_fn_root,
+        checked_fn_scheme,
+    );
+
+    const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
+    artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
+        .source_fn_ty = erased.source_fn_ty,
+        .params = params,
+        .sig_key = erased.sig_key,
+        .code = erased.code,
+        .capture = try cloneErasedCapturePlan(allocator, erased.capture),
+        .arg_bridges = &.{},
+        .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
+            .none
+        else
+            .{ .materialized_capture = try cloneErasedCapturePlan(allocator, erased.capture) },
+        .result_bridge = null,
+        .result_ty = erased.result_ty,
+        .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
+    } });
+    try artifact.publishPromotedCallableWrapper(allocator, reserved);
+
+    const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .erased = .{
+        .result_plan = result_plan,
+        .promoted_proc = reserved.promoted_ref,
+    } });
+    const proc_value = canonical.ProcedureCallableRef{
+        .template = .{ .synthetic = .{ .template = reserved.template } },
+        .source_fn_ty = erased.source_fn_ty,
+    };
+    return .{
+        .proc_value = proc_value,
+        .output = .{ .promoted_procedure = reserved.promoted_ref },
+        .promotion_plan = promotion_plan,
+    };
+}
+
+fn cloneBoxBoundarySpan(
+    allocator: Allocator,
+    provenance: []const canonical.BoxBoundaryId,
+) Allocator.Error![]const canonical.BoxBoundaryId {
+    if (provenance.len == 0) {
+        compileTimeFinalizationInvariant("erased callable publication had no Box(T) provenance");
+    }
+    return try allocator.dupe(canonical.BoxBoundaryId, provenance);
+}
+
+fn cloneErasedCapturePlan(
+    allocator: Allocator,
+    capture: checked_artifact.ErasedCaptureReificationPlan,
+) Allocator.Error!checked_artifact.ErasedCaptureReificationPlan {
+    return switch (capture) {
+        .none => .none,
+        .zero_sized_typed => |ty| .{ .zero_sized_typed = ty },
+        .finite_callable_set => |result| .{ .finite_callable_set = result },
+        .values => |values| .{ .values = try allocator.dupe(checked_artifact.CaptureSlotReificationPlanId, values) },
     };
 }
 
@@ -1046,8 +1129,23 @@ const ComptimeReifier = struct {
                     .value = try self.values.addValue(.{ .callable = callable_leaf }),
                 };
             },
-            .erased_boxed,
-            => reifierInvariant("callable constant leaf reification requires sealed callable promotion output"),
+            .erased_boxed => |result_plan| blk: {
+                const erased = switch (self.plans.callableResult(result_plan)) {
+                    .finite => reifierInvariant("erased boxed callable leaf referenced a finite callable result plan"),
+                    .erased => |erased| erased,
+                };
+                const callable_leaf = checked_artifact.CallableLeafInstance{ .erased_boxed = .{
+                    .source_fn_ty = erased.source_fn_ty,
+                    .sig_key = erased.sig_key,
+                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+                    .code = erased.code,
+                    .capture = try cloneErasedCapturePlan(self.allocator, erased.capture),
+                } };
+                break :blk .{
+                    .schema = try self.values.addSchema(.{ .callable = erased.source_fn_ty }),
+                    .value = try self.values.addValue(.{ .callable = callable_leaf }),
+                };
+            },
         };
     }
 
