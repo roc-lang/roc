@@ -162,6 +162,7 @@ fn evaluateConstantRoot(
         .plans = &artifact.comptime_plans,
         .checked_types = &artifact.checked_types,
         .layouts = &lowered.lir_result.layouts,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
     };
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
 
@@ -209,8 +210,9 @@ fn evaluateCallableBindingRoot(
 
     const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
     const callable = existingNoCaptureCallableResult(
-        artifact,
-        lowered,
+        &artifact.comptime_plans,
+        lowered.callable_set_descriptors,
+        &lowered.lir_result.layouts,
         result_plan,
         ret_layout,
         result.value,
@@ -237,13 +239,14 @@ fn evaluateCallableBindingRoot(
 }
 
 fn existingNoCaptureCallableResult(
-    artifact: *const checked_artifact.CheckedModuleArtifact,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    layouts: *const layout_mod.Store,
     result_plan_id: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
     value: Value,
 ) check.CanonicalNames.ProcedureCallableRef {
-    const plan = artifact.comptime_plans.callableResult(result_plan_id);
+    const plan = plans.callableResult(result_plan_id);
     const finite = switch (plan) {
         .finite => |finite| finite,
         .erased => compileTimeFinalizationInvariant("erased compile-time callable promotion is not sealed yet"),
@@ -253,7 +256,7 @@ fn existingNoCaptureCallableResult(
     }
 
     const selected_member_id = readCallableSetMemberDiscriminant(
-        &lowered.lir_result.layouts,
+        layouts,
         layout_idx,
         value,
         finite.members.len,
@@ -265,7 +268,7 @@ fn existingNoCaptureCallableResult(
         compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
     }
 
-    const descriptor = callableSetDescriptor(lowered.callable_set_descriptors, finite.callable_set_key) orelse {
+    const descriptor = callableSetDescriptor(descriptors, finite.callable_set_key) orelse {
         compileTimeFinalizationInvariant("compile-time callable result descriptor was not preserved");
     };
     const member = callableSetMember(descriptor, planned_member.member) orelse {
@@ -377,6 +380,7 @@ const ComptimeReifier = struct {
     plans: *const checked_artifact.CompileTimePlanStore,
     checked_types: *const checked_artifact.CheckedTypeStore,
     layouts: *const layout_mod.Store,
+    callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
 
     fn reifyPlan(
         self: *ComptimeReifier,
@@ -396,7 +400,7 @@ const ComptimeReifier = struct {
             .tag_union => |variants| self.reifyTagUnionPlan(variants, layout_idx, value),
             .transparent_alias => |alias| self.reifyWrappedPlan(alias.alias, alias.backing, layout_idx, value, .alias),
             .nominal => |nominal| self.reifyWrappedPlan(nominal.nominal, nominal.backing, layout_idx, value, .nominal),
-            .callable_leaf => |leaf| self.reifyCallableLeaf(leaf),
+            .callable_leaf => |leaf| self.reifyCallableLeaf(leaf, layout_idx, value),
             .recursive_ref => |ref| self.reifyPlan(ref, layout_idx, value),
         };
     }
@@ -470,13 +474,28 @@ const ComptimeReifier = struct {
     fn reifyCallableLeaf(
         self: *ComptimeReifier,
         leaf: checked_artifact.CallableLeafReificationPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
     ) Allocator.Error!ReifiedValue {
         return switch (leaf) {
             .already_resolved => |resolved| .{
                 .schema = try self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
                 .value = try self.values.addValue(.{ .callable = resolved.proc_value }),
             },
-            .finite,
+            .finite => |result_plan| blk: {
+                const proc_value = existingNoCaptureCallableResult(
+                    self.plans,
+                    self.callable_set_descriptors,
+                    self.layouts,
+                    result_plan,
+                    layout_idx,
+                    value,
+                );
+                break :blk .{
+                    .schema = try self.values.addSchema(.{ .callable = proc_value.source_fn_ty }),
+                    .value = try self.values.addValue(.{ .callable = proc_value }),
+                };
+            },
             .erased_boxed,
             => reifierInvariant("callable constant leaf reification requires sealed callable promotion output"),
         };
@@ -488,7 +507,10 @@ const ComptimeReifier = struct {
     ) Allocator.Error!checked_artifact.ComptimeSchemaId {
         return switch (leaf) {
             .already_resolved => |resolved| self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
-            .finite,
+            .finite => |result_plan| switch (self.plans.callableResult(result_plan)) {
+                .finite => |finite| self.values.addSchema(.{ .callable = finite.source_fn_ty }),
+                .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
+            },
             .erased_boxed,
             => reifierInvariant("callable constant leaf schema requires sealed callable promotion output"),
         };
