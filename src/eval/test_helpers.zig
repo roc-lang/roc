@@ -12,6 +12,7 @@ const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
 
 const builtin_loading = @import("builtin_loading.zig");
+const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 
@@ -352,6 +353,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
             .module_env_storage = .{ .checked_source = main_checked.module_env },
             .imports = publish_imports,
             .explicit_roots = explicit_roots,
+            .compile_time_finalizer = CompileTimeFinalization.finalizer(),
         },
     );
     errdefer checked_artifact.deinit(allocator);
@@ -557,6 +559,7 @@ fn publishImportArtifacts(
                 .env = builtin_module.env,
                 .buffer = builtin_module.buffer,
             } },
+            .compile_time_finalizer = CompileTimeFinalization.finalizer(),
         },
     );
     builtin_module_owned_by_artifact.* = true;
@@ -597,6 +600,7 @@ fn publishImportArtifacts(
                 .{
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .imports = published_keys.items,
+                    .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                 },
             );
             extra_modules[extra_i].published_owns_module_env = true;

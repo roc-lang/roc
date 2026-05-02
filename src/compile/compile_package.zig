@@ -1343,6 +1343,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
+                .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
             },
         );
     }

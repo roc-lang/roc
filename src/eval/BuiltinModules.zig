@@ -9,6 +9,7 @@ const can = @import("can");
 const check = @import("check");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins.zig");
+const CompileTimeFinalization = @import("compile_time_finalization.zig");
 
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
@@ -73,6 +74,7 @@ pub const BuiltinModules = struct {
                     .env = builtin_module.env,
                     .buffer = builtin_module.buffer,
                 } },
+                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             },
         );
         errdefer checked_artifact.deinit(allocator);

@@ -257,6 +257,26 @@ pub const PublishInputs = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
+    compile_time_finalizer: CompileTimeFinalizer,
+};
+
+pub const CompileTimeFinalizer = struct {
+    context: ?*anyopaque = null,
+    finalize: *const fn (
+        context: ?*anyopaque,
+        allocator: Allocator,
+        artifact: *CheckedModuleArtifact,
+        imports: []const PublishImportArtifact,
+    ) anyerror!void,
+
+    pub fn run(
+        self: CompileTimeFinalizer,
+        allocator: Allocator,
+        artifact: *CheckedModuleArtifact,
+        imports: []const PublishImportArtifact,
+    ) anyerror!void {
+        try self.finalize(self.context, allocator, artifact, imports);
+    }
 };
 
 pub const ExplicitRootRequestInput = struct {
@@ -6562,6 +6582,43 @@ pub const CheckedModuleArtifact = struct {
         self.module_env.deinit();
     }
 
+    pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
+        if (builtin.mode != .Debug) return;
+
+        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
+        std.debug.assert(self.checked_types.roots.len == self.checked_types.payloads.len);
+
+        for (self.checked_types.payloads, 0..) |payload, i| {
+            switch (payload) {
+                .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
+                else => {},
+            }
+        }
+
+        for (self.checked_bodies.exprs, 0..) |expr, i| {
+            std.debug.assert(@intFromEnum(expr.id) == i);
+            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
+            verifyCheckedExprDataPublished(expr.data);
+        }
+
+        for (self.root_requests.requests, 0..) |request, i| {
+            std.debug.assert(request.order == i);
+            std.debug.assert(request.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.len);
+            if (request.abi == .compile_time) {
+                const template_ref = request.procedure_template orelse {
+                    std.debug.panic("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
+                };
+                std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
+                const template = self.checked_procedure_templates.get(template_ref.template);
+                switch (template.target) {
+                    .comptime_only => {},
+                    else => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
+                }
+            }
+        }
+    }
+
     pub fn verifyPublished(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .Debug) return;
 
@@ -7143,7 +7200,7 @@ pub fn publishFromTypedModule(
     modules: *const TypedCIR.Modules,
     module_idx: u32,
     inputs: PublishInputs,
-) Allocator.Error!CheckedModuleArtifact {
+) anyerror!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
     const idents = module.identStoreConst();
@@ -7388,6 +7445,7 @@ pub fn publishFromTypedModule(
         .callable_binding_instances = callable_binding_instances,
         .semantic_instantiation_procedures = semantic_instantiation_procedures,
     };
+    try inputs.compile_time_finalizer.run(allocator, &artifact, inputs.imports);
     artifact.verifyPublished();
     return artifact;
 }

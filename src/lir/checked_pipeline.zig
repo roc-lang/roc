@@ -36,6 +36,12 @@ pub const RootPurpose = enum {
 
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    artifact_state: ArtifactState = .published,
+};
+
+pub const ArtifactState = enum {
+    published,
+    checking_finalization,
 };
 
 pub const LoweredProgram = struct {
@@ -54,7 +60,10 @@ pub fn lowerArtifactsToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
-    artifacts.root.artifact.verifyPublished();
+    switch (target.artifact_state) {
+        .published => artifacts.root.artifact.verifyPublished(),
+        .checking_finalization => artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
+    }
 
     const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
     defer allocator.free(selected_roots);

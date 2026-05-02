@@ -34,6 +34,8 @@ pub const layout = @import("layout");
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
+/// Checked-artifact compile-time evaluation finalizer
+pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 /// Builtin types for type checking
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Crash context for host crash handling
@@ -99,6 +101,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
