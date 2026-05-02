@@ -304,9 +304,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(&lowered) orelse {
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "make_glue") orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: glue spec produced no callable platform root", .{});
+            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
         unreachable;
     };
@@ -492,15 +492,66 @@ fn findTopLevelDefByName(
 }
 
 fn selectGlueSpecRootProc(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_ffi_symbol: []const u8,
 ) ?lir.LirProcSpecId {
     for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
-        if (metadata.kind == .provided_export) return root_proc;
-    }
-    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
-        if (metadata.kind == .platform_required_binding) return root_proc;
+        if (metadata.kind != .provided_export) continue;
+        const root = rootRequestByOrder(root_artifact, metadata.order);
+        const ffi_symbol = providedRootFfiSymbol(root_artifact, root);
+        if (std.mem.eql(u8, ffi_symbol, expected_ffi_symbol)) return root_proc;
     }
     return null;
+}
+
+fn rootRequestByOrder(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    order: u32,
+) CheckedArtifact.RootRequest {
+    for (root_artifact.root_requests.requests) |request| {
+        if (request.order == order) return request;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: missing root request order {d}", .{order});
+    }
+    unreachable;
+}
+
+fn providedRootFfiSymbol(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    root: CheckedArtifact.RootRequest,
+) []const u8 {
+    const def_idx = switch (root.source) {
+        .def => |def| def,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("glue invariant violated: provided export root is not a definition", .{});
+            }
+            unreachable;
+        },
+    };
+    const env = root_artifact.moduleEnvConst();
+    const def = env.store.getDef(def_idx);
+    const pattern = env.store.getPattern(def.pattern);
+    const ident = switch (pattern) {
+        .assign => |assign| assign.ident,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("glue invariant violated: provided export root definition is not an assignment", .{});
+            }
+            unreachable;
+        },
+    };
+
+    for (root_artifact.provides_requires.provides) |entry| {
+        if (entry.ident == ident) return env.getString(entry.ffi_symbol);
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: provided export root has no published FFI symbol", .{});
+    }
+    unreachable;
 }
 
 fn argLayoutsForProc(
