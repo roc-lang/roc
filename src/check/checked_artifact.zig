@@ -5115,6 +5115,10 @@ fn verifyCallableResultRef(store: *const CompileTimePlanStore, id: CallableResul
     std.debug.assert(@intFromEnum(id) < store.callable_results.items.len);
 }
 
+fn verifyCallablePromotionRef(store: *const CompileTimePlanStore, id: CallablePromotionPlanId) void {
+    std.debug.assert(@intFromEnum(id) < store.callable_promotions.items.len);
+}
+
 fn verifyCaptureSlotRef(store: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) void {
     std.debug.assert(@intFromEnum(id) < store.capture_slots.items.len);
 }
@@ -6666,7 +6670,12 @@ pub const CallableBindingInstantiationStore = struct {
         };
     }
 
-    pub fn verifySealed(self: *const CallableBindingInstantiationStore) void {
+    pub fn verifySealed(
+        self: *const CallableBindingInstantiationStore,
+        plans: *const CompileTimePlanStore,
+        roots: *const CompileTimeRootTable,
+        promoted_procedures: *const PromotedProcedureTable,
+    ) void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.by_key.count() == self.instances.items.len);
@@ -6678,7 +6687,14 @@ pub const CallableBindingInstantiationStore = struct {
             };
             std.debug.assert(indexed == record.id);
             switch (record.state) {
-                .evaluated => {},
+                .evaluated => |instance| verifyCallableBindingInstance(
+                    i,
+                    record.key,
+                    instance,
+                    plans,
+                    roots,
+                    promoted_procedures,
+                ),
                 .reserved, .evaluating => std.debug.panic(
                     "checked artifact invariant violated: callable binding instance {d} was not sealed before publication",
                     .{i},
@@ -6723,6 +6739,55 @@ pub const CallableBindingInstantiationStore = struct {
         self.* = .{};
     }
 };
+
+fn verifyCallableBindingInstance(
+    index: usize,
+    key: CallableBindingInstantiationKey,
+    instance: CallableBindingInstance,
+    plans: *const CompileTimePlanStore,
+    roots: *const CompileTimeRootTable,
+    promoted_procedures: *const PromotedProcedureTable,
+) void {
+    if (!callableBindingInstantiationKeyEql(instance.key, key)) {
+        std.debug.panic("checked artifact invariant violated: callable binding instance {d} payload key does not match row key", .{index});
+    }
+    verifyCallableResultRef(plans, instance.result_plan);
+
+    const root_index = @intFromEnum(instance.executable_root);
+    if (root_index >= roots.roots.len) {
+        std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is out of range", .{index});
+    }
+    if (roots.roots[root_index].kind != .callable_binding) {
+        std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is not callable", .{index});
+    }
+
+    switch (instance.promotion_output) {
+        .existing_procedure => |proc| {
+            if (instance.promotion_plan != null) {
+                std.debug.panic("checked artifact invariant violated: existing callable binding instance {d} unexpectedly has a promotion plan", .{index});
+            }
+            if (!canonical.procedureCallableRefEql(instance.proc_value, proc)) {
+                std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from existing procedure output", .{index});
+            }
+        },
+        .promoted_procedure => |promoted| {
+            const plan = instance.promotion_plan orelse {
+                std.debug.panic("checked artifact invariant violated: promoted callable binding instance {d} has no promotion plan", .{index});
+            };
+            verifyCallablePromotionRef(plans, plan);
+            const promoted_record = promoted_procedures.get(promoted) orelse {
+                std.debug.panic("checked artifact invariant violated: promoted callable binding instance {d} references a missing promoted procedure", .{index});
+            };
+            const expected = canonical.ProcedureCallableRef{
+                .template = .{ .synthetic = .{ .template = promoted_record.template } },
+                .source_fn_ty = instance.key.requested_source_fn_ty,
+            };
+            if (!canonical.procedureCallableRefEql(instance.proc_value, expected)) {
+                std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from promoted procedure output", .{index});
+            }
+        },
+    }
+}
 
 pub const SemanticInstantiationProcedureKey = union(enum) {
     const_instance_callable_leaf: struct {
@@ -7519,7 +7584,11 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_plans.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
-        self.callable_binding_instances.verifySealed();
+        self.callable_binding_instances.verifySealed(
+            &self.comptime_plans,
+            &self.compile_time_roots,
+            &self.promoted_procedures,
+        );
         self.semantic_instantiation_procedures.verifySealed();
 
         for (self.resolved_value_refs.records) |record| {
