@@ -4869,6 +4869,78 @@ pub const CompileTimePlanStore = struct {
         return self.const_graphs.items[index];
     }
 
+    pub fn appendCallableResult(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+        plan: CallableResultPlan,
+    ) Allocator.Error!CallableResultPlanId {
+        const id: CallableResultPlanId = @enumFromInt(@as(u32, @intCast(self.callable_results.items.len)));
+        try self.callable_results.append(allocator, plan);
+        return id;
+    }
+
+    pub fn callableResult(self: *const CompileTimePlanStore, id: CallableResultPlanId) CallableResultPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.callable_results.items.len) {
+            checkedArtifactInvariant("callable result plan id is out of range", .{});
+        }
+        return self.callable_results.items[index];
+    }
+
+    pub fn appendCallablePromotion(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+        plan: CallablePromotionPlan,
+    ) Allocator.Error!CallablePromotionPlanId {
+        const id: CallablePromotionPlanId = @enumFromInt(@as(u32, @intCast(self.callable_promotions.items.len)));
+        try self.callable_promotions.append(allocator, plan);
+        return id;
+    }
+
+    pub fn callablePromotion(self: *const CompileTimePlanStore, id: CallablePromotionPlanId) CallablePromotionPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.callable_promotions.items.len) {
+            checkedArtifactInvariant("callable promotion plan id is out of range", .{});
+        }
+        return self.callable_promotions.items[index];
+    }
+
+    pub fn appendCaptureSlot(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+        plan: CaptureSlotReificationPlan,
+    ) Allocator.Error!CaptureSlotReificationPlanId {
+        const id: CaptureSlotReificationPlanId = @enumFromInt(@as(u32, @intCast(self.capture_slots.items.len)));
+        try self.capture_slots.append(allocator, plan);
+        return id;
+    }
+
+    pub fn captureSlot(self: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) CaptureSlotReificationPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.capture_slots.items.len) {
+            checkedArtifactInvariant("capture slot reification plan id is out of range", .{});
+        }
+        return self.capture_slots.items[index];
+    }
+
+    pub fn appendPrivateCapture(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+        node: PrivateCaptureNode,
+    ) Allocator.Error!PrivateCaptureNodeId {
+        const id: PrivateCaptureNodeId = @enumFromInt(@as(u32, @intCast(self.private_captures.items.len)));
+        try self.private_captures.append(allocator, node);
+        return id;
+    }
+
+    pub fn privateCapture(self: *const CompileTimePlanStore, id: PrivateCaptureNodeId) PrivateCaptureNode {
+        const index = @intFromEnum(id);
+        if (index >= self.private_captures.items.len) {
+            checkedArtifactInvariant("private capture node id is out of range", .{});
+        }
+        return self.private_captures.items[index];
+    }
+
     pub fn deinit(self: *CompileTimePlanStore, allocator: Allocator) void {
         for (self.const_graphs.items) |*plan| deinitConstGraphReificationPlan(allocator, plan);
         for (self.callable_results.items) |*plan| deinitCallableResultPlan(allocator, plan);
