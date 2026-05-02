@@ -154,7 +154,7 @@ pub const BridgePlan = union(enum) {
 };
 
 pub const CallableSetValue = struct {
-    construction_plan: repr.CallableSetConstructionPlanId,
+    construction_plan: ?repr.CallableSetConstructionPlanId = null,
     callable_set_key: repr.CanonicalCallableSetKey,
     member: CallableSetMemberRef,
     capture_record: ?CallableCaptureRecord = null,

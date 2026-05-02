@@ -274,6 +274,7 @@ fn lowerErasedPromotedWrapperProc(
     const body = try lowerErasedPromotedWrapperBody(
         allocator,
         program,
+        synthetic.comptime_plans,
         &published_types,
         args,
         signature,
@@ -312,6 +313,7 @@ fn lowerErasedPromotedWrapperParams(
 fn lowerErasedPromotedWrapperBody(
     allocator: Allocator,
     program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
     published_types: *PublishedTypeLowerer,
     args: Ast.Span(Ast.TypedValue),
     signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
@@ -339,7 +341,9 @@ fn lowerErasedPromotedWrapperBody(
     else
         null;
     const capture = try lowerErasedPromotedCapture(
+        allocator,
         program,
+        plans,
         capture_ty,
         erased.capture,
         erased.hidden_capture_arg,
@@ -405,7 +409,9 @@ const ErasedPromotedCaptureLowering = struct {
 };
 
 fn lowerErasedPromotedCapture(
+    allocator: Allocator,
     program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
     capture_ty: ?Type.TypeId,
     capture: checked_artifact.ErasedCaptureMaterializationPlan,
     hidden_arg: checked_artifact.ErasedHiddenCaptureArgPlan,
@@ -422,14 +428,16 @@ fn lowerErasedPromotedCapture(
         return .{};
     }
     const ty = capture_ty.?;
-    switch (capture) {
-        .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no capture materialization"),
-        .zero_sized_typed => {},
-        .node => executableInvariant("executable erased promoted wrapper capture materialization node lowering is not implemented"),
-    }
     switch (hidden_arg) {
         .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no hidden arg"),
         .materialized_capture => {},
+    }
+    switch (capture) {
+        .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no capture materialization"),
+        .zero_sized_typed => |key| {
+            _ = key;
+        },
+        .node => |node| return try lowerErasedCaptureMaterializationNode(allocator, program, plans, ty, node),
     }
     const value = program.ast.freshValueRef();
     const expr = try program.ast.addExpr(ty, value, .unit);
@@ -440,6 +448,104 @@ fn lowerErasedPromotedCapture(
             .body = expr,
         } }),
     };
+}
+
+fn lowerErasedCaptureMaterializationNode(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+) Allocator.Error!ErasedPromotedCaptureLowering {
+    const expr = try lowerErasedCaptureMaterializationExpr(allocator, program, plans, expected_ty, node_id);
+    const value = program.ast.getExpr(expr).value;
+    return .{
+        .value = value,
+        .stmt = try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = expr,
+        } }),
+    };
+}
+
+fn lowerErasedCaptureMaterializationExpr(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+) Allocator.Error!Ast.ExprId {
+    const node = plans.erasedCaptureMaterializationNode(node_id);
+    return switch (node) {
+        .pending => executableInvariant("executable erased capture materialization reached pending node"),
+        .public_constant => |const_instance| blk: {
+            const value = program.ast.freshValueRef();
+            break :blk try program.ast.addExpr(expected_ty, value, .{ .const_instance = const_instance });
+        },
+        .private_capture => executableInvariant("executable erased capture private capture materialization is not implemented"),
+        .callable_leaf => executableInvariant("executable erased capture callable leaf materialization is not implemented"),
+        .finite_callable_set => |finite| try lowerMaterializedFiniteCallableSetCapture(allocator, program, expected_ty, finite),
+        .tuple => |items| try lowerErasedCaptureTupleMaterialization(allocator, program, plans, expected_ty, items),
+        .record,
+        .tag_union,
+        .list,
+        .box,
+        .nominal,
+        .recursive_ref,
+        => executableInvariant("executable erased capture structural materialization node lowering is not implemented"),
+    };
+}
+
+fn lowerErasedCaptureTupleMaterialization(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    items: []const checked_artifact.ErasedCaptureMaterializationNodeId,
+) Allocator.Error!Ast.ExprId {
+    const tuple_tys = switch (program.types.getType(expected_ty)) {
+        .tuple => |tuple| tuple,
+        else => executableInvariant("executable erased capture tuple materialization expected a tuple type"),
+    };
+    if (tuple_tys.len != items.len) {
+        executableInvariant("executable erased capture tuple materialization arity disagrees with expected type");
+    }
+    const exprs = try allocator.alloc(Ast.ExprId, items.len);
+    defer allocator.free(exprs);
+    for (items, 0..) |item, i| {
+        exprs[i] = try lowerErasedCaptureMaterializationExpr(allocator, program, plans, tuple_tys[i], item);
+    }
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .tuple = try program.ast.addExprSpan(exprs) });
+}
+
+fn lowerMaterializedFiniteCallableSetCapture(
+    allocator: Allocator,
+    program: *Program,
+    expected_ty: Type.TypeId,
+    finite: checked_artifact.MaterializedFiniteCallableSetCapture,
+) Allocator.Error!Ast.ExprId {
+    const callable_set = switch (program.types.getType(expected_ty)) {
+        .callable_set => |callable_set| callable_set,
+        else => executableInvariant("executable erased finite capture materialization expected callable-set type"),
+    };
+    if (!repr.callableSetKeyEql(callable_set.key, finite.callable_set_key)) {
+        executableInvariant("executable erased finite capture materialization callable-set key differs from expected type");
+    }
+    if (finite.captures.len != 0 or finite.member_capture_slots.len != 0) {
+        executableInvariant("executable erased finite capture materialization with captures is not implemented");
+    }
+    const value = program.ast.freshValueRef();
+    _ = allocator;
+    return try program.ast.addExpr(expected_ty, value, .{ .callable_set_value = .{
+        .construction_plan = null,
+        .callable_set_key = finite.callable_set_key,
+        .member = .{
+            .callable_set_key = finite.callable_set_key,
+            .member_index = finite.selected_member,
+        },
+        .capture_record = null,
+    } });
 }
 
 fn executableProcForErasedCode(

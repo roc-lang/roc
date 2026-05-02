@@ -34,6 +34,9 @@ pub const MonoSpecializationReason = union(enum) {
     comptime_dependency_summary: u32,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     private_capture_callable_leaf: checked_artifact.PrivateCaptureNodeId,
+    erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
+    erased_capture_callable_leaf: checked_artifact.ErasedCaptureMaterializationNodeId,
+    erased_finite_capture_member: checked_artifact.ErasedCaptureMaterializationNodeId,
 };
 
 pub const Input = struct {
@@ -203,6 +206,7 @@ pub fn run(
         const reserved = queue.requested.get(key) orelse unreachable;
         const template_lookup = checkedTemplateForKey(input, key.template);
         if (executableSyntheticProcForReserved(key, reserved, template_lookup)) |synthetic| {
+            try reserveExecutableSyntheticProcDependencies(allocator, input, &program, &queue, template_lookup.artifact, synthetic);
             try program.addExecutableSyntheticProc(synthetic);
             queue.markLowered(key);
             continue;
@@ -342,6 +346,246 @@ fn executableSyntheticProcForReserved(
         },
         else => null,
     };
+}
+
+const PrivateCaptureDependencyKey = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    node: checked_artifact.PrivateCaptureNodeId,
+};
+
+const ErasedCaptureMaterializationDependencyKey = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    node: checked_artifact.ErasedCaptureMaterializationNodeId,
+};
+
+const ExecutableSyntheticDependencyState = struct {
+    private_captures: std.AutoHashMap(PrivateCaptureDependencyKey, void),
+    erased_materializations: std.AutoHashMap(ErasedCaptureMaterializationDependencyKey, void),
+
+    fn init(allocator: Allocator) ExecutableSyntheticDependencyState {
+        return .{
+            .private_captures = std.AutoHashMap(PrivateCaptureDependencyKey, void).init(allocator),
+            .erased_materializations = std.AutoHashMap(ErasedCaptureMaterializationDependencyKey, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ExecutableSyntheticDependencyState) void {
+        self.erased_materializations.deinit();
+        self.private_captures.deinit();
+    }
+};
+
+fn reserveExecutableSyntheticProcDependencies(
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    synthetic: ids.ExecutableSyntheticProc,
+) Allocator.Error!void {
+    var state = ExecutableSyntheticDependencyState.init(allocator);
+    defer state.deinit();
+
+    switch (synthetic.body) {
+        .erased_promoted_wrapper => |erased| {
+            try reserveErasedCodeRefDependency(input, program, queue, erased.code, .{ .erased_promoted_wrapper_code = synthetic.template });
+            try reserveErasedCaptureMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, erased.capture);
+            switch (erased.hidden_capture_arg) {
+                .none => {},
+                .materialized_capture => |capture| try reserveErasedCaptureMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, capture),
+            }
+        },
+    }
+}
+
+fn reserveErasedCodeRefDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    code: canonical.ErasedCallableCodeRef,
+    reason: MonoSpecializationReason,
+) Allocator.Error!void {
+    switch (code) {
+        .direct_proc_value => |direct| _ = try reserveProcedureCallableDependency(input, program, queue, direct.proc_value, reason),
+        .finite_set_adapter => {},
+    }
+}
+
+fn reserveErasedCaptureMaterializationPlanDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ExecutableSyntheticDependencyState,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    capture: checked_artifact.ErasedCaptureMaterializationPlan,
+) Allocator.Error!void {
+    switch (capture) {
+        .none,
+        .zero_sized_typed,
+        => {},
+        .node => |node| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, node),
+    }
+}
+
+fn reserveErasedCaptureMaterializationNodeDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ExecutableSyntheticDependencyState,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+) Allocator.Error!void {
+    const visit_key = ErasedCaptureMaterializationDependencyKey{
+        .artifact = owner_artifact,
+        .node = node_id,
+    };
+    const visit = try state.erased_materializations.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    switch (plans.erasedCaptureMaterializationNode(node_id)) {
+        .pending => invariantViolation("mono dependency reservation reached pending erased capture materialization node"),
+        .public_constant => {},
+        .private_capture => |capture| try reservePrivateCaptureRefDependencies(input, program, queue, state, capture),
+        .callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .erased_capture_callable_leaf = node_id }),
+        .finite_callable_set => |finite| {
+            _ = try reserveProcedureCallableDependency(input, program, queue, finite.member_proc, .{ .erased_finite_capture_member = node_id });
+            for (finite.captures) |capture| {
+                try reservePrivateCaptureRefDependencies(input, program, queue, state, capture);
+            }
+        },
+        .record => |fields| for (fields) |field| {
+            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, field.value);
+        },
+        .tuple => |items| for (items) |item| {
+            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, item);
+        },
+        .tag_union => |tag| for (tag.payloads) |payload| {
+            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, payload.value);
+        },
+        .list => |items| for (items) |item| {
+            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, item);
+        },
+        .box => |payload| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, payload),
+        .nominal => |nominal| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, nominal.backing),
+        .recursive_ref => |ref| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, ref),
+    }
+}
+
+fn reservePrivateCaptureRefDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ExecutableSyntheticDependencyState,
+    capture: checked_artifact.PrivateCaptureRef,
+) Allocator.Error!void {
+    const plans = comptimePlansForKey(input, capture.artifact) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: private capture artifact was not available");
+        unreachable;
+    };
+    try reservePrivateCaptureNodeDependencies(input, program, queue, state, capture.artifact, plans, capture.node);
+}
+
+fn reservePrivateCaptureNodeDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ExecutableSyntheticDependencyState,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    node_id: checked_artifact.PrivateCaptureNodeId,
+) Allocator.Error!void {
+    const visit_key = PrivateCaptureDependencyKey{
+        .artifact = artifact,
+        .node = node_id,
+    };
+    const visit = try state.private_captures.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    switch (plans.privateCapture(node_id)) {
+        .pending => invariantViolation("mono dependency reservation reached pending private capture node"),
+        .serializable_leaf => {},
+        .callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .private_capture_callable_leaf = node_id }),
+        .record => |fields| for (fields) |field| {
+            try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, field.value);
+        },
+        .tuple => |items| for (items) |item| {
+            try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, item);
+        },
+        .tag_union => |tag| for (tag.payloads) |payload| {
+            try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, payload.value);
+        },
+        .list => |items| for (items) |item| {
+            try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, item);
+        },
+        .box => |payload| try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, payload),
+        .nominal => |nominal| try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, nominal.backing),
+        .recursive_ref => |ref| try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, ref),
+    }
+}
+
+fn reserveCallableLeafDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    leaf: checked_artifact.CallableLeafInstance,
+    reason: MonoSpecializationReason,
+) Allocator.Error!void {
+    switch (leaf) {
+        .finite => |finite| _ = try reserveProcedureCallableDependency(input, program, queue, finite.proc_value, reason),
+        .erased_boxed => |erased| try reserveErasedCodeRefDependency(input, program, queue, erased.code, reason),
+    }
+}
+
+fn reserveProcedureCallableDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    callable: canonical.ProcedureCallableRef,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
+    const template = checkedTemplateFromCallableTemplate(callable.template);
+    const artifact = artifactKeyForRef(input, template.artifact) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable template artifact was not available");
+        unreachable;
+    };
+    const checked_types = checkedTypesForKey(input, artifact) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable template checked types were not available");
+        unreachable;
+    };
+    const checked_ty = checkedTypeRootForKey(checked_types, callable.source_fn_ty) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable source function type was not published");
+        unreachable;
+    };
+    const requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(artifact, checked_types, checked_ty);
+    const requested_key = program.concrete_source_types.key(requested_fn_ty);
+    if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
+        invariantViolation("mono dependency reservation source function type disagrees with callable occurrence");
+    }
+    const reserved = try queue.reserve(&program.concrete_source_types, .{
+        .template = template,
+        .requested_fn_ty = requested_fn_ty,
+        .reason = reason,
+    });
+    return .{
+        .proc = reserved.proc.proc,
+        .callable = callable,
+    };
+}
+
+fn artifactKeyForRef(
+    input: Input,
+    artifact: canonical.ArtifactRef,
+) ?checked_artifact.CheckedModuleArtifactKey {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &artifact.bytes)) return input.root.artifact.key;
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &artifact.bytes)) return imported.key;
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &artifact.bytes)) return related.key;
+    }
+    return null;
 }
 
 const TypeInstantiator = struct {
