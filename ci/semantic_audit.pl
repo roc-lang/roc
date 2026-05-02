@@ -12,6 +12,7 @@ my @roots = qw(
     src/lambdamono
     src/lambdasolved
     src/lir
+    src/mir
     src/monotype
     src/monotype_lifted
 );

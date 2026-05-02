@@ -3,7 +3,7 @@
 //! `CanonicalTypeKey` is only an identity key. Any stage that constructs a
 //! concrete mono/lambda/executable request must retain an explicit payload ref so
 //! later lowering can clone or inspect the checked type graph without
-//! reconstructing it from the key.
+//! deriving it from the key.
 
 const std = @import("std");
 const check = @import("check");

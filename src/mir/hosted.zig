@@ -2,7 +2,7 @@
 //!
 //! Hosted procedures are discovered and ordered during checked artifact
 //! publication. Post-check stages must carry this explicit metadata; they must
-//! not recover host symbol names from source syntax or module-local identifiers.
+//! not derive host symbol names from source syntax or module-local identifiers.
 
 const check = @import("check");
 
