@@ -62,22 +62,8 @@ pub const CallableMemberInstanceId = struct {
 
 pub const CallableRepresentation = canonical.CallableRepresentation;
 
-pub const CallableReprMode = enum {
-    direct,
-    finite_callable_set,
-    erased_callable,
-    erased_adapter,
-    intrinsic_wrapper,
-};
-
-pub const ExecutableSpecializationKey = struct {
-    base: canonical.ProcBaseKeyRef,
-    requested_fn_ty: canonical.CanonicalTypeKey,
-    exec_arg_tys: []const CanonicalExecValueTypeKey,
-    exec_ret_ty: CanonicalExecValueTypeKey,
-    callable_repr_mode: CallableReprMode,
-    capture_shape_key: CaptureShapeKey,
-};
+pub const CallableReprMode = canonical.CallableReprMode;
+pub const ExecutableSpecializationKey = canonical.ExecutableSpecializationKey;
 
 pub const RepresentationShape = union(enum) {
     primitive,

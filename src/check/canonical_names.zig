@@ -168,6 +168,23 @@ pub const CallableRepresentation = union(enum) {
     erased: ErasedFnSigKey,
 };
 
+pub const CallableReprMode = enum {
+    direct,
+    finite_callable_set,
+    erased_callable,
+    erased_adapter,
+    intrinsic_wrapper,
+};
+
+pub const ExecutableSpecializationKey = struct {
+    base: ProcBaseKeyRef,
+    requested_fn_ty: CanonicalTypeKey,
+    exec_arg_tys: []const CanonicalExecValueTypeKey,
+    exec_ret_ty: CanonicalExecValueTypeKey,
+    callable_repr_mode: CallableReprMode,
+    capture_shape_key: CaptureShapeKey,
+};
+
 pub const ErasedAdapterKey = struct {
     source_fn_ty: CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,

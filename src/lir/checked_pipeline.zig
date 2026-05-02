@@ -199,6 +199,7 @@ fn publishCompileTimeRootPayloads(
 }
 
 const ConstValueContext = struct {
+    solved: *const mir.LambdaSolved.Solve.Program,
     canonical_names: *const canonical.CanonicalNameStore,
     types: *const mir.LambdaSolved.Type.Store,
     value_store_id: repr.ValueInfoStoreId,
@@ -208,12 +209,683 @@ const ConstValueContext = struct {
     ret: repr.ValueInfoId,
 };
 
+const ExecutablePayloadWithKey = struct {
+    ref: checked_artifact.ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+const ExecutablePayloadValueKey = struct {
+    value_store: repr.ValueInfoStoreId,
+    value: repr.ValueInfoId,
+};
+
+const ExecutableTypePayloadBuilder = struct {
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    context: ConstValueContext,
+    active_types: std.AutoHashMap(mir.LambdaSolved.Type.TypeVarId, checked_artifact.ExecutableTypePayloadId),
+    active_values: std.AutoHashMap(ExecutablePayloadValueKey, checked_artifact.ExecutableTypePayloadId),
+
+    fn init(
+        allocator: Allocator,
+        artifact: *checked_artifact.CheckedModuleArtifact,
+        context: ConstValueContext,
+    ) ExecutableTypePayloadBuilder {
+        return .{
+            .allocator = allocator,
+            .artifact = artifact,
+            .context = context,
+            .active_types = std.AutoHashMap(mir.LambdaSolved.Type.TypeVarId, checked_artifact.ExecutableTypePayloadId).init(allocator),
+            .active_values = std.AutoHashMap(ExecutablePayloadValueKey, checked_artifact.ExecutableTypePayloadId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ExecutableTypePayloadBuilder) void {
+        self.active_values.deinit();
+        self.active_types.deinit();
+    }
+
+    fn artifactRef(self: *const ExecutableTypePayloadBuilder) canonical.ArtifactRef {
+        return .{ .bytes = self.artifact.key.bytes };
+    }
+
+    fn refFor(self: *const ExecutableTypePayloadBuilder, id: checked_artifact.ExecutableTypePayloadId) checked_artifact.ExecutableTypePayloadRef {
+        return .{
+            .artifact = self.artifactRef(),
+            .payload = id,
+        };
+    }
+
+    fn appendPayload(
+        self: *ExecutableTypePayloadBuilder,
+        payload: checked_artifact.ExecutableTypePayload,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayloadRef {
+        const id = try self.artifact.executable_type_payloads.append(self.allocator, payload);
+        return self.refFor(id);
+    }
+
+    fn payloadForCurrentValue(
+        self: *ExecutableTypePayloadBuilder,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        return try self.payloadForValueInStore(
+            self.context.value_store_id,
+            self.context.value_store,
+            self.context.representation_store,
+            value,
+        );
+    }
+
+    fn payloadForValueInStore(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const key = try repr.execValueTypeKeyForValue(
+            self.allocator,
+            self.context.canonical_names,
+            self.context.types,
+            representation_store,
+            value_store,
+            value,
+        );
+        const active_key = ExecutablePayloadValueKey{
+            .value_store = value_store_id,
+            .value = value,
+        };
+        if (self.active_values.get(active_key)) |active| {
+            return .{
+                .ref = try self.appendPayload(.{ .recursive_ref = active }),
+                .key = key,
+            };
+        }
+
+        const id = try self.artifact.executable_type_payloads.reserve(self.allocator);
+        try self.active_values.put(active_key, id);
+        errdefer _ = self.active_values.remove(active_key);
+
+        const info = value_store.values.items[@intFromEnum(value)];
+        const payload = if (info.callable) |callable|
+            try self.callablePayload(value_store_id, value_store, representation_store, callable)
+        else if (info.aggregate) |aggregate|
+            try self.aggregatePayload(value_store_id, value_store, representation_store, info.logical_ty, aggregate)
+        else
+            try self.typePayload(info.logical_ty);
+
+        self.artifact.executable_type_payloads.fill(id, payload);
+        _ = self.active_values.remove(active_key);
+        return .{
+            .ref = self.refFor(id),
+            .key = key,
+        };
+    }
+
+    fn payloadForType(
+        self: *ExecutableTypePayloadBuilder,
+        ty: mir.LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const key = try repr.execValueTypeKey(
+            self.allocator,
+            self.context.canonical_names,
+            self.context.types,
+            ty,
+        );
+        const root = self.context.types.unlinkConst(ty);
+        if (self.active_types.get(root)) |active| {
+            return .{
+                .ref = try self.appendPayload(.{ .recursive_ref = active }),
+                .key = key,
+            };
+        }
+
+        const id = try self.artifact.executable_type_payloads.reserve(self.allocator);
+        try self.active_types.put(root, id);
+        errdefer _ = self.active_types.remove(root);
+
+        const payload = try self.typePayload(root);
+        self.artifact.executable_type_payloads.fill(id, payload);
+        _ = self.active_types.remove(root);
+        return .{
+            .ref = self.refFor(id),
+            .key = key,
+        };
+    }
+
+    fn typePayload(
+        self: *ExecutableTypePayloadBuilder,
+        ty: mir.LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
+        const root = self.context.types.unlinkConst(ty);
+        return switch (self.context.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => checkedPipelineInvariant("executable type payload reached unresolved lambda-solved type"),
+            .nominal => |nominal| blk: {
+                const backing = try self.payloadForType(nominal.backing);
+                break :blk .{ .nominal = .{
+                    .nominal = nominal.nominal,
+                    .backing = backing.ref,
+                    .backing_key = backing.key,
+                } };
+            },
+            .content => |content| try self.contentPayload(content),
+        };
+    }
+
+    fn contentPayload(
+        self: *ExecutableTypePayloadBuilder,
+        content: mir.LambdaSolved.Type.Content,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
+        return switch (content) {
+            .primitive => |prim| .{ .primitive = executablePrimitive(prim) },
+            .list => |elem| .{ .list = try self.childPayloadForType(elem) },
+            .box => |elem| .{ .box = try self.childPayloadForType(elem) },
+            .tuple => |span| .{ .tuple = try self.tuplePayloadForTypeSpan(span) },
+            .record => |record| .{ .record = try self.recordPayloadForTypeSpan(record.fields) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagUnionPayloadForTypeSpan(tag_union.tags) },
+            .func => checkedPipelineInvariant("executable type payload requires callable value metadata for function type"),
+        };
+    }
+
+    fn childPayloadForType(
+        self: *ExecutableTypePayloadBuilder,
+        ty: mir.LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayloadChild {
+        const child = try self.payloadForType(ty);
+        return .{ .ty = child.ref, .key = child.key };
+    }
+
+    fn tuplePayloadForTypeSpan(
+        self: *ExecutableTypePayloadBuilder,
+        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.TypeVarId),
+    ) Allocator.Error![]const checked_artifact.ExecutableTupleElemPayload {
+        const items = self.context.types.sliceTypeVarSpan(span);
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, items.len);
+        errdefer self.allocator.free(out);
+        for (items, 0..) |item, i| {
+            const child = try self.payloadForType(item);
+            out[i] = .{
+                .index = @intCast(i),
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn recordPayloadForTypeSpan(
+        self: *ExecutableTypePayloadBuilder,
+        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Field),
+    ) Allocator.Error![]const checked_artifact.ExecutableRecordFieldPayload {
+        const fields = self.context.types.sliceFields(span);
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableRecordFieldPayload, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            const child = try self.payloadForType(field.ty);
+            out[i] = .{
+                .field = field.name,
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn tagUnionPayloadForTypeSpan(
+        self: *ExecutableTypePayloadBuilder,
+        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Tag),
+    ) Allocator.Error![]const checked_artifact.ExecutableTagVariantPayload {
+        const tags = self.context.types.sliceTags(span);
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, tags.len);
+        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .tag = tag.name,
+                .payloads = try self.tagPayloadsForTypeSpan(tag.args),
+            };
+        }
+        return out;
+    }
+
+    fn tagPayloadsForTypeSpan(
+        self: *ExecutableTypePayloadBuilder,
+        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.TypeVarId),
+    ) Allocator.Error![]const checked_artifact.ExecutableTagPayload {
+        const args = self.context.types.sliceTypeVarSpan(span);
+        if (args.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagPayload, args.len);
+        errdefer self.allocator.free(out);
+        for (args, 0..) |arg, i| {
+            const child = try self.payloadForType(arg);
+            out[i] = .{
+                .index = @intCast(i),
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn callablePayload(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        callable: repr.CallableValueInfo,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
+        _ = value_store_id;
+        _ = value_store;
+        return switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| .{ .callable_set = try self.callableSetPayload(key, representation_store) },
+            .already_erased => |erased| .{ .erased_fn = try self.erasedFnPayloadForAlreadyErased(erased) },
+            .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(erase) },
+            .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
+        };
+    }
+
+    fn aggregatePayload(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+        aggregate: repr.AggregateValueInfo,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
+        return switch (aggregate) {
+            .record => |record| .{ .record = try self.recordPayloadForValue(value_store_id, value_store, representation_store, record) },
+            .tuple => |tuple| .{ .tuple = try self.tuplePayloadForValue(value_store_id, value_store, representation_store, tuple) },
+            .tag => |tag| .{ .tag_union = try self.tagUnionPayloadForValue(value_store_id, value_store, representation_store, logical_ty, tag) },
+            .list => |list| .{ .list = try self.listPayloadForValue(value_store_id, value_store, representation_store, logical_ty, list) },
+        };
+    }
+
+    fn recordPayloadForValue(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        record: anytype,
+    ) Allocator.Error![]const checked_artifact.ExecutableRecordFieldPayload {
+        if (record.fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableRecordFieldPayload, record.fields.len);
+        errdefer self.allocator.free(out);
+        for (record.fields, 0..) |field, i| {
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, field.value);
+            out[i] = .{
+                .field = self.context.row_shapes.recordField(field.field).label,
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn tuplePayloadForValue(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        tuple: []const repr.ElemValueInfo,
+    ) Allocator.Error![]const checked_artifact.ExecutableTupleElemPayload {
+        if (tuple.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, tuple.len);
+        errdefer self.allocator.free(out);
+        for (tuple) |elem| {
+            const index: usize = @intCast(elem.index);
+            if (index >= tuple.len) checkedPipelineInvariant("executable payload tuple element index exceeded tuple arity");
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, elem.value);
+            out[index] = .{
+                .index = elem.index,
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn tagUnionPayloadForValue(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+        tag_value: anytype,
+    ) Allocator.Error![]const checked_artifact.ExecutableTagVariantPayload {
+        const root = self.context.types.unlinkConst(logical_ty);
+        const logical_tags = switch (self.context.types.getNode(root)) {
+            .nominal => |nominal| self.context.types.sliceTags(switch (self.context.types.getNode(self.context.types.unlinkConst(nominal.backing))) {
+                .content => |content| switch (content) {
+                    .tag_union => |tag_union| tag_union.tags,
+                    else => checkedPipelineInvariant("tag aggregate executable payload nominal backing is not a tag union"),
+                },
+                else => checkedPipelineInvariant("tag aggregate executable payload nominal backing is unresolved"),
+            }),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| self.context.types.sliceTags(tag_union.tags),
+                else => checkedPipelineInvariant("tag aggregate executable payload logical type is not a tag union"),
+            },
+            else => checkedPipelineInvariant("tag aggregate executable payload logical type is unresolved"),
+        };
+        const shape_tags = self.context.row_shapes.tagUnionTags(tag_value.union_shape);
+        if (shape_tags.len != logical_tags.len) {
+            checkedPipelineInvariant("tag aggregate executable payload shape/logical tag count mismatch");
+        }
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, shape_tags.len);
+        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(out);
+        }
+        for (shape_tags) |shape_tag| {
+            const tag_info = self.context.row_shapes.tag(shape_tag);
+            const index: usize = @intCast(tag_info.logical_index);
+            if (index >= out.len) checkedPipelineInvariant("tag aggregate executable payload logical index exceeded arity");
+            out[index] = .{
+                .tag = tag_info.label,
+                .payloads = if (shape_tag == tag_value.tag)
+                    try self.selectedTagPayloadsForValue(value_store_id, value_store, representation_store, tag_value)
+                else
+                    try self.tagPayloadsForTypeSpan(logical_tags[index].args),
+            };
+        }
+        return out;
+    }
+
+    fn selectedTagPayloadsForValue(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        tag_value: anytype,
+    ) Allocator.Error![]const checked_artifact.ExecutableTagPayload {
+        const shape_payloads = self.context.row_shapes.tagPayloads(tag_value.tag);
+        if (shape_payloads.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagPayload, shape_payloads.len);
+        errdefer self.allocator.free(out);
+        for (tag_value.payloads) |payload| {
+            const info = self.context.row_shapes.tagPayload(payload.payload);
+            const index: usize = @intCast(info.logical_index);
+            if (index >= out.len) checkedPipelineInvariant("selected tag payload executable payload index exceeded arity");
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, payload.value);
+            out[index] = .{
+                .index = @intCast(index),
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn listPayloadForValue(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+        list: anytype,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayloadChild {
+        if (list.elems.len == 0) {
+            const elem_ty = try self.logicalListElemType(logical_ty);
+            return try self.childPayloadForType(elem_ty);
+        }
+        const first = try self.payloadForValueInStore(value_store_id, value_store, representation_store, list.elems[0]);
+        for (list.elems[1..]) |elem| {
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, elem);
+            if (!repr.canonicalExecValueTypeKeyEql(first.key, child.key)) {
+                checkedPipelineInvariant("list executable payload elements have different executable representations");
+            }
+        }
+        return .{ .ty = first.ref, .key = first.key };
+    }
+
+    fn logicalListElemType(
+        self: *ExecutableTypePayloadBuilder,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!mir.LambdaSolved.Type.TypeVarId {
+        const root = self.context.types.unlinkConst(logical_ty);
+        return switch (self.context.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalListElemType(nominal.backing),
+            .content => |content| switch (content) {
+                .list => |elem| elem,
+                else => checkedPipelineInvariant("list executable payload metadata attached to non-list type"),
+            },
+            else => checkedPipelineInvariant("list executable payload metadata attached to unresolved type"),
+        };
+    }
+
+    fn callableSetPayload(
+        self: *ExecutableTypePayloadBuilder,
+        key: repr.CanonicalCallableSetKey,
+        representation_store: *const repr.RepresentationStore,
+    ) Allocator.Error!checked_artifact.ExecutableCallableSetPayload {
+        const descriptor = representation_store.callableSetDescriptor(key) orelse {
+            checkedPipelineInvariant("callable-set executable payload has no descriptor");
+        };
+        if (descriptor.members.len == 0) checkedPipelineInvariant("callable-set executable payload descriptor is empty");
+        const members = try self.allocator.alloc(checked_artifact.ExecutableCallableSetMemberPayload, descriptor.members.len);
+        errdefer self.allocator.free(members);
+        for (descriptor.members, 0..) |member, i| {
+            members[i] = .{
+                .member = member.member,
+            };
+            if (member.capture_slots.len == 0) continue;
+            const payload = try self.capturePayloadForCallableSetMember(member);
+            members[i].payload_ty = payload.ref;
+            members[i].payload_ty_key = payload.key;
+        }
+        return .{
+            .key = key,
+            .members = members,
+        };
+    }
+
+    fn capturePayloadForCallableSetMember(
+        self: *ExecutableTypePayloadBuilder,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const instance = self.procInstanceForMir(member.source_proc);
+        const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
+        const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+        const captures = value_store.sliceValueSpan(instance.public_roots.captures);
+        return try self.tuplePayloadForCaptureValues(instance.value_store, value_store, representation_store, captures, null);
+    }
+
+    fn erasedFnPayloadForAlreadyErased(
+        self: *ExecutableTypePayloadBuilder,
+        erased: repr.AlreadyErasedCallablePlan,
+    ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
+        const capture = try self.hiddenCapturePayloadForAlreadyErased(erased);
+        return .{
+            .sig_key = erased.sig_key,
+            .capture_shape_key = erased.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ref else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn erasedFnPayloadForProcValue(
+        self: *ExecutableTypePayloadBuilder,
+        erase: repr.ProcValueErasePlan,
+    ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
+        const capture = try self.hiddenCapturePayloadForProcValue(erase.proc_value, erase.erased_fn_sig_key);
+        return .{
+            .sig_key = erase.erased_fn_sig_key,
+            .capture_shape_key = erase.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ref else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn erasedFnPayloadForFiniteSetAdapter(
+        self: *ExecutableTypePayloadBuilder,
+        erase: repr.FiniteSetErasePlan,
+    ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
+        const capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
+            null
+        else
+            try self.payloadForCallableSetType(erase.adapter.callable_set_key, erase.adapter.erased_fn_sig_key.capture_ty.?);
+        return .{
+            .sig_key = erase.adapter.erased_fn_sig_key,
+            .capture_shape_key = erase.adapter.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ref else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn hiddenCapturePayloadForAlreadyErased(
+        self: *ExecutableTypePayloadBuilder,
+        erased: repr.AlreadyErasedCallablePlan,
+    ) Allocator.Error!?ExecutablePayloadWithKey {
+        return switch (erased.capture) {
+            .none => blk: {
+                if (erased.sig_key.capture_ty != null) checkedPipelineInvariant("already-erased executable payload has no capture but signature has capture type");
+                break :blk null;
+            },
+            .zero_sized_ty => |ty| blk: {
+                const capture = try self.payloadForType(ty);
+                if (erased.sig_key.capture_ty) |expected| {
+                    if (!repr.canonicalExecValueTypeKeyEql(capture.key, expected)) {
+                        checkedPipelineInvariant("already-erased executable payload zero-sized capture key differs from signature");
+                    }
+                } else {
+                    checkedPipelineInvariant("already-erased executable payload zero-sized capture has no signature capture type");
+                }
+                break :blk capture;
+            },
+            .value => |value| blk: {
+                const capture = try self.payloadForCurrentValue(value);
+                if (erased.sig_key.capture_ty) |expected| {
+                    if (!repr.canonicalExecValueTypeKeyEql(capture.key, expected)) {
+                        checkedPipelineInvariant("already-erased executable payload capture key differs from signature");
+                    }
+                } else {
+                    checkedPipelineInvariant("already-erased executable payload capture value has no signature capture type");
+                }
+                break :blk capture;
+            },
+        };
+    }
+
+    fn hiddenCapturePayloadForProcValue(
+        self: *ExecutableTypePayloadBuilder,
+        proc_value: canonical.ProcedureCallableRef,
+        sig_key: canonical.ErasedFnSigKey,
+    ) Allocator.Error!?ExecutablePayloadWithKey {
+        if (sig_key.capture_ty == null) return null;
+        const instance = self.procInstanceForCallable(proc_value);
+        const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
+        const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+        const captures = value_store.sliceValueSpan(instance.public_roots.captures);
+        return try self.tuplePayloadForCaptureValues(instance.value_store, value_store, representation_store, captures, sig_key.capture_ty.?);
+    }
+
+    fn payloadForCallableSetType(
+        self: *ExecutableTypePayloadBuilder,
+        key: repr.CanonicalCallableSetKey,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const payload_ref = try self.appendPayload(.{ .callable_set = try self.callableSetPayload(key, self.context.representation_store) });
+        return .{
+            .ref = payload_ref,
+            .key = expected_key,
+        };
+    }
+
+    fn tuplePayloadForCaptureValues(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        captures: []const repr.ValueInfoId,
+        expected_key: ?canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        if (captures.len == 0) {
+            const ref = try self.appendPayload(.{ .tuple = &.{} });
+            return .{
+                .ref = ref,
+                .key = expected_key orelse .{},
+            };
+        }
+        const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, captures.len);
+        errdefer self.allocator.free(items);
+        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        key_hasher.update("capture_tuple");
+        for (captures, 0..) |capture, i| {
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, capture);
+            key_hasher.update(&child.key.bytes);
+            items[i] = .{
+                .index = @intCast(i),
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        const ref = try self.appendPayload(.{ .tuple = items });
+        return .{
+            .ref = ref,
+            .key = expected_key orelse .{ .bytes = key_hasher.finalResult() },
+        };
+    }
+
+    fn procInstanceForCallable(
+        self: *ExecutableTypePayloadBuilder,
+        proc: canonical.ProcedureCallableRef,
+    ) *const repr.ProcRepresentationInstance {
+        for (self.context.solved.proc_instances.items) |*instance| {
+            if (canonical.procedureCallableRefEql(instance.proc.callable, proc)) return instance;
+        }
+        checkedPipelineInvariant("executable payload could not find procedure instance for callable");
+    }
+
+    fn procInstanceForMir(
+        self: *ExecutableTypePayloadBuilder,
+        proc: canonical.MirProcedureRef,
+    ) *const repr.ProcRepresentationInstance {
+        for (self.context.solved.proc_instances.items) |*instance| {
+            if (canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
+        }
+        checkedPipelineInvariant("executable payload could not find procedure instance for MIR procedure");
+    }
+};
+
+fn executablePrimitive(prim: mir.LambdaSolved.Type.Prim) checked_artifact.ExecutablePrimitive {
+    return switch (prim) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .erased => .erased,
+    };
+}
+
 fn constValueContextForRoot(
     solved: *const mir.LambdaSolved.Solve.Program,
     root_proc: canonical.MirProcedureRef,
 ) ConstValueContext {
     const instance = procRepresentationInstanceForRoot(solved, root_proc);
     return .{
+        .solved = solved,
         .canonical_names = &solved.canonical_names,
         .types = &solved.types,
         .value_store_id = instance.value_store,
@@ -237,6 +909,7 @@ fn callableResultPlanForRoot(
     const ret_info = value_store.values.items[@intFromEnum(instance.public_roots.ret)];
     const callable = ret_info.callable orelse checkedPipelineInvariant("compile-time callable root returned a value without callable metadata");
     const value_context = ConstValueContext{
+        .solved = solved,
         .canonical_names = &solved.canonical_names,
         .types = &solved.types,
         .value_store_id = instance.value_store,
@@ -324,6 +997,170 @@ fn finiteCallableResultPlan(
     } });
 }
 
+fn erasedPromotedSignaturePayloadsForProcValue(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    value_context: ConstValueContext,
+    source: anytype,
+    erase: repr.ProcValueErasePlan,
+) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
+    var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
+    defer builder.deinit();
+
+    const target_instance = builder.procInstanceForMir(source.proc);
+    return try erasedPromotedSignaturePayloadsForProcInstance(
+        allocator,
+        &builder,
+        target_instance,
+        erase.erased_fn_sig_key,
+        erase.erased_fn_sig_key.source_fn_ty,
+        erase.executable_specialization_key.exec_ret_ty,
+        erase.capture_shape_key,
+        try builder.hiddenCapturePayloadForProcValue(erase.proc_value, erase.erased_fn_sig_key),
+    );
+}
+
+fn erasedPromotedSignaturePayloadsForFiniteSetAdapter(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    value_context: ConstValueContext,
+    callable: repr.CallableValueInfo,
+    erase: repr.FiniteSetErasePlan,
+) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
+    _ = callable;
+    var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
+    defer builder.deinit();
+
+    const descriptor = value_context.representation_store.callableSetDescriptor(erase.adapter.callable_set_key) orelse {
+        checkedPipelineInvariant("erased finite-set promoted signature has no callable-set descriptor");
+    };
+    if (descriptor.members.len == 0) {
+        checkedPipelineInvariant("erased finite-set promoted signature descriptor has no members");
+    }
+
+    const first_instance = builder.procInstanceForMir(descriptor.members[0].source_proc);
+    const hidden_capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
+        null
+    else
+        try builder.payloadForCallableSetType(erase.adapter.callable_set_key, erase.adapter.erased_fn_sig_key.capture_ty.?);
+    return try erasedPromotedSignaturePayloadsForProcInstance(
+        allocator,
+        &builder,
+        first_instance,
+        erase.adapter.erased_fn_sig_key,
+        erase.adapter.source_fn_ty,
+        erase.result_ty,
+        erase.adapter.capture_shape_key,
+        hidden_capture,
+    );
+}
+
+fn erasedPromotedSignaturePayloadsForAlreadyErased(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    value_context: ConstValueContext,
+    erased: repr.AlreadyErasedCallablePlan,
+) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
+    var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
+    defer builder.deinit();
+
+    const target_instance = switch (erased.code) {
+        .direct_proc_value => |direct| builder.procInstanceForCallable(direct.proc_value),
+        .finite_set_adapter => |adapter| blk: {
+            const descriptor = value_context.representation_store.callableSetDescriptor(adapter.callable_set_key) orelse {
+                checkedPipelineInvariant("already-erased promoted signature finite adapter has no callable-set descriptor");
+            };
+            if (descriptor.members.len == 0) {
+                checkedPipelineInvariant("already-erased promoted signature finite adapter descriptor has no members");
+            }
+            break :blk builder.procInstanceForMir(descriptor.members[0].source_proc);
+        },
+    };
+    return try erasedPromotedSignaturePayloadsForProcInstance(
+        allocator,
+        &builder,
+        target_instance,
+        erased.sig_key,
+        erased.sig_key.source_fn_ty,
+        erased.result_ty,
+        erased.capture_shape_key,
+        try builder.hiddenCapturePayloadForAlreadyErased(erased),
+    );
+}
+
+fn erasedPromotedSignaturePayloadsForProcInstance(
+    allocator: Allocator,
+    builder: *ExecutableTypePayloadBuilder,
+    instance: *const repr.ProcRepresentationInstance,
+    sig_key: canonical.ErasedFnSigKey,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
+    capture_shape_key: canonical.CaptureShapeKey,
+    hidden_capture: ?ExecutablePayloadWithKey,
+) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
+    const value_store = &builder.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
+    const representation_store = &builder.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+    const params = value_store.sliceValueSpan(instance.public_roots.params);
+    const param_exec_tys = if (params.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, params.len);
+    errdefer if (param_exec_tys.len > 0) allocator.free(param_exec_tys);
+    const param_exec_ty_keys = if (params.len == 0)
+        &.{}
+    else
+        try allocator.alloc(canonical.CanonicalExecValueTypeKey, params.len);
+    errdefer if (param_exec_ty_keys.len > 0) allocator.free(param_exec_ty_keys);
+
+    for (params, 0..) |param, i| {
+        const payload = try builder.payloadForValueInStore(
+            instance.value_store,
+            value_store,
+            representation_store,
+            param,
+        );
+        param_exec_tys[i] = payload.ref;
+        param_exec_ty_keys[i] = payload.key;
+    }
+
+    const wrapper_ret = try builder.payloadForValueInStore(
+        instance.value_store,
+        value_store,
+        representation_store,
+        instance.public_roots.ret,
+    );
+    if (!repr.canonicalExecValueTypeKeyEql(wrapper_ret.key, erased_call_ret_key)) {
+        checkedPipelineInvariant("erased promoted executable signature return key differs from target proc return key");
+    }
+
+    if ((sig_key.capture_ty == null) != (hidden_capture == null)) {
+        checkedPipelineInvariant("erased promoted executable signature hidden capture presence differs from erased signature key");
+    }
+    if (hidden_capture) |capture| {
+        const expected = sig_key.capture_ty orelse unreachable;
+        if (!repr.canonicalExecValueTypeKeyEql(capture.key, expected)) {
+            checkedPipelineInvariant("erased promoted executable signature hidden capture key differs from erased signature key");
+        }
+    }
+
+    return .{
+        .source_fn_ty = source_fn_ty,
+        .param_exec_tys = param_exec_tys,
+        .param_exec_ty_keys = param_exec_ty_keys,
+        .wrapper_ret = wrapper_ret.ref,
+        .wrapper_ret_key = wrapper_ret.key,
+        .erased_call_args = try allocator.dupe(checked_artifact.ExecutableTypePayloadRef, param_exec_tys),
+        .erased_call_arg_keys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, param_exec_ty_keys),
+        .erased_call_ret = wrapper_ret.ref,
+        .erased_call_ret_key = erased_call_ret_key,
+        .hidden_capture = if (hidden_capture) |capture| .{
+            .exec_ty = capture.ref,
+            .exec_ty_key = capture.key,
+        } else null,
+        .capture_shape_key = capture_shape_key,
+    };
+}
+
 fn erasedProcValueResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
@@ -356,6 +1193,13 @@ fn erasedProcValueResultPlan(
         } },
         .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
         .result_ty = erase.executable_specialization_key.exec_ret_ty,
+        .executable_signature_payloads = try erasedPromotedSignaturePayloadsForProcValue(
+            allocator,
+            artifact_sink,
+            value_context,
+            source,
+            erase,
+        ),
     } });
 }
 
@@ -384,6 +1228,13 @@ fn erasedFiniteSetResultPlan(
                 callable,
                 erase.adapter.callable_set_key,
             ) },
+        .executable_signature_payloads = try erasedPromotedSignaturePayloadsForFiniteSetAdapter(
+            allocator,
+            artifact_sink,
+            value_context,
+            callable,
+            erase,
+        ),
     } });
 }
 
@@ -401,6 +1252,12 @@ fn alreadyErasedResultPlan(
         .code = erased.code,
         .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, plans, value_context, erased),
         .result_ty = erased.result_ty,
+        .executable_signature_payloads = try erasedPromotedSignaturePayloadsForAlreadyErased(
+            allocator,
+            artifact_sink,
+            value_context,
+            erased,
+        ),
     } });
 }
 

@@ -47,6 +47,7 @@ pub const ExecutableSyntheticProcBody = union(enum) {
 pub const ExecutableSyntheticProc = struct {
     source_proc: canonical.MirProcedureRef,
     template: canonical.ProcedureTemplateRef,
+    executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
     body: ExecutableSyntheticProcBody,
 };
 

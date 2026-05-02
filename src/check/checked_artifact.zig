@@ -2497,6 +2497,200 @@ pub const PromotedWrapperArg = union(enum) {
 
 pub const PromotedWrapperBridgeId = enum(u32) { _ };
 
+pub const ExecutableTypePayloadId = enum(u32) { _ };
+
+pub const ExecutableTypePayloadRef = struct {
+    artifact: canonical.ArtifactRef,
+    payload: ExecutableTypePayloadId,
+};
+
+pub const ExecutablePrimitive = enum {
+    bool,
+    str,
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+    f32,
+    f64,
+    dec,
+    erased,
+};
+
+pub const ExecutableTypePayloadChild = struct {
+    ty: ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableRecordFieldPayload = struct {
+    field: canonical.RecordFieldLabelId,
+    ty: ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableTupleElemPayload = struct {
+    index: u32,
+    ty: ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableTagPayload = struct {
+    index: u32,
+    ty: ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableTagVariantPayload = struct {
+    tag: canonical.TagLabelId,
+    payloads: []const ExecutableTagPayload = &.{},
+};
+
+pub const ExecutableNominalPayload = struct {
+    nominal: canonical.NominalTypeKey,
+    backing: ExecutableTypePayloadRef,
+    backing_key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableCallableSetMemberPayload = struct {
+    member: canonical.CallableSetMemberId,
+    payload_ty: ?ExecutableTypePayloadRef = null,
+    payload_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
+};
+
+pub const ExecutableCallableSetPayload = struct {
+    key: canonical.CanonicalCallableSetKey,
+    members: []const ExecutableCallableSetMemberPayload = &.{},
+};
+
+pub const ExecutableErasedFnPayload = struct {
+    sig_key: canonical.ErasedFnSigKey,
+    capture_shape_key: canonical.CaptureShapeKey,
+    capture_ty: ?ExecutableTypePayloadRef = null,
+    capture_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
+};
+
+pub const ExecutableTypePayload = union(enum) {
+    pending,
+    primitive: ExecutablePrimitive,
+    record: []const ExecutableRecordFieldPayload,
+    tuple: []const ExecutableTupleElemPayload,
+    tag_union: []const ExecutableTagVariantPayload,
+    list: ExecutableTypePayloadChild,
+    box: ExecutableTypePayloadChild,
+    nominal: ExecutableNominalPayload,
+    callable_set: ExecutableCallableSetPayload,
+    erased_fn: ExecutableErasedFnPayload,
+    recursive_ref: ExecutableTypePayloadId,
+};
+
+pub const ExecutableTypePayloadStore = struct {
+    payloads: []ExecutableTypePayload = &.{},
+
+    pub fn reserve(
+        self: *ExecutableTypePayloadStore,
+        allocator: Allocator,
+    ) Allocator.Error!ExecutableTypePayloadId {
+        return try self.append(allocator, .pending);
+    }
+
+    pub fn append(
+        self: *ExecutableTypePayloadStore,
+        allocator: Allocator,
+        payload: ExecutableTypePayload,
+    ) Allocator.Error!ExecutableTypePayloadId {
+        const id: ExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.payloads.len)));
+        const old = self.payloads;
+        const next = try allocator.alloc(ExecutableTypePayload, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = payload;
+        allocator.free(old);
+        self.payloads = next;
+        return id;
+    }
+
+    pub fn fill(
+        self: *ExecutableTypePayloadStore,
+        id: ExecutableTypePayloadId,
+        payload: ExecutableTypePayload,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.payloads.len) {
+            checkedArtifactInvariant("executable type payload id is out of range", .{});
+        }
+        switch (payload) {
+            .pending => checkedArtifactInvariant("cannot fill executable type payload with pending", .{}),
+            else => {},
+        }
+        switch (self.payloads[index]) {
+            .pending => self.payloads[index] = payload,
+            else => checkedArtifactInvariant("executable type payload was filled twice", .{}),
+        }
+    }
+
+    pub fn get(self: *const ExecutableTypePayloadStore, id: ExecutableTypePayloadId) ExecutableTypePayload {
+        const index = @intFromEnum(id);
+        if (index >= self.payloads.len) {
+            checkedArtifactInvariant("executable type payload id is out of range", .{});
+        }
+        return self.payloads[index];
+    }
+
+    pub fn verifyPublished(self: *const ExecutableTypePayloadStore, artifact_key: CheckedModuleArtifactKey) void {
+        if (builtin.mode != .Debug) return;
+        for (self.payloads) |payload| verifyExecutableTypePayload(self, artifact_key, payload);
+    }
+
+    pub fn deinit(self: *ExecutableTypePayloadStore, allocator: Allocator) void {
+        for (self.payloads) |*payload| deinitExecutableTypePayload(allocator, payload);
+        allocator.free(self.payloads);
+        self.* = .{};
+    }
+};
+
+pub const ExecutableProcedureParamPayload = struct {
+    param: PromotedWrapperParam,
+    exec_ty: ExecutableTypePayloadRef,
+    exec_ty_key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ExecutableHiddenCapturePayload = struct {
+    exec_ty: ExecutableTypePayloadRef,
+    exec_ty_key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const ErasedPromotedProcedureExecutableSignaturePayloads = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    param_exec_tys: []const ExecutableTypePayloadRef = &.{},
+    param_exec_ty_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
+    wrapper_ret: ExecutableTypePayloadRef,
+    wrapper_ret_key: canonical.CanonicalExecValueTypeKey,
+    erased_call_args: []const ExecutableTypePayloadRef = &.{},
+    erased_call_arg_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
+    erased_call_ret: ExecutableTypePayloadRef,
+    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
+    hidden_capture: ?ExecutableHiddenCapturePayload = null,
+    capture_shape_key: canonical.CaptureShapeKey,
+};
+
+pub const ErasedPromotedProcedureExecutableSignature = struct {
+    specialization_key: canonical.ExecutableSpecializationKey,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    wrapper_params: []const ExecutableProcedureParamPayload = &.{},
+    wrapper_ret: ExecutableTypePayloadRef,
+    wrapper_ret_key: canonical.CanonicalExecValueTypeKey,
+    erased_call_args: []const ExecutableTypePayloadRef = &.{},
+    erased_call_arg_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
+    erased_call_ret: ExecutableTypePayloadRef,
+    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
+    hidden_capture: ?ExecutableHiddenCapturePayload = null,
+};
+
 pub const FinitePromotedWrapperBodyPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
@@ -2518,6 +2712,7 @@ pub const ErasedHiddenCaptureArgPlan = union(enum) {
 pub const ErasedPromotedWrapperBodyPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     params: []const PromotedWrapperParam = &.{},
+    executable_signature: ErasedPromotedProcedureExecutableSignature,
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureReificationPlan,
@@ -2586,10 +2781,20 @@ pub const PromotedCallableBodyPlanTable = struct {
         return self.plans[index];
     }
 
-    pub fn verifyPublished(self: *const PromotedCallableBodyPlanTable, plans: *const CompileTimePlanStore) void {
+    pub fn verifyPublished(
+        self: *const PromotedCallableBodyPlanTable,
+        plans: *const CompileTimePlanStore,
+        executable_type_payloads: *const ExecutableTypePayloadStore,
+        artifact_key: CheckedModuleArtifactKey,
+    ) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.plans) |plan| verifyPromotedCallableBodyPlan(plans, plan);
+        for (self.plans) |plan| verifyPromotedCallableBodyPlan(
+            plans,
+            executable_type_payloads,
+            artifact_key,
+            plan,
+        );
     }
 
     pub fn deinit(self: *PromotedCallableBodyPlanTable, allocator: Allocator) void {
@@ -5075,6 +5280,7 @@ pub const ErasedCallableResultPlan = struct {
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureReificationPlan,
     result_ty: canonical.CanonicalExecValueTypeKey,
+    executable_signature_payloads: ErasedPromotedProcedureExecutableSignaturePayloads,
 };
 
 pub const CallableResultPlan = union(enum) {
@@ -5330,6 +5536,8 @@ fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) voi
             allocator.free(finite.members);
         },
         .erased => |erased| {
+            var payloads = erased.executable_signature_payloads;
+            deinitErasedPromotedProcedureExecutableSignaturePayloads(allocator, &payloads);
             allocator.free(erased.provenance);
             deinitErasedCaptureReificationPlan(allocator, erased.capture);
         },
@@ -5407,6 +5615,59 @@ fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCa
     }
 }
 
+fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePayload) void {
+    switch (payload.*) {
+        .pending,
+        .primitive,
+        .list,
+        .box,
+        .nominal,
+        .erased_fn,
+        .recursive_ref,
+        => {},
+        .record => |fields| allocator.free(fields),
+        .tuple => |items| allocator.free(items),
+        .tag_union => |variants| {
+            for (variants) |variant| allocator.free(variant.payloads);
+            allocator.free(variants);
+        },
+        .callable_set => |callable_set| allocator.free(callable_set.members),
+    }
+    payload.* = .pending;
+}
+
+fn deinitExecutableSpecializationKey(allocator: Allocator, key: *canonical.ExecutableSpecializationKey) void {
+    allocator.free(key.exec_arg_tys);
+    key.exec_arg_tys = &.{};
+}
+
+fn deinitErasedPromotedProcedureExecutableSignaturePayloads(
+    allocator: Allocator,
+    payloads: *ErasedPromotedProcedureExecutableSignaturePayloads,
+) void {
+    allocator.free(payloads.param_exec_tys);
+    allocator.free(payloads.param_exec_ty_keys);
+    allocator.free(payloads.erased_call_args);
+    allocator.free(payloads.erased_call_arg_keys);
+    payloads.param_exec_tys = &.{};
+    payloads.param_exec_ty_keys = &.{};
+    payloads.erased_call_args = &.{};
+    payloads.erased_call_arg_keys = &.{};
+}
+
+fn deinitErasedPromotedProcedureExecutableSignature(
+    allocator: Allocator,
+    signature: *ErasedPromotedProcedureExecutableSignature,
+) void {
+    deinitExecutableSpecializationKey(allocator, &signature.specialization_key);
+    allocator.free(signature.wrapper_params);
+    allocator.free(signature.erased_call_args);
+    allocator.free(signature.erased_call_arg_keys);
+    signature.wrapper_params = &.{};
+    signature.erased_call_args = &.{};
+    signature.erased_call_arg_keys = &.{};
+}
+
 fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableBodyPlan) void {
     switch (plan.*) {
         .pending => {},
@@ -5417,6 +5678,8 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
             allocator.free(finite.call_args);
         },
         .erased => |erased| {
+            var signature = erased.executable_signature;
+            deinitErasedPromotedProcedureExecutableSignature(allocator, &signature);
             allocator.free(erased.params);
             allocator.free(erased.arg_bridges);
             allocator.free(erased.provenance);
@@ -5585,7 +5848,121 @@ fn verifyPromotedWrapperArg(store: *const CompileTimePlanStore, arg: PromotedWra
     }
 }
 
-fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: PromotedCallableBodyPlan) void {
+fn verifyExecutableTypePayloadRef(
+    payloads: *const ExecutableTypePayloadStore,
+    artifact_key: CheckedModuleArtifactKey,
+    ref: ExecutableTypePayloadRef,
+) void {
+    if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact_key.bytes)) {
+        std.debug.panic("checked artifact invariant violated: executable type payload ref belongs to a different artifact", .{});
+    }
+    if (@intFromEnum(ref.payload) >= payloads.payloads.len) {
+        std.debug.panic("checked artifact invariant violated: executable type payload ref is out of range", .{});
+    }
+}
+
+fn verifyExecutableTypePayload(
+    payloads: *const ExecutableTypePayloadStore,
+    artifact_key: CheckedModuleArtifactKey,
+    payload: ExecutableTypePayload,
+) void {
+    switch (payload) {
+        .pending => std.debug.panic("checked artifact invariant violated: executable type payload was not filled", .{}),
+        .primitive => {},
+        .record => |fields| for (fields) |field| verifyExecutableTypePayloadRef(payloads, artifact_key, field.ty),
+        .tuple => |items| for (items) |item| verifyExecutableTypePayloadRef(payloads, artifact_key, item.ty),
+        .tag_union => |variants| for (variants) |variant| {
+            for (variant.payloads) |tag_payload| verifyExecutableTypePayloadRef(payloads, artifact_key, tag_payload.ty);
+        },
+        .list => |child| verifyExecutableTypePayloadRef(payloads, artifact_key, child.ty),
+        .box => |child| verifyExecutableTypePayloadRef(payloads, artifact_key, child.ty),
+        .nominal => |nominal| verifyExecutableTypePayloadRef(payloads, artifact_key, nominal.backing),
+        .callable_set => |callable_set| for (callable_set.members) |member| {
+            if ((member.payload_ty == null) != (member.payload_ty_key == null)) {
+                std.debug.panic("checked artifact invariant violated: callable-set executable payload member has mismatched payload ref/key presence", .{});
+            }
+            if (member.payload_ty) |payload_ty| verifyExecutableTypePayloadRef(payloads, artifact_key, payload_ty);
+        },
+        .erased_fn => |erased| {
+            if ((erased.capture_ty == null) != (erased.capture_ty_key == null)) {
+                std.debug.panic("checked artifact invariant violated: erased executable payload has mismatched capture ref/key presence", .{});
+            }
+            if (erased.capture_ty) |capture| verifyExecutableTypePayloadRef(payloads, artifact_key, capture);
+            if (erased.sig_key.capture_ty == null and erased.capture_ty != null) {
+                std.debug.panic("checked artifact invariant violated: erased executable payload has capture payload but signature has no capture", .{});
+            }
+            if (erased.sig_key.capture_ty != null and erased.capture_ty == null) {
+                std.debug.panic("checked artifact invariant violated: erased executable payload signature has capture but payload is missing", .{});
+            }
+        },
+        .recursive_ref => |ref| {
+            if (@intFromEnum(ref) >= payloads.payloads.len) {
+                std.debug.panic("checked artifact invariant violated: executable recursive type payload ref is out of range", .{});
+            }
+        },
+    }
+}
+
+fn verifyErasedPromotedProcedureExecutableSignature(
+    payloads: *const ExecutableTypePayloadStore,
+    artifact_key: CheckedModuleArtifactKey,
+    signature: ErasedPromotedProcedureExecutableSignature,
+    erased: ErasedPromotedWrapperBodyPlan,
+) void {
+    if (!std.mem.eql(u8, &signature.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable signature source type differs from wrapper source type", .{});
+    }
+    if (!std.mem.eql(u8, &signature.specialization_key.requested_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable specialization source type differs from wrapper source type", .{});
+    }
+    if (signature.specialization_key.callable_repr_mode != .erased_callable) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable signature was not marked erased-callable", .{});
+    }
+    if (signature.wrapper_params.len != erased.params.len) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable signature param count differs from wrapper params", .{});
+    }
+    if (signature.specialization_key.exec_arg_tys.len != signature.wrapper_params.len) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable specialization arg count differs from wrapper params", .{});
+    }
+    for (signature.wrapper_params, erased.params, signature.specialization_key.exec_arg_tys) |param_payload, wrapper_param, arg_key| {
+        if (param_payload.param.index != wrapper_param.index) {
+            std.debug.panic("checked artifact invariant violated: erased promoted executable signature param order differs from wrapper params", .{});
+        }
+        if (!std.mem.eql(u8, &param_payload.exec_ty_key.bytes, &arg_key.bytes)) {
+            std.debug.panic("checked artifact invariant violated: erased promoted executable param key differs from specialization key", .{});
+        }
+        verifyExecutableTypePayloadRef(payloads, artifact_key, param_payload.exec_ty);
+    }
+    verifyExecutableTypePayloadRef(payloads, artifact_key, signature.wrapper_ret);
+    verifyExecutableTypePayloadRef(payloads, artifact_key, signature.erased_call_ret);
+    for (signature.erased_call_args) |arg| verifyExecutableTypePayloadRef(payloads, artifact_key, arg);
+    if (!std.mem.eql(u8, &signature.wrapper_ret_key.bytes, &signature.specialization_key.exec_ret_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
+    }
+    if (!std.mem.eql(u8, &signature.erased_call_ret_key.bytes, &erased.result_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from body result type", .{});
+    }
+    if (signature.erased_call_args.len != signature.erased_call_arg_keys.len) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg refs/keys differ in length", .{});
+    }
+    if ((erased.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from signature key", .{});
+    }
+    if (signature.hidden_capture) |hidden| {
+        const capture_ty = erased.sig_key.capture_ty orelse unreachable;
+        if (!std.mem.eql(u8, &hidden.exec_ty_key.bytes, &capture_ty.bytes)) {
+            std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture key differs from signature key", .{});
+        }
+        verifyExecutableTypePayloadRef(payloads, artifact_key, hidden.exec_ty);
+    }
+}
+
+fn verifyPromotedCallableBodyPlan(
+    store: *const CompileTimePlanStore,
+    executable_type_payloads: *const ExecutableTypePayloadStore,
+    artifact_key: CheckedModuleArtifactKey,
+    plan: PromotedCallableBodyPlan,
+) void {
     switch (plan) {
         .pending => std.debug.panic("checked artifact invariant violated: published promoted callable body plan is pending", .{}),
         .finite => |finite| {
@@ -5607,6 +5984,12 @@ fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: Prom
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
             }
+            verifyErasedPromotedProcedureExecutableSignature(
+                executable_type_payloads,
+                artifact_key,
+                erased.executable_signature,
+                erased,
+            );
             switch (erased.capture) {
                 .none,
                 .zero_sized_typed,
@@ -7675,6 +8058,7 @@ pub const CheckedModuleArtifact = struct {
     entry_wrappers: EntryWrapperTable = .{},
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
+    executable_type_payloads: ExecutableTypePayloadStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -7843,6 +8227,7 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
+        self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
         self.entry_wrappers.deinit(allocator);
@@ -8153,7 +8538,12 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.promoted_callable_body_plans.verifyPublished(&self.comptime_plans);
+        self.executable_type_payloads.verifyPublished(self.key);
+        self.promoted_callable_body_plans.verifyPublished(
+            &self.comptime_plans,
+            &self.executable_type_payloads,
+            self.key,
+        );
         self.promoted_callable_wrappers.verifyPublished(
             self.key,
             &self.checked_types,
@@ -8236,6 +8626,7 @@ pub const ImportedModuleView = struct {
     hosted_procs: *const HostedProcTable,
     promoted_callable_wrappers: *const PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
+    executable_type_payloads: *const ExecutableTypePayloadStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -8272,6 +8663,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .hosted_procs = &artifact.hosted_procs,
         .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
         .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
+        .executable_type_payloads = &artifact.executable_type_payloads,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),

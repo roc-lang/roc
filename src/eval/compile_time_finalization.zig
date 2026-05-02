@@ -471,6 +471,12 @@ fn publishErasedCallableResult(
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
         .source_fn_ty = erased.source_fn_ty,
         .params = params,
+        .executable_signature = try buildErasedPromotedProcedureExecutableSignature(
+            allocator,
+            reserved,
+            erased,
+            params,
+        ),
         .sig_key = erased.sig_key,
         .code = erased.code,
         .capture = try cloneErasedCapturePlan(allocator, erased.capture),
@@ -497,6 +503,57 @@ fn publishErasedCallableResult(
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
+    };
+}
+
+fn buildErasedPromotedProcedureExecutableSignature(
+    allocator: Allocator,
+    reserved: checked_artifact.ReservedPromotedCallableWrapper,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    params: []const checked_artifact.PromotedWrapperParam,
+) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignature {
+    const payloads = erased.executable_signature_payloads;
+    if (!std.mem.eql(u8, &payloads.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("erased callable signature payload source type differs from result plan");
+    }
+    if (payloads.param_exec_tys.len != params.len or payloads.param_exec_ty_keys.len != params.len) {
+        compileTimeFinalizationInvariant("erased callable signature payload param arity differs from promoted wrapper params");
+    }
+    if (payloads.erased_call_args.len != payloads.erased_call_arg_keys.len) {
+        compileTimeFinalizationInvariant("erased callable signature payload erased-call arg refs/keys differ in length");
+    }
+
+    const wrapper_params = if (params.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableProcedureParamPayload, params.len);
+    errdefer if (wrapper_params.len > 0) allocator.free(wrapper_params);
+    for (params, 0..) |param, i| {
+        wrapper_params[i] = .{
+            .param = param,
+            .exec_ty = payloads.param_exec_tys[i],
+            .exec_ty_key = payloads.param_exec_ty_keys[i],
+        };
+    }
+
+    return .{
+        .specialization_key = .{
+            .base = reserved.proc_value.proc_base,
+            .requested_fn_ty = erased.source_fn_ty,
+            .exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, payloads.param_exec_ty_keys),
+            .exec_ret_ty = payloads.wrapper_ret_key,
+            .callable_repr_mode = .erased_callable,
+            .capture_shape_key = payloads.capture_shape_key,
+        },
+        .source_fn_ty = erased.source_fn_ty,
+        .wrapper_params = wrapper_params,
+        .wrapper_ret = payloads.wrapper_ret,
+        .wrapper_ret_key = payloads.wrapper_ret_key,
+        .erased_call_args = try allocator.dupe(checked_artifact.ExecutableTypePayloadRef, payloads.erased_call_args),
+        .erased_call_arg_keys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, payloads.erased_call_arg_keys),
+        .erased_call_ret = payloads.erased_call_ret,
+        .erased_call_ret_key = payloads.erased_call_ret_key,
+        .hidden_capture = payloads.hidden_capture,
     };
 }
 
