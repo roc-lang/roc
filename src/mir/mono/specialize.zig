@@ -205,6 +205,9 @@ const CheckedTemplateLookup = struct {
     resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
     nested_proc_sites: *const checked_artifact.NestedProcSiteTable,
     hosted_procs: *const checked_artifact.HostedProcTable,
+    promoted_callable_wrappers: *const checked_artifact.PromotedCallableWrapperTable,
+    promoted_callable_body_plans: *const checked_artifact.PromotedCallableBodyPlanTable,
+    comptime_plans: *const checked_artifact.CompileTimePlanStore,
     entry_wrappers: ?*const checked_artifact.EntryWrapperTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
@@ -221,6 +224,9 @@ fn checkedTemplateForKey(
             .resolved_value_refs = &input.root.artifact.resolved_value_refs,
             .nested_proc_sites = &input.root.artifact.nested_proc_sites,
             .hosted_procs = &input.root.artifact.hosted_procs,
+            .promoted_callable_wrappers = &input.root.artifact.promoted_callable_wrappers,
+            .promoted_callable_body_plans = &input.root.artifact.promoted_callable_body_plans,
+            .comptime_plans = &input.root.artifact.comptime_plans,
             .entry_wrappers = &input.root.artifact.entry_wrappers,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
@@ -239,6 +245,9 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = imported.resolved_value_refs,
                     .nested_proc_sites = imported.nested_proc_sites,
                     .hosted_procs = imported.hosted_procs,
+                    .promoted_callable_wrappers = imported.promoted_callable_wrappers,
+                    .promoted_callable_body_plans = imported.promoted_callable_body_plans,
+                    .comptime_plans = imported.comptime_plans,
                     .entry_wrappers = null,
                     .template = exported.template_data,
                 };
@@ -261,6 +270,9 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = related.resolved_value_refs,
                     .nested_proc_sites = related.nested_proc_sites,
                     .hosted_procs = related.hosted_procs,
+                    .promoted_callable_wrappers = related.promoted_callable_wrappers,
+                    .promoted_callable_body_plans = related.promoted_callable_body_plans,
+                    .comptime_plans = related.comptime_plans,
                     .entry_wrappers = null,
                     .template = exported.template_data,
                 };

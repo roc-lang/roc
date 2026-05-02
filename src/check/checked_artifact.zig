@@ -2461,6 +2461,178 @@ pub const EntryWrapperTable = struct {
     }
 };
 
+pub const PromotedWrapperParam = struct {
+    index: u32,
+    checked_ty: CheckedTypeId,
+    source_ty: canonical.CanonicalTypeKey,
+};
+
+pub const PrivateCaptureRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    owner: PromotedCaptureId,
+    node: PrivateCaptureNodeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+};
+
+pub const PrivateCaptureInstantiationKey = struct {
+    capture_ref: PrivateCaptureRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+};
+
+pub const PromotedWrapperArg = union(enum) {
+    param: u32,
+    private_capture: PrivateCaptureRef,
+};
+
+pub const PromotedWrapperBridgeId = enum(u32) { _ };
+
+pub const FinitePromotedWrapperBodyPlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    callable_set_key: canonical.CanonicalCallableSetKey,
+    member: canonical.CallableSetMemberId,
+    captures: []const PrivateCaptureRef = &.{},
+    params: []const PromotedWrapperParam = &.{},
+    call_args: []const PromotedWrapperArg = &.{},
+    result_bridge: ?PromotedWrapperBridgeId = null,
+};
+
+pub const ErasedHiddenCaptureArgPlan = union(enum) {
+    none,
+    materialized_capture: ErasedCaptureReificationPlan,
+};
+
+pub const ErasedPromotedWrapperBodyPlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    params: []const PromotedWrapperParam = &.{},
+    sig_key: canonical.ErasedFnSigKey,
+    code: canonical.ErasedCallableCodeRef,
+    capture: ErasedCaptureReificationPlan,
+    arg_bridges: []const PromotedWrapperBridgeId = &.{},
+    hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
+    result_bridge: ?PromotedWrapperBridgeId = null,
+    result_ty: canonical.CanonicalExecValueTypeKey,
+    provenance: []const canonical.BoxBoundaryId,
+};
+
+pub const PromotedCallableBodyPlan = union(enum) {
+    finite: FinitePromotedWrapperBodyPlan,
+    erased: ErasedPromotedWrapperBodyPlan,
+};
+
+pub const PromotedCallableBodyPlanTable = struct {
+    plans: []PromotedCallableBodyPlan = &.{},
+
+    pub fn append(
+        self: *PromotedCallableBodyPlanTable,
+        allocator: Allocator,
+        plan: PromotedCallableBodyPlan,
+    ) Allocator.Error!canonical.PromotedCallableBodyPlanId {
+        const id: canonical.PromotedCallableBodyPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
+        const old = self.plans;
+        const next = try allocator.alloc(PromotedCallableBodyPlan, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = plan;
+        allocator.free(old);
+        self.plans = next;
+        return id;
+    }
+
+    pub fn get(self: *const PromotedCallableBodyPlanTable, id: canonical.PromotedCallableBodyPlanId) PromotedCallableBodyPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.plans.len) {
+            checkedArtifactInvariant("promoted callable body plan id is out of range", .{});
+        }
+        return self.plans[index];
+    }
+
+    pub fn verifyPublished(self: *const PromotedCallableBodyPlanTable, plans: *const CompileTimePlanStore) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.plans) |plan| verifyPromotedCallableBodyPlan(plans, plan);
+    }
+
+    pub fn deinit(self: *PromotedCallableBodyPlanTable, allocator: Allocator) void {
+        for (self.plans) |*plan| deinitPromotedCallableBodyPlan(allocator, plan);
+        allocator.free(self.plans);
+        self.* = .{};
+    }
+};
+
+pub const PromotedCallableWrapper = struct {
+    id: canonical.PromotedCallableWrapperId,
+    promoted_proc: canonical.ProcedureValueRef,
+    proc_base_key: canonical.ProcBaseKeyRef,
+    callable_node: canonical.PromotedCallableNodeId,
+    source_binding: CIR.Pattern.Idx,
+    checked_fn_root: CheckedTypeId,
+    body_plan: canonical.PromotedCallableBodyPlanId,
+};
+
+pub const PromotedCallableWrapperTable = struct {
+    wrappers: []PromotedCallableWrapper = &.{},
+
+    pub fn append(
+        self: *PromotedCallableWrapperTable,
+        allocator: Allocator,
+        wrapper: PromotedCallableWrapper,
+    ) Allocator.Error!canonical.PromotedCallableWrapperId {
+        const id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.wrappers.len)));
+        if (wrapper.id != id) {
+            checkedArtifactInvariant("promoted callable wrapper id does not match append slot", .{});
+        }
+        for (self.wrappers) |existing| {
+            if (canonical.procedureValueRefEql(existing.promoted_proc, wrapper.promoted_proc)) {
+                checkedArtifactInvariant("promoted callable wrapper procedure was published twice", .{});
+            }
+        }
+        const old = self.wrappers;
+        const next = try allocator.alloc(PromotedCallableWrapper, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = wrapper;
+        allocator.free(old);
+        self.wrappers = next;
+        return id;
+    }
+
+    pub fn get(self: *const PromotedCallableWrapperTable, id: canonical.PromotedCallableWrapperId) PromotedCallableWrapper {
+        const index = @intFromEnum(id);
+        if (index >= self.wrappers.len) {
+            checkedArtifactInvariant("promoted callable wrapper id is out of range", .{});
+        }
+        return self.wrappers[index];
+    }
+
+    pub fn verifyPublished(
+        self: *const PromotedCallableWrapperTable,
+        artifact_key: CheckedModuleArtifactKey,
+        checked_types: *const CheckedTypeStore,
+        body_plans: *const PromotedCallableBodyPlanTable,
+    ) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.wrappers, 0..) |wrapper, i| {
+            std.debug.assert(@intFromEnum(wrapper.id) == i);
+            if (!std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &artifact_key.bytes)) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper procedure belongs to a different artifact", .{});
+            }
+            if (wrapper.promoted_proc.proc_base != wrapper.proc_base_key) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper procedure/base mismatch", .{});
+            }
+            if (@intFromEnum(wrapper.checked_fn_root) >= checked_types.roots.len) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper checked function root is out of range", .{});
+            }
+            if (@intFromEnum(wrapper.body_plan) >= body_plans.plans.len) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper body plan is out of range", .{});
+            }
+        }
+    }
+
+    pub fn deinit(self: *PromotedCallableWrapperTable, allocator: Allocator) void {
+        allocator.free(self.wrappers);
+        self.* = .{};
+    }
+};
+
 pub const StaticDispatchPlanTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
@@ -5107,6 +5279,30 @@ fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptu
     }
 }
 
+fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCaptureArgPlan) void {
+    switch (hidden) {
+        .none => {},
+        .materialized_capture => |capture| deinitErasedCaptureReificationPlan(allocator, capture),
+    }
+}
+
+fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableBodyPlan) void {
+    switch (plan.*) {
+        .finite => |finite| {
+            allocator.free(finite.captures);
+            allocator.free(finite.params);
+            allocator.free(finite.call_args);
+        },
+        .erased => |erased| {
+            allocator.free(erased.params);
+            allocator.free(erased.arg_bridges);
+            allocator.free(erased.provenance);
+            deinitErasedCaptureReificationPlan(allocator, erased.capture);
+            deinitErasedHiddenCaptureArgPlan(allocator, erased.hidden_capture_arg);
+        },
+    }
+}
+
 fn verifyConstGraphRef(store: *const CompileTimePlanStore, id: ConstGraphReificationPlanId) void {
     std.debug.assert(@intFromEnum(id) < store.const_graphs.items.len);
 }
@@ -5125,6 +5321,10 @@ fn verifyCaptureSlotRef(store: *const CompileTimePlanStore, id: CaptureSlotReifi
 
 fn verifyPrivateCaptureRef(store: *const CompileTimePlanStore, id: PrivateCaptureNodeId) void {
     std.debug.assert(@intFromEnum(id) < store.private_captures.items.len);
+}
+
+fn verifyPrivateCaptureHandle(store: *const CompileTimePlanStore, ref: PrivateCaptureRef) void {
+    verifyPrivateCaptureRef(store, ref.node);
 }
 
 fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: ConstGraphReificationPlan) void {
@@ -5246,6 +5446,42 @@ fn verifyCallableLeafInstance(store: *const CompileTimePlanStore, leaf: Callable
                 .zero_sized_typed,
                 => {},
                 .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+            }
+        },
+    }
+}
+
+fn verifyPromotedWrapperArg(store: *const CompileTimePlanStore, arg: PromotedWrapperArg) void {
+    switch (arg) {
+        .param => {},
+        .private_capture => |capture| verifyPrivateCaptureHandle(store, capture),
+    }
+}
+
+fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: PromotedCallableBodyPlan) void {
+    switch (plan) {
+        .finite => |finite| {
+            for (finite.captures) |capture| verifyPrivateCaptureHandle(store, capture);
+            for (finite.call_args) |arg| verifyPromotedWrapperArg(store, arg);
+        },
+        .erased => |erased| {
+            if (erased.provenance.len == 0) {
+                std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
+            }
+            switch (erased.capture) {
+                .none,
+                .zero_sized_typed,
+                => {},
+                .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+            }
+            switch (erased.hidden_capture_arg) {
+                .none => {},
+                .materialized_capture => |capture| switch (capture) {
+                    .none,
+                    .zero_sized_typed,
+                    => {},
+                    .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+                },
             }
         },
     }
@@ -5806,6 +6042,16 @@ pub const ArtifactPrivateCaptureNodeRef = struct {
     node: PrivateCaptureNodeId,
 };
 
+pub const ArtifactPromotedCallableWrapperRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    wrapper: canonical.PromotedCallableWrapperId,
+};
+
+pub const ArtifactPromotedCallableBodyPlanRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    plan: canonical.PromotedCallableBodyPlanId,
+};
+
 pub const ImportedTemplateClosureView = struct {
     checked_bodies: []const ArtifactCheckedBodyRef = &.{},
     checked_type_roots: []const ArtifactCheckedTypeRef = &.{},
@@ -5817,6 +6063,8 @@ pub const ImportedTemplateClosureView = struct {
     const_templates: []const ConstRef = &.{},
     promoted_procedures: []const PromotedProcedureRef = &.{},
     semantic_instantiation_procedures: []const SemanticInstantiationProcedureId = &.{},
+    promoted_callable_wrappers: []const ArtifactPromotedCallableWrapperRef = &.{},
+    promoted_callable_body_plans: []const ArtifactPromotedCallableBodyPlanRef = &.{},
     private_capture_roots: []const PrivateCaptureId = &.{},
     private_capture_nodes: []const ArtifactPrivateCaptureNodeRef = &.{},
     private_capture_const_templates: []const ConstRef = &.{},
@@ -6022,6 +6270,8 @@ fn deinitImportedTemplateClosure(
     freeConstSlice(allocator, closure.const_templates);
     freeConstSlice(allocator, closure.promoted_procedures);
     freeConstSlice(allocator, closure.semantic_instantiation_procedures);
+    freeConstSlice(allocator, closure.promoted_callable_wrappers);
+    freeConstSlice(allocator, closure.promoted_callable_body_plans);
     freeConstSlice(allocator, closure.private_capture_roots);
     freeConstSlice(allocator, closure.private_capture_nodes);
     freeConstSlice(allocator, closure.private_capture_const_templates);
@@ -7274,6 +7524,8 @@ pub const CheckedModuleArtifact = struct {
     nested_proc_sites: NestedProcSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable,
     entry_wrappers: EntryWrapperTable = .{},
+    promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
+    promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -7306,6 +7558,69 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
+    pub fn appendPromotedCallableWrapper(
+        self: *CheckedModuleArtifact,
+        allocator: Allocator,
+        source_binding: CIR.Pattern.Idx,
+        checked_fn_root: CheckedTypeId,
+        checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+        body_plan: PromotedCallableBodyPlan,
+    ) Allocator.Error!PromotedProcedureRef {
+        const body_plan_id = try self.promoted_callable_body_plans.append(allocator, body_plan);
+
+        const wrapper_id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.promoted_callable_wrappers.wrappers.len)));
+        const proc_base = try self.canonical_names.internProcBase(.{
+            .module_name = self.module_identity.module_name,
+            .export_name = null,
+            .kind = .promoted_callable_wrapper,
+            .ordinal = @intFromEnum(wrapper_id),
+            .source_def_idx = null,
+        });
+        const owner_artifact = artifactRef(self.key);
+        const proc_value = canonical.ProcedureValueRef{
+            .artifact = owner_artifact,
+            .proc_base = proc_base,
+        };
+        const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(self.checked_procedure_templates.templates.len)));
+        const template_ref = canonical.ProcedureTemplateRef{
+            .artifact = owner_artifact,
+            .proc_base = proc_base,
+            .template = template_id,
+        };
+
+        const appended_wrapper = try self.promoted_callable_wrappers.append(allocator, .{
+            .id = wrapper_id,
+            .promoted_proc = proc_value,
+            .proc_base_key = proc_base,
+            .callable_node = @enumFromInt(@intFromEnum(wrapper_id)),
+            .source_binding = source_binding,
+            .checked_fn_root = checked_fn_root,
+            .body_plan = body_plan_id,
+        });
+        if (appended_wrapper != wrapper_id) {
+            checkedArtifactInvariant("promoted callable wrapper append returned the wrong id", .{});
+        }
+
+        try self.checked_procedure_templates.appendTemplate(allocator, .{
+            .proc_base = proc_base,
+            .template_id = template_id,
+            .body = .{ .promoted_callable_wrapper = wrapper_id },
+            .checked_fn_scheme = checked_fn_scheme,
+            .checked_fn_root = checked_fn_root,
+            .static_dispatch_plans = .{},
+            .resolved_value_refs = .{},
+            .top_level_value_uses = .{},
+            .nested_proc_sites = .{},
+            .target = .promoted_callable,
+        });
+
+        return try self.promoted_procedures.append(allocator, self.module_identity.module_idx, .{
+            .proc = proc_value,
+            .template = template_ref,
+            .source_binding = source_binding,
+        });
+    }
+
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.comptime_values.deinit(allocator);
         self.semantic_instantiation_procedures.deinit(allocator);
@@ -7322,6 +7637,8 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
+        self.promoted_callable_body_plans.deinit(allocator);
+        self.promoted_callable_wrappers.deinit(allocator);
         self.entry_wrappers.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
         self.nested_proc_sites.deinit(allocator);
@@ -7483,7 +7800,14 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(checked_body.owner_template.proc_base == template.proc_base);
                     std.debug.assert(@intFromEnum(checked_body.root_expr) < self.checked_bodies.exprs.len);
                 },
-                .promoted_callable_wrapper,
+                .promoted_callable_wrapper => |wrapper_id| {
+                    const wrapper = self.promoted_callable_wrappers.get(wrapper_id);
+                    std.debug.assert(wrapper.proc_base_key == template.proc_base);
+                    std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
+                    std.debug.assert(wrapper.promoted_proc.proc_base == template.proc_base);
+                    std.debug.assert(std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(@intFromEnum(wrapper.body_plan) < self.promoted_callable_body_plans.plans.len);
+                },
                 .hosted_wrapper,
                 .intrinsic_wrapper,
                 => {},
@@ -7623,6 +7947,12 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
+        self.promoted_callable_body_plans.verifyPublished(&self.comptime_plans);
+        self.promoted_callable_wrappers.verifyPublished(
+            self.key,
+            &self.checked_types,
+            &self.promoted_callable_body_plans,
+        );
         self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates);
         self.comptime_plans.verifySealed();
         self.comptime_values.verifySealed();
@@ -7698,6 +8028,8 @@ pub const ImportedModuleView = struct {
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
+    promoted_callable_wrappers: *const PromotedCallableWrapperTable,
+    promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -7732,6 +8064,8 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
+        .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
+        .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
@@ -8217,6 +8551,8 @@ pub fn publishFromTypedModule(
         .nested_proc_sites = nested_proc_sites,
         .checked_procedure_templates = checked_procedure_templates,
         .entry_wrappers = entry_wrappers,
+        .promoted_callable_wrappers = .{},
+        .promoted_callable_body_plans = .{},
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
@@ -8260,6 +8596,8 @@ test "artifact views are read-only projections" {
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
+        .promoted_callable_wrappers = .{},
+        .promoted_callable_body_plans = .{},
         .top_level_procedure_bindings = .{},
         .root_requests = .{},
         .hosted_procs = .{},
