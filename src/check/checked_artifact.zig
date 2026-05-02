@@ -394,19 +394,13 @@ pub const RootRequestTable = struct {
                     .expect => .test_expect,
                 },
                 .source = root.source,
-                .checked_type = switch (root.kind) {
-                    .expect => entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
-                    .constant, .callable_binding => root.checked_type,
-                },
+                .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
                     .constant, .callable_binding => .compile_time,
                 },
                 .exposure = .private,
-                .procedure_template = switch (root.kind) {
-                    .expect => templateForEntryWrapperRoot(entry_wrappers, root.id),
-                    .constant, .callable_binding => null,
-                },
+                .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
             });
         }
 
@@ -569,7 +563,7 @@ fn entryWrapperForRoot(
 ) EntryWrapper {
     const wrapper = entry_wrappers.lookupByRoot(root) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: expect root has no entry wrapper", .{});
+            std.debug.panic("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
         }
         unreachable;
     };
@@ -3504,6 +3498,7 @@ pub const ProcTarget = union(enum) {
     hosted,
     intrinsic,
     entry,
+    comptime_only,
     promoted_callable,
 };
 
@@ -3628,8 +3623,6 @@ pub const CheckedProcedureTemplateTable = struct {
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
         for (compile_time_roots.roots) |root| {
-            if (root.kind != .expect) continue;
-
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
                 allocator,
                 .pure,
@@ -3661,7 +3654,10 @@ pub const CheckedProcedureTemplateTable = struct {
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
-                .target = .entry,
+                .target = switch (root.kind) {
+                    .expect => .entry,
+                    .constant, .callable_binding => .comptime_only,
+                },
             });
         }
     }
@@ -6575,9 +6571,12 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.len);
-            if (request.kind == .test_expect) {
+            if (request.kind == .test_expect or
+                request.kind == .compile_time_constant or
+                request.kind == .compile_time_callable)
+            {
                 const template_ref = request.procedure_template orelse {
-                    std.debug.panic("checked artifact invariant violated: test root has no entry wrapper template", .{});
+                    std.debug.panic("checked artifact invariant violated: compile-time/test root has no entry wrapper template", .{});
                 };
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
             }

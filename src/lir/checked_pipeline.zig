@@ -26,6 +26,12 @@ pub const ArtifactSet = struct {
 
 pub const RootRequestSet = struct {
     requests: []const checked_artifact.RootRequest,
+    purpose: RootPurpose = .runtime,
+};
+
+pub const RootPurpose = enum {
+    runtime,
+    compile_time,
 };
 
 pub const TargetConfig = struct {
@@ -50,10 +56,13 @@ pub fn lowerArtifactsToLir(
 ) LowerResourceError!LoweredProgram {
     artifacts.root.artifact.verifyPublished();
 
+    const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
+    defer allocator.free(selected_roots);
+
     var mono = try mir.Mono.Specialize.run(allocator, .{
         .root = artifacts.root,
         .imports = artifacts.imports,
-    }, roots.requests);
+    }, selected_roots);
     errdefer mono.deinit();
 
     var row_finalized = try mir.MonoRow.run(allocator, mono);
@@ -96,6 +105,29 @@ pub fn lowerArtifactsToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
+    };
+}
+
+fn filterRootsForPurpose(
+    allocator: Allocator,
+    roots: []const checked_artifact.RootRequest,
+    purpose: RootPurpose,
+) Allocator.Error![]checked_artifact.RootRequest {
+    var selected = std.ArrayList(checked_artifact.RootRequest).empty;
+    errdefer selected.deinit(allocator);
+
+    for (roots) |root| {
+        if (!rootMatchesPurpose(root, purpose)) continue;
+        try selected.append(allocator, root);
+    }
+
+    return try selected.toOwnedSlice(allocator);
+}
+
+fn rootMatchesPurpose(root: checked_artifact.RootRequest, purpose: RootPurpose) bool {
+    return switch (purpose) {
+        .runtime => root.abi != .compile_time,
+        .compile_time => root.abi == .compile_time,
     };
 }
 
