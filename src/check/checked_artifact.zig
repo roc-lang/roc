@@ -5374,6 +5374,64 @@ pub const PromotedProcedure = struct {
 pub const PromotedProcedureTable = struct {
     procedures: []PromotedProcedure = &.{},
 
+    pub fn append(
+        self: *PromotedProcedureTable,
+        allocator: Allocator,
+        module_idx: u32,
+        procedure: PromotedProcedure,
+    ) Allocator.Error!PromotedProcedureRef {
+        const old = self.procedures;
+        const next = try allocator.alloc(PromotedProcedure, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = procedure;
+        if (old.len > 0) allocator.free(old);
+        self.procedures = next;
+
+        return .{
+            .module_idx = module_idx,
+            .proc = procedure.proc,
+        };
+    }
+
+    pub fn get(self: *const PromotedProcedureTable, ref: PromotedProcedureRef) ?PromotedProcedure {
+        for (self.procedures) |procedure| {
+            if (canonical.procedureValueRefEql(procedure.proc, ref.proc)) return procedure;
+        }
+        return null;
+    }
+
+    pub fn verifyPublished(
+        self: *const PromotedProcedureTable,
+        artifact_key: CheckedModuleArtifactKey,
+        templates: *const CheckedProcedureTemplateTable,
+    ) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.procedures) |procedure| {
+            if (!std.mem.eql(u8, &procedure.proc.artifact.bytes, &artifact_key.bytes)) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure value belongs to a different artifact", .{});
+            }
+            if (!std.mem.eql(u8, &procedure.template.artifact.bytes, &artifact_key.bytes)) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure template belongs to a different artifact", .{});
+            }
+            if (procedure.proc.proc_base != procedure.template.proc_base) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure proc base differs from its template", .{});
+            }
+            const template_index = @intFromEnum(procedure.template.template);
+            if (template_index >= templates.templates.len) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure template id is out of range", .{});
+            }
+            const template = templates.templates[template_index];
+            if (template.proc_base != procedure.template.proc_base) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure table references a template with a different proc base", .{});
+            }
+            switch (template.body) {
+                .promoted_callable_wrapper => {},
+                else => std.debug.panic("checked artifact invariant violated: promoted procedure table row does not point at a promoted callable wrapper", .{}),
+            }
+        }
+    }
+
     pub fn deinit(self: *PromotedProcedureTable, allocator: Allocator) void {
         allocator.free(self.procedures);
         self.* = .{};
@@ -6125,6 +6183,33 @@ pub const ConstTemplateTable = struct {
         const owner: ConstOwner = .{ .top_level_binding = .{
             .module_idx = module_idx,
             .pattern = pattern,
+        } };
+        try self.templates.append(allocator, .{
+            .id = id,
+            .owner = owner,
+            .source_scheme = source_scheme,
+            .state = .reserved,
+        });
+        return .{
+            .artifact = artifact_key,
+            .owner = owner,
+            .template = id,
+            .source_scheme = source_scheme,
+        };
+    }
+
+    pub fn reservePromotedCapture(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        promoted_proc: PromotedProcedureRef,
+        capture_index: u32,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+    ) Allocator.Error!ConstRef {
+        const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+        const owner: ConstOwner = .{ .promoted_capture = .{
+            .promoted_proc = promoted_proc,
+            .capture_index = capture_index,
         } };
         try self.templates.append(allocator, .{
             .id = id,
@@ -7417,6 +7502,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
+        self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates);
         self.comptime_plans.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
