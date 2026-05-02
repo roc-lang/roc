@@ -5156,23 +5156,49 @@ fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: Con
 fn verifyCallableResultPlan(store: *const CompileTimePlanStore, plan: CallableResultPlan) void {
     switch (plan) {
         .finite => |finite| {
+            if (finite.members.len == 0) {
+                std.debug.panic("checked artifact invariant violated: finite callable result plan has no members", .{});
+            }
             for (finite.members) |member| {
                 for (member.capture_slots) |capture| verifyCaptureSlotRef(store, capture);
             }
         },
-        .erased => |erased| switch (erased.capture) {
-            .none,
-            .zero_sized_typed,
-            => {},
-            .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+        .erased => |erased| {
+            if (erased.provenance.len == 0) {
+                std.debug.panic("checked artifact invariant violated: erased callable result plan has no Box(T) provenance", .{});
+            }
+            switch (erased.capture) {
+                .none,
+                .zero_sized_typed,
+                => {},
+                .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+            }
         },
     }
 }
 
 fn verifyCallablePromotionPlan(store: *const CompileTimePlanStore, plan: CallablePromotionPlan) void {
     switch (plan) {
-        .finite => |finite| verifyCallableResultRef(store, finite.result_plan),
-        .erased => |erased| verifyCallableResultRef(store, erased.result_plan),
+        .finite => |finite| {
+            verifyCallableResultRef(store, finite.result_plan);
+            switch (store.callableResult(finite.result_plan)) {
+                .finite => |result| {
+                    for (result.members) |member| {
+                        if (member.member == finite.selected_member) break;
+                    } else {
+                        std.debug.panic("checked artifact invariant violated: finite callable promotion selects a member outside its result plan", .{});
+                    }
+                },
+                .erased => std.debug.panic("checked artifact invariant violated: finite callable promotion points at an erased result plan", .{}),
+            }
+        },
+        .erased => |erased| {
+            verifyCallableResultRef(store, erased.result_plan);
+            switch (store.callableResult(erased.result_plan)) {
+                .erased => {},
+                .finite => std.debug.panic("checked artifact invariant violated: erased callable promotion points at a finite result plan", .{}),
+            }
+        },
     }
 }
 
