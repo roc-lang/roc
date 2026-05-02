@@ -32,6 +32,8 @@ pub const MonoSpecializationReason = union(enum) {
     proc_value: checked_artifact.CheckedExprId,
     static_dispatch_target: checked_artifact.StaticDispatchPlanId,
     comptime_dependency_summary: u32,
+    promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
+    private_capture_callable_leaf: checked_artifact.PrivateCaptureNodeId,
 };
 
 pub const Input = struct {
@@ -140,6 +142,10 @@ pub const Program = struct {
         return try self.symbols.add(base.Ident.Idx.NONE, .{ .specialized_top_level_def = .{
             .source_symbol = @intFromEnum(handle),
         } });
+    }
+
+    pub fn addSyntheticSymbol(self: *Program) Allocator.Error!Ast.Symbol {
+        return try self.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
 };
 
@@ -1255,10 +1261,464 @@ const BodyLowerer = struct {
         return switch (self.template_lookup.template.body) {
             .checked_body => |body_id| try self.lowerCheckedBody(reserved, fn_ty, body_id),
             .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperDef(reserved, fn_ty, wrapper_id),
-            .promoted_callable_wrapper,
+            .promoted_callable_wrapper => |wrapper_id| try self.lowerPromotedCallableWrapperDef(reserved, fn_ty, wrapper_id),
             .hosted_wrapper,
             .intrinsic_wrapper,
-            => invariantViolation("mono body lowering reached a wrapper template before wrapper lowering was implemented"),
+            => invariantViolation("mono body lowering reached a hosted/intrinsic wrapper template before wrapper lowering was implemented"),
+        };
+    }
+
+    fn lowerPromotedCallableWrapperDef(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        wrapper_id: canonical.PromotedCallableWrapperId,
+    ) Allocator.Error!Ast.DefId {
+        const wrapper = self.template_lookup.promoted_callable_wrappers.get(wrapper_id);
+        const body_plan = self.template_lookup.promoted_callable_body_plans.get(wrapper.body_plan);
+        const lowered = switch (body_plan) {
+            .finite => |finite| blk: {
+                const params = try self.lowerPromotedWrapperParamBundle(finite.params);
+                defer if (params.exprs.len > 0) self.allocator.free(params.exprs);
+                break :blk PromotedWrapperLowering{
+                    .args = params.args,
+                    .body = try self.lowerFinitePromotedCallableWrapperBody(reserved, fn_ty, wrapper_id, finite, params.exprs),
+                };
+            },
+            .erased => invariantViolation("mono body lowering reached erased promoted callable wrapper before erased wrapper lowering was implemented"),
+            .pending => invariantViolation("mono body lowering reached unsealed promoted callable wrapper body plan"),
+        };
+        const bind = Ast.TypedSymbol{
+            .ty = fn_ty,
+            .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
+            .symbol = try self.program.addProcSymbol(reserved.local_handle),
+        };
+        return try self.program.ast.addDef(.{
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .debug_name = null,
+            .value = .{ .fn_ = .{
+                .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
+                .recursive = false,
+                .bind = bind,
+                .args = lowered.args,
+                .body = lowered.body,
+            } },
+        });
+    }
+
+    const PromotedWrapperLowering = struct {
+        args: Ast.Span(Ast.TypedSymbol),
+        body: Ast.ExprId,
+    };
+
+    fn lowerFinitePromotedCallableWrapperBody(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        wrapper_id: canonical.PromotedCallableWrapperId,
+        finite: checked_artifact.FinitePromotedWrapperBodyPlan,
+        params: []const Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!std.mem.eql(u8, &reserved.proc.specialization.requested_mono_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper source function type disagrees with mono specialization request");
+        }
+        if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper member source function type disagrees with wrapper source function type");
+        }
+        if (finite.result_bridge != null) {
+            invariantViolation("mono body lowering reached promoted callable wrapper result bridge before bridge lowering was implemented");
+        }
+        if (finite.member_capture_slots.len != finite.captures.len) {
+            invariantViolation("promoted callable wrapper capture refs disagree with member capture slots");
+        }
+
+        const capture_args = try self.allocator.alloc(Ast.CaptureArg, finite.captures.len);
+        defer self.allocator.free(capture_args);
+        for (finite.captures, 0..) |capture, i| {
+            const slot = finite.member_capture_slots[i];
+            if (slot.slot != @as(u32, @intCast(i))) {
+                invariantViolation("promoted callable wrapper member capture slot order is not canonical");
+            }
+            capture_args[i] = .{
+                .slot = slot.slot,
+                .symbol = try self.program.addSyntheticSymbol(),
+                .expr = try self.lowerPrivateCaptureExpr(capture),
+            };
+        }
+
+        const member_proc = try self.reserveCallableProcedure(
+            finite.member_proc,
+            reserved.requested_fn_ty,
+            .{ .promoted_callable_wrapper = wrapper_id },
+        );
+        const proc_value = try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .proc_value = .{
+            .proc = member_proc,
+            .captures = try self.program.ast.addCaptureArgSpan(capture_args),
+            .fn_ty = fn_ty,
+        } });
+
+        const call_args = try self.allocator.alloc(Ast.ExprId, finite.call_args.len);
+        defer self.allocator.free(call_args);
+        for (finite.call_args, 0..) |arg, i| {
+            call_args[i] = switch (arg) {
+                .param => |index| blk: {
+                    const param_index: usize = @intCast(index);
+                    if (param_index >= params.len) {
+                        invariantViolation("promoted callable wrapper call arg referenced a missing parameter");
+                    }
+                    break :blk params[param_index];
+                },
+                .private_capture => |capture| try self.lowerPrivateCaptureExpr(capture),
+            };
+        }
+
+        return try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .call_value = .{
+            .func = proc_value,
+            .args = try self.program.ast.addExprSpan(call_args),
+            .requested_fn_ty = fn_ty,
+            .requested_source_fn_ty = finite.source_fn_ty,
+        } });
+    }
+
+    const PromotedWrapperParamBundle = struct {
+        args: Ast.Span(Ast.TypedSymbol),
+        exprs: []const Ast.ExprId,
+    };
+
+    fn lowerPromotedWrapperParamBundle(
+        self: *BodyLowerer,
+        params: []const checked_artifact.PromotedWrapperParam,
+    ) Allocator.Error!PromotedWrapperParamBundle {
+        if (params.len == 0) return .{
+            .args = Ast.Span(Ast.TypedSymbol).empty(),
+            .exprs = &.{},
+        };
+        const lowered_args = try self.allocator.alloc(Ast.TypedSymbol, params.len);
+        defer self.allocator.free(lowered_args);
+        const lowered_exprs = try self.allocator.alloc(Ast.ExprId, params.len);
+        errdefer self.allocator.free(lowered_exprs);
+        const seen = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (params) |param| {
+            const index: usize = @intCast(param.index);
+            if (index >= params.len or seen[index]) {
+                invariantViolation("promoted callable wrapper params are not a dense unique index set");
+            }
+            const ty = try self.type_instantiator.lowerTemplateType(param.checked_ty);
+            const symbol = try self.program.addSyntheticSymbol();
+            lowered_args[index] = .{
+                .ty = ty,
+                .source_ty = param.source_ty,
+                .symbol = symbol,
+            };
+            lowered_exprs[index] = try self.program.ast.addExprWithSource(ty, param.source_ty, .{ .var_ = symbol });
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) invariantViolation("promoted callable wrapper omitted a parameter index");
+        }
+        return .{
+            .args = try self.program.ast.addTypedSymbolSpan(lowered_args),
+            .exprs = lowered_exprs,
+        };
+    }
+
+    fn lowerPrivateCaptureExpr(
+        self: *BodyLowerer,
+        capture: checked_artifact.PrivateCaptureRef,
+    ) Allocator.Error!Ast.ExprId {
+        const checked_types = checkedTypesForKey(self.input, capture.artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private capture artifact was not available");
+            unreachable;
+        };
+        const scheme = checkedTypeSchemeForKey(checked_types, capture.source_scheme) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private capture source scheme was not available");
+            unreachable;
+        };
+        if (scheme.generalized_vars.len != 0) {
+            invariantViolation("mono body lowering reached generalized private capture without a concrete instantiation");
+        }
+        const root_index: usize = @intFromEnum(scheme.root);
+        if (root_index >= checked_types.roots.len) {
+            invariantViolation("private capture source scheme root is outside checked type roots");
+        }
+        return try self.lowerPrivateCaptureNode(capture.artifact, capture.node, scheme.root);
+    }
+
+    fn lowerPrivateCaptureNode(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        node_id: checked_artifact.PrivateCaptureNodeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const plans = comptimePlansForKey(self.input, artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private capture plan artifact was not available");
+            unreachable;
+        };
+        const node = plans.privateCapture(node_id);
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private capture type artifact was not available");
+            unreachable;
+        };
+        const ty = try self.lowerArtifactCheckedType(artifact, checked_ty);
+        const source_ty = checkedTypeKey(checked_types, checked_ty);
+
+        return switch (node) {
+            .pending => invariantViolation("mono body lowering reached pending private capture node"),
+            .serializable_leaf => |leaf| try self.lowerPrivateSerializableLeaf(artifact, ty, leaf),
+            .callable_leaf => |leaf| try self.lowerPrivateCallableLeaf(ty, source_ty, node_id, leaf),
+            .record => |fields| try self.lowerPrivateRecordCapture(artifact, ty, checked_ty, fields),
+            .tuple => |items| try self.lowerPrivateTupleCapture(artifact, ty, checked_ty, items),
+            .tag_union => |tag| try self.lowerPrivateTagCapture(artifact, ty, checked_ty, tag),
+            .list => |items| try self.lowerPrivateListCapture(artifact, ty, checked_ty, items),
+            .box => |payload| try self.lowerPrivateBoxCapture(artifact, ty, checked_ty, payload),
+            .nominal => |nominal| try self.lowerPrivateNominalCapture(artifact, ty, checked_ty, nominal),
+            .recursive_ref => invariantViolation("mono body lowering reached recursive private capture materialization before recursive capture lowering was implemented"),
+        };
+    }
+
+    fn lowerPrivateSerializableLeaf(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        leaf: checked_artifact.PrivateSerializableCaptureLeaf,
+    ) Allocator.Error!Ast.ExprId {
+        const key = checked_artifact.ConstInstantiationKey{
+            .const_ref = leaf.const_ref,
+            .requested_source_ty = leaf.requested_source_ty,
+        };
+        const instance = constInstanceForKey(self.input, artifact, key) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private capture serializable leaf had no sealed const instance");
+            unreachable;
+        };
+        return try self.program.ast.addExprWithSource(ty, leaf.requested_source_ty, .{ .const_instance = instance });
+    }
+
+    fn lowerPrivateCallableLeaf(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        source_ty: canonical.CanonicalTypeKey,
+        node_id: checked_artifact.PrivateCaptureNodeId,
+        leaf: checked_artifact.CallableLeafInstance,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (leaf) {
+            .finite => |finite| blk: {
+                if (!std.mem.eql(u8, &finite.proc_value.source_fn_ty.bytes, &source_ty.bytes)) {
+                    invariantViolation("private finite callable leaf source function type disagrees with materialization type");
+                }
+                const template = checkedTemplateFromCallableTemplate(finite.proc_value.template);
+                const concrete = try self.concreteSourceTypeForCheckedKey(template.artifact, source_ty);
+                const proc = try self.reserveCallableProcedure(
+                    finite.proc_value,
+                    concrete,
+                    .{ .private_capture_callable_leaf = node_id },
+                );
+                break :blk try self.program.ast.addExprWithSource(ty, source_ty, .{ .proc_value = .{
+                    .proc = proc,
+                    .captures = Ast.Span(Ast.CaptureArg).empty(),
+                    .fn_ty = ty,
+                } });
+            },
+            .erased_boxed => invariantViolation("mono body lowering reached erased private callable leaf before erased capture materialization was implemented"),
+        };
+    }
+
+    fn lowerPrivateRecordCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        fields: []const checked_artifact.PrivateCaptureRecordField,
+    ) Allocator.Error!Ast.ExprId {
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse unreachable;
+        const record_field_count = privateRecordFieldCount(checked_types, checked_ty);
+        if (record_field_count != fields.len) {
+            invariantViolation("private capture record field count disagrees with checked type");
+        }
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+        for (fields, 0..) |field, i| {
+            const field_ty = privateRecordFieldTypeForType(checked_types, checked_ty, field.field) orelse {
+                invariantViolation("private capture record field is not present in checked type");
+            };
+            lowered[i] = .{
+                .field = field.field,
+                .value = try self.lowerPrivateCaptureNode(artifact, field.value, field_ty),
+            };
+        }
+        return try self.program.ast.addExprWithSource(
+            ty,
+            checkedTypeKey(checked_types, checked_ty),
+            .{ .record = try self.program.ast.addFieldExprSpan(lowered) },
+        );
+    }
+
+    fn lowerPrivateTupleCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        items: []const checked_artifact.PrivateCaptureNodeId,
+    ) Allocator.Error!Ast.ExprId {
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse unreachable;
+        const elem_tys = privateTupleElems(checked_types, checked_ty);
+        if (elem_tys.len != items.len) {
+            invariantViolation("private capture tuple arity disagrees with checked type");
+        }
+        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, i| {
+            lowered[i] = try self.lowerPrivateCaptureNode(artifact, item, elem_tys[i]);
+        }
+        return try self.program.ast.addExprWithSource(
+            ty,
+            checkedTypeKey(checked_types, checked_ty),
+            .{ .tuple = try self.program.ast.addExprSpan(lowered) },
+        );
+    }
+
+    fn lowerPrivateTagCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        tag: checked_artifact.PrivateCaptureTagNode,
+    ) Allocator.Error!Ast.ExprId {
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse unreachable;
+        const checked_tag = privateTagTypeForType(checked_types, checked_ty, tag.tag) orelse {
+            invariantViolation("private capture tag label is not present in checked type");
+        };
+        if (checked_tag.args.len != tag.payloads.len) {
+            invariantViolation("private capture tag payload count disagrees with checked type");
+        }
+        const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
+        defer self.allocator.free(lowered);
+        for (tag.payloads, 0..) |payload_ref, i| {
+            if (payload_ref.index != @as(u32, @intCast(i))) {
+                invariantViolation("private capture tag payloads are not in canonical index order");
+            }
+            lowered[i] = try self.lowerPrivateCaptureNode(artifact, payload_ref.value, checked_tag.args[i]);
+        }
+        const tag_info = self.tagInfoForUnionType(ty, tag.tag);
+        if (tag_info.payload_count != lowered.len) {
+            invariantViolation("private capture tag payload count disagrees with finalized tag info");
+        }
+        return try self.program.ast.addExprWithSource(ty, checkedTypeKey(checked_types, checked_ty), .{ .tag = .{
+            .name = tag.tag,
+            .discriminant = tag_info.discriminant,
+            .args = try self.program.ast.addExprSpan(lowered),
+            .constructor_ty = ty,
+        } });
+    }
+
+    fn lowerPrivateListCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        items: []const checked_artifact.PrivateCaptureNodeId,
+    ) Allocator.Error!Ast.ExprId {
+        const elem_ty = privateBuiltinArgType(checkedTypesForKey(self.input, artifact) orelse unreachable, checked_ty, .list);
+        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, i| {
+            lowered[i] = try self.lowerPrivateCaptureNode(artifact, item, elem_ty);
+        }
+        return try self.program.ast.addExprWithSource(
+            ty,
+            checkedTypeKey(checkedTypesForKey(self.input, artifact) orelse unreachable, checked_ty),
+            .{ .list = try self.program.ast.addExprSpan(lowered) },
+        );
+    }
+
+    fn lowerPrivateBoxCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        payload: checked_artifact.PrivateCaptureNodeId,
+    ) Allocator.Error!Ast.ExprId {
+        const payload_ty = privateBuiltinArgType(checkedTypesForKey(self.input, artifact) orelse unreachable, checked_ty, .box);
+        const child = try self.lowerPrivateCaptureNode(artifact, payload, payload_ty);
+        const args = [_]Ast.ExprId{child};
+        return try self.program.ast.addExprWithSource(ty, checkedTypeKey(checkedTypesForKey(self.input, artifact) orelse unreachable, checked_ty), .{ .low_level = .{
+            .op = .box_box,
+            .args = try self.program.ast.addExprSpan(&args),
+            .source_constraint_ty = ty,
+        } });
+    }
+
+    fn lowerPrivateNominalCapture(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        ty: Type.TypeId,
+        checked_ty: checked_artifact.CheckedTypeId,
+        nominal: anytype,
+    ) Allocator.Error!Ast.ExprId {
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse unreachable;
+        const payload = checkedTypePayload(checked_types, checked_ty);
+        return switch (payload) {
+            .nominal => |nominal_ty| blk: {
+                const backing = try self.lowerPrivateCaptureNode(artifact, nominal.backing, nominal_ty.backing);
+                break :blk try self.program.ast.addExprWithSource(
+                    ty,
+                    checkedTypeKey(checked_types, checked_ty),
+                    .{ .nominal_reinterpret = backing },
+                );
+            },
+            .alias => |alias| try self.lowerPrivateCaptureNode(artifact, nominal.backing, alias.backing),
+            else => invariantViolation("private capture nominal node had non-nominal checked type"),
+        };
+    }
+
+    fn lowerArtifactCheckedType(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Type.TypeId {
+        return try self.type_instantiator.lowerArtifactRef(.{
+            .artifact = artifact,
+            .ty = checked_ty,
+        });
+    }
+
+    fn concreteSourceTypeForCheckedKey(
+        self: *BodyLowerer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        source_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const checked_types = checkedTypesForKey(self.input, artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: callable leaf artifact was not available");
+            unreachable;
+        };
+        const checked_ty = checkedTypeRootForKey(checked_types, source_ty) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: callable leaf source type key has no checked payload");
+            unreachable;
+        };
+        return try self.program.concrete_source_types.registerArtifactRoot(artifact, checked_types, checked_ty);
+    }
+
+    fn reserveCallableProcedure(
+        self: *BodyLowerer,
+        callable: canonical.ProcedureCallableRef,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+        reason: MonoSpecializationReason,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+        if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
+            invariantViolation("callable procedure reservation source function type disagrees with requested mono type");
+        }
+        const template = checkedTemplateFromCallableTemplate(callable.template);
+        const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+            .template = template,
+            .requested_fn_ty = requested_fn_ty,
+            .reason = reason,
+        });
+        return .{
+            .proc = reserved.proc.proc,
+            .callable = callable,
         };
     }
 
@@ -2737,6 +3197,211 @@ fn checkedTypesForKey(
         if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.checked_types;
     }
     return null;
+}
+
+fn checkedTypeSchemeForKey(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    key: canonical.CanonicalTypeSchemeKey,
+) ?checked_artifact.CheckedTypeScheme {
+    for (checked_types.schemes) |scheme| {
+        if (std.mem.eql(u8, &scheme.key.bytes, &key.bytes)) return scheme;
+    }
+    return null;
+}
+
+fn checkedTypeRootForKey(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    key: canonical.CanonicalTypeKey,
+) ?checked_artifact.CheckedTypeId {
+    for (checked_types.roots) |root| {
+        if (std.mem.eql(u8, &root.key.bytes, &key.bytes)) return root.id;
+    }
+    return null;
+}
+
+fn checkedTypeKey(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+) canonical.CanonicalTypeKey {
+    const index: usize = @intFromEnum(ty);
+    if (index >= checked_types.roots.len) {
+        invariantViolation("checked type key lookup referenced a missing root");
+    }
+    return checked_types.roots[index].key;
+}
+
+fn checkedTypePayload(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+) checked_artifact.CheckedTypePayload {
+    const index: usize = @intFromEnum(ty);
+    if (index >= checked_types.payloads.len) {
+        invariantViolation("checked type payload lookup referenced a missing payload");
+    }
+    return checked_types.payloads[index];
+}
+
+fn privateRecordFieldCount(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+) usize {
+    return switch (checkedTypePayload(checked_types, ty)) {
+        .record => |record| record.fields.len + privateRecordFieldCount(checked_types, record.ext),
+        .record_unbound => |fields| fields.len,
+        .empty_record => 0,
+        .alias => |alias| privateRecordFieldCount(checked_types, alias.backing),
+        else => invariantViolation("private capture record node had non-record checked type"),
+    };
+}
+
+fn privateRecordFieldTypeForType(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+    label: canonical.RecordFieldLabelId,
+) ?checked_artifact.CheckedTypeId {
+    return switch (checkedTypePayload(checked_types, ty)) {
+        .record => |record| {
+            for (record.fields) |field| {
+                if (field.name == label) return field.ty;
+            }
+            return privateRecordFieldTypeForType(checked_types, record.ext, label);
+        },
+        .record_unbound => |fields| {
+            for (fields) |field| {
+                if (field.name == label) return field.ty;
+            }
+            return null;
+        },
+        .empty_record => null,
+        .alias => |alias| privateRecordFieldTypeForType(checked_types, alias.backing, label),
+        else => invariantViolation("private capture record node had non-record checked type"),
+    };
+}
+
+fn privateTupleElems(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+) []const checked_artifact.CheckedTypeId {
+    return switch (checkedTypePayload(checked_types, ty)) {
+        .tuple => |tuple| tuple,
+        .alias => |alias| privateTupleElems(checked_types, alias.backing),
+        else => invariantViolation("private capture tuple node had non-tuple checked type"),
+    };
+}
+
+fn privateTagTypeForType(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+    label: canonical.TagLabelId,
+) ?checked_artifact.CheckedTag {
+    return switch (checkedTypePayload(checked_types, ty)) {
+        .tag_union => |tag_union| {
+            for (tag_union.tags) |tag| {
+                if (tag.name == label) return tag;
+            }
+            return privateTagTypeForType(checked_types, tag_union.ext, label);
+        },
+        .empty_tag_union => null,
+        .alias => |alias| privateTagTypeForType(checked_types, alias.backing, label),
+        else => invariantViolation("private capture tag node had non-tag-union checked type"),
+    };
+}
+
+fn privateBuiltinArgType(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    ty: checked_artifact.CheckedTypeId,
+    builtin: checked_artifact.CheckedBuiltinNominal,
+) checked_artifact.CheckedTypeId {
+    return switch (checkedTypePayload(checked_types, ty)) {
+        .alias => |alias| privateBuiltinArgType(checked_types, alias.backing, builtin),
+        .nominal => |nominal| blk: {
+            if (nominal.builtin == null or nominal.builtin.? != builtin or nominal.args.len != 1) {
+                invariantViolation("private capture builtin container node had incompatible checked type");
+            }
+            break :blk nominal.args[0];
+        },
+        else => invariantViolation("private capture builtin container node had non-nominal checked type"),
+    };
+}
+
+fn comptimePlansForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.CompileTimePlanStore {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) return &input.root.artifact.comptime_plans;
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.comptime_plans;
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.comptime_plans;
+    }
+    return null;
+}
+
+fn constInstancesForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.ConstInstantiationStoreView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) return input.root.artifact.const_instances.view();
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.const_instances;
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.const_instances;
+    }
+    return null;
+}
+
+fn constInstanceForKey(
+    input: Input,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    key: checked_artifact.ConstInstantiationKey,
+) ?checked_artifact.ConstInstanceRef {
+    const view = constInstancesForKey(input, owner) orelse return null;
+    for (view.instances) |record| {
+        if (!monoConstInstantiationKeyEql(record.key, key)) continue;
+        switch (record.state) {
+            .evaluated => return .{
+                .owner = view.owner,
+                .key = key,
+                .instance = record.id,
+            },
+            .reserved, .evaluating => invariantViolation("constant instance was consumed before it was sealed"),
+        }
+    }
+    return null;
+}
+
+fn monoConstInstantiationKeyEql(
+    a: checked_artifact.ConstInstantiationKey,
+    b: checked_artifact.ConstInstantiationKey,
+) bool {
+    return monoConstRefEql(a.const_ref, b.const_ref) and
+        std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
+}
+
+fn monoConstRefEql(a: checked_artifact.ConstRef, b: checked_artifact.ConstRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        monoConstOwnerEql(a.owner, b.owner) and
+        a.template == b.template and
+        std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
+}
+
+fn monoConstOwnerEql(a: checked_artifact.ConstOwner, b: checked_artifact.ConstOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level_binding => |left| blk: {
+            const right = b.top_level_binding;
+            break :blk left.module_idx == right.module_idx and
+                left.pattern == right.pattern;
+        },
+        .promoted_capture => |left| blk: {
+            const right = b.promoted_capture;
+            break :blk left.capture_index == right.capture_index and
+                left.promoted_proc.module_idx == right.promoted_proc.module_idx and
+                canonical.procedureValueRefEql(left.promoted_proc.proc, right.promoted_proc.proc);
+        },
+    };
 }
 
 fn templateForRoot(
