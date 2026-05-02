@@ -52,6 +52,7 @@ pub const targets_validator = @import("targets_validator.zig");
 const platform_validation = @import("platform_validation.zig");
 const cli_context = @import("CliContext.zig");
 const cli_problem = @import("CliProblem.zig");
+const ReplLine = @import("ReplLine.zig");
 
 const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
@@ -4780,10 +4781,166 @@ fn printTestFailure(
     try stderr.print("\x1b[0m\n", .{});
 }
 
+const ReplInputKind = enum {
+    definition,
+    expression,
+};
+
+fn classifyReplInput(ctx: *CliContext, line: []const u8) !?ReplInputKind {
+    var env = try ModuleEnv.init(ctx.gpa, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(ctx.gpa);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .expr => .expression,
+        .decl,
+        .@"var",
+        .import,
+        .file_import,
+        .type_decl,
+        .type_anno,
+        => .definition,
+        .malformed => null,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        => .expression,
+    };
+}
+
+fn replCompileInspectedModule(
+    ctx: *CliContext,
+    source: []const u8,
+) !eval.test_helpers.CompiledProgram {
+    return eval.test_helpers.compileInspectedProgram(ctx.gpa, .module, source, &.{});
+}
+
+fn validateReplDefinitions(
+    ctx: *CliContext,
+    definitions: []const u8,
+) !bool {
+    const source = try std.fmt.allocPrint(ctx.gpa, "{s}\nmain = \"\"\n", .{definitions});
+    defer ctx.gpa.free(source);
+
+    var compiled = replCompileInspectedModule(ctx, source) catch |err| {
+        try ctx.io.stderr().print("Error: {s}\n", .{@errorName(err)});
+        return false;
+    };
+    defer compiled.deinit(ctx.gpa);
+    return true;
+}
+
+fn evaluateReplExpression(
+    ctx: *CliContext,
+    definitions: []const u8,
+    expr: []const u8,
+    backend_kind: eval.EvalBackend,
+) !?[]u8 {
+    const source = try std.fmt.allocPrint(ctx.gpa, "{s}\nmain = {s}\n", .{ definitions, expr });
+    defer ctx.gpa.free(source);
+
+    var compiled = replCompileInspectedModule(ctx, source) catch |err| {
+        try ctx.io.stderr().print("Error: {s}\n", .{@errorName(err)});
+        return null;
+    };
+    defer compiled.deinit(ctx.gpa);
+
+    return switch (backend_kind) {
+        .interpreter => eval.test_helpers.lirInterpreterInspectedStr(ctx.gpa, &compiled.lowered),
+        .dev, .llvm => eval.test_helpers.devEvaluatorInspectedStr(ctx.gpa, &compiled.lowered),
+        .wasm => eval.test_helpers.wasmEvaluatorInspectedStr(ctx.gpa, &compiled.wasm_lowered),
+    } catch |err| {
+        try ctx.io.stderr().print("Error: {s}\n", .{@errorName(err)});
+        return null;
+    };
+}
+
+fn printReplHelp(stdout: *std.Io.Writer) !void {
+    try stdout.writeAll(
+        \\Commands:
+        \\  :help    Show this help
+        \\  :exit    Exit the REPL
+        \\  :quit    Exit the REPL
+        \\
+    );
+}
+
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
-    _ = ctx;
-    _ = repl_args;
-    @compileError("Phase 2 must route CLI REPL through checked-artifact roots");
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+    const backend_kind = repl_args.opt.toBackend();
+
+    try stdout.writeAll("Roc REPL\nType :help for commands.\n");
+    ctx.io.flush();
+
+    var reader = ReplLine.init(ctx.gpa);
+    defer reader.deinit();
+
+    var definitions = std.ArrayList(u8).empty;
+    defer definitions.deinit(ctx.gpa);
+
+    const stdin = std.fs.File.stdin();
+    while (true) {
+        const raw_line = reader.readLine(ctx.gpa, "> ", stdin) catch |err| switch (err) {
+            error.ExitRepl => break,
+            else => return err,
+        };
+        defer ctx.gpa.free(raw_line);
+
+        const line = std.mem.trim(u8, raw_line, " \t\r\n");
+        if (line.len == 0) continue;
+
+        if (std.mem.eql(u8, line, ":help")) {
+            try printReplHelp(stdout);
+            ctx.io.flush();
+            continue;
+        }
+        if (std.mem.eql(u8, line, ":exit") or std.mem.eql(u8, line, ":quit") or std.mem.eql(u8, line, "exit")) {
+            try stdout.writeAll("Goodbye.\n");
+            break;
+        }
+
+        const input_kind = try classifyReplInput(ctx, line) orelse {
+            try stderr.writeAll("Parse error\n");
+            ctx.io.flush();
+            continue;
+        };
+
+        switch (input_kind) {
+            .definition => {
+                const old_len = definitions.items.len;
+                try definitions.appendSlice(ctx.gpa, line);
+                try definitions.append(ctx.gpa, '\n');
+                const valid = try validateReplDefinitions(ctx, definitions.items);
+                if (!valid) {
+                    definitions.shrinkRetainingCapacity(old_len);
+                }
+            },
+            .expression => {
+                const inspected = try evaluateReplExpression(ctx, definitions.items, line, backend_kind) orelse {
+                    ctx.io.flush();
+                    continue;
+                };
+                defer ctx.gpa.free(inspected);
+                try stdout.print("{s}\n", .{inspected});
+            },
+        }
+        ctx.io.flush();
+    }
 }
 
 const glue = @import("glue");
