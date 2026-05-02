@@ -355,6 +355,7 @@ fn erasedProcValueResultPlan(
             .capture_shape_key = erase.capture_shape_key,
         } },
         .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
+        .result_ty = erase.executable_specialization_key.exec_ret_ty,
     } });
 }
 
@@ -371,6 +372,7 @@ fn erasedFiniteSetResultPlan(
         .sig_key = erase.adapter.erased_fn_sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
         .code = .{ .finite_set_adapter = erase.adapter },
+        .result_ty = erase.result_ty,
         .capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
             .none
         else
@@ -398,6 +400,7 @@ fn alreadyErasedResultPlan(
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
         .code = erased.code,
         .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, plans, value_context, erased),
+        .result_ty = erased.result_ty,
     } });
 }
 

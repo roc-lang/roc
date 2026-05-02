@@ -5074,6 +5074,7 @@ pub const ErasedCallableResultPlan = struct {
     provenance: []const canonical.BoxBoundaryId,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureReificationPlan,
+    result_ty: canonical.CanonicalExecValueTypeKey,
 };
 
 pub const CallableResultPlan = union(enum) {

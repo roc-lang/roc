@@ -165,6 +165,7 @@ pub const AlreadyErasedCallablePlan = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
     code: canonical.ErasedCallableCodeRef,
+    result_ty: CanonicalExecValueTypeKey,
     capture: AlreadyErasedCapturePlan = .none,
     provenance: []const BoxBoundaryId = &.{},
 };
@@ -173,6 +174,7 @@ pub const ErasedAdapterKey = canonical.ErasedAdapterKey;
 
 pub const FiniteSetErasePlan = struct {
     adapter: ErasedAdapterKey,
+    result_ty: CanonicalExecValueTypeKey,
     provenance: []const BoxBoundaryId = &.{},
 };
 
