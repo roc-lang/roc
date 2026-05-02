@@ -6,6 +6,7 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
+const can = @import("can");
 const check = @import("check");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -18,7 +19,9 @@ const Value = @import("value.zig").Value;
 const Allocator = std.mem.Allocator;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
+const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
+const CIR = can.CIR;
 
 pub fn finalizer() checked_artifact.CompileTimeFinalizer {
     return .{ .finalize = finalize };
@@ -220,8 +223,16 @@ fn evaluateCallableBindingRoot(
         ret_layout,
         result.value,
     );
-    const callable = existingProcedureFromSelectedCallableResult(selected_callable);
-    if (!std.mem.eql(u8, &callable.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
+    const callable = try publishCallableResult(
+        allocator,
+        artifact,
+        lowered,
+        pattern,
+        root.checked_type,
+        result_plan,
+        selected_callable,
+    );
+    if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
 
@@ -236,16 +247,25 @@ fn evaluateCallableBindingRoot(
         .dependency_summary = @enumFromInt(@intFromEnum(root.dependency_summary_request)),
         .executable_root = root.id,
         .result_plan = result_plan,
-        .promotion_plan = null,
-        .promotion_output = .{ .existing_procedure = callable },
-        .proc_value = callable,
+        .promotion_plan = callable.promotion_plan,
+        .promotion_output = callable.output,
+        .proc_value = callable.proc_value,
     });
 }
 
 const SelectedFiniteCallableResult = struct {
+    result_plan_id: checked_artifact.CallableResultPlanId,
     result_plan: checked_artifact.FiniteCallableResultPlan,
     planned_member: checked_artifact.CallableResultMemberPlan,
     descriptor_member: *const check.CanonicalNames.CanonicalCallableSetMember,
+    payload_layout: layout_mod.Idx,
+    payload_value: Value,
+};
+
+const PublishedCallableResult = struct {
+    proc_value: check.CanonicalNames.ProcedureCallableRef,
+    output: checked_artifact.CallablePromotionOutput,
+    promotion_plan: ?checked_artifact.CallablePromotionPlanId,
 };
 
 fn selectFiniteCallableResult(
@@ -287,23 +307,518 @@ fn selectFiniteCallableResult(
     if (member.capture_slots.len != planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("compile-time callable result member capture arity differs from descriptor");
     }
+    const result_layout = layouts.getLayout(layout_idx);
+    if (result_layout.tag != .tag_union) {
+        compileTimeFinalizationInvariant("finite compile-time callable result did not lower to tag-union layout");
+    }
+    const info = layouts.getTagUnionInfo(result_layout);
+    const payload_layout = info.variants.get(@intCast(@intFromEnum(selected_member_id))).payload_layout;
     return .{
+        .result_plan_id = result_plan_id,
         .result_plan = finite,
         .planned_member = planned_member,
         .descriptor_member = member,
+        .payload_layout = payload_layout,
+        .payload_value = value,
     };
 }
 
-fn existingProcedureFromSelectedCallableResult(
+fn publishCallableResult(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    source_binding: CIR.Pattern.Idx,
+    checked_fn_root: checked_artifact.CheckedTypeId,
+    result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
-) check.CanonicalNames.ProcedureCallableRef {
+) anyerror!PublishedCallableResult {
     if (selected.planned_member.capture_slots.len != 0) {
-        compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
+        return try promoteFiniteCallableResult(allocator, artifact, lowered, source_binding, checked_fn_root, result_plan_id, selected);
     }
     if (selected.descriptor_member.capture_slots.len != 0) {
         compileTimeFinalizationInvariant("descriptor member for no-capture callable result had captures");
     }
+    const proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected);
+    return .{
+        .proc_value = proc_value,
+        .output = .{ .existing_procedure = proc_value },
+        .promotion_plan = null,
+    };
+}
+
+fn closedFiniteCallableLeafFromSelectedCallableResult(
+    selected: SelectedFiniteCallableResult,
+) canonical.ProcedureCallableRef {
+    if (selected.planned_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("captured finite callable value cannot collapse to a closed callable leaf");
+    }
+    if (selected.descriptor_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("finite callable descriptor member unexpectedly had captures");
+    }
     return selected.descriptor_member.proc_value;
+}
+
+fn promoteFiniteCallableResult(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    source_binding: CIR.Pattern.Idx,
+    checked_fn_root: checked_artifact.CheckedTypeId,
+    result_plan_id: checked_artifact.CallableResultPlanId,
+    selected: SelectedFiniteCallableResult,
+) anyerror!PublishedCallableResult {
+    const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
+    const reserved = try artifact.reservePromotedCallableWrapper(
+        allocator,
+        source_binding,
+        checked_fn_root,
+        checked_fn_scheme,
+    );
+
+    const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
+    const call_args = try promotedWrapperCallArgs(allocator, params.len);
+    const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
+
+    var capture_builder = PrivateCaptureBuilder{
+        .allocator = allocator,
+        .artifact = artifact,
+        .lowered = lowered,
+        .layouts = &lowered.lir_result.layouts,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
+        .owner = reserved.promoted_ref,
+        .source_binding = source_binding,
+        .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
+    };
+    defer capture_builder.deinit();
+
+    if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
+        compileTimeFinalizationInvariant("promoted callable selected member capture schema disagrees with result plan");
+    }
+    for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
+        if (slot.slot != @as(u32, @intCast(i))) {
+            compileTimeFinalizationInvariant("promoted callable selected member capture slots are not canonical");
+        }
+        captures[i] = try capture_builder.captureRef(
+            slot.source_ty,
+            slot_plan,
+            captureSlotValue(&lowered.lir_result.layouts, selected, @intCast(i)),
+            @intCast(i),
+        );
+    }
+
+    artifact.fillPromotedCallableWrapperBody(reserved, .{ .finite = .{
+        .source_fn_ty = selected.result_plan.source_fn_ty,
+        .callable_set_key = selected.result_plan.callable_set_key,
+        .member = selected.planned_member.member,
+        .member_proc = selected.descriptor_member.proc_value,
+        .member_capture_shape = selected.descriptor_member.capture_shape_key,
+        .member_capture_slots = selected.descriptor_member.capture_slots,
+        .captures = captures,
+        .params = params,
+        .call_args = call_args,
+        .result_bridge = null,
+    } });
+    try artifact.publishPromotedCallableWrapper(allocator, reserved);
+
+    const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .finite = .{
+        .result_plan = result_plan_id,
+        .selected_member = selected.planned_member.member,
+        .promoted_proc = reserved.promoted_ref,
+    } });
+    const proc_value = canonical.ProcedureCallableRef{
+        .template = .{ .synthetic = .{ .template = reserved.template } },
+        .source_fn_ty = selected.result_plan.source_fn_ty,
+    };
+    return .{
+        .proc_value = proc_value,
+        .output = .{ .promoted_procedure = reserved.promoted_ref },
+        .promotion_plan = promotion_plan,
+    };
+}
+
+fn promotedWrapperParamsForFnRoot(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    checked_fn_root: checked_artifact.CheckedTypeId,
+) Allocator.Error![]const checked_artifact.PromotedWrapperParam {
+    const payload = artifact.checked_types.payloads[@intFromEnum(checked_fn_root)];
+    const function = switch (payload) {
+        .function => |function| function,
+        else => compileTimeFinalizationInvariant("promoted callable checked root was not a function"),
+    };
+    if (function.args.len == 0) return &.{};
+
+    const params = try allocator.alloc(checked_artifact.PromotedWrapperParam, function.args.len);
+    for (function.args, 0..) |arg, i| {
+        params[i] = .{
+            .index = @intCast(i),
+            .checked_ty = arg,
+            .source_ty = artifact.checked_types.roots[@intFromEnum(arg)].key,
+        };
+    }
+    return params;
+}
+
+fn promotedWrapperCallArgs(
+    allocator: Allocator,
+    param_count: usize,
+) Allocator.Error![]const checked_artifact.PromotedWrapperArg {
+    if (param_count == 0) return &.{};
+    const args = try allocator.alloc(checked_artifact.PromotedWrapperArg, param_count);
+    for (args, 0..) |*arg, i| {
+        arg.* = .{ .param = @intCast(i) };
+    }
+    return args;
+}
+
+fn captureSlotValue(
+    layouts: *const layout_mod.Store,
+    selected: SelectedFiniteCallableResult,
+    slot_index: u32,
+) PhysicalValue {
+    const slot_count = selected.planned_member.capture_slots.len;
+    const layout_idx = payloadLayoutForTagArg(layouts, selected.payload_layout, slot_count, slot_index);
+    const layout = layouts.getLayout(layout_idx);
+    const offset = payloadOffsetForTagArg(layouts, selected.payload_layout, slot_count, slot_index);
+    return .{
+        .layout_idx = layout_idx,
+        .value = if (layouts.layoutSize(layout) == 0) Value.zst else selected.payload_value.offset(offset),
+    };
+}
+
+const PrivateCaptureBuilder = struct {
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    layouts: *const layout_mod.Store,
+    callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    owner: checked_artifact.PromotedProcedureRef,
+    source_binding: CIR.Pattern.Idx,
+    next_private_const: u32 = 0,
+    active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
+
+    fn deinit(self: *PrivateCaptureBuilder) void {
+        self.active.deinit();
+    }
+
+    fn captureRef(
+        self: *PrivateCaptureBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+        capture_index: u32,
+    ) anyerror!checked_artifact.PrivateCaptureRef {
+        const checked_root = self.artifact.checked_types.rootForKey(source_ty) orelse {
+            compileTimeFinalizationInvariant("private capture source type was not published in checked type store");
+        };
+        const source_scheme = try self.artifact.checked_types.ensureSchemeForRoot(self.allocator, checked_root);
+        return .{
+            .artifact = self.artifact.key,
+            .owner = .{
+                .promoted_proc = self.owner,
+                .capture_index = capture_index,
+            },
+            .node = try self.captureNode(plan_id, physical),
+            .source_scheme = source_scheme,
+        };
+    }
+
+    fn captureNode(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.PrivateCaptureNodeId {
+        if (self.active.get(plan_id)) |active| {
+            return try self.artifact.comptime_plans.appendPrivateCapture(self.allocator, .{ .recursive_ref = active });
+        }
+
+        const node_id = try self.artifact.comptime_plans.reservePrivateCapture(self.allocator);
+        try self.active.put(plan_id, node_id);
+        errdefer _ = self.active.remove(plan_id);
+
+        const node = try self.buildNode(plan_id, physical);
+        self.artifact.comptime_plans.fillPrivateCapture(node_id, node);
+        _ = self.active.remove(plan_id);
+        return node_id;
+    }
+
+    fn buildNode(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.PrivateCaptureNode {
+        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
+        return switch (plan) {
+            .pending => compileTimeFinalizationInvariant("private capture reification reached pending capture plan"),
+            .serializable_leaf => |leaf| .{ .serializable_leaf = try self.serializableLeaf(leaf, physical) },
+            .callable_leaf => |result_plan| .{ .callable_leaf = try self.callableLeaf(result_plan, physical) },
+            .record => |fields| .{ .record = try self.record(fields, physical) },
+            .tuple => |items| .{ .tuple = try self.tuple(items, physical) },
+            .tag_union => |variants| .{ .tag_union = try self.tagUnion(variants, physical) },
+            .list => |list| .{ .list = try self.list(list.elem, physical) },
+            .box => |payload| .{ .box = try self.box(payload, physical) },
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.captureNode(nominal.backing, physical),
+            } },
+            .recursive_ref => |target| .{ .recursive_ref = try self.captureNode(target, physical) },
+        };
+    }
+
+    fn serializableLeaf(
+        self: *PrivateCaptureBuilder,
+        leaf: checked_artifact.SerializableCaptureLeafPlan,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.PrivateSerializableCaptureLeaf {
+        const capture_index = self.next_private_const;
+        self.next_private_const += 1;
+
+        const const_ref = try self.artifact.const_templates.reservePromotedCapture(
+            self.allocator,
+            self.artifact.key,
+            self.owner,
+            capture_index,
+            leaf.source_scheme,
+        );
+
+        var reifier = ComptimeReifier{
+            .allocator = self.allocator,
+            .values = &self.artifact.comptime_values,
+            .plans = &self.artifact.comptime_plans,
+            .checked_types = &self.artifact.checked_types,
+            .layouts = self.layouts,
+            .callable_set_descriptors = self.callable_set_descriptors,
+        };
+        const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
+
+        self.artifact.const_templates.fillValueGraph(const_ref, .{
+            .schema = reified.schema,
+            .value = reified.value,
+        });
+
+        const instance_ref = try self.artifact.const_instances.reserve(self.allocator, .{
+            .const_ref = const_ref,
+            .requested_source_ty = leaf.requested_source_ty,
+        });
+        self.artifact.const_instances.fill(instance_ref, .{
+            .schema = reified.schema,
+            .value = reified.value,
+            .reification_plan = leaf.reification_plan,
+        });
+
+        return .{
+            .const_ref = const_ref,
+            .requested_source_ty = leaf.requested_source_ty,
+            .schema = reified.schema,
+        };
+    }
+
+    fn callableLeaf(
+        self: *PrivateCaptureBuilder,
+        result_plan: checked_artifact.CallableResultPlanId,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.CallableLeafInstance {
+        const selected = selectFiniteCallableResult(
+            &self.artifact.comptime_plans,
+            self.callable_set_descriptors,
+            self.layouts,
+            result_plan,
+            physical.layout_idx,
+            physical.value,
+        );
+        const checked_fn_root = self.artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
+            compileTimeFinalizationInvariant("captured callable leaf source function type was not published in checked type store");
+        };
+        const published = try publishCallableResult(
+            self.allocator,
+            self.artifact,
+            self.lowered,
+            self.source_binding,
+            checked_fn_root,
+            result_plan,
+            selected,
+        );
+        return .{ .finite = .{ .proc_value = published.proc_value } };
+    }
+
+    fn record(
+        self: *PrivateCaptureBuilder,
+        fields: []const checked_artifact.CaptureRecordFieldPlan,
+        physical: PhysicalValue,
+    ) anyerror![]const checked_artifact.PrivateCaptureRecordField {
+        if (fields.len == 0) return &.{};
+        const aggregate = self.logicalAggregateValue(physical, .struct_);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .struct_) compileTimeFinalizationInvariant("private record capture did not lower to struct layout");
+
+        const out = try self.allocator.alloc(checked_artifact.PrivateCaptureRecordField, fields.len);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .field = field.field,
+                .value = try self.captureNode(field.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i))),
+            };
+        }
+        return out;
+    }
+
+    fn tuple(
+        self: *PrivateCaptureBuilder,
+        items: []const checked_artifact.CaptureTupleElemPlan,
+        physical: PhysicalValue,
+    ) anyerror![]const checked_artifact.PrivateCaptureNodeId {
+        if (items.len == 0) return &.{};
+        const aggregate = self.logicalAggregateValue(physical, .struct_);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .struct_) compileTimeFinalizationInvariant("private tuple capture did not lower to struct layout");
+
+        const out = try self.allocator.alloc(checked_artifact.PrivateCaptureNodeId, items.len);
+        for (items, 0..) |item, i| {
+            if (item.index != @as(u32, @intCast(i))) {
+                compileTimeFinalizationInvariant("private tuple capture plan indices are not canonical");
+            }
+            out[i] = try self.captureNode(item.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)));
+        }
+        return out;
+    }
+
+    fn tagUnion(
+        self: *PrivateCaptureBuilder,
+        variants: []const checked_artifact.CaptureTagVariantPlan,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.PrivateCaptureTagNode {
+        const aggregate = self.logicalAggregateValue(physical, .tag_union);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .tag_union) compileTimeFinalizationInvariant("private tag capture did not lower to tag-union layout");
+        const info = self.layouts.getTagUnionInfo(layout);
+        const discriminant = info.data.readDiscriminant(aggregate.value.ptr);
+        if (discriminant >= variants.len) {
+            compileTimeFinalizationInvariant("private tag capture discriminant exceeded capture plan variants");
+        }
+
+        const active = variants[discriminant];
+        const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
+        const payloads = try self.allocator.alloc(checked_artifact.PrivateCaptureTagPayload, active.payloads.len);
+        for (active.payloads, 0..) |payload, i| {
+            payloads[i] = .{
+                .index = payload.index,
+                .value = try self.captureNode(
+                    payload.value,
+                    tagPayloadValue(self.layouts, active_payload_layout, aggregate.value, active.payloads.len, @intCast(i)),
+                ),
+            };
+        }
+        return .{
+            .tag = active.tag,
+            .payloads = payloads,
+        };
+    }
+
+    fn list(
+        self: *PrivateCaptureBuilder,
+        elem_plan: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) anyerror![]const checked_artifact.PrivateCaptureNodeId {
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        const elem_layout_idx = switch (layout.tag) {
+            .list => layout.data.list,
+            .list_of_zst => layout_mod.Idx.zst,
+            else => compileTimeFinalizationInvariant("private List(T) capture did not lower to list layout"),
+        };
+        const elem_layout = self.layouts.getLayout(elem_layout_idx);
+        const elem_size: usize = @intCast(self.layouts.layoutSize(elem_layout));
+        const roc_list: *const RocList = @ptrCast(@alignCast(physical.value.ptr));
+        if (roc_list.len() == 0) return &.{};
+
+        const out = try self.allocator.alloc(checked_artifact.PrivateCaptureNodeId, roc_list.len());
+        var i: usize = 0;
+        while (i < roc_list.len()) : (i += 1) {
+            const elem_value = if (elem_size == 0)
+                Value.zst
+            else
+                Value{ .ptr = (roc_list.bytes orelse compileTimeFinalizationInvariant("non-empty private list capture had null bytes")) + i * elem_size };
+            out[i] = try self.captureNode(elem_plan, .{
+                .layout_idx = elem_layout_idx,
+                .value = elem_value,
+            });
+        }
+        return out;
+    }
+
+    fn box(
+        self: *PrivateCaptureBuilder,
+        payload_plan: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) anyerror!checked_artifact.PrivateCaptureNodeId {
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        const payload = switch (layout.tag) {
+            .box => PhysicalValue{
+                .layout_idx = layout.data.box,
+                .value = .{ .ptr = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("private Box(T) capture had null payload") },
+            },
+            .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
+            else => compileTimeFinalizationInvariant("private Box(T) capture did not lower to box layout"),
+        };
+        return try self.captureNode(payload_plan, payload);
+    }
+
+    fn logicalAggregateValue(
+        self: *const PrivateCaptureBuilder,
+        physical: PhysicalValue,
+        expected_tag: layout_mod.LayoutTag,
+    ) PhysicalValue {
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        switch (layout.tag) {
+            .box => {
+                const payload = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("private capture aggregate used boxed layout with null payload");
+                const inner_layout = self.layouts.getLayout(layout.data.box);
+                if (inner_layout.tag != expected_tag) {
+                    compileTimeFinalizationInvariant("private capture boxed aggregate did not contain expected layout");
+                }
+                return .{ .layout_idx = layout.data.box, .value = .{ .ptr = payload } };
+            },
+            .box_of_zst => {
+                if (expected_tag != .zst) {
+                    compileTimeFinalizationInvariant("private capture used box_of_zst for non-ZST aggregate");
+                }
+                return .{ .layout_idx = .zst, .value = Value.zst };
+            },
+            else => return physical,
+        }
+    }
+};
+
+fn structFieldValue(
+    layouts: *const layout_mod.Store,
+    struct_layout: layout_mod.Layout,
+    value: Value,
+    field_index: u32,
+) PhysicalValue {
+    if (struct_layout.tag != .struct_) {
+        compileTimeFinalizationInvariant("private capture field read expected struct layout");
+    }
+    const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, field_index);
+    const field_layout = layouts.getLayout(field_layout_idx);
+    const offset = layouts.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, field_index);
+    return .{
+        .layout_idx = field_layout_idx,
+        .value = if (layouts.layoutSize(field_layout) == 0) Value.zst else value.offset(offset),
+    };
+}
+
+fn tagPayloadValue(
+    layouts: *const layout_mod.Store,
+    variant_layout_idx: layout_mod.Idx,
+    value: Value,
+    payload_count: usize,
+    payload_index: u32,
+) PhysicalValue {
+    const payload_layout_idx = payloadLayoutForTagArg(layouts, variant_layout_idx, payload_count, payload_index);
+    const payload_layout = layouts.getLayout(payload_layout_idx);
+    const offset = payloadOffsetForTagArg(layouts, variant_layout_idx, payload_count, payload_index);
+    return .{
+        .layout_idx = payload_layout_idx,
+        .value = if (layouts.layoutSize(payload_layout) == 0) Value.zst else value.offset(offset),
+    };
 }
 
 fn readCallableSetMemberDiscriminant(
@@ -516,7 +1031,7 @@ const ComptimeReifier = struct {
                     layout_idx,
                     value,
                 );
-                const proc_value = existingProcedureFromSelectedCallableResult(selected_callable);
+                const proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected_callable);
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = proc_value.source_fn_ty }),
                     .value = try self.values.addValue(.{ .callable = .{ .finite = .{ .proc_value = proc_value } } }),
