@@ -501,8 +501,8 @@ const CallableProcedureTemplateRef = union(enum) {
     /// source-local function can appear inside different mono specializations.
     ///
     /// ```roc
-    /// makeAdder : I64 -> (I64 -> I64)
-    /// makeAdder = |n|
+    /// make_adder : I64 -> (I64 -> I64)
+    /// make_adder = |n|
     ///     add = |x| x + n
     ///     add
     /// ```
@@ -516,12 +516,12 @@ const CallableProcedureTemplateRef = union(enum) {
     /// compile-time callable result into a procedure-like template.
     ///
     /// ```roc
-    /// makeAdder : I64 -> (I64 -> I64)
-    /// makeAdder = |n|
+    /// make_adder : I64 -> (I64 -> I64)
+    /// make_adder = |n|
     ///     |x| x + n
     ///
     /// inc : I64 -> I64
-    /// inc = makeAdder(1)
+    /// inc = make_adder(1)
     ///
     /// answer = inc(41)
     /// ```
@@ -600,6 +600,7 @@ const ErasedFiniteSetAdapterRef = struct {
 const ErasedPromotedWrapperBodyPlan = struct {
     source_fn_ty: CanonicalTypeKey,
     params: Span(PromotedWrapperParam),
+    executable_signature: ErasedPromotedProcedureExecutableSignature,
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedCaptureMaterializationPlan,
@@ -608,6 +609,35 @@ const ErasedPromotedWrapperBodyPlan = struct {
     result_bridge: ?BridgeId,
     result_ty: CanonicalExecValueTypeKey,
     provenance: NonEmptySpan(BoxBoundaryId),
+};
+
+const ErasedPromotedProcedureExecutableSignature = struct {
+    specialization_key: ExecutableSpecializationKey,
+    source_fn_ty: CanonicalTypeKey,
+    wrapper_params: Span(ExecutableProcedureParamPayload),
+    wrapper_ret: ExecutableTypePayloadRef,
+    wrapper_ret_key: CanonicalExecValueTypeKey,
+    erased_call_args: Span(ExecutableTypePayloadRef),
+    erased_call_arg_keys: Span(CanonicalExecValueTypeKey),
+    erased_call_ret: ExecutableTypePayloadRef,
+    erased_call_ret_key: CanonicalExecValueTypeKey,
+    hidden_capture: ?ExecutableHiddenCapturePayload,
+};
+
+const ExecutableProcedureParamPayload = struct {
+    param: PromotedWrapperParam,
+    exec_ty: ExecutableTypePayloadRef,
+    exec_ty_key: CanonicalExecValueTypeKey,
+};
+
+const ExecutableHiddenCapturePayload = struct {
+    exec_ty: ExecutableTypePayloadRef,
+    exec_ty_key: CanonicalExecValueTypeKey,
+};
+
+const ExecutableTypePayloadRef = struct {
+    artifact: ArtifactRef,
+    payload: ExecutableTypePayloadId,
 };
 
 const PromotedWrapperStageOwner = union(enum) {
@@ -657,11 +687,11 @@ is mandatory:
 This is not a runtime thunk or a runtime closure object. For example:
 
 ```roc
-makeAdder : I64 -> (I64 -> I64)
-makeAdder = |n| |x| x + n
+make_adder : I64 -> (I64 -> I64)
+make_adder = |n| |x| x + n
 
 add5 : I64 -> I64
-add5 = makeAdder(5)
+add5 = make_adder(5)
 ```
 
 `add5` is a finite promoted callable. Checking finalization evaluates the
@@ -672,25 +702,28 @@ runtime initializer procedure, runtime top-level closure object, or runtime
 global callable-value object is created.
 
 ```roc
-makeBoxed : {} -> Box(I64 -> I64)
-makeBoxed = |_| Box.box(|x| x + 1)
+make_boxed : {} -> Box(I64 -> I64)
+make_boxed = |_| Box.box(|x| x + 1)
 
 add1 : I64 -> I64
-add1 = Box.unbox(makeBoxed({}))
+add1 = Box.unbox(make_boxed({}))
 ```
 
 `add1` is an erased promoted callable. The erased representation exists only
 because the result flowed through the explicit `Box(I64 -> I64)` boundary.
 Checking finalization evaluates the function-valued root, reifies the exact
 erased code ref, `ErasedFnSigKey`, erased capture materialization plan, bridges,
-result executable type, and non-empty `BoxBoundaryId` provenance, then reserves a
-promoted procedure identity. Mono may call or pass that procedure identity as an
-opaque `ProcedureValueRef` at the source function type `I64 -> I64`, but mono
-does not lower the body. Executable MIR later emits the synthetic procedure body
-from the published erased plan by materializing the explicit capture, applying
-the argument bridges, issuing `call_erased`, and applying the result bridge. No
-runtime thunk, runtime initializer procedure, runtime top-level erased callable
-object, runtime closure object, or source-shape recovery is allowed.
+the full `ErasedPromotedProcedureExecutableSignature`, and non-empty
+`BoxBoundaryId` provenance, then reserves a promoted procedure identity. Mono
+may call or pass that procedure identity as an opaque `ProcedureValueRef` at the
+source function type `I64 -> I64`, but mono does not lower the body. Executable
+MIR later emits the synthetic procedure body from the published erased plan by
+lowering the explicit executable type payloads in
+`ErasedPromotedProcedureExecutableSignature`, materializing the explicit capture,
+applying the argument bridges, issuing `call_erased`, and applying the result
+bridge. No runtime thunk, runtime initializer procedure, runtime top-level
+erased callable object, runtime closure object, source-shape recovery, or
+canonical-key-to-TypeId cache is allowed.
 
 `MonoSpecializationKey` is keyed by a checked `ProcedureTemplateRef` and the
 requested monomorphic source function type. `MonoSpecializedProcRef` is the
@@ -761,6 +794,54 @@ wrapper's required result representation. `provenance` is non-empty and
 contains only explicit `BoxBoundaryId` values. A promoted erased wrapper must
 not rediscover any of these decisions from the code ref, source syntax, runtime
 bytes, or shape comparison.
+
+`ErasedPromotedProcedureExecutableSignature` is mandatory because an erased
+promoted procedure body skips mono, row-finalized mono, lifted MIR, and
+lambda-solved body lowering. Executable MIR therefore cannot obtain parameter,
+result, erased-call argument, erased-call result, or hidden-capture executable
+`TypeId`s from lambda-solved value occurrences in a lowered body. The signature
+must publish executable type payload refs as well as their canonical keys.
+Executable MIR lowers those payload refs directly and uses the keys only for
+debug-only verification. It must not maintain a map from
+`CanonicalExecValueTypeKey` to executable `TypeId`, ask the checked source type
+store to reconstruct executable representation, inspect the source expression,
+or recover missing executable types from layouts or erased ABI shape.
+
+`ExecutableTypePayloadRef` points into an artifact-owned
+`ExecutableTypePayloadStore`. This store contains structural executable type
+payloads using the same semantic cases as `CanonicalExecValueTypeKey`:
+primitive, record, tuple, tag union, list, box, nominal, callable-set, and
+erased-fn. Recursive payloads use store-local placeholders/backrefs, not raw
+Zig pointers, raw lambda-solved type ids, raw checked type ids, layout ids,
+expression ids, or allocation-order-dependent handles. The store is not a cache;
+it is published semantic data produced by lambda-solved MIR while checking
+finalization is still evaluating/promoting compile-time callable roots.
+
+For an erased promoted procedure:
+
+- `specialization_key` is the exact executable specialization key for the
+  promoted procedure body. It uses the wrapper source function type, wrapper
+  parameter executable keys, wrapper result executable key, callable mode
+  `erased_callable`, and the published capture shape.
+- `wrapper_params` are the ordinary fixed-arity Roc parameters. Each entry
+  carries the source `PromotedWrapperParam`, the executable type payload ref for
+  the parameter value, and the canonical executable key for debug verification.
+- `wrapper_ret` and `wrapper_ret_key` describe the value returned by the
+  promoted procedure after applying `result_bridge`, not merely the erased-call
+  ABI return.
+- `erased_call_args` and `erased_call_arg_keys` describe the exact ABI argument
+  values passed to `call_erased` after applying `arg_bridges`. Their arity must
+  exactly match the fixed arity encoded by `sig_key`.
+- `erased_call_ret` and `erased_call_ret_key` describe the raw erased-call result
+  before applying `result_bridge`. `erased_call_ret_key` must exactly match the
+  return key encoded by `sig_key`.
+- `hidden_capture` is present exactly when `sig_key.capture_ty` is non-null. Its
+  `exec_ty_key` must equal `sig_key.capture_ty`. If `sig_key.capture_ty` is null,
+  `hidden_capture` must be null. Runtime pointer nullness, runtime capture byte
+  size, and backend ABI behavior must not decide this.
+
+All mismatches are compiler invariant violations: debug builds assert at the
+first boundary that observes the mismatch and release builds use `unreachable`.
 
 An erased promoted wrapper plan is consumed by executable MIR, not by mono MIR.
 The checked artifact publishes it early so that all later stages have explicit
@@ -3174,8 +3255,8 @@ For example:
 
 ```roc
 choose : Bool, Box(I64 -> I64) -> (I64 -> I64)
-choose = |useBox, boxed|
-    if useBox {
+choose = |use_box, boxed|
+    if use_box {
         Box.unbox(boxed)
     } else {
         |x| x + 1
@@ -4857,7 +4938,7 @@ specialization, or concrete source type payload before the requested source type
 is fully resolved. This is required for generic constants such as
 `table = { f: id }`, where different consumers of the same exported constant
 instantiate callable leaves at different function types, and for generic
-callable roots such as `alsoId = choose(True, id, id)`, where different
+callable roots such as `also_id = choose(True, id, id)`, where different
 consumers instantiate the callable binding at different function types.
 
 - top-level values named directly by the root expression
@@ -4952,23 +5033,23 @@ compile-time root.
 For example:
 
 ```roc
-makeAdder : I64 -> (I64 -> I64)
-makeAdder = |n| |x| x + n
+make_adder : I64 -> (I64 -> I64)
+make_adder = |n| |x| x + n
 
 add5 : I64 -> I64
-add5 = makeAdder(5)
+add5 = make_adder(5)
 
-useAdd5 : I64 -> I64
-useAdd5 = |x| add5(x)
+use_add5 : I64 -> I64
+use_add5 = |x| add5(x)
 
 answer : I64
-answer = useAdd5(37)
+answer = use_add5(37)
 ```
 
 `add5` is a `callable_binding` root. `answer` is a
-`compile_time_constant_root`. The expression for `answer` names only `useAdd5`,
+`compile_time_constant_root`. The expression for `answer` names only `use_add5`,
 but the dependency graph still contains an edge from `answer` to `add5` because
-the monomorphic body summary for `useAdd5` names `add5`. `answer` cannot lower
+the monomorphic body summary for `use_add5` names `add5`. `answer` cannot lower
 through `TopLevelValueTable` until `add5` has been promoted to
 `procedure_binding`.
 
@@ -5185,11 +5266,11 @@ add1 = |x| x + 1
 This binding is case 2:
 
 ```roc
-makeAdder : I64 -> (I64 -> I64)
-makeAdder = |n| |x| x + n
+make_adder : I64 -> (I64 -> I64)
+make_adder = |n| |x| x + n
 
 add5 : I64 -> I64
-add5 = makeAdder(5)
+add5 = make_adder(5)
 ```
 
 An alias to an existing top-level procedure is also case 2:
@@ -5198,11 +5279,11 @@ An alias to an existing top-level procedure is also case 2:
 inc : I64 -> I64
 inc = |x| x + 1
 
-alsoInc : I64 -> I64
-alsoInc = inc
+also_inc : I64 -> I64
+also_inc = inc
 ```
 
-`alsoInc` must not introduce a separate callable-alias semantic category. It is
+`also_inc` must not introduce a separate callable-alias semantic category. It is
 a compile-time callable root like any other function-valued expression. Checking
 finalization evaluates the expression `inc` through the normal compile-time
 callable path. Reification produces the same compiler-owned callable result it
@@ -5217,7 +5298,7 @@ finite {
 }
 ```
 
-Publication may then map `alsoInc` directly to the existing procedure binding
+Publication may then map `also_inc` directly to the existing procedure binding
 for `inc`. If a distinct procedure value is required for export metadata, debug
 provenance, or other artifact bookkeeping, that value must be produced as a
 normal promoted checked wrapper from the evaluated `ComptimeCallable`; it is not
@@ -5231,13 +5312,13 @@ instantiable procedure binding rather than one concrete mono procedure:
 id : a -> a
 id = |x| x
 
-alsoId = id
+also_id = id
 
-useInt = alsoId(1)
-useStr = alsoId("x")
+use_int = also_id(1)
+use_str = also_id("x")
 ```
 
-`alsoId` is not a runtime closure object and not a runtime thunk. Checking
+`also_id` is not a runtime closure object and not a runtime thunk. Checking
 finalization processes the root through the compile-time callable path. Because
 the expression reifies to an existing captureless checked procedure template, the
 published `TopLevelProcedureBinding` may use `ProcedureBindingBody.direct_template`
@@ -5245,9 +5326,9 @@ with `CallableProcedureTemplateRef.checked(template_ref_of_source_proc(id))`, or
 sealed `CallableProcedureTemplateRef.synthetic` wrapper if a distinct exported
 procedure identity is required. This direct publication is an outcome of
 callable-template reification, not a syntax shortcut and not a callable-alias
-category. `useInt` and `useStr` create separate concrete procedure uses by
+category. `use_int` and `use_str` create separate concrete procedure uses by
 clone-instantiating the binding's source scheme at `I64 -> I64` and
-`Str -> Str`; they do not force `alsoId` to become an alias table entry or a
+`Str -> Str`; they do not force `also_id` to become an alias table entry or a
 single concrete specialization.
 
 A generic function-valued root whose value must be computed at the concrete
@@ -5260,18 +5341,18 @@ id = |x| x
 choose : Bool, (a -> a), (a -> a) -> (a -> a)
 choose = |b, f, g| if b { f } else { g }
 
-alsoId = choose(True, id, id)
+also_id = choose(True, id, id)
 
-useInt = alsoId(1)
-useStr = alsoId("x")
+use_int = also_id(1)
+use_str = also_id("x")
 ```
 
-The published `alsoId` binding has one generalized `source_scheme` and one
-`CallableEvalTemplate`. `useInt` creates a
+The published `also_id` binding has one generalized `source_scheme` and one
+`CallableEvalTemplate`. `use_int` creates a
 `CallableBindingInstantiationRequest` whose key is
-`CallableBindingInstantiationKey(binding = alsoId, requested_source_fn_ty =
+`CallableBindingInstantiationKey(binding = also_id, requested_source_fn_ty =
 I64 -> I64)` and whose payload is a `ConcreteSourceTypeRef` for the concrete
-`I64 -> I64` function type. `useStr` creates a second request at `Str -> Str`
+`I64 -> I64` function type. `use_str` creates a second request at `Str -> Str`
 with a different payload. Each request reserves a `CallableBindingInstance` in
 the artifact that requested the use. During that artifact's checking
 finalization, the compiler lowers the checked callable body through mono MIR,
@@ -5307,9 +5388,9 @@ This uniform compile-time evaluation rule is intentionally broader than
 procedure aliases. These all use the same root/reify/publish path:
 
 ```roc
-alsoInc = inc
-add5 = makeAdder(5)
-choose = if useInc { inc } else { dec }
+also_inc = inc
+add5 = make_adder(5)
+choose = if use_inc { inc } else { dec }
 table = { f: inc }
 ```
 
@@ -5365,8 +5446,8 @@ id = |x| x
 
 table = { f: id }
 
-useInt = (table.f)(1)
-useStr = (table.f)("x")
+use_int = (table.f)(1)
+use_str = (table.f)("x")
 ```
 
 `table` publishes as one reserved and sealed `ConstRef` whose source type is a
@@ -5384,8 +5465,8 @@ const ConstInstantiationKey = struct {
 };
 ```
 
-For the example above, `useInt` requests the `table` constant at a record type
-whose `f` field has type `I64 -> I64`; `useStr` requests the same `ConstRef` at a
+For the example above, `use_int` requests the `table` constant at a record type
+whose `f` field has type `I64 -> I64`; `use_str` requests the same `ConstRef` at a
 record type whose `f` field has type `Str -> Str`. During the requesting
 artifact's checking finalization, those requests materialize two concrete
 constant instances from the same target-independent template. They do not create
@@ -5405,8 +5486,8 @@ instantiated at a concrete type:
 ```roc
 table = { f: |x| x }
 
-useInt = (table.f)(1)
-useStr = (table.f)("x")
+use_int = (table.f)(1)
+use_str = (table.f)("x")
 ```
 
 This `table` binding is valid Roc code, but it must publish a `ConstEvalTemplate`
@@ -5435,8 +5516,8 @@ choose = |b, f, g| if b { f } else { g }
 
 table = { f: choose(True, id, id) }
 
-useInt = (table.f)(1)
-useStr = (table.f)("x")
+use_int = (table.f)(1)
+use_str = (table.f)("x")
 ```
 
 The exported `table` binding still publishes one `ConstRef`, but that `ConstRef`
@@ -5588,11 +5669,11 @@ object, global callable object, or runtime thunk.
 For example:
 
 ```roc
-makeBoxed : {} -> Box(I64 -> I64)
-makeBoxed = |_| Box.box(|x| x + 1)
+make_boxed : {} -> Box(I64 -> I64)
+make_boxed = |_| Box.box(|x| x + 1)
 
 add1 : I64 -> I64
-add1 = Box.unbox(makeBoxed({}))
+add1 = Box.unbox(make_boxed({}))
 ```
 
 `add1` is a function-valued top-level binding. Checking finalization must
@@ -5867,11 +5948,11 @@ top-level global, runtime thunk, or runtime closure object.
 For example:
 
 ```roc
-makeCaller : { f : I64 -> I64 } -> (I64 -> I64)
-makeCaller = |r| |x| (r.f)(x)
+make_caller : { f : I64 -> I64 } -> (I64 -> I64)
+make_caller = |r| |x| (r.f)(x)
 
 add1 : I64 -> I64
-add1 = makeCaller({ f: |x| x + 1 })
+add1 = make_caller({ f: |x| x + 1 })
 ```
 
 `add1` is a callable-binding root. Its result is promoted to a closed ordinary
@@ -6619,16 +6700,16 @@ For example:
 id : a -> a
 id = |x| x
 
-intTable : { f : I64 -> I64 }
-intTable = { f: id }
+int_table : { f : I64 -> I64 }
+int_table = { f: id }
 
-strTable : { f : Str -> Str }
-strTable = { f: id }
+str_table : { f : Str -> Str }
+str_table = { f: id }
 
 table = { f: id }
 ```
 
-`intTable` and `strTable` are concrete constants, so their concrete constant
+`int_table` and `str_table` are concrete constants, so their concrete constant
 instances contain distinct finite callable leaf instances:
 
 ```zig
@@ -11497,7 +11578,7 @@ root path only during the checking finalization of the artifact that owns the
 concrete instance, at the requested function type payload. The published artifact
 must not contain a `ProcedureUseTemplate` that requires post-check lowering to
 finish the callable evaluation.
-This includes trivial references to existing procedures such as `alsoInc = inc`.
+This includes trivial references to existing procedures such as `also_inc = inc`.
 Those bindings still run through compile-time callable evaluation. If the
 evaluated `ComptimeCallable` is a finite existing procedure with no captures,
 checking finalization may publish the existing procedure value directly for the
@@ -12714,7 +12795,7 @@ objects.
   for that boundary, promote/lower the captured callable correctly, and keep the
   non-boxed finite callable path as a finite callable-set value until it reaches
   the explicit erased join.
-- add a Box-adapted `test/erased/erased-map2.roc`: a generic Map2-like shape
+- add a Box-adapted `test/erased/erased-map2.roc`: a generic map2-like shape
   must run through boxed `a`, boxed `b`, and a boxed mapper. The test must cover
   both non-callable boxed payloads such as `Box(I64)` and callable boxed
   payloads such as `Box({} -> I64)` through the same generic path. The expected
@@ -12794,7 +12875,7 @@ Compile-time constants:
   runtime thunks
 - top-level function declarations are published directly as `procedure_binding`
   without being evaluated just to prove they are callable
-- top-level function-typed expressions such as `add5 = makeAdder(5)` evaluate
+- top-level function-typed expressions such as `add5 = make_adder(5)` evaluate
   as `callable_binding` roots during checking finalization
 - generic top-level function-typed expressions that require computation publish
   `CallableEvalTemplate` and instantiate through
@@ -12807,32 +12888,32 @@ Compile-time constants:
   choose : Bool, (a -> a), (a -> a) -> (a -> a)
   choose = |b, f, g| if b { f } else { g }
 
-  alsoId = choose(True, id, id)
+  also_id = choose(True, id, id)
 
-  useInt = alsoId(1)
-  useStr = alsoId("x")
+  use_int = also_id(1)
+  use_str = also_id("x")
   ```
 
   The expected checked artifact contains one `TopLevelProcedureBindingRef` for
-  `alsoId` whose body is `callable_eval_template`, plus two concrete
+  `also_id` whose body is `callable_eval_template`, plus two concrete
   `CallableBindingInstanceRef` values in the requesting instantiation store: one
   at `I64 -> I64` and one at `Str -> Str`. No generalized executable MIR,
   generalized interpreter value, runtime top-level closure object, runtime thunk,
   or callable-alias table is allowed.
-- top-level callable aliases such as `alsoInc = inc` also evaluate as
+- top-level callable aliases such as `also_inc = inc` also evaluate as
   `callable_binding` roots during checking finalization. The interpreter result
   reifies to a selected finite callable value whose callable set has the `inc`
   member selected and whose evaluated capture list is empty;
-  publication may map `alsoInc` directly to the same `procedure_binding` as
+  publication may map `also_inc` directly to the same `procedure_binding` as
   `inc`, or to a sealed synthetic wrapper binding if distinct export identity is
   required. There is no separate callable-alias category,
   alias side table, syntax shortcut, runtime thunk, or runtime top-level
   closure object.
-- `add5 = makeAdder(5)` promotes to a closed procedure whose captured `5` is a
+- `add5 = make_adder(5)` promotes to a closed procedure whose captured `5` is a
   private capture `ConstRef`, not a source top-level binding and not a runtime
   closure environment
 - a promoted callable may capture a private record containing a callable leaf,
-  for example `add1 = makeCaller({ f: |x| x + 1 })` where `makeCaller = |r|
+  for example `add1 = make_caller({ f: |x| x + 1 })` where `make_caller = |r|
   |x| (r.f)(x)`. The record must be represented as a private promoted-capture
   record node, the `f` field must recursively promote to a private synthetic
   procedure template, and the sealed `add1` body must read an explicit
@@ -12840,7 +12921,7 @@ Compile-time constants:
   `TopLevelValueTable`, must not be importable by source name, and must not
   become a runtime top-level closure object.
 - a promoted callable may capture a private record containing an existing
-  procedure value, for example `add1 = makeCaller({ f: inc })`. The `f` field
+  procedure value, for example `add1 = make_caller({ f: inc })`. The `f` field
   must be a finite callable leaf instance whose `proc_value.template` is
   `CallableProcedureTemplateRef.checked(template_ref_of_source_proc(inc))` and
   whose `proc_value.source_fn_ty` is the exact canonical function type of that
@@ -12882,6 +12963,30 @@ Compile-time constants:
   identities at their source function type, but mono must not lower their bodies
   and must not carry `ErasedFnSigKey`, erased bridges, hidden capture arguments,
   executable result type keys, or erased capture ABI data.
+- top-level function-valued declarations that evaluate to erased callable values
+  must include the direct promoted-procedure case:
+
+  ```roc
+  make_boxed : {} -> Box(I64 -> I64)
+  make_boxed = |_| Box.box(|x| x + 1)
+
+  add1 : I64 -> I64
+  add1 = Box.unbox(make_boxed({}))
+
+  main : I64
+  main = add1(10)
+  ```
+
+  The expected checked artifact publishes `add1` as a normal
+  `procedure_binding` whose promoted procedure has a sealed erased promoted
+  procedure plan with `ErasedPromotedProcedureExecutableSignature`. The expected
+  executable MIR contains the compiler-created procedure body that performs the
+  known erased call. Mono, row-finalized mono, lifted MIR, and lambda-solved MIR
+  must carry only the opaque procedure identity/source function type for `add1`;
+  they must not lower the erased body, build a runtime thunk, allocate a runtime
+  top-level closure object, publish a runtime erased callable object, or use a
+  canonical executable key as a substitute for an explicit executable type
+  payload.
 - erased compile-time callable values and erased callable leaves must store
   exact erased code refs. Direct erased code refs carry
   `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`. Finite-set
@@ -12984,8 +13089,8 @@ Compile-time constants:
 
   table = { f: choose(True, id, id) }
 
-  useInt = (table.f)(1)
-  useStr = (table.f)("x")
+  use_int = (table.f)(1)
+  use_str = (table.f)("x")
   ```
 
   The expected checked artifact contains one exported `ConstRef` for `table`, an
@@ -13000,8 +13105,8 @@ Compile-time constants:
   ```roc
   table = { f: |x| x }
 
-  useInt = (table.f)(1)
-  useStr = (table.f)("x")
+  use_int = (table.f)(1)
+  use_str = (table.f)("x")
   ```
 
   The expected checked artifact contains one exported `ConstRef` for `table`
@@ -13038,7 +13143,7 @@ Compile-time constants:
   module's interpreter or inspect source declarations to recover callable leaves.
 - imported generic callable eval bindings are consumed through
   `ImportedProcedureBindingView` and `CallableBindingInstantiationKey`. A test
-  must put the `alsoId = choose(True, id, id)` example in one module, import it
+  must put the `also_id = choose(True, id, id)` example in one module, import it
   from another module, and use it at both `I64 -> I64` and `Str -> Str`. The
   importing artifact must own the two concrete callable binding instances it
   requests, and it must not inspect the exporting module's source, mutate the
@@ -13080,7 +13185,7 @@ Compile-time constants:
   templates in its own `SemanticInstantiationProcedureTable`; the exporter must
   remain immutable after publication, and post-check lowering must not create
   semantic instances.
-- callable binding ownership tests must put `alsoId = choose(True, id, id)` in
+- callable binding ownership tests must put `also_id = choose(True, id, id)` in
   one module, import it in another module, and call it at both `I64 -> I64` and
   `Str -> Str`. The importer must own two sealed
   `CallableBindingInstance` rows with concrete dependency summaries, executable
