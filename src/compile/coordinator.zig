@@ -237,19 +237,18 @@ pub const ModuleState = struct {
         std.debug.panic("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
     }
 
-    pub fn deinit(self: *ModuleState, gpa: Allocator, owns_module_data: bool) void {
+    pub fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*artifact| artifact.deinit(gpa);
         }
         if (comptime trace_build) {
-            std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}, owns={}\n", .{
+            std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}\n", .{
                 self.name,
                 if (self.semantic != null) @as(u8, 1) else @as(u8, 0),
                 if (self.cached_ast != null) @as(u8, 1) else @as(u8, 0),
-                if (owns_module_data) @as(u8, 1) else @as(u8, 0),
             });
         }
-        // Free cached AST if present (always in gpa, not module_allocator)
+        // Free cached AST if present.
         if (self.cached_ast) |ast| {
             if (comptime trace_build) {
                 std.debug.print("[MOD DEINIT] {s}: freeing ast\n", .{self.name});
@@ -257,25 +256,22 @@ pub const ModuleState = struct {
             ast.deinit();
         }
 
-        // Free module env if present (only if we own module data)
-        if (owns_module_data) {
-            if (self.semantic) |*semantic| {
-                if (semantic.checked_artifact != null) {
-                    // The checked artifact owns the ModuleEnv after publication.
-                } else {
-                    const env = semantic.module_env;
-                    // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
-                    // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
-                    // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
-                    const env_alloc = env.gpa;
-                    const source = env.common.source;
-                    if (comptime trace_build) {
-                        std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
-                    }
-                    env.deinit();
-                    env_alloc.destroy(env);
-                    if (source.len > 0) env_alloc.free(@constCast(source));
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact != null) {
+                // The checked artifact owns the ModuleEnv after publication.
+            } else {
+                const env = semantic.module_env;
+                // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
+                // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
+                // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
+                const env_alloc = env.gpa;
+                const source = env.common.source;
+                if (comptime trace_build) {
+                    std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
                 }
+                env.deinit();
+                env_alloc.destroy(env);
+                if (source.len > 0) env_alloc.free(@constCast(source));
             }
         }
 
@@ -329,7 +325,7 @@ pub const PackageState = struct {
         };
     }
 
-    pub fn deinit(self: *PackageState, gpa: Allocator, owns_module_data: bool) void {
+    pub fn deinit(self: *PackageState, gpa: Allocator) void {
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: deiniting {} modules\n", .{ self.name, self.modules.items.len });
         }
@@ -337,7 +333,7 @@ pub const PackageState = struct {
             if (comptime trace_build) {
                 std.debug.print("[PKG DEINIT] {s}: deinit module {} ({s})\n", .{ self.name, i, mod.name });
             }
-            mod.deinit(gpa, owns_module_data);
+            mod.deinit(gpa);
         }
         self.modules.deinit(gpa);
         if (comptime trace_build) {
@@ -504,17 +500,8 @@ pub const Coordinator = struct {
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
     cross_package_dependents: std.StringHashMap(std.ArrayList(ModuleRef)),
 
-    /// Optional allocator for module data (ModuleEnv, source).
-    /// When set, used instead of gpa for module data only.
-    /// This supports IPC mode where module data must be in shared memory.
-    module_allocator: ?std.mem.Allocator,
-
-    /// Whether this coordinator owns module data (should free on deinit).
-    /// Set to false for IPC mode where shared memory will be unmapped.
-    owns_module_data: bool,
-
     /// Whether to run hosted compiler transformation after canonicalization.
-    /// Set to true for IPC mode where platform modules need hosted lambdas.
+    /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
 
     /// Timing accumulators
@@ -574,8 +561,6 @@ pub const Coordinator = struct {
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
-            .module_allocator = null,
-            .owns_module_data = true,
             .enable_hosted_transform = false,
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -610,7 +595,7 @@ pub const Coordinator = struct {
             if (comptime trace_build) {
                 std.debug.print("[COORD DEINIT] deinit package {s}\n", .{entry.key_ptr.*});
             }
-            entry.value_ptr.*.deinit(self.gpa, self.owns_module_data);
+            entry.value_ptr.*.deinit(self.gpa);
             if (comptime trace_build) {
                 std.debug.print("[COORD DEINIT] package deinit done, now destroying\n", .{});
             }
@@ -649,20 +634,10 @@ pub const Coordinator = struct {
         self.io = io orelse Io.default();
     }
 
-    /// Set a custom allocator for module data (ModuleEnv, source).
-    /// Used for IPC mode where module data must be in shared memory.
-    pub fn setModuleAllocator(self: *Coordinator, allocator: std.mem.Allocator) void {
-        self.module_allocator = allocator;
-    }
-
     /// Get the allocator to use for module data.
-    /// Returns module_allocator if set (IPC mode), otherwise:
     /// - In multi-threaded mode: page_allocator (guaranteed thread-safe)
     /// - In single-threaded mode: gpa (better performance)
     pub fn getModuleAllocator(self: *Coordinator) std.mem.Allocator {
-        if (self.module_allocator) |alloc| return alloc;
-        // Use page_allocator in multi-threaded mode for thread safety.
-        // Module data is created by workers and used throughout canonicalization/type-checking.
         return if (threads_available and self.mode == .multi_threaded)
             std.heap.page_allocator
         else
@@ -1285,7 +1260,7 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = null; // AST was consumed during canonicalization
 
-        // Run hosted compiler transformation if enabled (for IPC mode)
+        // Run hosted compiler transformation if enabled.
         // This converts e_anno_only expressions to e_hosted_lambda in platform modules
         // Must be done AFTER canonicalization but BEFORE type checking
         if (self.enable_hosted_transform) {
@@ -1304,8 +1279,7 @@ pub const Coordinator = struct {
             }
         }
 
-        // Append reports - we take ownership, so clear result.reports after copying
-        // to prevent WorkerResult.deinit from freeing the shared memory
+        // Append reports - we take ownership, so clear result.reports after copying.
         for (result.reports.items, 0..) |rep, ri| {
             if (comptime trace_build) {
                 std.debug.print("[COORD] CANONICALIZED: result report {}: owned_strings.len={}\n", .{ ri, rep.owned_strings.items.len });
@@ -1970,11 +1944,10 @@ pub const Coordinator = struct {
 
         // Parse, canonicalize, type-check
 
-        // Create ModuleEnv using module allocator (for IPC, this is shared memory)
+        // Create ModuleEnv using the long-lived module allocator.
         const module_alloc = self.getModuleAllocator();
         const env = module_alloc.create(ModuleEnv) catch {
-            // Note: In IPC mode (SharedMemoryAllocator), free is a no-op
-            if (self.owns_module_data) module_alloc.free(src);
+            module_alloc.free(src);
             return .{
                 .parse_failed = .{
                     .package_name = task.package_name,
@@ -1988,10 +1961,8 @@ pub const Coordinator = struct {
         };
 
         env.* = ModuleEnv.init(module_alloc, src) catch {
-            if (self.owns_module_data) {
-                module_alloc.destroy(env);
-                module_alloc.free(src);
-            }
+            module_alloc.destroy(env);
+            module_alloc.free(src);
             return .{
                 .parse_failed = .{
                     .package_name = task.package_name,
@@ -2004,13 +1975,7 @@ pub const Coordinator = struct {
             };
         };
 
-        // Initialize CIR fields
-        // For IPC mode, module_name must be in shared memory (it will be accessed after coordinator deinit)
-        const module_name_for_env = if (self.module_allocator != null)
-            module_alloc.dupe(u8, task.module_name) catch task.module_name
-        else
-            task.module_name;
-        env.initCIRFields(module_name_for_env) catch {};
+        env.initCIRFields(task.module_name) catch {};
 
         // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
         // to ensure module identity is unique across packages. Without this, two modules with
@@ -2159,8 +2124,7 @@ pub const Coordinator = struct {
         // Pre-allocate to reduce allocation contention in multi-threaded mode
         var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
         const diags = env.getDiagnostics() catch &[_]CIR.Diagnostic{};
-        // Free with env.gpa since that's what getDiagnostics uses for allocation
-        // (In IPC mode, this is a no-op since SharedMemoryAllocator.free does nothing)
+        // Free with env.gpa since that's what getDiagnostics uses for allocation.
         defer env.gpa.free(diags);
         for (diags) |d| {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;

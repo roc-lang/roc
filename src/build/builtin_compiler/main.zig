@@ -1794,8 +1794,6 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    // This follows the pattern from module_env_test.zig
-
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();

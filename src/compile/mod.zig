@@ -91,7 +91,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("coordinator.zig"));
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
-    std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
     std.testing.refAllDecls(@import("test/test_package_env.zig"));
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
