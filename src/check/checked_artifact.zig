@@ -5000,6 +5000,7 @@ pub const CaptureTagVariantPlan = struct {
 };
 
 pub const CaptureSlotReificationPlan = union(enum) {
+    pending,
     serializable_leaf: SerializableCaptureLeafPlan,
     callable_leaf: CallableResultPlanId,
     record: []const CaptureRecordFieldPlan,
@@ -5161,6 +5162,32 @@ pub const CompileTimePlanStore = struct {
         return id;
     }
 
+    pub fn reserveCaptureSlot(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+    ) Allocator.Error!CaptureSlotReificationPlanId {
+        return try self.appendCaptureSlot(allocator, .pending);
+    }
+
+    pub fn fillCaptureSlot(
+        self: *CompileTimePlanStore,
+        id: CaptureSlotReificationPlanId,
+        plan: CaptureSlotReificationPlan,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.capture_slots.items.len) {
+            checkedArtifactInvariant("capture slot reification plan id is out of range", .{});
+        }
+        switch (plan) {
+            .pending => checkedArtifactInvariant("cannot fill capture slot reification plan with pending", .{}),
+            else => {},
+        }
+        switch (self.capture_slots.items[index]) {
+            .pending => self.capture_slots.items[index] = plan,
+            else => checkedArtifactInvariant("capture slot reification plan was filled twice", .{}),
+        }
+    }
+
     pub fn captureSlot(self: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) CaptureSlotReificationPlan {
         const index = @intFromEnum(id);
         if (index >= self.capture_slots.items.len) {
@@ -5274,6 +5301,7 @@ fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) voi
 
 fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReificationPlan) void {
     switch (plan.*) {
+        .pending,
         .serializable_leaf,
         .callable_leaf,
         .box,
@@ -5464,6 +5492,7 @@ fn verifyCallablePromotionPlan(store: *const CompileTimePlanStore, plan: Callabl
 
 fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: CaptureSlotReificationPlan) void {
     switch (plan) {
+        .pending => std.debug.panic("checked artifact invariant violated: published capture slot reification plan is pending", .{}),
         .serializable_leaf => {},
         .callable_leaf => |callable| verifyCallableResultRef(store, callable),
         .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
