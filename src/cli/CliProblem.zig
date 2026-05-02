@@ -138,12 +138,6 @@ pub const CliProblem = union(enum) {
         err: anyerror,
     },
 
-    /// Entrypoint extraction failed
-    entrypoint_extraction_failed: struct {
-        path: []const u8,
-        reason: []const u8,
-    },
-
     // URL/Download Problems
 
     /// Invalid URL format
@@ -250,7 +244,6 @@ pub const CliProblem = union(enum) {
             .invalid_app_header,
             .object_compilation_failed,
             .shim_generation_failed,
-            .entrypoint_extraction_failed,
             .invalid_url,
             .download_failed,
             .package_cache_error,
@@ -291,7 +284,6 @@ pub const CliProblem = union(enum) {
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
-            .entrypoint_extraction_failed => |info| try createEntrypointExtractionFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
@@ -640,19 +632,6 @@ fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) !Report
     try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
-
-    return report;
-}
-
-fn createEntrypointExtractionFailedReport(allocator: Allocator, info: anytype) !Report {
-    var report = Report.init(allocator, "ENTRYPOINT EXTRACTION FAILED", .runtime_error);
-
-    try report.document.addText("Failed to extract entrypoint from ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-    try report.document.addText("Reason: ");
-    try report.document.addText(info.reason);
 
     return report;
 }

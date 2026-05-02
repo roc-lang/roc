@@ -912,6 +912,26 @@ fn ensureCompilerCacheDirExists(path: []const u8) !void {
     };
 }
 
+fn interpreterExeCacheName(
+    ctx: *CliContext,
+    app_path: []const u8,
+    target: RocTarget,
+    entrypoint_names: []const []const u8,
+) ![]const u8 {
+    var hash = std.hash.Crc32.init();
+    hash.update("roc-run-lir-shared-memory-v1");
+    hash.update(build_options.compiler_version);
+    hash.update(app_path);
+    hash.update(@tagName(target));
+    for (entrypoint_names) |name| {
+        hash.update(&[_]u8{0});
+        hash.update(name);
+    }
+    return std.fmt.allocPrint(ctx.arena, "roc_{x}", .{hash.final()}) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+}
+
 fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -953,24 +973,6 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         ctx.arena.dupe(u8, exe_display_name) catch |err| {
             return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         };
-
-    // Cache executable name uses hash of path (no PID - collision is fine since same content)
-    const exe_cache_name = std.fmt.allocPrint(ctx.arena, "roc_{x}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
 
     // Create unique temp directory for this build (uses PID for uniqueness)
     const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
@@ -1068,24 +1070,40 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return error.PlatformNotSupported;
     };
 
-    // Extract entrypoints from platform source file
-    var entrypoints = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-        return error.OutOfMemory;
-    };
+    // Build the viewable LIR runtime image in shared memory before linking the
+    // host executable. The same lowered root metadata supplies the platform
+    // entrypoint names used by the shim, so `roc run` does not rediscover roots
+    // from platform source syntax after checking.
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
+    const shm_handle = shm_result.handle;
+    defer closeSharedMemoryHandle(shm_handle);
 
-    if (platform_paths.platform_source_path) |platform_source| {
-        extractEntrypointsFromPlatform(ctx, platform_source, &entrypoints) catch |err| {
-            return ctx.fail(.{ .entrypoint_extraction_failed = .{
-                .path = platform_source,
-                .reason = @errorName(err),
-            } });
-        };
-    } else {
-        return ctx.fail(.{ .entrypoint_extraction_failed = .{
-            .path = platform_paths.platform_source_path orelse "<unknown>",
-            .reason = "No platform source file found for entrypoint extraction",
-        } });
+    if (shm_result.error_count > 0 and !args.allow_errors) {
+        return error.TypeCheckingFailed;
     }
+
+    const entrypoint_names = shm_result.entrypoint_names;
+    if (entrypoint_names.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("roc run invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+        }
+        unreachable;
+    }
+
+    const selected_target = validated_link_spec.target;
+    const exe_cache_name = try interpreterExeCacheName(ctx, args.path, selected_target, entrypoint_names);
+    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        }
+    else
+        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
+
+    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
 
     // Check if the interpreter executable already exists in cache
     const cache_exists = if (args.no_cache) false else blk: {
@@ -1118,15 +1136,14 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
         // Always extract to temp dir (unique per process, no race condition)
         // Use the selected target's shim (which may differ from native if falling back to a compatible target)
-        const selected_target = validated_link_spec.target;
         extractReadRocFilePathShimLibrary(ctx, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
-        // Generate platform host shim using the detected entrypoints
+        // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -1240,29 +1257,6 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 std.log.debug("Failed to copy to cache: {}", .{copy_err});
             };
         };
-    }
-
-    // Build the viewable LIR runtime image in shared memory.
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
-
-    // Check for errors - abort unless --allow-errors flag is set
-    if (shm_result.error_count > 0 and !args.allow_errors) {
-        return error.TypeCheckingFailed;
-    }
-
-    const shm_handle = shm_result.handle;
-
-    // Ensure we clean up shared memory resources on all exit paths.
-    // Use mapped_size (the full mmap'd region) rather than size (the used portion)
-    // to properly unmap the entire shared memory region and release kernel resources.
-    defer {
-        if (comptime is_windows) {
-            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            if (c.close(shm_handle.fd) != 0) {}
-        }
     }
 
     std.log.debug("Launching interpreter executable: {s}", .{exe_path});
@@ -1785,6 +1779,7 @@ pub const SharedMemoryHandle = struct {
 /// counts of errors and warnings encountered during compilation.
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
+    entrypoint_names: []const []const u8,
     error_count: usize,
     warning_count: usize,
 };
@@ -1831,7 +1826,11 @@ fn renderCoordinatorReports(ctx: *CliContext, coord: *Coordinator, roc_file_path
     return counts;
 }
 
-fn sharedMemoryResult(shm: *SharedMemoryAllocator, counts: CoordinatorReportCounts) SharedMemoryResult {
+fn sharedMemoryResult(
+    shm: *SharedMemoryAllocator,
+    counts: CoordinatorReportCounts,
+    entrypoint_names: []const []const u8,
+) SharedMemoryResult {
     return .{
         .handle = .{
             .fd = shm.handle,
@@ -1839,6 +1838,7 @@ fn sharedMemoryResult(shm: *SharedMemoryAllocator, counts: CoordinatorReportCoun
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
         },
+        .entrypoint_names = entrypoint_names,
         .error_count = counts.errors,
         .warning_count = counts.warnings,
     };
@@ -2074,7 +2074,7 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0 and !allow_errors) {
         shm.updateHeader();
-        return sharedMemoryResult(&shm, counts);
+        return sharedMemoryResult(&shm, counts, &.{});
     }
 
     try coord.finalizeExecutableArtifacts();
@@ -2101,6 +2101,7 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
     );
 
     const platform_entrypoints = try buildPlatformEntrypoints(shm_allocator, &lowered);
+    const entrypoint_names = try platformEntrypointNamesFromLowered(ctx, root_artifact, &lowered);
 
     try lir.RuntimeImage.fillHeaderInSharedMemory(
         runtime_header,
@@ -2112,7 +2113,7 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
     );
 
     shm.updateHeader();
-    return sharedMemoryResult(&shm, counts);
+    return sharedMemoryResult(&shm, counts, entrypoint_names);
 }
 
 /// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
@@ -2605,130 +2606,6 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
     return PlatformPaths{
         .platform_source_path = platform_source_path,
     };
-}
-
-/// Extract all entrypoint names from platform header provides record into ArrayList
-/// TODO: Replace this with proper BuildEnv solution in the future
-fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
-    // Read the Roc file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path (strip .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse the source code as a full module
-    var allocators2: Allocators = undefined;
-    allocators2.initInPlace(ctx.gpa);
-    defer allocators2.deinit();
-
-    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    // Look for platform header in the AST
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    // Check if this is a platform file with a platform header
-    switch (header) {
-        .platform => |platform_header| {
-            // Get the provides collection and its record fields
-            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
-            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-
-            // Extract FFI symbol names from provides clause
-            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
-            // The string value specifies the symbol name exported to the host (becomes roc__<symbol>)
-            for (provides_fields) |field_idx| {
-                const field = parse_ast.store.getRecordField(field_idx);
-
-                // Require explicit string value for symbol name
-                const symbol_name = if (field.value) |value_idx| blk: {
-                    const value_expr = parse_ast.store.getExpr(value_idx);
-                    switch (value_expr) {
-                        .string => |str_like| {
-                            const parts = parse_ast.store.exprSlice(str_like.parts);
-                            if (parts.len > 0) {
-                                const first_part = parse_ast.store.getExpr(parts[0]);
-                                switch (first_part) {
-                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
-                                    else => {},
-                                }
-                            }
-                            return error.InvalidProvidesEntry;
-                        },
-                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
-                        else => {
-                            return error.InvalidProvidesEntry;
-                        },
-                    }
-                } else {
-                    return error.InvalidProvidesEntry;
-                };
-                try entrypoints.append(try ctx.arena.dupe(u8, symbol_name));
-            }
-
-            if (provides_fields.len == 0) {
-                return error.NoEntrypointFound;
-            }
-        },
-        else => {
-            return error.NotPlatformFile;
-        },
-    }
-}
-
-/// Extract Roc identifier names (not FFI symbols) from the platform provides record.
-fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
-
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    var allocators2: Allocators = undefined;
-    allocators2.initInPlace(ctx.gpa);
-    defer allocators2.deinit();
-
-    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    switch (header) {
-        .platform => |platform_header| {
-            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
-            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-            for (provides_fields) |field_idx| {
-                const field = parse_ast.store.getRecordField(field_idx);
-                try entrypoints.append(try ctx.arena.dupe(u8, parse_ast.resolve(field.name)));
-            }
-        },
-        else => return error.NoPlatformFound,
-    }
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
