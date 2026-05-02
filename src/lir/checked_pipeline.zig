@@ -248,8 +248,8 @@ fn callableResultPlanForRoot(
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
         .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, callable, key),
+        .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
         .already_erased,
-        .erase_proc_value,
         .erase_finite_set,
         => checkedPipelineInvariant("compile-time erased callable result publication is not sealed"),
     };
@@ -323,6 +323,100 @@ fn finiteCallableResultPlan(
         .callable_set_key = key,
         .members = members,
     } });
+}
+
+fn erasedProcValueResultPlan(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    plans: *checked_artifact.CompileTimePlanStore,
+    value_context: ConstValueContext,
+    callable: repr.CallableValueInfo,
+    erase: repr.ProcValueErasePlan,
+) Allocator.Error!checked_artifact.CallableResultPlanId {
+    const source = switch (callable.source) {
+        .proc_value => |source| source,
+        else => checkedPipelineInvariant("erased proc-value result plan was attached to a non-proc callable source"),
+    };
+    if (!canonical.procedureCallableRefEql(source.proc.callable, erase.proc_value)) {
+        checkedPipelineInvariant("erased proc-value result plan procedure differs from callable source");
+    }
+    if (!repr.canonicalTypeKeyEql(source.fn_ty, erase.proc_value.source_fn_ty)) {
+        checkedPipelineInvariant("erased proc-value result plan source function type differs from callable source");
+    }
+    if (source.captures.len != erase.capture_slots.len) {
+        checkedPipelineInvariant("erased proc-value result plan capture arity differs from callable source");
+    }
+
+    return try plans.appendCallableResult(allocator, .{ .erased = .{
+        .source_fn_ty = erase.erased_fn_sig_key.source_fn_ty,
+        .sig_key = erase.erased_fn_sig_key,
+        .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
+        .code = .{ .direct_proc_value = .{
+            .proc_value = erase.proc_value,
+            .capture_shape_key = erase.capture_shape_key,
+        } },
+        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
+    } });
+}
+
+fn erasedCapturePlanForProcValue(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    plans: *checked_artifact.CompileTimePlanStore,
+    value_context: ConstValueContext,
+    source: anytype,
+    erase: repr.ProcValueErasePlan,
+) Allocator.Error!checked_artifact.ErasedCaptureReificationPlan {
+    if (erase.erased_fn_sig_key.capture_ty == null) {
+        if (erase.capture_slots.len != 0) {
+            checkedPipelineInvariant("erased proc-value result had capture slots but no erased hidden capture type");
+        }
+        return .none;
+    }
+    if (erase.capture_slots.len == 0) {
+        return .{ .zero_sized_typed = erase.erased_fn_sig_key.capture_ty.? };
+    }
+
+    const slot_plans = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, erase.capture_slots.len);
+    errdefer allocator.free(slot_plans);
+    var seen = try allocator.alloc(bool, erase.capture_slots.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    var capture_builder = CaptureSlotPlanBuilder{
+        .allocator = allocator,
+        .artifact = artifact_sink,
+        .plans = plans,
+        .value_context = value_context,
+        .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
+    };
+    defer capture_builder.deinit();
+
+    for (erase.capture_slots) |slot| {
+        const slot_index: usize = @intCast(slot.slot);
+        if (slot_index >= source.captures.len) {
+            checkedPipelineInvariant("erased proc-value result capture slot exceeded source capture arity");
+        }
+        if (seen[slot_index]) {
+            checkedPipelineInvariant("erased proc-value result capture slot was duplicated");
+        }
+        slot_plans[slot_index] = try capture_builder.planFor(slot.source_ty, source.captures[slot_index]);
+        seen[slot_index] = true;
+    }
+    for (seen) |was_seen| {
+        if (!was_seen) checkedPipelineInvariant("erased proc-value result did not publish every capture slot");
+    }
+    return .{ .values = slot_plans };
+}
+
+fn cloneBoxBoundarySpan(
+    allocator: Allocator,
+    provenance: []const canonical.BoxBoundaryId,
+) Allocator.Error![]const canonical.BoxBoundaryId {
+    if (provenance.len == 0) {
+        checkedPipelineInvariant("erased callable result had no Box(T) provenance");
+    }
+    return try allocator.dupe(canonical.BoxBoundaryId, provenance);
 }
 
 const CapturePlanKey = struct {
@@ -421,8 +515,15 @@ const CaptureSlotPlanBuilder = struct {
                 callable,
                 key,
             ),
+            .erase_proc_value => |erase| try erasedProcValueResultPlan(
+                self.allocator,
+                self.artifact,
+                self.plans,
+                self.value_context,
+                callable,
+                erase,
+            ),
             .already_erased,
-            .erase_proc_value,
             .erase_finite_set,
             => checkedPipelineInvariant("erased capture callable leaf publication is not sealed"),
         };
@@ -1066,8 +1167,15 @@ const ConstGraphPlanBuilder = struct {
                 callable,
                 key,
             ) },
+            .erase_proc_value => |erase| .{ .erased_boxed = try erasedProcValueResultPlan(
+                self.allocator,
+                self.artifactSink(),
+                self.plans,
+                context,
+                callable,
+                erase,
+            ) },
             .already_erased,
-            .erase_proc_value,
             .erase_finite_set,
             => checkedPipelineInvariant("erased callable constant leaf publication is not sealed"),
         };
