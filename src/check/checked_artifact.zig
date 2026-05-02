@@ -2518,6 +2518,7 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
 };
 
 pub const PromotedCallableBodyPlan = union(enum) {
+    pending,
     finite: FinitePromotedWrapperBodyPlan,
     erased: ErasedPromotedWrapperBodyPlan,
 };
@@ -2538,6 +2539,32 @@ pub const PromotedCallableBodyPlanTable = struct {
         allocator.free(old);
         self.plans = next;
         return id;
+    }
+
+    pub fn reserve(
+        self: *PromotedCallableBodyPlanTable,
+        allocator: Allocator,
+    ) Allocator.Error!canonical.PromotedCallableBodyPlanId {
+        return try self.append(allocator, .pending);
+    }
+
+    pub fn fill(
+        self: *PromotedCallableBodyPlanTable,
+        id: canonical.PromotedCallableBodyPlanId,
+        plan: PromotedCallableBodyPlan,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.plans.len) {
+            checkedArtifactInvariant("promoted callable body plan id is out of range", .{});
+        }
+        switch (plan) {
+            .pending => checkedArtifactInvariant("cannot fill promoted callable body plan with pending", .{}),
+            .finite, .erased => {},
+        }
+        switch (self.plans[index]) {
+            .pending => self.plans[index] = plan,
+            .finite, .erased => checkedArtifactInvariant("promoted callable body plan was filled twice", .{}),
+        }
     }
 
     pub fn get(self: *const PromotedCallableBodyPlanTable, id: canonical.PromotedCallableBodyPlanId) PromotedCallableBodyPlan {
@@ -5291,6 +5318,7 @@ fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCa
 
 fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableBodyPlan) void {
     switch (plan.*) {
+        .pending => {},
         .finite => |finite| {
             allocator.free(finite.member_capture_slots);
             allocator.free(finite.captures);
@@ -5464,6 +5492,7 @@ fn verifyPromotedWrapperArg(store: *const CompileTimePlanStore, arg: PromotedWra
 
 fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: PromotedCallableBodyPlan) void {
     switch (plan) {
+        .pending => std.debug.panic("checked artifact invariant violated: published promoted callable body plan is pending", .{}),
         .finite => |finite| {
             if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
                 std.debug.panic("checked artifact invariant violated: finite promoted callable body member procedure source type differs from wrapper source type", .{});
@@ -5650,6 +5679,14 @@ pub const PromotedProcedure = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
     source_binding: CIR.Pattern.Idx,
+};
+
+pub const ReservedPromotedCallableWrapper = struct {
+    promoted_ref: PromotedProcedureRef,
+    proc_value: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
+    wrapper: canonical.PromotedCallableWrapperId,
+    body_plan: canonical.PromotedCallableBodyPlanId,
 };
 
 pub const PromotedProcedureTable = struct {
@@ -7581,8 +7618,25 @@ pub const CheckedModuleArtifact = struct {
         checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
         body_plan: PromotedCallableBodyPlan,
     ) Allocator.Error!PromotedProcedureRef {
-        const body_plan_id = try self.promoted_callable_body_plans.append(allocator, body_plan);
+        const reserved = try self.reservePromotedCallableWrapper(
+            allocator,
+            source_binding,
+            checked_fn_root,
+            checked_fn_scheme,
+        );
+        self.promoted_callable_body_plans.fill(reserved.body_plan, body_plan);
+        try self.publishPromotedCallableWrapper(allocator, reserved);
+        return reserved.promoted_ref;
+    }
 
+    pub fn reservePromotedCallableWrapper(
+        self: *CheckedModuleArtifact,
+        allocator: Allocator,
+        source_binding: CIR.Pattern.Idx,
+        checked_fn_root: CheckedTypeId,
+        checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+    ) Allocator.Error!ReservedPromotedCallableWrapper {
+        const body_plan_id = try self.promoted_callable_body_plans.reserve(allocator);
         const wrapper_id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.promoted_callable_wrappers.wrappers.len)));
         const proc_base = try self.canonical_names.internProcBase(.{
             .module_name = self.module_identity.module_name,
@@ -7629,11 +7683,51 @@ pub const CheckedModuleArtifact = struct {
             .target = .promoted_callable,
         });
 
-        return try self.promoted_procedures.append(allocator, self.module_identity.module_idx, .{
-            .proc = proc_value,
+        return .{
+            .promoted_ref = .{
+                .module_idx = self.module_identity.module_idx,
+                .proc = proc_value,
+            },
+            .proc_value = proc_value,
             .template = template_ref,
-            .source_binding = source_binding,
+            .wrapper = wrapper_id,
+            .body_plan = body_plan_id,
+        };
+    }
+
+    pub fn fillPromotedCallableWrapperBody(
+        self: *CheckedModuleArtifact,
+        reserved: ReservedPromotedCallableWrapper,
+        body_plan: PromotedCallableBodyPlan,
+    ) void {
+        const wrapper = self.promoted_callable_wrappers.get(reserved.wrapper);
+        if (!canonical.procedureValueRefEql(wrapper.promoted_proc, reserved.proc_value) or
+            wrapper.body_plan != reserved.body_plan)
+        {
+            checkedArtifactInvariant("reserved promoted callable wrapper does not match artifact tables", .{});
+        }
+        self.promoted_callable_body_plans.fill(reserved.body_plan, body_plan);
+    }
+
+    pub fn publishPromotedCallableWrapper(
+        self: *CheckedModuleArtifact,
+        allocator: Allocator,
+        reserved: ReservedPromotedCallableWrapper,
+    ) Allocator.Error!void {
+        const wrapper = self.promoted_callable_wrappers.get(reserved.wrapper);
+        if (!canonical.procedureValueRefEql(wrapper.promoted_proc, reserved.proc_value) or
+            wrapper.body_plan != reserved.body_plan)
+        {
+            checkedArtifactInvariant("reserved promoted callable wrapper does not match artifact tables", .{});
+        }
+        const published = try self.promoted_procedures.append(allocator, self.module_identity.module_idx, .{
+            .proc = reserved.proc_value,
+            .template = reserved.template,
+            .source_binding = wrapper.source_binding,
         });
+        if (!promotedProcedureRefEql(published, reserved.promoted_ref)) {
+            checkedArtifactInvariant("published promoted procedure ref differed from reserved ref", .{});
+        }
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
