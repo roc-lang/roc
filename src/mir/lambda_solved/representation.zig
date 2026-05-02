@@ -244,6 +244,7 @@ pub const TagPayloadValueInfo = struct {
 
 pub const ValueInfo = struct {
     logical_ty: TypeVarId,
+    source_ty: canonical.CanonicalTypeKey,
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
     callable: ?CallableValueInfo = null,
@@ -538,10 +539,14 @@ pub const RepresentationStore = struct {
         const slots = try self.allocator.alloc(CallableSetCaptureSlot, values.len);
         errdefer self.allocator.free(slots);
         for (values, 0..) |value, i| {
+            const value_info = value_store.values.items[@intFromEnum(value)];
+            if (isEmptyCanonicalTypeKey(value_info.source_ty)) {
+                representationInvariant("lambda-solved capture slot reached callable-set construction without an explicit source type key");
+            }
             const exec_key = try execValueTypeKeyForValue(self.allocator, names, types, self, value_store, value);
             slots[i] = .{
                 .slot = @intCast(i),
-                .source_ty = .{ .bytes = exec_key.bytes },
+                .source_ty = value_info.source_ty,
                 .exec_value_ty = exec_key,
             };
         }
@@ -682,6 +687,13 @@ pub const ValueInfoStore = struct {
 
 pub fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+}
+
+fn isEmptyCanonicalTypeKey(key: canonical.CanonicalTypeKey) bool {
+    for (key.bytes) |byte| {
+        if (byte != 0) return false;
+    }
+    return true;
 }
 
 pub fn callableSetKeyEql(a: CanonicalCallableSetKey, b: CanonicalCallableSetKey) bool {

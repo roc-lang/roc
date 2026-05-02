@@ -1276,6 +1276,7 @@ const BodyLowerer = struct {
         const body = try self.lowerExpr(wrapper.body_expr);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
+            .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
@@ -1375,6 +1376,7 @@ const BodyLowerer = struct {
         const body = try self.lowerExpr(body_expr);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
+            .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
@@ -1411,6 +1413,7 @@ const BodyLowerer = struct {
         const binder = self.binderForSimplePattern(pattern.data);
         return .{
             .ty = try self.type_instantiator.lowerTemplateType(pattern.ty),
+            .source_ty = try self.sourceTypeKey(pattern.ty),
             .symbol = try self.symbolForBinder(binder),
         };
     }
@@ -1443,7 +1446,8 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         const expr = self.checkedExpr(expr_id);
         const ty = try self.type_instantiator.lowerTemplateType(expr.ty);
-        return switch (expr.data) {
+        const source_ty = try self.sourceTypeKey(expr.ty);
+        const lowered = switch (expr.data) {
             .num => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
             .typed_int => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
             .frac_f32 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f32_lit = frac.value }),
@@ -1523,6 +1527,8 @@ const BodyLowerer = struct {
             .crash => |literal| try self.program.ast.addExpr(ty, .{ .crash = try self.lowerCheckedStringLiteral(literal) }),
             .ellipsis, .anno_only, .pending => invariantViolation("mono body lowering received a non-runtime checked expression form"),
         };
+        self.program.ast.setExprSourceTy(lowered, source_ty);
+        return lowered;
     }
 
     fn lowerStringExpr(
@@ -1672,9 +1678,10 @@ const BodyLowerer = struct {
         update_fields: []const checked_artifact.CheckedRecordExprField,
     ) Allocator.Error!Ast.ExprId {
         const ext_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(ext).ty);
+        const ext_source_ty = try self.sourceTypeKey(self.checkedExpr(ext).ty);
         const ext_expr = try self.lowerExpr(ext);
         const ext_symbol = try self.program.symbols.add(base.Ident.Idx.NONE, .synthetic);
-        const ext_var = try self.program.ast.addExpr(ext_ty, .{ .var_ = ext_symbol });
+        const ext_var = try self.program.ast.addExprWithSource(ext_ty, ext_source_ty, .{ .var_ = ext_symbol });
 
         const record_ty = switch (self.program.types.getType(ty)) {
             .record => |record| record,
@@ -1722,6 +1729,7 @@ const BodyLowerer = struct {
             .def = .{ .let_val = .{
                 .bind = .{
                     .ty = ext_ty,
+                    .source_ty = ext_source_ty,
                     .symbol = ext_symbol,
                 },
                 .body = ext_expr,
@@ -2080,8 +2088,9 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.PatId {
         const pattern = self.checkedPattern(pattern_id);
         const ty = try self.type_instantiator.lowerTemplateType(pattern.ty);
+        const source_ty = try self.sourceTypeKey(pattern.ty);
         if (!self.program.types.equalIds(ty, expected_ty)) invariantViolation("mono body lowering pattern type did not match its scrutinee type");
-        return switch (pattern.data) {
+        const lowered = switch (pattern.data) {
             .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .var_ = try self.symbolForBinder(binder) } }),
             .as => |as| {
                 const symbol = try self.symbolForBinder(as.binder);
@@ -2175,6 +2184,8 @@ const BodyLowerer = struct {
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
             .pending => invariantViolation("mono body lowering reached an unresolved checked pattern"),
         };
+        self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = source_ty;
+        return lowered;
     }
 
     fn recordFieldType(
@@ -2494,6 +2505,14 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!canonical.CanonicalTypeKey {
         const concrete = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(expr_id).ty);
+        return self.program.concrete_source_types.key(concrete);
+    }
+
+    fn sourceTypeKey(
+        self: *BodyLowerer,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!canonical.CanonicalTypeKey {
+        const concrete = try self.type_instantiator.concreteRefForTemplateType(checked_ty);
         return self.program.concrete_source_types.key(concrete);
     }
 

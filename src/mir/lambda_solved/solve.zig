@@ -318,7 +318,7 @@ const BodySolver = struct {
                 .hosted_fn => |hosted| blk: {
                     const lowered_args = try self.lowerParamSpan(hosted.args);
                     const ret_ty = try self.type_importer.importType(hosted.ret_ty);
-                    const ret = try self.newValue(ret_ty);
+                    const ret = try self.newValue(ret_ty, .{});
                     self.public_roots = .{
                         .params = lowered_args.values,
                         .ret = ret,
@@ -373,7 +373,7 @@ const BodySolver = struct {
         defer self.allocator.free(values);
         for (input_items, 0..) |param, i| {
             const ty = try self.type_importer.importType(param.ty);
-            const value = try self.newValue(ty);
+            const value = try self.newValue(ty, param.source_ty);
             const binding = try self.value_store.addBinding(.{
                 .symbol = param.symbol,
                 .value = value,
@@ -382,6 +382,7 @@ const BodySolver = struct {
             try self.env.put(param.symbol, binding);
             symbols[i] = .{
                 .ty = ty,
+                .source_ty = param.source_ty,
                 .symbol = param.symbol,
                 .binding_info = binding,
             };
@@ -400,7 +401,7 @@ const BodySolver = struct {
         defer self.allocator.free(values);
         for (input_items, 0..) |slot, i| {
             const ty = try self.type_importer.importType(slot.ty);
-            const value = try self.newValue(ty);
+            const value = try self.newValue(ty, slot.source_ty);
             const binding = try self.value_store.addBinding(.{
                 .symbol = slot.source_symbol,
                 .value = value,
@@ -421,7 +422,7 @@ const BodySolver = struct {
             .var_ => |symbol| {
                 const binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info");
                 const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
-                const lowered = try self.output.addExpr(ty, binding.value, .{ .var_ = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, binding.value, .{ .var_ = .{
                     .symbol = symbol,
                     .binding_info = binding_info,
                 } });
@@ -433,7 +434,7 @@ const BodySolver = struct {
                 const captures = self.value_store.sliceValueSpan(captures_span);
                 const capture_index: usize = @intCast(slot);
                 if (capture_index >= captures.len) lambdaInvariant("lambda-solved capture_ref slot does not exist in procedure capture roots");
-                const lowered = try self.output.addExpr(ty, captures[capture_index], .{ .capture_ref = slot });
+                const lowered = try self.output.addExpr(ty, expr.source_ty, captures[capture_index], .{ .capture_ref = slot });
                 try self.expr_map.put(expr_id, lowered);
                 return lowered;
             },
@@ -457,9 +458,10 @@ const BodySolver = struct {
                     }
                 }
                 const rest = try self.lowerExpr(let_.rest);
-                const lowered = try self.output.addExpr(ty, self.exprValue(rest), .{ .let_ = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, self.exprValue(rest), .{ .let_ = .{
                     .bind = .{
                         .ty = bind_ty,
+                        .source_ty = let_.bind.source_ty,
                         .symbol = let_.bind.symbol,
                         .binding_info = binding,
                     },
@@ -472,7 +474,7 @@ const BodySolver = struct {
             .block => |block| {
                 const stmts = try self.lowerStmtSpan(block.stmts);
                 const final_expr = try self.lowerExpr(block.final_expr);
-                const lowered = try self.output.addExpr(ty, self.exprValue(final_expr), .{ .block = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, self.exprValue(final_expr), .{ .block = .{
                     .stmts = stmts,
                     .final_expr = final_expr,
                 } });
@@ -481,7 +483,7 @@ const BodySolver = struct {
             },
             .inspect => |child| {
                 const lowered_child = try self.lowerExpr(child);
-                const lowered = try self.output.addExpr(ty, self.exprValue(lowered_child), .{ .inspect = lowered_child });
+                const lowered = try self.output.addExpr(ty, expr.source_ty, self.exprValue(lowered_child), .{ .inspect = lowered_child });
                 try self.expr_map.put(expr_id, lowered);
                 return lowered;
             },
@@ -502,7 +504,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .record_field = access.field },
                     });
-                    const lowered = try self.output.addExpr(ty, result, .{ .access = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .access = .{
                         .record = record,
                         .field = access.field,
                         .projection_info = projection,
@@ -525,7 +527,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .tuple_elem = access.elem_index },
                     });
-                    const lowered = try self.output.addExpr(ty, result, .{ .tuple_access = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .tuple_access = .{
                         .tuple = tuple,
                         .elem_index = access.elem_index,
                         .projection_info = projection,
@@ -548,7 +550,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .tag_payload = payload.payload },
                     });
-                    const lowered = try self.output.addExpr(ty, result, .{ .tag_payload = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .tag_payload = .{
                         .tag_union = tag_union,
                         .payload = payload.payload,
                         .projection_info = projection,
@@ -560,8 +562,8 @@ const BodySolver = struct {
             else => {},
         }
 
-        const value = try self.newValue(ty);
-        const lowered = try self.output.addExpr(ty, value, switch (expr.data) {
+        const value = try self.newValue(ty, expr.source_ty);
+        const lowered = try self.output.addExpr(ty, expr.source_ty, value, switch (expr.data) {
             .var_,
             .capture_ref,
             => unreachable,
@@ -774,7 +776,7 @@ const BodySolver = struct {
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
         const ty = try self.type_importer.importType(pat.ty);
-        const value = try self.newValue(ty);
+        const value = try self.newValue(ty, pat.source_ty);
         return try self.lowerPatScopedWithValue(pat_id, ty, value, saved);
     }
 
@@ -786,7 +788,7 @@ const BodySolver = struct {
         saved: *std.ArrayList(SavedBinding),
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = ty, .value_info = value, .data = switch (pat.data) {
+        return try self.output.addPat(.{ .ty = ty, .source_ty = pat.source_ty, .value_info = value, .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .int_lit => |literal| .{ .int_lit = literal },
             .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
@@ -935,6 +937,7 @@ const BodySolver = struct {
                 break :blk .{ .decl = .{
                     .bind = .{
                         .ty = bind_ty,
+                        .source_ty = decl.bind.source_ty,
                         .symbol = decl.bind.symbol,
                         .binding_info = binding,
                     },
@@ -953,6 +956,7 @@ const BodySolver = struct {
                 break :blk .{ .var_decl = .{
                     .bind = .{
                         .ty = bind_ty,
+                        .source_ty = decl.bind.source_ty,
                         .symbol = decl.bind.symbol,
                         .binding_info = binding,
                     },
@@ -1286,11 +1290,16 @@ const BodySolver = struct {
         return try self.output.addTagPayloadPatternSpan(output_items);
     }
 
-    fn newValue(self: *BodySolver, ty: Type.TypeVarId) Allocator.Error!repr.ValueInfoId {
+    fn newValue(
+        self: *BodySolver,
+        ty: Type.TypeVarId,
+        source_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!repr.ValueInfoId {
         const root = self.representation_store.reserveRoot();
         const class = self.representation_store.reserveClass();
         return try self.value_store.addValue(.{
             .logical_ty = ty,
+            .source_ty = source_ty,
             .root = root,
             .solved_class = class,
         });

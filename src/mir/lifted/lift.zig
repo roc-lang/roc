@@ -29,6 +29,7 @@ pub const CaptureValueEdge = struct {
     from_proc: canonical.ProcedureValueRef,
     source_symbol: Symbol,
     source_ty: Type.TypeId,
+    source_type_key: canonical.CanonicalTypeKey,
 };
 
 pub const CaptureProcValueEdge = struct {
@@ -149,6 +150,7 @@ const PreviousLocalProc = struct {
 const CaptureCandidate = struct {
     symbol: Symbol,
     ty: Type.TypeId,
+    source_ty: canonical.CanonicalTypeKey,
 };
 
 const BoundRestore = struct {
@@ -179,11 +181,16 @@ const CaptureSet = struct {
         self.values.deinit(self.allocator);
     }
 
-    fn addValue(self: *CaptureSet, symbol: Symbol, ty: Type.TypeId) Allocator.Error!bool {
+    fn addValue(
+        self: *CaptureSet,
+        symbol: Symbol,
+        ty: Type.TypeId,
+        source_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!bool {
         for (self.values.items) |existing| {
             if (existing.symbol == symbol) return false;
         }
-        try self.values.append(self.allocator, .{ .symbol = symbol, .ty = ty });
+        try self.values.append(self.allocator, .{ .symbol = symbol, .ty = ty, .source_ty = source_ty });
         return true;
     }
 
@@ -248,7 +255,7 @@ const BodyLifter = struct {
 
     fn lowerExpr(self: *BodyLifter, expr_id: MonoRow.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
-        return try self.output.addExpr(expr.ty, switch (expr.data) {
+        return try self.output.addExpr(expr.ty, expr.source_ty, switch (expr.data) {
             .var_ => |symbol| try self.lowerVar(expr.ty, symbol),
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -336,6 +343,7 @@ const BodyLifter = struct {
             .let_ => |let_| .{ .let_ = .{
                 .bind = .{
                     .ty = let_.bind.ty,
+                    .source_ty = let_.bind.source_ty,
                     .symbol = let_.bind.symbol,
                 },
                 .body = try self.lowerExpr(let_.body),
@@ -373,9 +381,9 @@ const BodyLifter = struct {
         defer self.allocator.free(capture_args);
         for (slots, 0..) |slot, i| {
             const expr = if (self.capture_slots.get(slot.source_symbol)) |captured_slot|
-                try self.output.addExpr(slot.ty, .{ .capture_ref = captured_slot })
+                try self.output.addExpr(slot.ty, slot.source_ty, .{ .capture_ref = captured_slot })
             else
-                try self.output.addExpr(slot.ty, .{ .var_ = slot.source_symbol });
+                try self.output.addExpr(slot.ty, slot.source_ty, .{ .var_ = slot.source_symbol });
             capture_args[i] = .{
                 .slot = slot.index,
                 .symbol = slot.source_symbol,
@@ -623,6 +631,7 @@ const BodyLifter = struct {
                 .index = @intCast(i),
                 .source_symbol = capture.symbol,
                 .ty = capture.ty,
+                .source_ty = capture.source_ty,
             };
         }
         return try self.output.addCaptureSlotSpan(slots);
@@ -642,7 +651,7 @@ const BodyLifter = struct {
                     try captures.addProcEdge(symbol);
                     return;
                 }
-                _ = try captures.addValue(symbol, expr.ty);
+                _ = try captures.addValue(symbol, expr.ty, expr.source_ty);
             },
             .tag => |tag| {
                 for (self.input.sliceTagPayloadEvalSpan(tag.eval_order)) |payload| {
@@ -885,11 +894,11 @@ const BodyLifter = struct {
                 for (set.proc_edges.items) |proc_symbol| {
                     if (findLocalFnIndex(self.input, stmt_ids, proc_symbol)) |target_index| {
                         for (sets[target_index].values.items) |capture| {
-                            if (try set.addValue(capture.symbol, capture.ty)) changed = true;
+                            if (try set.addValue(capture.symbol, capture.ty, capture.source_ty)) changed = true;
                         }
                     } else if (self.local_procs.get(proc_symbol)) |proc| {
                         for (self.output.sliceCaptureSlotSpan(proc.capture_slots)) |slot| {
-                            if (try set.addValue(slot.source_symbol, slot.ty)) changed = true;
+                            if (try set.addValue(slot.source_symbol, slot.ty, slot.source_ty)) changed = true;
                         }
                     }
                 }
@@ -906,7 +915,7 @@ const BodyLifter = struct {
         for (captures.proc_edges.items) |proc_symbol| {
             const target_index = findLocalFnIndex(self.input, stmt_ids, proc_symbol) orelse continue;
             for (sets[target_index].values.items) |capture| {
-                _ = try captures.addValue(capture.symbol, capture.ty);
+                _ = try captures.addValue(capture.symbol, capture.ty, capture.source_ty);
             }
         }
     }
@@ -983,7 +992,7 @@ const BodyLifter = struct {
             for (captures.proc_edges.items) |proc_symbol| {
                 const proc = self.local_procs.get(proc_symbol) orelse continue;
                 for (self.output.sliceCaptureSlotSpan(proc.capture_slots)) |slot| {
-                    if (try captures.addValue(slot.source_symbol, slot.ty)) changed = true;
+                    if (try captures.addValue(slot.source_symbol, slot.ty, slot.source_ty)) changed = true;
                 }
             }
         }
@@ -991,7 +1000,7 @@ const BodyLifter = struct {
 
     fn lowerPat(self: *BodyLifter, pat_id: MonoRow.Ast.PatId) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = pat.ty, .data = switch (pat.data) {
+        return try self.output.addPat(.{ .ty = pat.ty, .source_ty = pat.source_ty, .data = switch (pat.data) {
             .bool_lit => |value| .{ .bool_lit = value },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -1135,7 +1144,7 @@ const BodyLifter = struct {
         const output_items = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
         defer self.allocator.free(output_items);
         for (input_items, 0..) |symbol, i| {
-            output_items[i] = .{ .ty = symbol.ty, .symbol = symbol.symbol };
+            output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
         }
         return try self.output.addTypedSymbolSpan(output_items);
     }

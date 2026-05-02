@@ -38,6 +38,7 @@ pub fn Span(comptime _: type) type {
 
 pub const TypedSymbol = struct {
     ty: TypeId,
+    source_ty: canonical.CanonicalTypeKey = .{},
     symbol: Symbol,
 };
 
@@ -45,6 +46,7 @@ pub const CaptureSlot = struct {
     index: u32,
     source_symbol: Symbol,
     ty: TypeId,
+    source_ty: canonical.CanonicalTypeKey,
 };
 
 pub const CaptureArg = struct {
@@ -60,6 +62,7 @@ pub const TagPayloadPattern = struct {
 
 pub const Pat = struct {
     ty: TypeId,
+    source_ty: canonical.CanonicalTypeKey = .{},
     data: Data,
 
     pub const Data = union(enum) {
@@ -111,6 +114,7 @@ pub const TagPayloadAssembly = row.Ast.TagPayloadAssembly;
 
 pub const Expr = struct {
     ty: TypeId,
+    source_ty: canonical.CanonicalTypeKey = .{},
     data: Data,
 
     pub const Data = union(enum) {
@@ -335,9 +339,14 @@ pub const Store = struct {
         self.exprs.deinit(self.allocator);
     }
 
-    pub fn addExpr(self: *Store, ty: TypeId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
+    pub fn addExpr(
+        self: *Store,
+        ty: TypeId,
+        source_ty: canonical.CanonicalTypeKey,
+        data: Expr.Data,
+    ) std.mem.Allocator.Error!ExprId {
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .data = data });
+        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .data = data });
         return @enumFromInt(idx);
     }
 

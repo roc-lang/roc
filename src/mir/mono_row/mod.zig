@@ -490,7 +490,7 @@ const BodyFinalizer = struct {
 
     fn lowerExpr(self: *BodyFinalizer, expr_id: Mono.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
-        return try self.output.addExpr(expr.ty, switch (expr.data) {
+        return try self.output.addExpr(expr.ty, expr.source_ty, switch (expr.data) {
             .var_ => |symbol| .{ .var_ = symbol },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -576,6 +576,7 @@ const BodyFinalizer = struct {
             .let_val => |let_val| .{ .let_ = .{
                 .bind = .{
                     .ty = let_val.bind.ty,
+                    .source_ty = let_val.bind.source_ty,
                     .symbol = let_val.bind.symbol,
                 },
                 .body = try self.lowerExpr(let_val.body),
@@ -684,7 +685,7 @@ const BodyFinalizer = struct {
 
     fn lowerPat(self: *BodyFinalizer, pat_id: Mono.Ast.PatId) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = pat.ty, .data = switch (pat.data) {
+        return try self.output.addPat(.{ .ty = pat.ty, .source_ty = pat.source_ty, .data = switch (pat.data) {
             .bool_lit => |value| .{ .bool_lit = value },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -859,7 +860,7 @@ const BodyFinalizer = struct {
         const output_items = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
         defer self.allocator.free(output_items);
         for (input_items, 0..) |symbol, i| {
-            output_items[i] = .{ .ty = symbol.ty, .symbol = symbol.symbol };
+            output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
         }
         return try self.output.addTypedSymbolSpan(output_items);
     }

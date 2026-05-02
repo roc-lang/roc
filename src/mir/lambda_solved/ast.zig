@@ -39,6 +39,7 @@ pub fn Span(comptime _: type) type {
 
 pub const TypedSymbol = struct {
     ty: TypeVarId,
+    source_ty: canonical.CanonicalTypeKey,
     symbol: Symbol,
     binding_info: repr.BindingInfoId,
 };
@@ -50,6 +51,7 @@ pub const TagPayloadPattern = struct {
 
 pub const Pat = struct {
     ty: TypeVarId,
+    source_ty: canonical.CanonicalTypeKey,
     value_info: repr.ValueInfoId,
     data: Data,
 
@@ -128,6 +130,7 @@ pub const TagPayloadAssembly = struct {
 
 pub const Expr = struct {
     ty: TypeVarId,
+    source_ty: canonical.CanonicalTypeKey,
     value_info: repr.ValueInfoId,
     data: Data,
 
@@ -360,9 +363,15 @@ pub const Store = struct {
         self.exprs.deinit(self.allocator);
     }
 
-    pub fn addExpr(self: *Store, ty: TypeVarId, value_info: repr.ValueInfoId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
+    pub fn addExpr(
+        self: *Store,
+        ty: TypeVarId,
+        source_ty: canonical.CanonicalTypeKey,
+        value_info: repr.ValueInfoId,
+        data: Expr.Data,
+    ) std.mem.Allocator.Error!ExprId {
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .value_info = value_info, .data = data });
+        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .value_info = value_info, .data = data });
         return @enumFromInt(idx);
     }
 
