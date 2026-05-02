@@ -54,6 +54,7 @@ fn finalize(
             .requests = compile_time_roots,
             .purpose = .compile_time,
             .compile_time_plan_sink = &artifact.comptime_plans,
+            .compile_time_artifact_sink = artifact,
         },
         .{
             .target_usize = base.target.TargetUsize.native,

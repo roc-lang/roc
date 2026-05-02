@@ -879,6 +879,17 @@ pub const CheckedTypeStore = struct {
         return id;
     }
 
+    pub fn ensureSchemeForRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        root: CheckedTypeId,
+    ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+        const key = self.roots[@intFromEnum(root)].key;
+        const scheme_key = syntheticSchemeKeyForType(key);
+        try self.ensureSyntheticSchemeForRoot(allocator, root, key);
+        return scheme_key;
+    }
+
     fn ensureSyntheticSchemeForRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
@@ -4974,6 +4985,13 @@ pub const ConstGraphReificationPlan = union(enum) {
 };
 
 pub const SerializableCaptureLeafPlan = struct {
+    requested_source_ty: canonical.CanonicalTypeKey,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    schema: ComptimeSchemaId,
+    reification_plan: ConstGraphReificationPlanId,
+};
+
+pub const PrivateSerializableCaptureLeaf = struct {
     const_ref: ConstRef,
     requested_source_ty: canonical.CanonicalTypeKey,
     schema: ComptimeSchemaId,
@@ -4999,6 +5017,21 @@ pub const CaptureTagVariantPlan = struct {
     payloads: []const CaptureTagPayloadPlan,
 };
 
+pub const PrivateCaptureRecordField = struct {
+    field: canonical.RecordFieldLabelId,
+    value: PrivateCaptureNodeId,
+};
+
+pub const PrivateCaptureTagPayload = struct {
+    index: u32,
+    value: PrivateCaptureNodeId,
+};
+
+pub const PrivateCaptureTagNode = struct {
+    tag: canonical.TagLabelId,
+    payloads: []const PrivateCaptureTagPayload,
+};
+
 pub const CaptureSlotReificationPlan = union(enum) {
     pending,
     serializable_leaf: SerializableCaptureLeafPlan,
@@ -5006,7 +5039,9 @@ pub const CaptureSlotReificationPlan = union(enum) {
     record: []const CaptureRecordFieldPlan,
     tuple: []const CaptureTupleElemPlan,
     tag_union: []const CaptureTagVariantPlan,
-    list: []const CaptureSlotReificationPlanId,
+    list: struct {
+        elem: CaptureSlotReificationPlanId,
+    },
     box: CaptureSlotReificationPlanId,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
@@ -5063,13 +5098,13 @@ pub const CallablePromotionPlan = union(enum) {
 
 pub const PrivateCaptureNode = union(enum) {
     pending,
-    serializable_leaf: SerializableCaptureLeafPlan,
+    serializable_leaf: PrivateSerializableCaptureLeaf,
     callable_leaf: CallableLeafInstance,
-    record: []const CaptureRecordFieldPlan,
-    tuple: []const CaptureTupleElemPlan,
-    tag_union: []const CaptureTagVariantPlan,
-    list: []const CaptureSlotReificationPlanId,
-    box: CaptureSlotReificationPlanId,
+    record: []const PrivateCaptureRecordField,
+    tuple: []const PrivateCaptureNodeId,
+    tag_union: PrivateCaptureTagNode,
+    list: []const PrivateCaptureNodeId,
+    box: PrivateCaptureNodeId,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
         backing: PrivateCaptureNodeId,
@@ -5314,7 +5349,7 @@ fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReif
             for (variants) |variant| allocator.free(variant.payloads);
             allocator.free(variants);
         },
-        .list => |items| allocator.free(items),
+        .list => {},
     }
 }
 
@@ -5329,10 +5364,7 @@ fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) voi
         .callable_leaf => |*leaf| deinitCallableLeafInstance(allocator, leaf),
         .record => |fields| allocator.free(fields),
         .tuple => |items| allocator.free(items),
-        .tag_union => |variants| {
-            for (variants) |variant| allocator.free(variant.payloads);
-            allocator.free(variants);
-        },
+        .tag_union => |tag| allocator.free(tag.payloads),
         .list => |items| allocator.free(items),
     }
 }
@@ -5500,7 +5532,7 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
         .tag_union => |variants| for (variants) |variant| {
             for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
         },
-        .list => |items| for (items) |item| verifyCaptureSlotRef(store, item),
+        .list => |list| verifyCaptureSlotRef(store, list.elem),
         .box => |payload| verifyCaptureSlotRef(store, payload),
         .nominal => |nominal| verifyCaptureSlotRef(store, nominal.backing),
         .recursive_ref => |ref| verifyCaptureSlotRef(store, ref),
@@ -5512,13 +5544,13 @@ fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCap
         .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
         .serializable_leaf => {},
         .callable_leaf => |leaf| verifyCallableLeafInstance(store, leaf),
-        .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
-        .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
-        .tag_union => |variants| for (variants) |variant| {
-            for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
+        .record => |fields| for (fields) |field| verifyPrivateCaptureRef(store, field.value),
+        .tuple => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
+        .tag_union => |tag| {
+            for (tag.payloads) |payload| verifyPrivateCaptureRef(store, payload.value);
         },
-        .list => |items| for (items) |item| verifyCaptureSlotRef(store, item),
-        .box => |payload| verifyCaptureSlotRef(store, payload),
+        .list => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
+        .box => |payload| verifyPrivateCaptureRef(store, payload),
         .nominal => |nominal| verifyPrivateCaptureRef(store, nominal.backing),
         .recursive_ref => |ref| verifyPrivateCaptureRef(store, ref),
     }
