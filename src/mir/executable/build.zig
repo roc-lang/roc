@@ -407,7 +407,7 @@ const ErasedPromotedCaptureLowering = struct {
 fn lowerErasedPromotedCapture(
     program: *Program,
     capture_ty: ?Type.TypeId,
-    capture: checked_artifact.ErasedCaptureReificationPlan,
+    capture: checked_artifact.ErasedCaptureMaterializationPlan,
     hidden_arg: checked_artifact.ErasedHiddenCaptureArgPlan,
 ) Allocator.Error!ErasedPromotedCaptureLowering {
     if (capture_ty == null) {
@@ -425,9 +425,7 @@ fn lowerErasedPromotedCapture(
     switch (capture) {
         .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no capture materialization"),
         .zero_sized_typed => {},
-        .values,
-        .finite_callable_set,
-        => executableInvariant("executable erased promoted wrapper capture materialization requires private const/callable lowering"),
+        .node => executableInvariant("executable erased promoted wrapper capture materialization node lowering is not implemented"),
     }
     switch (hidden_arg) {
         .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no hidden arg"),

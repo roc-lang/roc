@@ -241,8 +241,11 @@ fn evaluateCallableBindingRoot(
         .erased => |erased| try publishErasedCallableResult(
             allocator,
             artifact,
+            lowered,
             pattern,
             root.checked_type,
+            ret_layout,
+            result.value,
             result_plan,
             erased,
         ),
@@ -454,8 +457,11 @@ fn promoteFiniteCallableResult(
 fn publishErasedCallableResult(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
     source_binding: CIR.Pattern.Idx,
     checked_fn_root: checked_artifact.CheckedTypeId,
+    ret_layout: layout_mod.Idx,
+    ret_value: Value,
     result_plan: checked_artifact.CallableResultPlanId,
     erased: checked_artifact.ErasedCallableResultPlan,
 ) Allocator.Error!PublishedCallableResult {
@@ -468,6 +474,26 @@ fn publishErasedCallableResult(
     );
 
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
+    var capture_builder = PrivateCaptureBuilder{
+        .allocator = allocator,
+        .artifact = artifact,
+        .lowered = lowered,
+        .layouts = &lowered.lir_result.layouts,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
+        .owner = reserved.promoted_ref,
+        .source_binding = source_binding,
+        .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
+    };
+    defer capture_builder.deinit();
+    const capture = try materializeErasedPromotedCapture(
+        allocator,
+        artifact,
+        lowered,
+        &capture_builder,
+        erased,
+        ret_layout,
+        ret_value,
+    );
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
         .source_fn_ty = erased.source_fn_ty,
         .params = params,
@@ -479,12 +505,12 @@ fn publishErasedCallableResult(
         ),
         .sig_key = erased.sig_key,
         .code = erased.code,
-        .capture = try cloneErasedCapturePlan(allocator, erased.capture),
+        .capture = capture,
         .arg_bridges = &.{},
         .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
             .none
         else
-            .{ .materialized_capture = try cloneErasedCapturePlan(allocator, erased.capture) },
+            .{ .materialized_capture = capture },
         .result_bridge = null,
         .result_ty = erased.result_ty,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
@@ -503,6 +529,171 @@ fn publishErasedCallableResult(
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
+    };
+}
+
+fn materializeErasedPromotedCapture(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    capture_builder: *PrivateCaptureBuilder,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    ret_layout: layout_mod.Idx,
+    ret_value: Value,
+) Allocator.Error!checked_artifact.ErasedCaptureMaterializationPlan {
+    return switch (erased.capture) {
+        .none => blk: {
+            if (erased.sig_key.capture_ty != null) {
+                compileTimeFinalizationInvariant("erased callable result had no capture materialization but signature has hidden capture type");
+            }
+            break :blk .none;
+        },
+        .zero_sized_typed => |ty| blk: {
+            const expected = erased.sig_key.capture_ty orelse {
+                compileTimeFinalizationInvariant("erased callable zero-sized capture had no hidden capture type");
+            };
+            if (!std.mem.eql(u8, &expected.bytes, &ty.bytes)) {
+                compileTimeFinalizationInvariant("erased callable zero-sized capture type differs from signature hidden capture type");
+            }
+            break :blk .{ .zero_sized_typed = ty };
+        },
+        .whole_hidden_capture_value => |capture| blk: {
+            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+                compileTimeFinalizationInvariant("erased callable whole hidden capture had no returned hidden capture payload");
+            };
+            const ref = try capture_builder.captureRef(capture.source_ty, capture.plan, physical, 0);
+            break :blk try erasedCapturePrivateRefPlan(allocator, artifact, ref);
+        },
+        .proc_capture_tuple => |captures| blk: {
+            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+                compileTimeFinalizationInvariant("erased proc-value capture tuple had no returned hidden capture payload");
+            };
+            if (captures.len == 0) {
+                compileTimeFinalizationInvariant("erased proc-value capture tuple materialization had no captures");
+            }
+            const tuple_items = try allocator.alloc(checked_artifact.ErasedCaptureMaterializationNodeId, captures.len);
+            errdefer allocator.free(tuple_items);
+            const tuple_layout = lowered.lir_result.layouts.getLayout(physical.layout_idx);
+            if (tuple_layout.tag != .struct_) {
+                compileTimeFinalizationInvariant("erased proc-value capture tuple did not lower to a struct layout");
+            }
+            for (captures, 0..) |capture, i| {
+                const field = structFieldValue(&lowered.lir_result.layouts, tuple_layout, physical.value, @intCast(i));
+                const ref = try capture_builder.captureRef(capture.source_ty, capture.plan, field, @intCast(i));
+                tuple_items[i] = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+                    allocator,
+                    .{ .private_capture = ref },
+                );
+            }
+            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+                allocator,
+                .{ .tuple = tuple_items },
+            ) };
+        },
+        .finite_callable_set_value => |result_plan| blk: {
+            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+                compileTimeFinalizationInvariant("erased finite callable-set adapter capture had no returned hidden capture payload");
+            };
+            const finite = try materializedFiniteCallableSetCapture(
+                allocator,
+                lowered,
+                capture_builder,
+                result_plan,
+                physical.layout_idx,
+                physical.value,
+            );
+            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+                allocator,
+                .{ .finite_callable_set = finite },
+            ) };
+        },
+    };
+}
+
+fn erasedCapturePrivateRefPlan(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    ref: checked_artifact.PrivateCaptureRef,
+) Allocator.Error!checked_artifact.ErasedCaptureMaterializationPlan {
+    return .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+        allocator,
+        .{ .private_capture = ref },
+    ) };
+}
+
+fn materializedFiniteCallableSetCapture(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    capture_builder: *PrivateCaptureBuilder,
+    result_plan: checked_artifact.CallableResultPlanId,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+) Allocator.Error!checked_artifact.MaterializedFiniteCallableSetCapture {
+    const selected = selectFiniteCallableResult(
+        &capture_builder.artifact.comptime_plans,
+        lowered.callable_set_descriptors,
+        &lowered.lir_result.layouts,
+        result_plan,
+        layout_idx,
+        value,
+    );
+    if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
+        compileTimeFinalizationInvariant("materialized finite erased capture selected member capture schema disagrees with result plan");
+    }
+    const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
+    errdefer allocator.free(captures);
+    for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
+        if (slot.slot != @as(u32, @intCast(i))) {
+            compileTimeFinalizationInvariant("materialized finite erased capture slots are not canonical");
+        }
+        captures[i] = try capture_builder.captureRef(
+            slot.source_ty,
+            slot_plan,
+            captureSlotValue(&lowered.lir_result.layouts, selected, @intCast(i)),
+            @intCast(i),
+        );
+    }
+
+    const member_capture_slots = try allocator.dupe(canonical.CallableSetCaptureSlot, selected.descriptor_member.capture_slots);
+    errdefer allocator.free(member_capture_slots);
+
+    return .{
+        .source_fn_ty = selected.result_plan.source_fn_ty,
+        .callable_set_key = selected.result_plan.callable_set_key,
+        .selected_member = selected.planned_member.member,
+        .member_proc = selected.descriptor_member.proc_value,
+        .member_capture_shape = selected.descriptor_member.capture_shape_key,
+        .member_capture_slots = member_capture_slots,
+        .captures = captures,
+    };
+}
+
+fn erasedClosureHiddenCapturePhysical(
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+) ?PhysicalValue {
+    const layout = layouts.getLayout(layout_idx);
+    if (layout.tag != .struct_) {
+        compileTimeFinalizationInvariant("erased callable result did not lower to a struct layout");
+    }
+    const capture_field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, 1);
+    const capture_field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, 1);
+    const capture_field_value = value.offset(capture_field_offset);
+    const capture_field_layout = layouts.getLayout(capture_field_layout_idx);
+    return switch (capture_field_layout.tag) {
+        .box => blk: {
+            const payload = capture_field_value.read(?[*]u8) orelse compileTimeFinalizationInvariant("erased callable result hidden capture box was null");
+            break :blk .{
+                .layout_idx = capture_field_layout.data.box,
+                .value = .{ .ptr = payload },
+            };
+        },
+        .box_of_zst => .{
+            .layout_idx = .zst,
+            .value = Value.zst,
+        },
+        else => compileTimeFinalizationInvariant("erased callable result hidden capture field was not a Box(T) layout"),
     };
 }
 
@@ -574,8 +765,9 @@ fn cloneErasedCapturePlan(
     return switch (capture) {
         .none => .none,
         .zero_sized_typed => |ty| .{ .zero_sized_typed = ty },
-        .finite_callable_set => |result| .{ .finite_callable_set = result },
-        .values => |values| .{ .values = try allocator.dupe(checked_artifact.CaptureSlotReificationPlanId, values) },
+        .whole_hidden_capture_value => |value| .{ .whole_hidden_capture_value = value },
+        .finite_callable_set_value => |result| .{ .finite_callable_set_value = result },
+        .proc_capture_tuple => |values| .{ .proc_capture_tuple = try allocator.dupe(checked_artifact.ErasedCaptureSlotReificationRef, values) },
     };
 }
 

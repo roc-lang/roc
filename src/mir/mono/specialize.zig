@@ -332,6 +332,7 @@ fn executableSyntheticProcForReserved(
                         .source_proc = canonical.mirProcedureRefFromMono(reserved.proc),
                         .template = key.template,
                         .executable_type_payloads = template_lookup.executable_type_payloads,
+                        .comptime_plans = template_lookup.comptime_plans,
                         .body = .{ .erased_promoted_wrapper = erased },
                     };
                 },

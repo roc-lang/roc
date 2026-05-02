@@ -1220,7 +1220,7 @@ fn erasedFiniteSetResultPlan(
         .capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
             .none
         else
-            .{ .finite_callable_set = try finiteCallableResultPlan(
+            .{ .finite_callable_set_value = try finiteCallableResultPlan(
                 allocator,
                 artifact_sink,
                 plans,
@@ -1294,9 +1294,10 @@ fn alreadyErasedCapturePlan(
                 .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
             };
             defer capture_builder.deinit();
-            const values = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, 1);
-            values[0] = try capture_builder.planFor(capture_info.source_ty, capture_value);
-            break :blk .{ .values = values };
+            break :blk .{ .whole_hidden_capture_value = .{
+                .source_ty = capture_info.source_ty,
+                .plan = try capture_builder.planFor(capture_info.source_ty, capture_value),
+            } };
         },
     };
 }
@@ -1319,7 +1320,7 @@ fn erasedCapturePlanForProcValue(
         return .{ .zero_sized_typed = erase.erased_fn_sig_key.capture_ty.? };
     }
 
-    const slot_plans = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, erase.capture_slots.len);
+    const slot_plans = try allocator.alloc(checked_artifact.ErasedCaptureSlotReificationRef, erase.capture_slots.len);
     errdefer allocator.free(slot_plans);
     var seen = try allocator.alloc(bool, erase.capture_slots.len);
     defer allocator.free(seen);
@@ -1342,13 +1343,16 @@ fn erasedCapturePlanForProcValue(
         if (seen[slot_index]) {
             checkedPipelineInvariant("erased proc-value result capture slot was duplicated");
         }
-        slot_plans[slot_index] = try capture_builder.planFor(slot.source_ty, source.captures[slot_index]);
+        slot_plans[slot_index] = .{
+            .source_ty = slot.source_ty,
+            .plan = try capture_builder.planFor(slot.source_ty, source.captures[slot_index]),
+        };
         seen[slot_index] = true;
     }
     for (seen) |was_seen| {
         if (!was_seen) checkedPipelineInvariant("erased proc-value result did not publish every capture slot");
     }
-    return .{ .values = slot_plans };
+    return .{ .proc_capture_tuple = slot_plans };
 }
 
 fn cloneBoxBoundarySpan(
