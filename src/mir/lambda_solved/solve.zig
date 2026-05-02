@@ -675,11 +675,7 @@ const BodySolver = struct {
                 } };
             },
             .inspect => unreachable,
-            .low_level => |low_level| .{ .low_level = .{
-                .op = low_level.op,
-                .args = try self.lowerExprSpan(low_level.args),
-                .source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty),
-            } },
+            .low_level => |low_level| try self.lowerLowLevel(value, expr.source_ty, low_level),
             .block => unreachable,
             .tuple => |items| blk: {
                 const lowered_items = try self.lowerExprSpanWithValues(items);
@@ -1037,6 +1033,61 @@ const BodySolver = struct {
 
     fn lowerExprSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
         return (try self.lowerExprSpanWithValues(span)).exprs;
+    }
+
+    fn lowerLowLevel(
+        self: *BodySolver,
+        result_value: repr.ValueInfoId,
+        result_source_ty: canonical.CanonicalTypeKey,
+        low_level: anytype,
+    ) Allocator.Error!Ast.Expr.Data {
+        const lowered_args = try self.lowerExprSpanWithValues(low_level.args);
+        const source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty);
+        switch (low_level.op) {
+            .box_box => {
+                const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
+                if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.box reached non-unary low-level expression");
+                const payload_value = arg_values[0];
+                const payload_info = self.value_store.values.items[@intFromEnum(payload_value)];
+                const result_root = self.valueRoot(result_value);
+                const payload_root = self.valueRoot(payload_value);
+                const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
+                    .box_ty = result_source_ty,
+                    .payload_source_ty = payload_info.source_ty,
+                    .payload_boundary_ty = payload_info.source_ty,
+                    .direction = .box,
+                    .source_root = payload_root,
+                    .boundary_root = result_root,
+                    .payload_plan = .unchanged,
+                });
+                self.value_store.values.items[@intFromEnum(result_value)].boxed = .{
+                    .box_root = result_root,
+                    .payload_root = payload_root,
+                    .boundary = boundary,
+                };
+            },
+            .box_unbox => {
+                const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
+                if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.unbox reached non-unary low-level expression");
+                const boxed_value = arg_values[0];
+                const boxed_info = self.value_store.values.items[@intFromEnum(boxed_value)];
+                _ = try self.representation_store.appendBoxBoundary(self.allocator, .{
+                    .box_ty = boxed_info.source_ty,
+                    .payload_source_ty = result_source_ty,
+                    .payload_boundary_ty = result_source_ty,
+                    .direction = .unbox,
+                    .source_root = self.valueRoot(boxed_value),
+                    .boundary_root = self.valueRoot(result_value),
+                    .payload_plan = .unchanged,
+                });
+            },
+            else => {},
+        }
+        return .{ .low_level = .{
+            .op = low_level.op,
+            .args = lowered_args.exprs,
+            .source_constraint_ty = source_constraint_ty,
+        } };
     }
 
     fn lowerStmtSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {

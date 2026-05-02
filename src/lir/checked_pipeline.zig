@@ -582,11 +582,25 @@ const CaptureSlotPlanBuilder = struct {
         payload_ty: checked_artifact.CheckedTypeId,
         value_info_id: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        _ = payload_ty;
         const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
         const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
-        _ = boxed;
-        checkedPipelineInvariant("Box(T) capture slot payload reification is not sealed");
+        const payload_value = self.valueForRoot(boxed.payload_root) orelse {
+            checkedPipelineInvariant("Box(T) capture payload root had no value-flow metadata");
+        };
+        return try self.planFor(
+            self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key,
+            payload_value,
+        );
+    }
+
+    fn valueForRoot(
+        self: *const CaptureSlotPlanBuilder,
+        root: repr.RepRootId,
+    ) ?repr.ValueInfoId {
+        for (self.value_context.value_store.values.items, 0..) |value, i| {
+            if (value.root == root) return @enumFromInt(@as(u32, @intCast(i)));
+        }
+        return null;
     }
 
     fn recordFieldValue(

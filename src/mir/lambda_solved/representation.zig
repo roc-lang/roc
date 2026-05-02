@@ -372,6 +372,21 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn appendBoxBoundary(
+        self: *RepresentationStore,
+        allocator: std.mem.Allocator,
+        boundary: BoxBoundary,
+    ) std.mem.Allocator.Error!BoxBoundaryId {
+        const id: BoxBoundaryId = @enumFromInt(@as(u32, @intCast(self.box_boundaries.len)));
+        const old = self.box_boundaries;
+        const next = try allocator.alloc(BoxBoundary, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = boundary;
+        allocator.free(old);
+        self.box_boundaries = next;
+        return id;
+    }
+
     pub fn callableEmissionPlan(
         self: *const RepresentationStore,
         id: CallableValueEmissionPlanId,
