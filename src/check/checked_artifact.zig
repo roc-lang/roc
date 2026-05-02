@@ -5065,6 +5065,7 @@ pub const ErasedCaptureReificationPlan = union(enum) {
     none,
     zero_sized_typed: canonical.CanonicalExecValueTypeKey,
     values: []const CaptureSlotReificationPlanId,
+    finite_callable_set: CallableResultPlanId,
 };
 
 pub const ErasedCallableResultPlan = struct {
@@ -5392,6 +5393,7 @@ fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptu
     switch (capture) {
         .none,
         .zero_sized_typed,
+        .finite_callable_set,
         => {},
         .values => |values| allocator.free(values),
     }
@@ -5492,6 +5494,7 @@ fn verifyCallableResultPlan(store: *const CompileTimePlanStore, plan: CallableRe
                 .zero_sized_typed,
                 => {},
                 .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+                .finite_callable_set => |result| verifyCallableResultRef(store, result),
             }
         },
     }
@@ -5568,6 +5571,7 @@ fn verifyCallableLeafInstance(store: *const CompileTimePlanStore, leaf: Callable
                 .zero_sized_typed,
                 => {},
                 .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+                .finite_callable_set => |result| verifyCallableResultRef(store, result),
             }
         },
     }
@@ -5607,6 +5611,7 @@ fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: Prom
                 .zero_sized_typed,
                 => {},
                 .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+                .finite_callable_set => |result| verifyCallableResultRef(store, result),
             }
             switch (erased.hidden_capture_arg) {
                 .none => {},
@@ -5615,6 +5620,7 @@ fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: Prom
                     .zero_sized_typed,
                     => {},
                     .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+                    .finite_callable_set => |result| verifyCallableResultRef(store, result),
                 },
             }
         },

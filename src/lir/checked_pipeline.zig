@@ -250,8 +250,7 @@ fn callableResultPlanForRoot(
         .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, callable, key),
         .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, plans, value_context, erased),
         .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
-        .erase_finite_set,
-        => checkedPipelineInvariant("compile-time erased callable result publication is not sealed"),
+        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
     };
 }
 
@@ -356,6 +355,33 @@ fn erasedProcValueResultPlan(
             .capture_shape_key = erase.capture_shape_key,
         } },
         .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
+    } });
+}
+
+fn erasedFiniteSetResultPlan(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    plans: *checked_artifact.CompileTimePlanStore,
+    value_context: ConstValueContext,
+    callable: repr.CallableValueInfo,
+    erase: repr.FiniteSetErasePlan,
+) Allocator.Error!checked_artifact.CallableResultPlanId {
+    return try plans.appendCallableResult(allocator, .{ .erased = .{
+        .source_fn_ty = erase.adapter.source_fn_ty,
+        .sig_key = erase.adapter.erased_fn_sig_key,
+        .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
+        .code = .{ .finite_set_adapter = erase.adapter },
+        .capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
+            .none
+        else
+            .{ .finite_callable_set = try finiteCallableResultPlan(
+                allocator,
+                artifact_sink,
+                plans,
+                value_context,
+                callable,
+                erase.adapter.callable_set_key,
+            ) },
     } });
 }
 
@@ -586,8 +612,14 @@ const CaptureSlotPlanBuilder = struct {
                 callable,
                 erase,
             ),
-            .erase_finite_set,
-            => checkedPipelineInvariant("erased capture callable leaf publication is not sealed"),
+            .erase_finite_set => |erase| try erasedFiniteSetResultPlan(
+                self.allocator,
+                self.artifact,
+                self.plans,
+                self.value_context,
+                callable,
+                erase,
+            ),
         };
     }
 
@@ -1244,8 +1276,14 @@ const ConstGraphPlanBuilder = struct {
                 callable,
                 erase,
             ) },
-            .erase_finite_set,
-            => checkedPipelineInvariant("erased callable constant leaf publication is not sealed"),
+            .erase_finite_set => |erase| .{ .erased_boxed = try erasedFiniteSetResultPlan(
+                self.allocator,
+                self.artifactSink(),
+                self.plans,
+                context,
+                callable,
+                erase,
+            ) },
         };
     }
 
