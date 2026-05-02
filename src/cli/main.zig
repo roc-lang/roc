@@ -905,7 +905,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    const cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
 
     // Create cache directory for linked interpreter executables
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
@@ -3196,10 +3196,444 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
+fn nativeBuildEntrypoints(
+    ctx: *CliContext,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ![]backend.Entrypoint {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+
+    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    errdefer entrypoints.deinit(ctx.gpa);
+
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi != .platform or metadata.exposure != .exported) continue;
+        const root = rootRequestByOrder(root_artifact, metadata.order);
+        if (root.kind != .provided_export) continue;
+
+        const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+        }
+
+        try entrypoints.append(ctx.gpa, .{
+            .symbol_name = try nativeEntrypointSymbolName(ctx, root_artifact, root),
+            .proc = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc_spec.ret_layout,
+        });
+    }
+
+    return try entrypoints.toOwnedSlice(ctx.gpa);
+}
+
+fn rootRequestByOrder(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    order: u32,
+) check.CheckedArtifact.RootRequest {
+    for (root_artifact.root_requests.requests) |request| {
+        if (request.order == order) return request;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("native build invariant violated: missing root request order {d}", .{order});
+    }
+    unreachable;
+}
+
+fn nativeEntrypointSymbolName(
+    ctx: *CliContext,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) ![]const u8 {
+    const module_env = root_artifact.moduleEnvConst();
+    const def_idx = switch (root.source) {
+        .def => |def| def,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("native build invariant violated: exported platform root is not a definition", .{});
+            }
+            unreachable;
+        },
+    };
+    const def = module_env.store.getDef(def_idx);
+    const pattern = module_env.store.getPattern(def.pattern);
+    const ident = switch (pattern) {
+        .assign => |assign| assign.ident,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("native build invariant violated: exported platform root definition is not an assignment", .{});
+            }
+            unreachable;
+        },
+    };
+
+    for (module_env.provides_entries.items.items) |entry| {
+        if (entry.ident == ident) {
+            return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{module_env.getString(entry.ffi_symbol)});
+        }
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "native build invariant violated: exported platform root {s} has no published FFI symbol",
+            .{module_env.getIdent(ident)},
+        );
+    }
+    unreachable;
+}
+
 fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
-    _ = ctx;
-    _ = args;
-    @compileError("Phase 2 must route native builds through checked artifacts");
+    const target_mod = @import("target.zig");
+
+    var timer = try std.time.Timer.start();
+
+    const output_path = if (args.output) |output|
+        try ctx.arena.dupe(u8, output)
+    else
+        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
+    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, FsIo.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    build_env.discoverDependencies(args.path) catch |err| {
+        renderDiagnostics(&build_env, ctx.io.stderr());
+        return err;
+    };
+
+    const targets_config = build_env.getPlatformTargetsConfig() orelse {
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+    const platform_source = build_env.getPlatformRootFile();
+    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
+
+    const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
+        const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
+            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
+            return error.InvalidTarget;
+        };
+
+        if (targets_config.supportsTarget(parsed_target, .exe)) {
+            break :blk .{ parsed_target, .exe };
+        }
+        if (targets_config.supportsTarget(parsed_target, .static_lib)) {
+            break :blk .{ parsed_target, .static_lib };
+        }
+        if (targets_config.supportsTarget(parsed_target, .shared_lib)) {
+            break :blk .{ parsed_target, .shared_lib };
+        }
+
+        const result = platform_validation.createUnsupportedTargetResult(
+            platform_source orelse "<unknown>",
+            parsed_target,
+            .exe,
+            targets_config,
+        );
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        return error.UnsupportedTarget;
+    } else blk: {
+        const compatible = targets_config.getFirstCompatibleTarget() orelse {
+            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+                .platform_validation_failed = .{
+                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
+                },
+            });
+            return error.UnsupportedTarget;
+        };
+        break :blk .{ compatible.target, compatible.link_type };
+    };
+
+    if (args.require_executable_output and link_type != .exe) {
+        const stderr = ctx.io.stderr();
+        switch (link_type) {
+            .static_lib => {
+                try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
+                try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
+                try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
+                try stderr.print("the library artifact.\n", .{});
+            },
+            .shared_lib => {
+                try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
+                try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
+                try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
+                try stderr.print("the library artifact.\n", .{});
+            },
+            .exe => unreachable,
+        }
+        return error.UnsupportedTarget;
+    }
+
+    const target_arch = target.toCpuArch();
+    const target_os = target.toOsTag();
+    if (target.isDynamic() and builtin.target.os.tag != .linux) {
+        renderValidationError(ctx.gpa, .{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(builtin.target.os.tag),
+            },
+        }, ctx.io.stderr());
+        return error.UnsupportedCrossCompilation;
+    }
+
+    switch (target_arch) {
+        .x86_64, .aarch64 => {},
+        .wasm32 => {
+            try ctx.io.stderr().writeAll(
+                "Error: `roc build` for wasm32 is not yet supported by the native object backend.\n",
+            );
+            return error.UnsupportedTarget;
+        },
+        else => {
+            try ctx.io.stderr().print(
+                "Error: The native object backend does not support the '{s}' architecture.\n",
+                .{@tagName(target_arch)},
+            );
+            return error.UnsupportedTarget;
+        },
+    }
+
+    const final_output_path = if (args.output != null)
+        output_path
+    else blk: {
+        const ext = switch (link_type) {
+            .exe => switch (target_os) {
+                .windows => ".exe",
+                .freestanding => ".wasm",
+                else => "",
+            },
+            .static_lib => switch (target_os) {
+                .windows => ".lib",
+                else => ".a",
+            },
+            .shared_lib => switch (target_os) {
+                .windows => ".dll",
+                .macos => ".dylib",
+                else => ".so",
+            },
+        };
+        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+    };
+
+    build_env.setTarget(target);
+    build_env.compileDiscovered() catch |err| {
+        renderDiagnostics(&build_env, ctx.io.stderr());
+        return err;
+    };
+
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const total_warning_count = diag.warnings;
+    if (diag.errors > 0 and !args.allow_errors) {
+        return error.CompilationFailed;
+    }
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
+    defer ctx.gpa.free(module_envs);
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    );
+    defer lowered.deinit();
+
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    defer ctx.gpa.free(entrypoints);
+    if (entrypoints.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("native build invariant violated: no exported platform entrypoints", .{});
+        }
+        unreachable;
+    }
+
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    object_compiler.compileToObjectFileAndWrite(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        entrypoints,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+        obj_path,
+    ) catch |err| {
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+
+    if (args.no_link) {
+        if (!args.suppress_build_status) {
+            try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
+        }
+        return;
+    }
+
+    const target_name = @tagName(target);
+    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = error.UnsupportedTarget,
+            .target = target_name,
+        } });
+    };
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+                std.fs.cwd().access(full_path, .{}) catch {
+                    renderValidationError(ctx.gpa, .{ .missing_target_file = .{
+                        .target = target,
+                        .link_type = link_type,
+                        .file_path = path,
+                        .expected_full_path = full_path,
+                    } }, ctx.io.stderr());
+                    return error.MissingTargetFile;
+                };
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => hit_app = true,
+            .win_gui => {},
+        }
+    }
+
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
+    std.fs.cwd().writeFile(.{
+        .sub_path = builtins_path,
+        .data = BuiltinsObjects.forTarget(target),
+    }) catch |err| {
+        std.log.err("Failed to write builtins object file: {}", .{err});
+        return error.BuiltinsExtractionFailed;
+    };
+
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+    try object_files.append(obj_path);
+    try object_files.append(builtins_path);
+
+    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
+    const link_config = linker.LinkConfig{
+        .target_format = linker.TargetFormat.detectFromOs(target_os),
+        .target_abi = linker.TargetAbi.fromRocTarget(target),
+        .target_os = target_os,
+        .target_arch = target_arch,
+        .output_path = final_output_path,
+        .object_files = object_files.items,
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .platform_files_dir = platform_files_dir,
+    };
+
+    if (args.z_dump_linker) {
+        try dumpLinkerInputs(ctx, link_config);
+    }
+
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = target_name,
+        } });
+    };
+
+    const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
+    const cache_stats = build_env.getCacheStats();
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
+
+    if (!args.suppress_build_status) {
+        const stdout = ctx.io.stdout();
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+            try stdout.print(" with {}% cache hit", .{cache_percent});
+        }
+        try stdout.writeAll(" (checked-artifact native backend)\n");
+
+        if (args.verbose) {
+            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+                cache_stats.modules_total,
+                cache_stats.cache_hits,
+                cache_stats.modules_compiled,
+            });
+            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        }
+
+        if (total_warning_count > 0) {
+            try stdout.print("  {} warning(s)\n", .{total_warning_count});
+        }
+    }
+
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
+    if (args.exit_on_warnings and total_warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 
