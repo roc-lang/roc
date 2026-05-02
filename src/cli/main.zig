@@ -344,25 +344,11 @@ else if (builtin.os.tag == .macos)
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux/Windows
 
-/// Fallback size for systems with overcommit disabled or limited resources.
-/// On Linux with vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
-/// though the memory wouldn't actually be used. We fall back to 4GB which
-/// should work on most systems while still being large enough for typical use.
-const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
-    256 * 1024 * 1024 // 256MB for 32-bit targets (same as primary)
-else
-    4 * 1024 * 1024 * 1024; // 4GB for 64-bit targets
-
-/// Try to create shared memory, falling back to a smaller size if the system
-/// has overcommit disabled and rejects the initial allocation.
-fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
-    // Try the preferred size first
-    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
-        return shm;
-    } else |_| {}
-
-    // Fall back to smaller size for systems with overcommit disabled
-    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+/// Create the shared-memory arena used for the parent-produced LIR runtime
+/// image. Allocation failure is reported directly; the compiler must not
+/// silently switch to a smaller arena that changes capacity assumptions.
+fn createSharedMemory(page_size: usize) !SharedMemoryAllocator {
+    return SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -1971,7 +1957,7 @@ fn buildPlatformEntrypoints(
 /// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
 pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryWithFallback(page_size);
+    var shm = try createSharedMemory(page_size);
     errdefer shm.deinit(ctx.gpa);
 
     const shm_allocator = shm.allocator();
@@ -3783,7 +3769,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer ctx.gpa.free(module_envs);
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryWithFallback(page_size);
+    var shm = try createSharedMemory(page_size);
     defer shm.deinit(ctx.gpa);
 
     const shm_allocator = shm.allocator();
