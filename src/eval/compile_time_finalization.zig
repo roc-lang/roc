@@ -401,6 +401,7 @@ const ComptimeReifier = struct {
             .transparent_alias => |alias| self.reifyWrappedPlan(alias.alias, alias.backing, layout_idx, value, .alias),
             .nominal => |nominal| self.reifyWrappedPlan(nominal.nominal, nominal.backing, layout_idx, value, .nominal),
             .callable_leaf => |leaf| self.reifyCallableLeaf(leaf, layout_idx, value),
+            .callable_schema => reifierInvariant("compile-time reification reached function schema without a callable value"),
             .recursive_ref => |ref| self.reifyPlan(ref, layout_idx, value),
         };
     }
@@ -429,6 +430,7 @@ const ComptimeReifier = struct {
                 .is_opaque = false,
             } }),
             .callable_leaf => |leaf| self.schemaForCallableLeaf(leaf),
+            .callable_schema => |source_fn_ty| self.values.addSchema(.{ .callable = source_fn_ty }),
             .recursive_ref => |ref| self.schemaForPlan(ref),
         };
     }

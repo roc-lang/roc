@@ -4767,6 +4767,7 @@ pub const ConstGraphReificationPlan = union(enum) {
         backing: ConstGraphReificationPlanId,
     },
     callable_leaf: CallableLeafReificationPlan,
+    callable_schema: canonical.CanonicalTypeKey,
     recursive_ref: ConstGraphReificationPlanId,
 };
 
@@ -5016,6 +5017,7 @@ fn deinitConstGraphReificationPlan(allocator: Allocator, plan: *ConstGraphReific
         .box,
         .transparent_alias,
         .nominal,
+        .callable_schema,
         .recursive_ref,
         => {},
         .callable_leaf => |*leaf| deinitCallableLeafReificationPlan(allocator, leaf),
@@ -5142,6 +5144,7 @@ fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: Con
             => |result| verifyCallableResultRef(store, result),
             .already_resolved => |resolved| verifyCallableLeafInstance(store, resolved),
         },
+        .callable_schema => {},
         .recursive_ref => |ref| verifyConstGraphRef(store, ref),
     }
 }

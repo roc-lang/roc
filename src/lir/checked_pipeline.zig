@@ -387,7 +387,10 @@ const ConstGraphPlanBuilder = struct {
                 .backing = try self.planFor(alias.backing, value_context, value_info),
             } },
             .nominal => |nominal| try self.nominalPlan(checked_ty, nominal, value_context, value_info),
-            .function => .{ .callable_leaf = try self.callableLeafPlan(value_context, value_info) },
+            .function => if (value_info == null)
+                .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key }
+            else
+                .{ .callable_leaf = try self.callableLeafPlan(value_context, value_info) },
             .flex, .rigid => checkedPipelineInvariant("compile-time constant planning reached unresolved type variable"),
             .pending => checkedPipelineInvariant("compile-time constant planning reached pending checked type"),
         };
