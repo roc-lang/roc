@@ -2490,6 +2490,9 @@ pub const FinitePromotedWrapperBodyPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
     member: canonical.CallableSetMemberId,
+    member_proc: canonical.ProcedureCallableRef,
+    member_capture_shape: canonical.CaptureShapeKey,
+    member_capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
     captures: []const PrivateCaptureRef = &.{},
     params: []const PromotedWrapperParam = &.{},
     call_args: []const PromotedWrapperArg = &.{},
@@ -5289,6 +5292,7 @@ fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCa
 fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableBodyPlan) void {
     switch (plan.*) {
         .finite => |finite| {
+            allocator.free(finite.member_capture_slots);
             allocator.free(finite.captures);
             allocator.free(finite.params);
             allocator.free(finite.call_args);
@@ -5461,6 +5465,17 @@ fn verifyPromotedWrapperArg(store: *const CompileTimePlanStore, arg: PromotedWra
 fn verifyPromotedCallableBodyPlan(store: *const CompileTimePlanStore, plan: PromotedCallableBodyPlan) void {
     switch (plan) {
         .finite => |finite| {
+            if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+                std.debug.panic("checked artifact invariant violated: finite promoted callable body member procedure source type differs from wrapper source type", .{});
+            }
+            if (finite.member_capture_slots.len != finite.captures.len) {
+                std.debug.panic("checked artifact invariant violated: finite promoted callable body capture count differs from selected member schema", .{});
+            }
+            for (finite.member_capture_slots, 0..) |slot, i| {
+                if (slot.slot != i) {
+                    std.debug.panic("checked artifact invariant violated: finite promoted callable body member capture slots are not canonical slot order", .{});
+                }
+            }
             for (finite.captures) |capture| verifyPrivateCaptureHandle(store, capture);
             for (finite.call_args) |arg| verifyPromotedWrapperArg(store, arg);
         },
