@@ -246,6 +246,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
             import_module.source,
             false,
             true,
+            &.{},
             builtin_module.env,
             builtin_indices,
             available_imports,
@@ -263,6 +264,16 @@ fn parseAndCanonicalizeProgramWithRootMode(
         };
     }
 
+    var explicit_eval_root_names_storage: [1][]const u8 = undefined;
+    var explicit_eval_root_names: []const []const u8 = &.{};
+    switch (root_mode) {
+        .eval_root => |root_inspect_wrap| {
+            explicit_eval_root_names_storage[0] = evalRootName(source_kind, root_inspect_wrap);
+            explicit_eval_root_names = explicit_eval_root_names_storage[0..];
+        },
+        .published_roots_only => {},
+    }
+
     var main_checked = try parseCheckModule(
         allocator,
         "Test",
@@ -270,6 +281,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         source,
         inspect_wrap,
         false,
+        explicit_eval_root_names,
         builtin_module.env,
         builtin_indices,
         main_imports,
@@ -315,7 +327,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     switch (root_mode) {
         .eval_root => |root_inspect_wrap| {
             const root_name = evalRootName(source_kind, root_inspect_wrap);
-            const root_def_idx = findDefByAssignedName(main_checked.module_env, root_name) orelse {
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
                 }
@@ -370,6 +382,7 @@ pub fn parseCheckModule(
     source: []const u8,
     inspect_wrap: bool,
     hosted_transform: bool,
+    explicit_root_names: []const []const u8,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
@@ -432,6 +445,7 @@ pub fn parseCheckModule(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = if (available_imports.len == 0) null else &imported_modules,
+        .explicit_root_names = explicit_root_names,
     });
     errdefer czer.deinit();
 
@@ -524,20 +538,6 @@ fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
         .expr => "main",
         .module => if (inspect_wrap) "codex_test_inspect_main" else "main",
     };
-}
-
-fn findDefByAssignedName(module_env: *const ModuleEnv, name: []const u8) ?CIR.Def.Idx {
-    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        const pattern = module_env.store.getPattern(def.pattern);
-        switch (pattern) {
-            .assign => |assign| {
-                if (std.mem.eql(u8, module_env.getIdent(assign.ident), name)) return def_idx;
-            },
-            else => {},
-        }
-    }
-    return null;
 }
 
 fn publishImportArtifacts(

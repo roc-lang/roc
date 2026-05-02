@@ -51,6 +51,13 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    explicit_root_names: []const []const u8 = &.{},
+};
+
+pub const ExplicitRootDef = struct {
+    name: []const u8,
+    ident: Ident.Idx,
+    def_idx: CIR.Def.Idx,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -88,6 +95,12 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Associated-block processing must consume this fact instead of re-deriving a
 /// type declaration from text.
 type_decl_stmt_by_ast_idx: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement.Idx) = .{},
+/// Definitions requested by the caller as explicit post-check roots.
+/// Canonicalization records these when it creates the definition, so later
+/// stages consume the published root handle instead of rediscovering a root by
+/// scanning declarations.
+explicit_root_names: []const []const u8 = &.{},
+explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -245,6 +258,7 @@ pub fn deinit(
     self.exposed_type_texts.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
     self.type_decl_stmt_by_ast_idx.deinit(gpa);
+    self.explicit_root_defs.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -314,6 +328,7 @@ fn initInternal(
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
@@ -365,6 +380,29 @@ fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTy
 
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
     return self.lookupAvailableModuleEnv(ident) != null;
+}
+
+pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
+    for (self.explicit_root_defs.items) |root| {
+        if (std.mem.eql(u8, root.name, name)) return root.def_idx;
+    }
+    return null;
+}
+
+fn recordExplicitRootDef(self: *Self, ident: Ident.Idx, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (self.explicit_root_names.len == 0) return;
+
+    const ident_text = self.env.getIdent(ident);
+    for (self.explicit_root_names) |root_name| {
+        if (!std.mem.eql(u8, ident_text, root_name)) continue;
+
+        try self.explicit_root_defs.append(self.env.gpa, .{
+            .name = root_name,
+            .ident = ident,
+            .def_idx = def_idx,
+        });
+        return;
+    }
 }
 
 fn populateBuiltinAutoImportedTypes(
@@ -3392,11 +3430,14 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
         // Top-level associated items (identifiers ending with '!') are automatically exposed
         const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
 
+        // If the caller requested this declaration as an explicit root, publish
+        // the def index now. Post-check lowering consumes this root handle
+        // instead of finding the declaration again from syntax or names.
+        const idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
+        try self.recordExplicitRootDef(idx, def_idx);
+
         // If this identifier is exposed (or is an associated item), add it to exposed_items
         if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
-            // Get the interned identifier - it should already exist from parsing
-            const ident = base.Ident.for_text(ident_text);
-            const idx = try self.env.insertIdent(ident);
             // Store the def index as u16 in exposed_items
             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
             try self.env.setExposedNodeIndexById(idx, def_idx_u16);

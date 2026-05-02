@@ -428,7 +428,7 @@ fn appendPublishedEntrypointRoots(
     const module_env = module.moduleEnvConst();
 
     for (module_env.provides_entries.items.items) |provides_entry| {
-        const def_idx = findTopLevelDefByIdent(module, provides_entry.ident) orelse {
+        const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "checked artifact invariant violated: provided entry {s} has no top-level definition",
@@ -437,6 +437,7 @@ fn appendPublishedEntrypointRoots(
             }
             unreachable;
         };
+        const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
         try appendRoot(requests, allocator, .{
             .module_idx = module.moduleIndex(),
             .kind = .provided_export,
@@ -449,15 +450,25 @@ fn appendPublishedEntrypointRoots(
 
     switch (module_env.module_kind) {
         .default_app => {
-            const main_def = findTopLevelDefByText(module, "main!") orelse {
+            const main_ident = module_env.common.findIdent("main!") orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
-                        "checked artifact invariant violated: default app has no main! root definition",
+                        "checked artifact invariant violated: default app has no main! identifier",
                         .{},
                     );
                 }
                 unreachable;
             };
+            const main_node_idx = module_env.getExposedNodeIndexById(main_ident) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: default app main! has no published root definition",
+                        .{},
+                    );
+                }
+                unreachable;
+            };
+            const main_def: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(main_node_idx)));
             try appendRoot(requests, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .runtime_entrypoint,
@@ -469,33 +480,6 @@ fn appendPublishedEntrypointRoots(
         },
         else => {},
     }
-}
-
-fn findTopLevelDefByIdent(module: TypedCIR.Module, ident: Ident.Idx) ?CIR.Def.Idx {
-    for (module.allDefs()) |def_idx| {
-        const def = module.def(def_idx);
-        const pattern = module.pattern(def.pattern.idx);
-        switch (pattern.data) {
-            .assign => |assign| if (assign.ident == ident) return def_idx,
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn findTopLevelDefByText(module: TypedCIR.Module, name: []const u8) ?CIR.Def.Idx {
-    const module_env = module.moduleEnvConst();
-    for (module.allDefs()) |def_idx| {
-        const def = module.def(def_idx);
-        const pattern = module.pattern(def.pattern.idx);
-        switch (pattern.data) {
-            .assign => |assign| {
-                if (std.mem.eql(u8, module_env.getIdent(assign.ident), name)) return def_idx;
-            },
-            else => {},
-        }
-    }
-    return null;
 }
 
 fn checkedTypeIdForRootSource(
