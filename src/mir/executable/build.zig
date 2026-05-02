@@ -34,6 +34,7 @@ pub const Program = struct {
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
+    callable_set_descriptors: []repr.CanonicalCallableSetDescriptor = &.{},
     layouts: ?Layouts.Layouts = null,
 
     pub fn init(allocator: Allocator) Program {
@@ -53,6 +54,7 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program) void {
         if (self.layouts) |*layouts| layouts.deinit();
+        deinitCallableSetDescriptors(self.allocator, self.callable_set_descriptors);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
@@ -145,8 +147,73 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
         try program.root_metadata.append(allocator, metadata);
     }
 
+    program.callable_set_descriptors = try cloneCallableSetDescriptors(allocator, input.solve_sessions.items);
+
     input.deinit();
     return program;
+}
+
+fn cloneCallableSetDescriptors(
+    allocator: Allocator,
+    solve_sessions: []const repr.RepresentationSolveSession,
+) Allocator.Error![]repr.CanonicalCallableSetDescriptor {
+    var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
+    errdefer {
+        for (descriptors.items) |descriptor| deinitCallableSetDescriptor(allocator, descriptor);
+        descriptors.deinit(allocator);
+    }
+
+    var seen = std.AutoHashMap(repr.CanonicalCallableSetKey, void).init(allocator);
+    defer seen.deinit();
+
+    for (solve_sessions) |*session| {
+        for (session.representation_store.callable_set_descriptors) |descriptor| {
+            const seen_entry = try seen.getOrPut(descriptor.key);
+            if (seen_entry.found_existing) continue;
+
+            const members = try allocator.alloc(repr.CanonicalCallableSetMember, descriptor.members.len);
+            errdefer allocator.free(members);
+            var member_count: usize = 0;
+            errdefer {
+                for (members[0..member_count]) |*member| allocator.free(member.capture_slots);
+            }
+
+            for (descriptor.members, 0..) |member, i| {
+                const capture_slots = try allocator.dupe(repr.CallableSetCaptureSlot, member.capture_slots);
+                members[i] = .{
+                    .member = member.member,
+                    .proc_value = member.proc_value,
+                    .source_proc = member.source_proc,
+                    .capture_slots = capture_slots,
+                    .capture_shape_key = member.capture_shape_key,
+                };
+                member_count += 1;
+            }
+
+            try descriptors.append(allocator, .{
+                .key = descriptor.key,
+                .members = members,
+            });
+        }
+    }
+
+    return try descriptors.toOwnedSlice(allocator);
+}
+
+pub fn deinitCallableSetDescriptors(
+    allocator: Allocator,
+    descriptors: []repr.CanonicalCallableSetDescriptor,
+) void {
+    for (descriptors) |descriptor| deinitCallableSetDescriptor(allocator, descriptor);
+    allocator.free(descriptors);
+}
+
+fn deinitCallableSetDescriptor(
+    allocator: Allocator,
+    descriptor: repr.CanonicalCallableSetDescriptor,
+) void {
+    for (descriptor.members) |member| allocator.free(member.capture_slots);
+    allocator.free(descriptor.members);
 }
 
 const TypeLowerer = struct {

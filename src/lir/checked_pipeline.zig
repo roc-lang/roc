@@ -16,6 +16,7 @@ const LIR = @import("LIR.zig");
 
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
+const repr = mir.LambdaSolved.Representation;
 
 pub const LowerResourceError = Allocator.Error;
 
@@ -48,8 +49,13 @@ pub const LoweredProgram = struct {
     lir_result: LowerIr.Result,
     main_proc: LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
+    callable_set_descriptors: []repr.CanonicalCallableSetDescriptor = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
+        mir.Executable.Build.deinitCallableSetDescriptors(
+            self.lir_result.store.allocator,
+            self.callable_set_descriptors,
+        );
         self.lir_result.deinit();
     }
 };
@@ -86,7 +92,14 @@ pub fn lowerArtifactsToLir(
     var executable = try mir.Executable.Build.run(allocator, solved);
     errdefer executable.deinit();
 
-    var lowered_ir = try ir.Lower.fromExecutable(allocator, executable);
+    const callable_set_descriptors = executable.callable_set_descriptors;
+    executable.callable_set_descriptors = &.{};
+    errdefer mir.Executable.Build.deinitCallableSetDescriptors(allocator, callable_set_descriptors);
+
+    var executable_for_ir = executable;
+    executable = mir.Executable.Build.Program.init(allocator);
+
+    var lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir);
     errdefer lowered_ir.deinit();
 
     const executable_roots = lowered_ir.root_procs.items;
@@ -114,6 +127,7 @@ pub fn lowerArtifactsToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
+        .callable_set_descriptors = callable_set_descriptors,
     };
 }
 
