@@ -6490,7 +6490,20 @@ pub const ConstInstantiationStore = struct {
             };
             std.debug.assert(indexed == record.id);
             switch (record.state) {
-                .evaluated => {},
+                .evaluated => |instance| {
+                    if (instance.dependency_summary == null) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: constant instance {d} has no dependency summary",
+                            .{i},
+                        );
+                    }
+                    if (instance.reification_plan == null) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: constant instance {d} has no reification plan",
+                            .{i},
+                        );
+                    }
+                },
                 .reserved, .evaluating => std.debug.panic(
                     "checked artifact invariant violated: constant instance {d} was not sealed before publication",
                     .{i},

@@ -180,6 +180,8 @@ fn evaluateConstantRoot(
     artifact.const_instances.fill(instance_ref, .{
         .schema = reified.schema,
         .value = reified.value,
+        .dependency_summary = @enumFromInt(@intFromEnum(root.dependency_summary_request)),
+        .reification_plan = reification_plan,
     });
 }
 
