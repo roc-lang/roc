@@ -145,9 +145,7 @@ pub const LayoutStoreImage = extern struct {
         target_usize: base.target.TargetUsize,
     ) ImageError!layout_mod.Store {
         return .{
-            .all_module_envs = &.{},
             .allocator = std.heap.page_allocator,
-            .mutable_env = null,
             .layouts = safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
             .resolved_list_layouts = arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
             .tuple_elems = safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
@@ -157,7 +155,6 @@ pub const LayoutStoreImage = extern struct {
             .tag_union_data = safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(std.heap.page_allocator),
             .scratch_intern_key = .empty,
-            .builtin_str_ident = null,
             .target_usize = target_usize,
         };
     }

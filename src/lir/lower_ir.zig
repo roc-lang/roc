@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const can = @import("can");
 const ir = @import("ir");
 const mir = @import("mir");
 const layout_mod = @import("layout");
@@ -15,7 +14,6 @@ const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
 
 pub const LowerResourceError = Allocator.Error;
 
@@ -51,8 +49,6 @@ pub const Result = struct {
 
 pub fn run(
     allocator: Allocator,
-    all_module_envs: []const *const ModuleEnv,
-    builtin_str_ident: ?base.Ident.Idx,
     target_usize: base.target.TargetUsize,
     input: ir.Lower.Program,
     explicit_roots: []const ir.Ast.ProcRef,
@@ -61,7 +57,7 @@ pub fn run(
     var owned_input = input;
     errdefer owned_input.deinit();
 
-    var lowerer = try Lowerer.init(allocator, all_module_envs, builtin_str_ident, target_usize, &owned_input);
+    var lowerer = try Lowerer.init(allocator, target_usize, &owned_input);
     errdefer lowerer.deinit();
     lowerer.canonical_names = owned_input.canonical_names;
     owned_input.canonical_names = mir.Hosted.CanonicalNameStore.init(allocator);
@@ -89,8 +85,6 @@ const Lowerer = struct {
 
     fn init(
         allocator: Allocator,
-        all_module_envs: []const *const ModuleEnv,
-        builtin_str_ident: ?base.Ident.Idx,
         target_usize: base.target.TargetUsize,
         input: *const ir.Lower.Program,
     ) LowerResourceError!Lowerer {
@@ -99,7 +93,7 @@ const Lowerer = struct {
             .canonical_names = mir.Hosted.CanonicalNameStore.init(allocator),
             .input = input,
             .store = LirStore.init(allocator),
-            .layouts = try layout_mod.Store.init(all_module_envs, builtin_str_ident, allocator, target_usize),
+            .layouts = try layout_mod.Store.init(allocator, target_usize),
             .root_procs = .empty,
             .root_metadata = .empty,
             .proc_map = .empty,

@@ -2184,18 +2184,6 @@ pub const BuildEnv = struct {
         return views.toOwnedSlice(allocator);
     }
 
-    pub fn collectModuleEnvViews(self: *BuildEnv, allocator: Allocator) ![]const *const ModuleEnv {
-        const resolved = try self.getResolvedModuleEnvs(allocator);
-        defer allocator.free(resolved.compiled_modules);
-        defer allocator.free(resolved.all_module_envs);
-
-        const envs = try allocator.alloc(*const ModuleEnv, resolved.all_module_envs.len);
-        for (resolved.all_module_envs, 0..) |env, i| {
-            envs[i] = env;
-        }
-        return envs;
-    }
-
     fn checkedArtifactKeysEqual(
         a: check.CheckedArtifact.CheckedModuleArtifactKey,
         b: check.CheckedArtifact.CheckedModuleArtifactKey,

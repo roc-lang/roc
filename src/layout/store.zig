@@ -5,14 +5,11 @@ const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
-const can = @import("can");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
 
-const ModuleEnv = can.ModuleEnv;
 const target = base.target;
-const Ident = base.Ident;
 const Layout = layout_mod.Layout;
 const LayoutTag = layout_mod.LayoutTag;
 const Idx = layout_mod.Idx;
@@ -67,15 +64,8 @@ pub const Store = struct {
         contains_refcounted: bool,
     };
 
-    /// All module environments for cross-module type resolution
-    all_module_envs: []const *const ModuleEnv,
-
     /// Allocator for all internal allocations
     allocator: std.mem.Allocator,
-
-    /// Optional mutable env reference (used by interpreter for runtime identifier insertion).
-    /// When set, getMutableEnv() returns this instead of null.
-    mutable_env: ?*ModuleEnv = null,
 
     layouts: collections.SafeList(Layout),
     resolved_list_layouts: std.ArrayList(?Idx),
@@ -89,10 +79,6 @@ pub const Store = struct {
     // binary encodings of layout shape.
     interned_layouts: std.StringHashMap(Idx),
     scratch_intern_key: std.ArrayList(u8),
-
-    // Identifier for "Builtin.Str" to recognize the string type without string comparisons
-    // (null when compiling Builtin module itself or when Builtin.Str isn't available)
-    builtin_str_ident: ?Ident.Idx,
 
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
@@ -114,8 +100,6 @@ pub const Store = struct {
     }
 
     pub fn init(
-        all_module_envs: []const *const ModuleEnv,
-        builtin_str_ident: ?Ident.Idx,
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
@@ -241,7 +225,6 @@ pub const Store = struct {
         std.debug.assert(layouts.len() == num_primitives);
 
         var self = Self{
-            .all_module_envs = all_module_envs,
             .allocator = allocator,
             .layouts = layouts,
             .resolved_list_layouts = .empty,
@@ -252,7 +235,6 @@ pub const Store = struct {
             .tag_union_data = tag_union_data,
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
             .scratch_intern_key = .empty,
-            .builtin_str_ident = builtin_str_ident,
             .target_usize = target_usize,
         };
 
@@ -265,11 +247,6 @@ pub const Store = struct {
         return self;
     }
 
-    /// Get all module environments in the layout store's module-index order.
-    pub fn moduleEnvs(self: *const Self) []const *const ModuleEnv {
-        return self.all_module_envs;
-    }
-
     pub const GraphCommit = struct {
         root_idx: Idx,
         value_layouts: []Idx,
@@ -278,17 +255,6 @@ pub const Store = struct {
             allocator.free(self_commit.value_layouts);
         }
     };
-
-    /// Get the mutable module environment (used by interpreter for identifier insertion).
-    /// Returns null if no mutable env was set via setMutableEnv.
-    pub fn getMutableEnv(self: *Self) ?*ModuleEnv {
-        return self.mutable_env;
-    }
-
-    /// Set a mutable env reference for runtime identifier insertion (used by interpreter).
-    pub fn setMutableEnv(self: *Self, env: *ModuleEnv) void {
-        self.mutable_env = env;
-    }
 
     pub fn deinit(self: *Self) void {
         self.resolved_list_layouts.deinit(self.allocator);
@@ -304,12 +270,6 @@ pub const Store = struct {
         }
         self.interned_layouts.deinit();
         self.scratch_intern_key.deinit(self.allocator);
-    }
-
-    /// Update the module env slice used for shared layout queries without
-    /// touching source-specific type-resolution caches.
-    pub fn setModuleEnvs(self: *Self, new_module_envs: []const *const ModuleEnv) void {
-        self.all_module_envs = new_module_envs;
     }
 
     fn appendInternKeyValue(self: *Self, value: anytype) std.mem.Allocator.Error!void {

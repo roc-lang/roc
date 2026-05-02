@@ -283,10 +283,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.OutOfMemory;
     };
     defer gpa.free(relation_artifacts);
-    const module_envs = glue_build_env.collectModuleEnvViews(gpa) catch {
-        return error.ModuleRetrieval;
-    };
-    defer gpa.free(module_envs);
 
     var lowered = lir.CheckedPipeline.lowerArtifactsToLir(
         gpa,
@@ -296,7 +292,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     ) catch {

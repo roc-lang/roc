@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const can = @import("can");
 const check = @import("check");
 const mir = @import("mir");
 const ir = @import("ir");
@@ -16,7 +15,6 @@ const LowerIr = @import("lower_ir.zig");
 const LIR = @import("LIR.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
 const checked_artifact = check.CheckedArtifact;
 
 pub const LowerResourceError = Allocator.Error;
@@ -31,8 +29,6 @@ pub const RootRequestSet = struct {
 };
 
 pub const TargetConfig = struct {
-    module_envs: []const *const ModuleEnv,
-    builtin_str_ident: ?base.Ident.Idx = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
 };
 
@@ -80,8 +76,6 @@ pub fn lowerArtifactsToLir(
 
     var lowered_lir = try LowerIr.run(
         allocator,
-        target.module_envs,
-        target.builtin_str_ident,
         target.target_usize,
         lowered_ir,
         executable_roots,

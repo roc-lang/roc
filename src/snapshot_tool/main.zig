@@ -3945,8 +3945,6 @@ fn processDevObjectSnapshot(
     defer allocator.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
-    const module_envs = try build_env.collectModuleEnvViews(allocator);
-    defer allocator.free(module_envs);
 
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         allocator,
@@ -3956,7 +3954,6 @@ fn processDevObjectSnapshot(
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     );

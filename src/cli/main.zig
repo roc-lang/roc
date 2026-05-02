@@ -2070,8 +2070,6 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try coord.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
-    const module_envs = try coord.collectModuleEnvViews(ctx.gpa);
-    defer ctx.gpa.free(module_envs);
 
     const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         shm_allocator,
@@ -2081,7 +2079,6 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     );
@@ -3438,8 +3435,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
-    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
-    defer ctx.gpa.free(module_envs);
 
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         ctx.gpa,
@@ -3449,7 +3444,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     );
@@ -3765,8 +3759,6 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
-    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
-    defer ctx.gpa.free(module_envs);
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try createSharedMemory(page_size);
@@ -3783,7 +3775,6 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     );
@@ -4384,7 +4375,6 @@ fn runCheckedArtifactTests(
     ctx: *CliContext,
     build_env: *BuildEnv,
     module: BuildEnv.CompiledModuleInfo,
-    module_envs: []const *const ModuleEnv,
     module_results: *std.ArrayList(CliModuleTestResult),
 ) !CliTestRunSummary {
     const artifact = module.semantic.checked_artifact orelse return .{};
@@ -4405,7 +4395,6 @@ fn runCheckedArtifactTests(
         },
         .{ .requests = test_roots },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.native,
         },
     );
@@ -4522,8 +4511,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
-    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
-    defer ctx.gpa.free(module_envs);
 
     var module_results = std.ArrayList(CliModuleTestResult).empty;
     defer {
@@ -4538,7 +4525,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     var total = CliTestRunSummary{};
     for (modules) |module| {
-        const summary = try runCheckedArtifactTests(ctx, &build_env, module, module_envs, &module_results);
+        const summary = try runCheckedArtifactTests(ctx, &build_env, module, &module_results);
         total.passed += summary.passed;
         total.failed += summary.failed;
     }

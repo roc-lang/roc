@@ -748,25 +748,6 @@ pub const Coordinator = struct {
         return false;
     }
 
-    /// Collect ModuleEnv pointers needed by LIR layout lowering.
-    pub fn collectModuleEnvViews(self: *Coordinator, allocator: Allocator) Allocator.Error![]const *const ModuleEnv {
-        var envs = std.ArrayList(*const ModuleEnv).empty;
-        errdefer envs.deinit(allocator);
-
-        try appendModuleEnvIfMissing(&envs, allocator, self.builtin_modules.builtin_module.env);
-
-        var pkg_iter = self.packages.iterator();
-        while (pkg_iter.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*mod| {
-                const env = mod.moduleEnv() orelse continue;
-                try appendModuleEnvIfMissing(&envs, allocator, env);
-            }
-        }
-
-        return try envs.toOwnedSlice(allocator);
-    }
-
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
@@ -924,17 +905,6 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) return;
         }
         try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-    }
-
-    fn appendModuleEnvIfMissing(
-        envs: *std.ArrayList(*const ModuleEnv),
-        allocator: Allocator,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (envs.items) |existing| {
-            if (existing == env) return;
-        }
-        try envs.append(allocator, env);
     }
 
     /// Start the coordinator and spawn worker threads (for multi-threaded mode).

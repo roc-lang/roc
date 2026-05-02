@@ -428,9 +428,6 @@ fn compileAndRunInner(source: []const u8) !u8 {
     const relation_views = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_views);
 
-    const module_envs = try build_env.collectModuleEnvViews(allocator);
-    defer allocator.free(module_envs);
-
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         allocator,
         .{
@@ -439,7 +436,6 @@ fn compileAndRunInner(source: []const u8) !u8 {
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .module_envs = module_envs,
             .target_usize = base.target.TargetUsize.u32,
         },
     );
