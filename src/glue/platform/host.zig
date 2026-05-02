@@ -631,7 +631,6 @@ fn parseTypesJson(
 
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
-/// If no entry point names are provided, defaults to ["main"].
 fn platform_main(args: [][*:0]u8) !c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
@@ -715,23 +714,16 @@ fn platform_main(args: [][*:0]u8) !c_int {
         },
     };
 
-    // Build entrypoints list
-    // For now, create a single entry point with the platform path as the name
-    // TODO: Extract actual entry points from compiled platform module
     const allocator = host_env.gpa.allocator();
 
     const stdout: std.fs.File = .stdout();
 
-    // Entry point names from args[entry_point_start_idx..], or default to ["main"] if none provided
-    const default_entry_points = [_][]const u8{"main"};
-    const entry_point_names: []const []const u8 = if (args.len > entry_point_start_idx) blk: {
-        const names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
-        for (args[entry_point_start_idx..], 0..) |arg, i| {
-            names[i] = std.mem.span(arg);
-        }
-        break :blk names;
-    } else &default_entry_points;
-    defer if (args.len > entry_point_start_idx) allocator.free(entry_point_names);
+    if (args.len <= entry_point_start_idx) return error.MissingEntrypointNames;
+    const entry_point_names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
+    for (args[entry_point_start_idx..], 0..) |arg, i| {
+        entry_point_names[i] = std.mem.span(arg);
+    }
+    defer allocator.free(entry_point_names);
 
     // Allocate array for EntryPoint entries using Roc's allocation scheme
     // This ensures a valid refcount is present at bytes-8, which Roc's
