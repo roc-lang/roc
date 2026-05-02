@@ -115,7 +115,6 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
-const CacheModule = compile.CacheModule;
 const single_module = compile.single_module;
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -1257,56 +1256,6 @@ fn processSnapshotContent(
 
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();
-
-    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
-    {
-        // Generate original S-expression for comparison
-        var original_tree = SExprTree.init(allocator);
-        defer original_tree.deinit();
-        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
-
-        var original_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
-
-        // Create arena for serialization
-        var cache_arena = std.heap.ArenaAllocator.init(allocator);
-        defer cache_arena.deinit();
-
-        // Create and serialize MmapCache
-        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), can_ir, can_ir, 0, 0);
-        defer allocator.free(cache_data);
-
-        // Deserialize back
-        var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
-
-        // Create arena for restore operation to handle temporary allocations
-        var restore_arena = std.heap.ArenaAllocator.init(allocator);
-        defer restore_arena.deinit();
-
-        // Restore ModuleEnv
-        const restored_env = try loaded_cache.restore(restore_arena.allocator(), module_name, content.source);
-        // Note: restored_env points to data within the cache, so we don't free it
-
-        // Generate S-expression from restored ModuleEnv
-        var restored_tree = SExprTree.init(allocator);
-        defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
-
-        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
-
-        // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
-            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
-            std.log.err("Original and restored CIR S-expressions don't match!", .{});
-            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
-            return error.CacheRoundTripValidationFailed;
-        }
-    }
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;

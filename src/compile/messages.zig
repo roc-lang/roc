@@ -11,13 +11,9 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const cache_module = @import("cache_module.zig");
-const cache_manager = @import("cache_manager.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CheckedArtifact = check.CheckedArtifact;
-const CacheData = cache_module.CacheModule.CacheData;
-const ImportInfo = cache_manager.ImportInfo;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -255,30 +251,6 @@ pub const CycleDetected = struct {
     module_env: *ModuleEnv,
 };
 
-/// Result when a module is loaded from cache (fast path)
-pub const CacheHitResult = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// The cached semantic module data (ownership returned)
-    semantic: OwnedSemanticModuleData,
-    /// Source code (kept for ModuleEnv)
-    source: []const u8,
-    /// Error count from cache
-    error_count: u32,
-    /// Warning count from cache
-    warning_count: u32,
-    /// Cache data buffer - must be kept alive for the lifetime of module_env
-    cache_data: CacheData,
-    /// Imports from cached metadata - these need to be recursively loaded (owned slice)
-    imports: []ImportInfo,
-};
-
 /// Result sent from workers - contains ALL outputs from the operation
 pub const WorkerResult = union(enum) {
     /// Module was successfully parsed
@@ -291,8 +263,6 @@ pub const WorkerResult = union(enum) {
     parse_failed: ParseFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
-    /// Module was loaded from cache (fast path)
-    cache_hit: CacheHitResult,
 
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
@@ -301,7 +271,6 @@ pub const WorkerResult = union(enum) {
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
-            .cache_hit => |r| r.package_name,
         };
     }
 
@@ -312,7 +281,6 @@ pub const WorkerResult = union(enum) {
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
-            .cache_hit => |r| r.module_id,
         };
     }
 
@@ -323,7 +291,6 @@ pub const WorkerResult = union(enum) {
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
-            .cache_hit => |r| r.module_name,
         };
     }
 
@@ -369,10 +336,6 @@ pub const WorkerResult = union(enum) {
                 if (r.cycle_info.cycle_path) |path| gpa.free(path);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
-            },
-            .cache_hit => |*r| {
-                r.semantic.deinit();
-                // Module env ownership is transferred to ModuleState, nothing to free here
             },
         }
     }

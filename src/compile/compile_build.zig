@@ -626,7 +626,7 @@ pub const BuildEnv = struct {
                     std.debug.assert(sched_mod.semantic == null);
 
                     if (comptime trace_build) {
-                        std.debug.print("[TRANSFER]   Transferring semantic data for {s} (was_cache_hit={})\n", .{ coord_mod.name, coord_mod.was_cache_hit });
+                        std.debug.print("[TRANSFER]   Transferring semantic data for {s}\n", .{coord_mod.name});
                     }
 
                     const env = coord_semantic.module_env;
@@ -635,7 +635,6 @@ pub const BuildEnv = struct {
                         .module_env = if (checked_artifact == null) env else null,
                         .checked_artifact = checked_artifact,
                     };
-                    sched_mod.was_from_cache = coord_mod.was_cache_hit;
 
                     coord_semantic.checked_artifact = null;
 

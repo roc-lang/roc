@@ -101,8 +101,8 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Get the module cache directory (for cached ModuleEnvs).
-    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    /// Get the checked-artifact cache directory.
+    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) ![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 

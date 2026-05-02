@@ -4965,7 +4965,6 @@ const CheckResult = struct {
         .type_checking_ns = 0,
         .check_diagnostics_ns = 0,
     },
-    was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
     /// Build statistics
@@ -5166,7 +5165,6 @@ fn checkFileWithBuildEnvPreserved(
     const check_result = CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // BuildEnv doesn't currently expose cache info
         .error_count = error_count,
         .warning_count = warning_count,
     };
@@ -5313,7 +5311,6 @@ fn checkFileWithBuildEnv(
     return CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // TODO: Set based on cache stats
         .error_count = error_count,
         .warning_count = warning_count,
         .modules_total = cache_stats.modules_total,
@@ -5356,92 +5353,63 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
 
     const elapsed = timer.read();
 
-    // Handle cached results vs fresh compilation results differently
-    if (check_result.was_cached) {
-        // For cached results, use the stored diagnostic counts
-        const total_errors = check_result.error_count;
-        const total_warnings = check_result.warning_count;
+    // Render reports grouped by module
+    for (check_result.reports) |module| {
+        for (module.reports) |*report| {
 
-        if (total_errors > 0 or total_warnings > 0) {
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                total_errors,
-                total_warnings,
-            }) catch {};
-            formatElapsedTimeMs(stderr, elapsed) catch {};
-            stderr.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
-            stderr.print("(note: module loaded from cache, use --no-cache to display errors and warnings)\n", .{}) catch {};
-            return error.CheckFailed;
-        } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTimeMs(stdout, elapsed) catch {};
-            stdout.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
+            // Render the diagnostic report to stderr
+            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
         }
-    } else {
-        // For fresh compilation, process and display reports normally
-        var has_errors = false;
+    }
 
-        // Render reports grouped by module
-        for (check_result.reports) |module| {
-            for (module.reports) |*report| {
+    // Flush stderr to ensure all error output is visible
+    ctx.io.flush();
 
-                // Render the diagnostic report to stderr
-                try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+    // Compute cache hit percentage
+    const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
 
-                if (report.severity == .fatal or report.severity == .runtime_error) {
-                    has_errors = true;
-                }
-            }
+    if (check_result.error_count > 0 or check_result.warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            check_result.error_count,
+            check_result.warning_count,
+        }) catch {};
+        formatElapsedTimeMs(stderr, elapsed) catch {};
+        // Include inline cache stats summary
+        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+            stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
+        }
+        stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+        // Print verbose stats if requested
+        if (args.verbose) {
+            printVerboseStats(stderr, &check_result);
         }
 
-        // Flush stderr to ensure all error output is visible
+        // Flush before exit
         ctx.io.flush();
 
-        // Compute cache hit percentage
-        const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
-
-        if (check_result.error_count > 0 or check_result.warning_count > 0) {
-            stderr.writeAll("\n") catch {};
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                check_result.error_count,
-                check_result.warning_count,
-            }) catch {};
-            formatElapsedTimeMs(stderr, elapsed) catch {};
-            // Include inline cache stats summary
-            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-                stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
-            }
-            stderr.print(" for {s}.\n", .{args.path}) catch {};
-
-            // Print verbose stats if requested
-            if (args.verbose) {
-                printVerboseStats(stderr, &check_result);
-            }
-
-            // Flush before exit
-            ctx.io.flush();
-
-            // Exit with code 1 for errors, code 2 for warnings only
-            if (check_result.error_count > 0) {
-                return error.CheckFailed;
-            } else {
-                std.process.exit(2);
-            }
+        // Exit with code 1 for errors, code 2 for warnings only
+        if (check_result.error_count > 0) {
+            return error.CheckFailed;
         } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTimeMs(stdout, elapsed) catch {};
-            // Include inline cache stats summary
-            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-                stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
-            }
-            stdout.print(" for {s}\n", .{args.path}) catch {};
-
-            // Print verbose stats if requested
-            if (args.verbose) {
-                printVerboseStats(stdout, &check_result);
-            }
-
-            ctx.io.flush();
+            std.process.exit(2);
         }
+    } else {
+        stdout.print("No errors found in ", .{}) catch {};
+        formatElapsedTimeMs(stdout, elapsed) catch {};
+        // Include inline cache stats summary
+        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+            stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
+        }
+        stdout.print(" for {s}\n", .{args.path}) catch {};
+
+        // Print verbose stats if requested
+        if (args.verbose) {
+            printVerboseStats(stdout, &check_result);
+        }
+
+        ctx.io.flush();
     }
 
     // Print timing breakdown if requested
@@ -5680,54 +5648,30 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     const check_result = &result_with_env.check_result;
     const elapsed = timer.read();
 
-    // Handle cached results vs fresh compilation results differently
-    if (check_result.was_cached) {
-        // For cached results, use the stored diagnostic counts
-        const total_errors = check_result.error_count;
-        const total_warnings = check_result.warning_count;
+    // Render reports grouped by module
+    for (check_result.reports) |module| {
+        for (module.reports) |*report| {
 
-        if (total_errors > 0 or total_warnings > 0) {
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                total_errors,
-                total_warnings,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
+            // Render the diagnostic report to stderr
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
+                // Fallback to just printing the title
+                stderr.print("  {s}", .{report.title}) catch {};
+            };
+        }
+    }
+
+    if (check_result.error_count > 0 or check_result.warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            check_result.error_count,
+            check_result.warning_count,
+        }) catch {};
+        formatElapsedTime(stderr, elapsed) catch {};
+        stderr.print(" for {s}.", .{args.path}) catch {};
+
+        if (check_result.error_count > 0) {
             return error.DocsFailed;
-        }
-    } else {
-        // For fresh compilation, process and display reports normally
-        var has_errors = false;
-
-        // Render reports grouped by module
-        for (check_result.reports) |module| {
-            for (module.reports) |*report| {
-
-                // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
-                    // Fallback to just printing the title
-                    stderr.print("  {s}", .{report.title}) catch {};
-                };
-
-                if (report.severity == .fatal or report.severity == .runtime_error) {
-                    has_errors = true;
-                }
-            }
-        }
-
-        if (check_result.error_count > 0 or check_result.warning_count > 0) {
-            stderr.writeAll("\n") catch {};
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                check_result.error_count,
-                check_result.warning_count,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.", .{args.path}) catch {};
-
-            if (check_result.error_count > 0) {
-                return error.DocsFailed;
-            }
         }
     }
 

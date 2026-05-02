@@ -17,7 +17,6 @@ pub const messages = @import("messages.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
 
-pub const module = @import("cache_module.zig");
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
@@ -40,11 +39,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
     pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
 };
 
-pub const Header = module.Header;
-pub const CacheModule = module.CacheModule;
-pub const Diagnostics = module.Diagnostics;
 pub const CacheManager = manager.CacheManager;
-pub const CacheResult = manager.CacheResult;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
 /// Cache cleanup utilities for managing temporary and persistent cache files.
@@ -82,7 +77,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));
-    std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_reporting.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));

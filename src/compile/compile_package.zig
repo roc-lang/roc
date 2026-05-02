@@ -136,9 +136,6 @@ const ModuleState = struct {
     working: if (!threading.is_freestanding) std.atomic.Value(u8) else u8 = if (!threading.is_freestanding) std.atomic.Value(u8).init(0) else 0,
     /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
     cached_ast: ?*parse.AST = null,
-    /// True if this module was loaded from cache. Cached modules have their env memory
-    /// owned by the cache buffer, so we must NOT call env.deinit() for them.
-    was_from_cache: bool = false,
 
     fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
         if (self.semantic) |*semantic| {
@@ -195,58 +192,22 @@ const ModuleState = struct {
         if (self.cached_ast) |ast| {
             ast.deinit();
         }
-        if (comptime trace_build) {
-            std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
-        }
-
-        // For cached modules:
-        // - Call deinitCachedModule() to free only heap-allocated hash maps
-        // - The cache buffer is freed separately via cache_buffers cleanup
-        // - STILL free the source - it's heap-allocated separately, not part of the cache buffer
-        //
-        // For non-cached modules:
-        // - Call full env.deinit() to free all allocations
-        // - Free the source which was heap-allocated
-        if (!self.was_from_cache) {
-            if (self.semantic) |*semantic| {
-                if (semantic.checked_artifact == null) {
-                    if (semantic.module_env) |e| {
-                        // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                        // with e.gpa (page_allocator in multi-threaded mode).
-                        const env_alloc = e.gpa;
-                        const source = e.common.source;
-                        if (comptime trace_build) {
-                            std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
-                        }
-                        e.deinit();
-                        if (comptime trace_build) {
-                            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
-                        }
-                        if (source.len > 0) env_alloc.free(@constCast(source));
-                        env_alloc.destroy(e);
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact == null) {
+                if (semantic.module_env) |e| {
+                    // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                    // with e.gpa (page_allocator in multi-threaded mode).
+                    const env_alloc = e.gpa;
+                    const source = e.common.source;
+                    if (comptime trace_build) {
+                        std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
                     }
-                }
-            }
-        } else {
-            if (self.semantic) |*semantic| {
-                if (semantic.checked_artifact == null) {
-                    if (semantic.module_env) |e| {
-                        if (comptime trace_build) {
-                            std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
-                        }
-                        // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                        // with e.gpa (page_allocator in multi-threaded mode).
-                        const env_alloc = e.gpa;
-                        // The source is heap-allocated separately (read from file), not part of the cache buffer.
-                        // We need to free it even for cached modules.
-                        const source = e.common.source;
-                        e.deinitCachedModule();
-                        if (comptime trace_build) {
-                            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
-                        }
-                        if (source.len > 0) env_alloc.free(@constCast(source));
-                        env_alloc.destroy(e);
+                    e.deinit();
+                    if (comptime trace_build) {
+                        std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
                     }
+                    if (source.len > 0) env_alloc.free(@constCast(source));
+                    env_alloc.destroy(e);
                 }
             }
         }
