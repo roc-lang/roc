@@ -162,11 +162,14 @@ fn evaluateConstantRoot(
 
     var reifier = ComptimeReifier{
         .allocator = allocator,
+        .artifact = artifact,
         .values = &artifact.comptime_values,
         .plans = &artifact.comptime_plans,
         .checked_types = &artifact.checked_types,
         .layouts = &lowered.lir_result.layouts,
+        .lowered = lowered,
         .callable_set_descriptors = lowered.callable_set_descriptors,
+        .source_binding = pattern,
     };
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
 
@@ -331,7 +334,7 @@ fn publishCallableResult(
     checked_fn_root: checked_artifact.CheckedTypeId,
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
-) anyerror!PublishedCallableResult {
+) Allocator.Error!PublishedCallableResult {
     if (selected.planned_member.capture_slots.len != 0) {
         return try promoteFiniteCallableResult(allocator, artifact, lowered, source_binding, checked_fn_root, result_plan_id, selected);
     }
@@ -366,7 +369,7 @@ fn promoteFiniteCallableResult(
     checked_fn_root: checked_artifact.CheckedTypeId,
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
-) anyerror!PublishedCallableResult {
+) Allocator.Error!PublishedCallableResult {
     const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
     const reserved = try artifact.reservePromotedCallableWrapper(
         allocator,
@@ -507,7 +510,7 @@ const PrivateCaptureBuilder = struct {
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
         capture_index: u32,
-    ) anyerror!checked_artifact.PrivateCaptureRef {
+    ) Allocator.Error!checked_artifact.PrivateCaptureRef {
         const checked_root = self.artifact.checked_types.rootForKey(source_ty) orelse {
             compileTimeFinalizationInvariant("private capture source type was not published in checked type store");
         };
@@ -527,7 +530,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.PrivateCaptureNodeId {
+    ) Allocator.Error!checked_artifact.PrivateCaptureNodeId {
         if (self.active.get(plan_id)) |active| {
             return try self.artifact.comptime_plans.appendPrivateCapture(self.allocator, .{ .recursive_ref = active });
         }
@@ -546,7 +549,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.PrivateCaptureNode {
+    ) Allocator.Error!checked_artifact.PrivateCaptureNode {
         const plan = self.artifact.comptime_plans.captureSlot(plan_id);
         return switch (plan) {
             .pending => compileTimeFinalizationInvariant("private capture reification reached pending capture plan"),
@@ -569,7 +572,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.PrivateSerializableCaptureLeaf {
+    ) Allocator.Error!checked_artifact.PrivateSerializableCaptureLeaf {
         const capture_index = self.next_private_const;
         self.next_private_const += 1;
 
@@ -583,11 +586,14 @@ const PrivateCaptureBuilder = struct {
 
         var reifier = ComptimeReifier{
             .allocator = self.allocator,
+            .artifact = self.artifact,
             .values = &self.artifact.comptime_values,
             .plans = &self.artifact.comptime_plans,
             .checked_types = &self.artifact.checked_types,
             .layouts = self.layouts,
+            .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
+            .source_binding = self.source_binding,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
 
@@ -617,7 +623,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         result_plan: checked_artifact.CallableResultPlanId,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.CallableLeafInstance {
+    ) Allocator.Error!checked_artifact.CallableLeafInstance {
         const selected = selectFiniteCallableResult(
             &self.artifact.comptime_plans,
             self.callable_set_descriptors,
@@ -645,7 +651,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         fields: []const checked_artifact.CaptureRecordFieldPlan,
         physical: PhysicalValue,
-    ) anyerror![]const checked_artifact.PrivateCaptureRecordField {
+    ) Allocator.Error![]const checked_artifact.PrivateCaptureRecordField {
         if (fields.len == 0) return &.{};
         const aggregate = self.logicalAggregateValue(physical, .struct_);
         const layout = self.layouts.getLayout(aggregate.layout_idx);
@@ -665,7 +671,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         items: []const checked_artifact.CaptureTupleElemPlan,
         physical: PhysicalValue,
-    ) anyerror![]const checked_artifact.PrivateCaptureNodeId {
+    ) Allocator.Error![]const checked_artifact.PrivateCaptureNodeId {
         if (items.len == 0) return &.{};
         const aggregate = self.logicalAggregateValue(physical, .struct_);
         const layout = self.layouts.getLayout(aggregate.layout_idx);
@@ -685,7 +691,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         variants: []const checked_artifact.CaptureTagVariantPlan,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.PrivateCaptureTagNode {
+    ) Allocator.Error!checked_artifact.PrivateCaptureTagNode {
         const aggregate = self.logicalAggregateValue(physical, .tag_union);
         const layout = self.layouts.getLayout(aggregate.layout_idx);
         if (layout.tag != .tag_union) compileTimeFinalizationInvariant("private tag capture did not lower to tag-union layout");
@@ -717,7 +723,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         elem_plan: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
-    ) anyerror![]const checked_artifact.PrivateCaptureNodeId {
+    ) Allocator.Error![]const checked_artifact.PrivateCaptureNodeId {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const elem_layout_idx = switch (layout.tag) {
             .list => layout.data.list,
@@ -748,7 +754,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         payload_plan: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
-    ) anyerror!checked_artifact.PrivateCaptureNodeId {
+    ) Allocator.Error!checked_artifact.PrivateCaptureNodeId {
         const layout = self.layouts.getLayout(physical.layout_idx);
         const payload = switch (layout.tag) {
             .box => PhysicalValue{
@@ -914,11 +920,14 @@ const PhysicalValue = struct {
 
 const ComptimeReifier = struct {
     allocator: Allocator,
+    artifact: ?*checked_artifact.CheckedModuleArtifact = null,
     values: *checked_artifact.CompileTimeValueStore,
     plans: *const checked_artifact.CompileTimePlanStore,
     checked_types: *const checked_artifact.CheckedTypeStore,
     layouts: *const layout_mod.Store,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    source_binding: ?CIR.Pattern.Idx = null,
 
     fn reifyPlan(
         self: *ComptimeReifier,
@@ -1031,10 +1040,10 @@ const ComptimeReifier = struct {
                     layout_idx,
                     value,
                 );
-                const proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected_callable);
+                const callable_leaf = try self.callableLeafInstance(result_plan, selected_callable);
                 break :blk .{
-                    .schema = try self.values.addSchema(.{ .callable = proc_value.source_fn_ty }),
-                    .value = try self.values.addValue(.{ .callable = .{ .finite = .{ .proc_value = proc_value } } }),
+                    .schema = try self.values.addSchema(.{ .callable = callableLeafSourceFnTy(callable_leaf) }),
+                    .value = try self.values.addValue(.{ .callable = callable_leaf }),
                 };
             },
             .erased_boxed,
@@ -1052,9 +1061,38 @@ const ComptimeReifier = struct {
                 .finite => |finite| self.values.addSchema(.{ .callable = finite.source_fn_ty }),
                 .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
             },
-            .erased_boxed,
-            => reifierInvariant("callable constant leaf schema requires sealed callable promotion output"),
+            .erased_boxed => |result_plan| switch (self.plans.callableResult(result_plan)) {
+                .finite => reifierInvariant("erased boxed callable leaf referenced a finite callable result plan"),
+                .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
+            },
         };
+    }
+
+    fn callableLeafInstance(
+        self: *ComptimeReifier,
+        result_plan: checked_artifact.CallableResultPlanId,
+        selected: SelectedFiniteCallableResult,
+    ) Allocator.Error!checked_artifact.CallableLeafInstance {
+        if (selected.planned_member.capture_slots.len == 0) {
+            return .{ .finite = .{ .proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected) } };
+        }
+
+        const artifact = self.artifact orelse reifierInvariant("captured callable leaf reification requires mutable checked artifact");
+        const lowered = self.lowered orelse reifierInvariant("captured callable leaf reification requires lowered LIR context");
+        const source_binding = self.source_binding orelse reifierInvariant("captured callable leaf reification requires source binding provenance");
+        const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
+            reifierInvariant("captured callable leaf source function type was not published in checked type store");
+        };
+        const published = try publishCallableResult(
+            self.allocator,
+            artifact,
+            lowered,
+            source_binding,
+            checked_fn_root,
+            result_plan,
+            selected,
+        );
+        return .{ .finite = .{ .proc_value = published.proc_value } };
     }
 
     fn reifyWrappedPlan(
