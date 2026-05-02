@@ -12,6 +12,11 @@
 //! - Fast startup, same-architecture only
 //! - See: `buildLirRuntimeImageWithCoordinator`, `rocRun`
 //!
+//! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
+//! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
+//! - Embeds the viewable LIR runtime image directly in the output binary
+//! - The interpreter shim receives only the LIR image pointer and length
+//!
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
 const std = @import("std");
@@ -765,8 +770,17 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
+/// If `runtime_image` is present, embed the already-lowered LIR runtime image
+/// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_names: []const []const u8, target: RocTarget, debug: bool) !?[]const u8 {
+fn generatePlatformHostShim(
+    ctx: *CliContext,
+    cache_dir: []const u8,
+    entrypoint_names: []const []const u8,
+    target: RocTarget,
+    runtime_image: ?[]const u8,
+    debug: bool,
+) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -804,14 +818,21 @@ fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_
         try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
     }
 
-    // Create the complete platform shim
-    // Note: Symbol names include platform-specific prefixes (underscore for macOS)
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
-        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-    };
+    // Create the complete platform shim.
+    // Note: Symbol names include platform-specific prefixes (underscore for macOS).
+    if (runtime_image) |image| {
+        platform_host_shim.createEmbeddedInterpreterShim(&llvm_builder, entrypoints.items, target, image) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+    } else {
+        platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+    }
 
     // Generate paths for temporary files
     var hash = std.hash.Crc32.init();
+    if (runtime_image) |image| hash.update(image);
     for (entrypoint_names) |name| {
         hash.update(name);
         hash.update(&[_]u8{0});
@@ -1104,7 +1125,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // Generate platform host shim using the detected entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -3252,7 +3273,7 @@ fn rootRequestByOrder(
     unreachable;
 }
 
-fn nativeEntrypointSymbolName(
+fn platformProvidedEntrypointName(
     ctx: *CliContext,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
@@ -3281,17 +3302,97 @@ fn nativeEntrypointSymbolName(
 
     for (module_env.provides_entries.items.items) |entry| {
         if (entry.ident == ident) {
-            return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{module_env.getString(entry.ffi_symbol)});
+            return module_env.getString(entry.ffi_symbol);
         }
     }
 
     if (builtin.mode == .Debug) {
         std.debug.panic(
-            "native build invariant violated: exported platform root {s} has no published FFI symbol",
+            "platform entrypoint invariant violated: exported platform root {s} has no published FFI symbol",
             .{module_env.getIdent(ident)},
         );
     }
     unreachable;
+}
+
+fn platformRequiredEntrypointName(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) []const u8 {
+    const binding_id = switch (root.source) {
+        .required_binding => |id| id,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("platform entrypoint invariant violated: platform-required root is not a required binding", .{});
+            }
+            unreachable;
+        },
+    };
+    const binding = root_artifact.platform_required_bindings.lookupByBindingId(binding_id) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("platform entrypoint invariant violated: missing platform-required binding {d}", .{binding_id});
+        }
+        unreachable;
+    };
+    const declaration = root_artifact.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("platform entrypoint invariant violated: missing platform-required declaration", .{});
+        }
+        unreachable;
+    };
+    return root_artifact.canonical_names.exportNameText(declaration.platform_name);
+}
+
+fn platformEntrypointNameForRoot(
+    ctx: *CliContext,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) ![]const u8 {
+    return switch (root.kind) {
+        .provided_export => try platformProvidedEntrypointName(ctx, root_artifact, root),
+        .platform_required_binding => platformRequiredEntrypointName(root_artifact, root),
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("platform entrypoint invariant violated: unexpected root kind {s}", .{@tagName(root.kind)});
+            }
+            unreachable;
+        },
+    };
+}
+
+fn platformEntrypointNamesFromLowered(
+    ctx: *CliContext,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ![]const []const u8 {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "embedded build invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+
+    var names = std.array_list.Managed([]const u8).initCapacity(ctx.arena, root_metadata.len) catch return error.OutOfMemory;
+    for (root_metadata) |metadata| {
+        if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+        const root = rootRequestByOrder(root_artifact, metadata.order);
+        try names.append(try platformEntrypointNameForRoot(ctx, root_artifact, root));
+    }
+    return names.items;
+}
+
+fn nativeEntrypointSymbolName(
+    ctx: *CliContext,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) ![]const u8 {
+    const entrypoint_name = try platformProvidedEntrypointName(ctx, root_artifact, root);
+    return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entrypoint_name});
 }
 
 fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
@@ -3637,12 +3738,343 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 }
 
 
-/// Build a standalone binary with the interpreter and embedded module data.
+/// Build a standalone binary with the interpreter and an embedded LIR runtime image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
 fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
-    _ = ctx;
-    _ = args;
-    @compileError("Phase 2 must route embedded builds through checked artifacts");
+    const target_mod = @import("target.zig");
+
+    var timer = try std.time.Timer.start();
+
+    const output_path = if (args.output) |output|
+        try ctx.arena.dupe(u8, output)
+    else
+        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
+    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, FsIo.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    build_env.discoverDependencies(args.path) catch |err| {
+        renderDiagnostics(&build_env, ctx.io.stderr());
+        return err;
+    };
+
+    const targets_config = build_env.getPlatformTargetsConfig() orelse {
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+    const platform_source = build_env.getPlatformRootFile();
+    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
+
+    const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
+        const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
+            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
+            return error.InvalidTarget;
+        };
+
+        if (targets_config.supportsTarget(parsed_target, .exe)) {
+            break :blk .{ parsed_target, .exe };
+        }
+        if (targets_config.supportsTarget(parsed_target, .static_lib)) {
+            break :blk .{ parsed_target, .static_lib };
+        }
+        if (targets_config.supportsTarget(parsed_target, .shared_lib)) {
+            break :blk .{ parsed_target, .shared_lib };
+        }
+
+        const result = platform_validation.createUnsupportedTargetResult(
+            platform_source orelse "<unknown>",
+            parsed_target,
+            .exe,
+            targets_config,
+        );
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        return error.UnsupportedTarget;
+    } else blk: {
+        const compatible = targets_config.getFirstCompatibleTarget() orelse {
+            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+                .platform_validation_failed = .{
+                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
+                },
+            });
+            return error.UnsupportedTarget;
+        };
+        break :blk .{ compatible.target, compatible.link_type };
+    };
+
+    const native_target = RocTarget.detectNative();
+    if (target != native_target) {
+        const stderr = ctx.io.stderr();
+        try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
+        try stderr.print("To cross-compile for {s}, use the dev backend:\n\n", .{@tagName(target)});
+        try stderr.print("    roc build --opt=dev --target={s} {s}\n\n", .{ @tagName(target), args.path });
+        return error.UnsupportedCrossCompilation;
+    }
+
+    if (args.require_executable_output and link_type != .exe) {
+        const stderr = ctx.io.stderr();
+        switch (link_type) {
+            .static_lib => {
+                try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
+                try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
+                try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
+                try stderr.print("the library artifact.\n", .{});
+            },
+            .shared_lib => {
+                try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
+                try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
+                try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
+                try stderr.print("the library artifact.\n", .{});
+            },
+            .exe => unreachable,
+        }
+        return error.UnsupportedTarget;
+    }
+
+    const target_arch = target.toCpuArch();
+    const target_os = target.toOsTag();
+    const final_output_path = if (args.output != null)
+        output_path
+    else blk: {
+        const ext = switch (link_type) {
+            .exe => switch (target_os) {
+                .windows => ".exe",
+                .freestanding => ".wasm",
+                else => "",
+            },
+            .static_lib => switch (target_os) {
+                .windows => ".lib",
+                else => ".a",
+            },
+            .shared_lib => switch (target_os) {
+                .windows => ".dll",
+                .macos => ".dylib",
+                else => ".so",
+            },
+        };
+        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+    };
+
+    build_env.setTarget(target);
+    build_env.compileDiscovered() catch |err| {
+        renderDiagnostics(&build_env, ctx.io.stderr());
+        return err;
+    };
+
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const total_warning_count = diag.warnings;
+    if (diag.errors > 0 and !args.allow_errors) {
+        return error.CompilationFailed;
+    }
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
+    defer ctx.gpa.free(module_envs);
+
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemoryWithFallback(page_size);
+    defer shm.deinit(ctx.gpa);
+
+    const shm_allocator = shm.allocator();
+    const runtime_header = try shm_allocator.create(lir.RuntimeImage.Header);
+
+    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        shm_allocator,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    );
+
+    const platform_entrypoints = try buildPlatformEntrypoints(shm_allocator, &lowered);
+    try lir.RuntimeImage.fillHeaderInSharedMemory(
+        runtime_header,
+        shm.base_ptr,
+        shm.getUsedSize(),
+        &lowered.lir_result,
+        lowered.target_usize,
+        platform_entrypoints,
+    );
+    shm.updateHeader();
+
+    const runtime_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
+    const entrypoint_names = try platformEntrypointNamesFromLowered(ctx, root_artifact, &lowered);
+    if (entrypoint_names.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("embedded build invariant violated: no platform entrypoints", .{});
+        }
+        unreachable;
+    }
+
+    const target_name = @tagName(target);
+    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = error.UnsupportedTarget,
+            .target = target_name,
+        } });
+    };
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+                std.fs.cwd().access(full_path, .{}) catch {
+                    renderValidationError(ctx.gpa, .{ .missing_target_file = .{
+                        .target = target,
+                        .link_type = link_type,
+                        .file_path = path,
+                        .expected_full_path = full_path,
+                    } }, ctx.io.stderr());
+                    return error.MissingTargetFile;
+                };
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => hit_app = true,
+            .win_gui => {},
+        }
+    }
+
+    const shim_filename = try std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}.a", .{target_name});
+    const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
+    std.fs.cwd().access(shim_path, .{}) catch {
+        extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+    };
+
+    const enable_debug = args.debug or (builtin.mode == .Debug);
+    const platform_shim_path = try generatePlatformHostShim(
+        ctx,
+        build_cache_dir,
+        entrypoint_names,
+        target,
+        runtime_image,
+        enable_debug,
+    );
+
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+    try object_files.append(shim_path);
+    if (platform_shim_path) |path| {
+        try object_files.append(path);
+    }
+
+    var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    if (target.isMacOS()) {
+        try extra_args.append("-lSystem");
+    }
+
+    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
+    const link_config = linker.LinkConfig{
+        .target_format = linker.TargetFormat.detectFromOs(target_os),
+        .target_abi = linker.TargetAbi.fromRocTarget(target),
+        .target_os = target_os,
+        .target_arch = target_arch,
+        .output_path = final_output_path,
+        .object_files = object_files.items,
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+        .extra_args = extra_args.items,
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY,
+        .wasm_stack_size = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE,
+        .platform_files_dir = platform_files_dir,
+    };
+
+    if (args.z_dump_linker) {
+        try dumpLinkerInputs(ctx, link_config);
+    }
+
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = target_name,
+        } });
+    };
+
+    const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
+    const cache_stats = build_env.getCacheStats();
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
+
+    if (!args.suppress_build_status) {
+        const stdout = ctx.io.stdout();
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+            try stdout.print(" with {}% cache hit", .{cache_percent});
+        }
+        try stdout.writeAll(" (checked-artifact embedded interpreter)\n");
+
+        if (args.verbose) {
+            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+                cache_stats.modules_total,
+                cache_stats.cache_hits,
+                cache_stats.modules_compiled,
+            });
+            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        }
+
+        if (total_warning_count > 0) {
+            try stdout.print("  {} warning(s)\n", .{total_warning_count});
+        }
+    }
+
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
+    if (args.exit_on_warnings and total_warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 

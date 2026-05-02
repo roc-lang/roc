@@ -56,6 +56,43 @@ fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Inde
     return entrypoint_fn;
 }
 
+/// Adds the extern declaration for `roc_entrypoint_from_image`.
+///
+/// Embedded interpreter builds pass an already-lowered LIR runtime image as a
+/// pointer/length pair. The interpreter shim views that image directly; it does
+/// not rebuild compiler data or perform any semantic lowering.
+fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
+    const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
+
+    const entrypoint_params = [_]Builder.Type{ .i32, ptr_type, ptr_type, ptr_type, ptr_type, usize_type };
+    const entrypoint_type = try builder.fnType(.void, &entrypoint_params, .normal);
+
+    const base_name = "roc_entrypoint_from_image";
+    const full_name = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
+    defer builder.gpa.free(full_name);
+    const fn_name = try builder.strtabString(full_name);
+
+    const entrypoint_fn = try builder.addFunction(entrypoint_type, fn_name, .default);
+    entrypoint_fn.setLinkage(.external, builder);
+
+    return entrypoint_fn;
+}
+
+fn addRuntimeImageGlobal(builder: *Builder, runtime_image: []const u8) !Builder.Variable.Index {
+    const image_string = try builder.string(runtime_image);
+    const image_const = try builder.stringConst(image_string);
+    const image_name = try builder.strtabString("roc_lir_runtime_image");
+    const image_var = try builder.addVariable(image_name, image_const.typeOf(builder), .default);
+    image_var.setLinkage(.internal, builder);
+    image_var.setMutability(.global, builder);
+    try image_var.setInitializer(image_const, builder);
+    return image_var;
+}
+
 /// Generates a single exported platform function that delegates to roc_entrypoint.
 ///
 /// This creates the "glue" functions that a Roc platform host expects to find when
@@ -133,6 +170,65 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
     return roc_fn;
 }
 
+fn addEmbeddedRocExportedFunction(
+    builder: *Builder,
+    entrypoint_fn: Builder.Function.Index,
+    runtime_image: Builder.Variable.Index,
+    runtime_image_len: usize,
+    name: []const u8,
+    entry_idx: u32,
+    target: RocTarget,
+) !Builder.Function.Index {
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
+    const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
+
+    const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
+    const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
+
+    const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    defer builder.gpa.free(base_name);
+    const full_name = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
+    defer builder.gpa.free(full_name);
+    const fn_name = try builder.strtabString(full_name);
+
+    const roc_fn = try builder.addFunction(roc_fn_type, fn_name, .default);
+    roc_fn.setLinkage(.external, builder);
+
+    var wip = try WipFunction.init(builder, .{
+        .function = roc_fn,
+        .strip = false,
+    });
+    defer wip.deinit();
+
+    const entry_block = try wip.block(0, "entry");
+    wip.cursor = .{ .block = entry_block };
+
+    const ops_ptr = wip.arg(0);
+    const ret_ptr = wip.arg(1);
+    const arg_ptr = wip.arg(2);
+
+    const idx_const = try builder.intConst(.i32, entry_idx);
+    const image_len_const = try builder.intConst(usize_type, runtime_image_len);
+
+    const call_args = [_]Builder.Value{
+        idx_const.toValue(),
+        ops_ptr,
+        ret_ptr,
+        arg_ptr,
+        runtime_image.toValue(builder),
+        image_len_const.toValue(),
+    };
+    _ = try wip.call(.normal, .ccc, .none, entrypoint_fn.typeOf(builder), entrypoint_fn.toValue(builder), &call_args, "");
+
+    _ = try wip.retVoid();
+    try wip.finish();
+
+    return roc_fn;
+}
+
 /// Creates a complete Roc platform library with all necessary entrypoints.
 ///
 /// This generates a shim that translates between the pre-built roc interpreter
@@ -166,5 +262,27 @@ pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint,
     // Add each exported entrypoint function
     for (entrypoints) |entry| {
         _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
+    }
+}
+
+pub fn createEmbeddedInterpreterShim(
+    builder: *Builder,
+    entrypoints: []const EntryPoint,
+    target: RocTarget,
+    runtime_image: []const u8,
+) !void {
+    const runtime_image_global = try addRuntimeImageGlobal(builder, runtime_image);
+    const entrypoint_fn = try addEmbeddedRocEntrypoint(builder, target);
+
+    for (entrypoints) |entry| {
+        _ = try addEmbeddedRocExportedFunction(
+            builder,
+            entrypoint_fn,
+            runtime_image_global,
+            runtime_image.len,
+            entry.name,
+            entry.idx,
+            target,
+        );
     }
 }
