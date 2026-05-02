@@ -2107,6 +2107,121 @@ pub const BuildEnv = struct {
         return self.getAppSemanticData();
     }
 
+    pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const semantic = self.getExecutableRootSemanticData() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
+            }
+            unreachable;
+        };
+        return semantic.checked_artifact orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
+            }
+            unreachable;
+        };
+    }
+
+    pub fn collectImportedArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (checkedArtifactKeysEqual(artifact.key, root_artifact.key)) continue;
+            if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
+
+            var seen = false;
+            for (views.items) |view| {
+                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+        }
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    pub fn collectRelationArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("build env invariant violated: missing relation artifact", .{});
+                }
+                unreachable;
+            };
+            var seen = false;
+            for (views.items) |view| {
+                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+        }
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    pub fn collectModuleEnvViews(self: *BuildEnv, allocator: Allocator) ![]const *const ModuleEnv {
+        const resolved = try self.getResolvedModuleEnvs(allocator);
+        defer allocator.free(resolved.compiled_modules);
+        defer allocator.free(resolved.all_module_envs);
+
+        const envs = try allocator.alloc(*const ModuleEnv, resolved.all_module_envs.len);
+        for (resolved.all_module_envs, 0..) |env, i| {
+            envs[i] = env;
+        }
+        return envs;
+    }
+
+    fn checkedArtifactKeysEqual(
+        a: check.CheckedArtifact.CheckedModuleArtifactKey,
+        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn rootRelationContainsArtifact(
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
+        }
+        return false;
+    }
+
+    fn artifactByKey(
+        modules: []const CompiledModuleInfo,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (checkedArtifactKeysEqual(artifact.key, key)) return artifact;
+        }
+        return null;
+    }
+
     /// Drain reports and render them to a writer. Returns error/warning counts.
     /// Replaces the repeated drain → iterate → render boilerplate pattern.
     pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) RenderDiagnosticsResult {

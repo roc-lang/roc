@@ -13,7 +13,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const can = @import("can");
 const check = @import("check");
 const compile = @import("compile");
 const echo_platform = @import("echo_platform");
@@ -77,92 +76,6 @@ fn emitDiagnostics(build_env: *BuildEnv) void {
             }
         }
     }
-}
-
-fn importedViewsFromCompiledModules(
-    alloc: Allocator,
-    modules: []const BuildEnv.CompiledModuleInfo,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]check.CheckedArtifact.ImportedModuleView {
-    var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-    errdefer views.deinit(alloc);
-
-    for (modules) |module| {
-        const artifact = module.semantic.checked_artifact orelse continue;
-        if (std.mem.eql(u8, &artifact.key.bytes, &root_artifact.key.bytes)) continue;
-        if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
-
-        var seen = false;
-        for (views.items) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) try views.append(alloc, check.CheckedArtifact.importedView(artifact));
-    }
-
-    return views.toOwnedSlice(alloc);
-}
-
-fn rootRelationContainsArtifact(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    key: check.CheckedArtifact.CheckedModuleArtifactKey,
-) bool {
-    for (root_artifact.platform_required_bindings.bindings) |binding| {
-        if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
-    }
-    return false;
-}
-
-fn relationViewsFromCompiledModules(
-    alloc: Allocator,
-    modules: []const BuildEnv.CompiledModuleInfo,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]check.CheckedArtifact.ImportedModuleView {
-    var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-    errdefer views.deinit(alloc);
-
-    for (root_artifact.platform_required_bindings.bindings) |binding| {
-        const artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("echo platform invariant violated: missing app relation artifact", .{});
-            }
-            unreachable;
-        };
-        var seen = false;
-        for (views.items) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) try views.append(alloc, check.CheckedArtifact.importedView(artifact));
-    }
-
-    return views.toOwnedSlice(alloc);
-}
-
-fn artifactByKey(
-    modules: []const BuildEnv.CompiledModuleInfo,
-    key: check.CheckedArtifact.CheckedModuleArtifactKey,
-) ?*const check.CheckedArtifact.CheckedModuleArtifact {
-    for (modules) |module| {
-        const artifact = module.semantic.checked_artifact orelse continue;
-        if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
-    }
-    return null;
-}
-
-fn moduleEnvViewsFromResolvedModules(
-    alloc: Allocator,
-    resolved: *const BuildEnv.ResolvedModules,
-) ![]const *const can.ModuleEnv {
-    const envs = try alloc.alloc(*const can.ModuleEnv, resolved.all_module_envs.len);
-    for (resolved.all_module_envs, 0..) |env, i| {
-        envs[i] = env;
-    }
-    return envs;
 }
 
 fn platformRootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) lir.LirProcSpecId {
@@ -508,24 +421,14 @@ fn compileAndRunInner(source: []const u8) !u8 {
 
     emitDiagnostics(&build_env);
 
-    const root_semantic = build_env.getExecutableRootSemanticData() orelse return error.CompilationFailed;
-    const root_artifact = root_semantic.checked_artifact orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("echo platform invariant violated: executable root has no checked artifact", .{});
-        }
-        unreachable;
-    };
+    const root_artifact = build_env.executableRootCheckedArtifact();
 
-    var resolved = try build_env.getResolvedModuleEnvs(allocator);
-    defer allocator.free(resolved.all_module_envs);
-    defer allocator.free(resolved.compiled_modules);
-
-    const import_views = try importedViewsFromCompiledModules(allocator, resolved.compiled_modules, root_artifact);
+    const import_views = try build_env.collectImportedArtifactViews(allocator, root_artifact);
     defer allocator.free(import_views);
-    const relation_views = try relationViewsFromCompiledModules(allocator, resolved.compiled_modules, root_artifact);
+    const relation_views = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_views);
 
-    const module_envs = try moduleEnvViewsFromResolvedModules(allocator, &resolved);
+    const module_envs = try build_env.collectModuleEnvViews(allocator);
     defer allocator.free(module_envs);
 
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
