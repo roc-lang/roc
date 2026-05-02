@@ -5410,6 +5410,15 @@ pub const PromotedProcedureTable = struct {
         module_idx: u32,
         procedure: PromotedProcedure,
     ) Allocator.Error!PromotedProcedureRef {
+        for (self.procedures) |existing| {
+            if (canonical.procedureValueRefEql(existing.proc, procedure.proc)) {
+                checkedArtifactInvariant("promoted procedure was published twice", .{});
+            }
+            if (canonical.procedureTemplateRefEql(existing.template, procedure.template)) {
+                checkedArtifactInvariant("promoted procedure template was published twice", .{});
+            }
+        }
+
         const old = self.procedures;
         const next = try allocator.alloc(PromotedProcedure, old.len + 1);
         @memcpy(next[0..old.len], old);
@@ -5437,7 +5446,15 @@ pub const PromotedProcedureTable = struct {
     ) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.procedures) |procedure| {
+        for (self.procedures, 0..) |procedure, i| {
+            for (self.procedures[0..i]) |previous| {
+                if (canonical.procedureValueRefEql(previous.proc, procedure.proc)) {
+                    std.debug.panic("checked artifact invariant violated: promoted procedure value appears more than once", .{});
+                }
+                if (canonical.procedureTemplateRefEql(previous.template, procedure.template)) {
+                    std.debug.panic("checked artifact invariant violated: promoted procedure template appears more than once", .{});
+                }
+            }
             if (!std.mem.eql(u8, &procedure.proc.artifact.bytes, &artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure value belongs to a different artifact", .{});
             }
