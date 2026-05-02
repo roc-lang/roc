@@ -248,8 +248,8 @@ fn callableResultPlanForRoot(
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
         .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, callable, key),
+        .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, plans, value_context, erased),
         .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
-        .already_erased,
         .erase_finite_set,
         => checkedPipelineInvariant("compile-time erased callable result publication is not sealed"),
     };
@@ -357,6 +357,62 @@ fn erasedProcValueResultPlan(
         } },
         .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
     } });
+}
+
+fn alreadyErasedResultPlan(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    plans: *checked_artifact.CompileTimePlanStore,
+    value_context: ConstValueContext,
+    erased: repr.AlreadyErasedCallablePlan,
+) Allocator.Error!checked_artifact.CallableResultPlanId {
+    return try plans.appendCallableResult(allocator, .{ .erased = .{
+        .source_fn_ty = erased.sig_key.source_fn_ty,
+        .sig_key = erased.sig_key,
+        .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
+        .code = erased.code,
+        .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, plans, value_context, erased),
+    } });
+}
+
+fn alreadyErasedCapturePlan(
+    allocator: Allocator,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    plans: *checked_artifact.CompileTimePlanStore,
+    value_context: ConstValueContext,
+    erased: repr.AlreadyErasedCallablePlan,
+) Allocator.Error!checked_artifact.ErasedCaptureReificationPlan {
+    return switch (erased.capture) {
+        .none => blk: {
+            if (erased.sig_key.capture_ty != null) {
+                checkedPipelineInvariant("already-erased callable capture plan is none but signature has hidden capture type");
+            }
+            break :blk .none;
+        },
+        .zero_sized_ty => blk: {
+            const capture_ty = erased.sig_key.capture_ty orelse {
+                checkedPipelineInvariant("already-erased zero-sized capture has no hidden capture type");
+            };
+            break :blk .{ .zero_sized_typed = capture_ty };
+        },
+        .value => |capture_value| blk: {
+            if (erased.sig_key.capture_ty == null) {
+                checkedPipelineInvariant("already-erased capture value has no hidden capture type");
+            }
+            const capture_info = value_context.value_store.values.items[@intFromEnum(capture_value)];
+            var capture_builder = CaptureSlotPlanBuilder{
+                .allocator = allocator,
+                .artifact = artifact_sink,
+                .plans = plans,
+                .value_context = value_context,
+                .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
+            };
+            defer capture_builder.deinit();
+            const values = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, 1);
+            values[0] = try capture_builder.planFor(capture_info.source_ty, capture_value);
+            break :blk .{ .values = values };
+        },
+    };
 }
 
 fn erasedCapturePlanForProcValue(
@@ -515,6 +571,13 @@ const CaptureSlotPlanBuilder = struct {
                 callable,
                 key,
             ),
+            .already_erased => |erased| try alreadyErasedResultPlan(
+                self.allocator,
+                self.artifact,
+                self.plans,
+                self.value_context,
+                erased,
+            ),
             .erase_proc_value => |erase| try erasedProcValueResultPlan(
                 self.allocator,
                 self.artifact,
@@ -523,7 +586,6 @@ const CaptureSlotPlanBuilder = struct {
                 callable,
                 erase,
             ),
-            .already_erased,
             .erase_finite_set,
             => checkedPipelineInvariant("erased capture callable leaf publication is not sealed"),
         };
@@ -1167,6 +1229,13 @@ const ConstGraphPlanBuilder = struct {
                 callable,
                 key,
             ) },
+            .already_erased => |erased| .{ .erased_boxed = try alreadyErasedResultPlan(
+                self.allocator,
+                self.artifactSink(),
+                self.plans,
+                context,
+                erased,
+            ) },
             .erase_proc_value => |erase| .{ .erased_boxed = try erasedProcValueResultPlan(
                 self.allocator,
                 self.artifactSink(),
@@ -1175,7 +1244,6 @@ const ConstGraphPlanBuilder = struct {
                 callable,
                 erase,
             ) },
-            .already_erased,
             .erase_finite_set,
             => checkedPipelineInvariant("erased callable constant leaf publication is not sealed"),
         };

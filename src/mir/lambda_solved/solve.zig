@@ -1026,7 +1026,7 @@ const BodySolver = struct {
         return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
             .finite => |key| .{ .finite = key },
             .already_erased => |erased| .{ .erased = erased.sig_key },
-            .erase_finite_set => |adapter| .{ .erased = adapter.erased_fn_sig_key },
+            .erase_finite_set => |erase| .{ .erased = erase.adapter.erased_fn_sig_key },
             .erase_proc_value => |erase| .{ .erased = erase.erased_fn_sig_key },
         };
     }

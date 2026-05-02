@@ -164,17 +164,23 @@ pub const AlreadyErasedCapturePlan = union(enum) {
 pub const AlreadyErasedCallablePlan = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
+    code: canonical.ErasedCallableCodeRef,
     capture: AlreadyErasedCapturePlan = .none,
     provenance: []const BoxBoundaryId = &.{},
 };
 
 pub const ErasedAdapterKey = canonical.ErasedAdapterKey;
 
+pub const FiniteSetErasePlan = struct {
+    adapter: ErasedAdapterKey,
+    provenance: []const BoxBoundaryId = &.{},
+};
+
 pub const CallableValueEmissionPlan = union(enum) {
     finite: CanonicalCallableSetKey,
     already_erased: AlreadyErasedCallablePlan,
     erase_proc_value: ProcValueErasePlan,
-    erase_finite_set: ErasedAdapterKey,
+    erase_finite_set: FiniteSetErasePlan,
 };
 
 pub const CallableValueSource = union(enum) {
@@ -339,9 +345,10 @@ pub const RepresentationStore = struct {
                     if (erase.capture_slots.len > 0) self.allocator.free(erase.capture_slots);
                     if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
                 },
-                .finite,
-                .erase_finite_set,
-                => {},
+                .erase_finite_set => |erase| {
+                    if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
+                },
+                .finite => {},
             }
         }
         if (self.callable_emission_plans.len > 0) self.allocator.free(self.callable_emission_plans);
@@ -998,9 +1005,9 @@ const ExecValueTypeKeyBuilder = struct {
                 self.writeTag("erased_fn");
                 self.writeErasedFnSigKey(erase.erased_fn_sig_key);
             },
-            .erase_finite_set => |adapter| {
+            .erase_finite_set => |erase| {
                 self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(adapter.erased_fn_sig_key);
+                self.writeErasedFnSigKey(erase.adapter.erased_fn_sig_key);
             },
         }
     }

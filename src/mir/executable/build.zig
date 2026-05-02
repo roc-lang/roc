@@ -509,10 +509,10 @@ const BodyBuilder = struct {
                     .capture_shape = erase.capture_shape_key,
                     .capture_ty = try self.lowerProcValueErasedCaptureType(callable, erase, value_store, representation_store),
                 } }),
-                .erase_finite_set => |adapter| try self.type_lowerer.output.addType(.{ .erased_fn = .{
-                    .sig_key = adapter.erased_fn_sig_key,
-                    .capture_shape = adapter.capture_shape_key,
-                    .capture_ty = try self.lowerFiniteSetAdapterCaptureType(adapter),
+                .erase_finite_set => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
+                    .sig_key = erase.adapter.erased_fn_sig_key,
+                    .capture_shape = erase.adapter.capture_shape_key,
+                    .capture_ty = try self.lowerFiniteSetAdapterCaptureType(erase.adapter),
                 } }),
             };
         }
@@ -2148,7 +2148,7 @@ const BodyBuilder = struct {
             .erase_proc_value => |erase| if (!repr.erasedFnSigKeyEql(erase.erased_fn_sig_key, sig_key)) {
                 executableInvariant("executable erased call_value call-site dispatch differs from proc erase emission");
             },
-            .erase_finite_set => |adapter| if (!repr.erasedFnSigKeyEql(adapter.erased_fn_sig_key, sig_key)) {
+            .erase_finite_set => |erase| if (!repr.erasedFnSigKeyEql(erase.adapter.erased_fn_sig_key, sig_key)) {
                 executableInvariant("executable erased call_value call-site dispatch differs from finite-set adapter emission");
             },
             .finite => executableInvariant("executable erased call_value reached finite callee emission"),
