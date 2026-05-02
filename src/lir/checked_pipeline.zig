@@ -191,6 +191,8 @@ fn publishCompileTimeRootPayloads(
 }
 
 const ConstValueContext = struct {
+    canonical_names: *const canonical.CanonicalNameStore,
+    types: *const mir.LambdaSolved.Type.Store,
     value_store_id: repr.ValueInfoStoreId,
     value_store: *const repr.ValueInfoStore,
     representation_store: *const repr.RepresentationStore,
@@ -204,6 +206,8 @@ fn constValueContextForRoot(
 ) ConstValueContext {
     const instance = procRepresentationInstanceForRoot(solved, root_proc);
     return .{
+        .canonical_names = &solved.canonical_names,
+        .types = &solved.types,
         .value_store_id = instance.value_store,
         .value_store = &solved.value_stores.items[@intFromEnum(instance.value_store)],
         .representation_store = &solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store,
@@ -224,6 +228,8 @@ fn callableResultPlanForRoot(
     const ret_info = value_store.values.items[@intFromEnum(instance.public_roots.ret)];
     const callable = ret_info.callable orelse checkedPipelineInvariant("compile-time callable root returned a value without callable metadata");
     const value_context = ConstValueContext{
+        .canonical_names = &solved.canonical_names,
+        .types = &solved.types,
         .value_store_id = instance.value_store,
         .value_store = value_store,
         .representation_store = representation_store,
@@ -410,7 +416,7 @@ const ConstGraphPlanBuilder = struct {
                 .list => .{ .list = .{ .elem = try self.planFor(
                     nominalArg(nominal, 0),
                     value_context,
-                    self.listElemValue(value_context, value_info),
+                    try self.listElemValue(value_context, value_info),
                 ) } },
                 .box => .{ .box = .{ .payload = try self.planFor(
                     nominalArg(nominal, 0),
@@ -616,7 +622,8 @@ const ConstGraphPlanBuilder = struct {
         self: *const ConstGraphPlanBuilder,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
-    ) ?repr.ValueInfoId {
+    ) Allocator.Error!?repr.ValueInfoId {
+        const context = value_context orelse return null;
         const info = self.valueInfo(value_context, value_info) orelse return null;
         const aggregate = info.aggregate orelse return null;
         const list = switch (aggregate) {
@@ -624,6 +631,27 @@ const ConstGraphPlanBuilder = struct {
             else => checkedPipelineInvariant("List(T) constant value had non-list aggregate metadata"),
         };
         if (list.elems.len == 0) return null;
+        const first_key = try repr.execValueTypeKeyForValue(
+            self.allocator,
+            context.canonical_names,
+            context.types,
+            context.representation_store,
+            context.value_store,
+            list.elems[0],
+        );
+        for (list.elems[1..]) |elem| {
+            const elem_key = try repr.execValueTypeKeyForValue(
+                self.allocator,
+                context.canonical_names,
+                context.types,
+                context.representation_store,
+                context.value_store,
+                elem,
+            );
+            if (!repr.canonicalExecValueTypeKeyEql(first_key, elem_key)) {
+                checkedPipelineInvariant("List(T) constant elements have different executable representations");
+            }
+        }
         return list.elems[0];
     }
 
