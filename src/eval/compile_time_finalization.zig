@@ -52,6 +52,7 @@ fn finalize(
         .{
             .requests = compile_time_roots,
             .purpose = .compile_time,
+            .compile_time_plan_sink = &artifact.comptime_plans,
         },
         .{
             .target_usize = base.target.TargetUsize.native,
@@ -75,7 +76,11 @@ fn finalize(
         compileTimeFinalizationInvariant("compile-time lowering did not preserve root cardinality");
     }
 
-    for (compile_time_roots, lowered.lir_result.root_procs.items) |root_request, lir_root| {
+    if (compile_time_roots.len != lowered.compile_time_root_payloads.len) {
+        compileTimeFinalizationInvariant("compile-time lowering did not publish one root payload per root");
+    }
+
+    for (compile_time_roots, lowered.lir_result.root_procs.items, lowered.compile_time_root_payloads) |root_request, lir_root, payload| {
         const root = compileTimeRootForRequest(artifact, root_request);
         switch (root.kind) {
             .constant => try evaluateConstantRoot(
@@ -85,6 +90,10 @@ fn finalize(
                 &lowered,
                 root,
                 lir_root,
+                switch (payload) {
+                    .const_graph => |plan| plan,
+                    else => compileTimeFinalizationInvariant("constant root did not publish a const graph plan"),
+                },
             ),
             .callable_binding => compileTimeFinalizationInvariant("compile-time callable binding promotion is not sealed yet"),
             .expect => {},
@@ -116,6 +125,7 @@ fn evaluateConstantRoot(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     root: checked_artifact.CompileTimeRoot,
     lir_root: lir.LIR.LirProcSpecId,
+    reification_plan: checked_artifact.ConstGraphReificationPlanId,
 ) anyerror!void {
     const pattern = root.pattern orelse compileTimeFinalizationInvariant("constant root had no top-level pattern");
     const top_level = artifact.top_level_values.lookupByPattern(pattern) orelse {
@@ -125,14 +135,6 @@ fn evaluateConstantRoot(
         .const_ref => |ref| ref,
         .procedure_binding => compileTimeFinalizationInvariant("constant root top-level value was a procedure binding"),
     };
-
-    var plan_builder = ConstGraphPlanBuilder{
-        .allocator = allocator,
-        .artifact = artifact,
-        .active = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ConstGraphReificationPlanId).init(allocator),
-    };
-    defer plan_builder.deinit();
-    const reification_plan = try plan_builder.planFor(root.checked_type);
 
     const result = try interpreter.eval(.{
         .proc_id = lir_root,
@@ -199,150 +201,6 @@ fn rootSourceEql(a: checked_artifact.RootSource, b: checked_artifact.RootSource)
         .required_binding => |binding| binding == b.required_binding,
     };
 }
-
-const ConstGraphPlanBuilder = struct {
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    active: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ConstGraphReificationPlanId),
-
-    fn deinit(self: *ConstGraphPlanBuilder) void {
-        self.active.deinit();
-    }
-
-    fn planFor(
-        self: *ConstGraphPlanBuilder,
-        checked_ty: checked_artifact.CheckedTypeId,
-    ) Allocator.Error!checked_artifact.ConstGraphReificationPlanId {
-        if (self.active.get(checked_ty)) |active| {
-            const recursive = try self.artifact.comptime_plans.reserveConstGraph(self.allocator);
-            self.artifact.comptime_plans.fillConstGraph(recursive, .{ .recursive_ref = active });
-            return recursive;
-        }
-
-        const id = try self.artifact.comptime_plans.reserveConstGraph(self.allocator);
-        try self.active.put(checked_ty, id);
-        errdefer _ = self.active.remove(checked_ty);
-
-        const plan = try self.buildPlan(checked_ty);
-        self.artifact.comptime_plans.fillConstGraph(id, plan);
-        _ = self.active.remove(checked_ty);
-        return id;
-    }
-
-    fn buildPlan(
-        self: *ConstGraphPlanBuilder,
-        checked_ty: checked_artifact.CheckedTypeId,
-    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
-        return switch (self.checkedPayload(checked_ty)) {
-            .empty_record => .{ .record = &.{} },
-            .record => |record| .{ .record = try self.recordFields(record.fields) },
-            .record_unbound => |fields| .{ .record = try self.recordFields(fields) },
-            .tuple => |items| .{ .tuple = try self.tupleItems(items) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags) },
-            .empty_tag_union => planBuilderInvariant("attempted to plan empty tag union constant"),
-            .alias => |alias| .{ .transparent_alias = .{
-                .alias = .{
-                    .module_name = alias.origin_module,
-                    .type_name = alias.name,
-                },
-                .backing = try self.planFor(alias.backing),
-            } },
-            .nominal => |nominal| try self.nominalPlan(checked_ty, nominal),
-            .function => planBuilderInvariant("callable constant leaf requires an explicit callable reification plan"),
-            .flex, .rigid => planBuilderInvariant("compile-time constant planning reached unresolved type variable"),
-            .pending => planBuilderInvariant("compile-time constant planning reached pending checked type"),
-        };
-    }
-
-    fn nominalPlan(
-        self: *ConstGraphPlanBuilder,
-        checked_ty: checked_artifact.CheckedTypeId,
-        nominal: checked_artifact.CheckedNominalType,
-    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
-        if (nominal.builtin) |builtin_nominal| {
-            return switch (builtin_nominal) {
-                .str => .{ .string = checked_ty },
-                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .{ .scalar = checked_ty },
-                .list => .{ .list = .{ .elem = try self.planFor(nominalArg(nominal, 0)) } },
-                .box => .{ .box = .{ .payload = try self.planFor(nominalArg(nominal, 0)) } },
-                .bool => self.buildPlan(nominal.backing),
-            };
-        }
-
-        return .{ .nominal = .{
-            .nominal = .{
-                .module_name = nominal.origin_module,
-                .type_name = nominal.name,
-            },
-            .backing = try self.planFor(nominal.backing),
-        } };
-    }
-
-    fn recordFields(
-        self: *ConstGraphPlanBuilder,
-        fields: []const checked_artifact.CheckedRecordField,
-    ) Allocator.Error![]const checked_artifact.ConstRecordFieldPlan {
-        if (fields.len == 0) return &.{};
-        const plans = try self.allocator.alloc(checked_artifact.ConstRecordFieldPlan, fields.len);
-        errdefer self.allocator.free(plans);
-        for (fields, 0..) |field, i| {
-            plans[i] = .{
-                .field = field.name,
-                .value = try self.planFor(field.ty),
-            };
-        }
-        return plans;
-    }
-
-    fn tupleItems(
-        self: *ConstGraphPlanBuilder,
-        items: []const checked_artifact.CheckedTypeId,
-    ) Allocator.Error![]const checked_artifact.ConstTupleElemPlan {
-        if (items.len == 0) return &.{};
-        const plans = try self.allocator.alloc(checked_artifact.ConstTupleElemPlan, items.len);
-        errdefer self.allocator.free(plans);
-        for (items, 0..) |item, i| {
-            plans[i] = .{
-                .index = @intCast(i),
-                .value = try self.planFor(item),
-            };
-        }
-        return plans;
-    }
-
-    fn tagVariants(
-        self: *ConstGraphPlanBuilder,
-        tags: []const checked_artifact.CheckedTag,
-    ) Allocator.Error![]const checked_artifact.ConstTagVariantPlan {
-        const variants = try self.allocator.alloc(checked_artifact.ConstTagVariantPlan, tags.len);
-        errdefer {
-            for (variants) |variant| self.allocator.free(variant.payloads);
-            self.allocator.free(variants);
-        }
-        for (tags, 0..) |tag, i| {
-            const payloads = try self.allocator.alloc(checked_artifact.ConstTagPayloadPlan, tag.args.len);
-            errdefer self.allocator.free(payloads);
-            for (tag.args, 0..) |arg_ty, arg_i| {
-                payloads[arg_i] = .{
-                    .index = @intCast(arg_i),
-                    .value = try self.planFor(arg_ty),
-                };
-            }
-            variants[i] = .{
-                .tag = tag.name,
-                .payloads = payloads,
-            };
-        }
-        return variants;
-    }
-
-    fn checkedPayload(
-        self: *const ConstGraphPlanBuilder,
-        ty: checked_artifact.CheckedTypeId,
-    ) checked_artifact.CheckedTypePayload {
-        return self.artifact.checked_types.payloads[@intFromEnum(ty)];
-    }
-};
 
 const ReifiedValue = struct {
     schema: checked_artifact.ComptimeSchemaId,
@@ -815,14 +673,6 @@ const ComptimeReifier = struct {
     }
 };
 
-fn nominalArg(
-    nominal: checked_artifact.CheckedNominalType,
-    index: usize,
-) checked_artifact.CheckedTypeId {
-    if (index >= nominal.args.len) reifierInvariant("builtin nominal type was missing an argument");
-    return nominal.args[index];
-}
-
 fn payloadLayoutForTagArg(
     layouts: *const layout_mod.Store,
     variant_layout_idx: layout_mod.Idx,
@@ -851,13 +701,6 @@ fn payloadOffsetForTagArg(
 fn reifierInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
         std.debug.panic("compile-time reifier invariant violated: " ++ message, .{});
-    }
-    unreachable;
-}
-
-fn planBuilderInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("compile-time plan builder invariant violated: " ++ message, .{});
     }
     unreachable;
 }

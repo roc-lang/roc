@@ -4552,7 +4552,6 @@ pub const ComptimeValueId = enum(u32) { _ };
 pub const ComptimeRootId = enum(u32) { _ };
 pub const ComptimeDependencySummaryRequestId = enum(u32) { _ };
 pub const ConstGraphReificationPlanId = enum(u32) { _ };
-pub const CallableResultRecordId = enum(u32) { _ };
 
 pub const CompileTimeRootKind = enum {
     constant,
@@ -4562,7 +4561,7 @@ pub const CompileTimeRootKind = enum {
 
 pub const CompileTimeRootPayload = union(enum) {
     const_graph: ConstGraphReificationPlanId,
-    callable_result: CallableResultRecordId,
+    callable_result: CallableResultPlanId,
     expect,
 };
 
