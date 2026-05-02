@@ -16,7 +16,7 @@ pub const BindingInfoId = enum(u32) { _ };
 pub const ProjectionInfoId = enum(u32) { _ };
 pub const CallSiteInfoId = enum(u32) { _ };
 pub const JoinInfoId = enum(u32) { _ };
-pub const BoxBoundaryId = enum(u32) { _ };
+pub const BoxBoundaryId = canonical.BoxBoundaryId;
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
@@ -24,7 +24,7 @@ pub const RepresentationClassId = enum(u32) { _ };
 pub const ProcRepresentationInstanceId = enum(u32) { _ };
 pub const RepresentationSolveSessionId = enum(u32) { _ };
 pub const ValueInfoStoreId = enum(u32) { _ };
-pub const CallableSetMemberId = enum(u32) { _ };
+pub const CallableSetMemberId = canonical.CallableSetMemberId;
 pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
@@ -44,51 +44,15 @@ pub fn Span(comptime _: type) type {
     };
 }
 
-pub const CanonicalCallableSetKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-pub const CaptureShapeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-pub const CanonicalExecValueTypeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-pub const ErasedFnAbiKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-pub const ErasedFnSigKey = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    abi: ErasedFnAbiKey,
-    capture_ty: ?CanonicalExecValueTypeKey = null,
-};
-
-pub const CallableSetMemberRef = struct {
-    callable_set_key: CanonicalCallableSetKey,
-    member_index: CallableSetMemberId,
-};
-
-pub const CallableSetCaptureSlot = struct {
-    slot: u32,
-    source_ty: canonical.CanonicalTypeKey,
-    exec_value_ty: CanonicalExecValueTypeKey,
-};
-
-pub const CanonicalCallableSetMember = struct {
-    member: CallableSetMemberId,
-    proc_value: canonical.ProcedureCallableRef,
-    source_proc: canonical.MirProcedureRef,
-    capture_slots: []const CallableSetCaptureSlot,
-    capture_shape_key: CaptureShapeKey,
-};
-
-pub const CanonicalCallableSetDescriptor = struct {
-    key: CanonicalCallableSetKey,
-    members: []const CanonicalCallableSetMember,
-};
+pub const CanonicalCallableSetKey = canonical.CanonicalCallableSetKey;
+pub const CaptureShapeKey = canonical.CaptureShapeKey;
+pub const CanonicalExecValueTypeKey = canonical.CanonicalExecValueTypeKey;
+pub const ErasedFnAbiKey = canonical.ErasedFnAbiKey;
+pub const ErasedFnSigKey = canonical.ErasedFnSigKey;
+pub const CallableSetMemberRef = canonical.CallableSetMemberRef;
+pub const CallableSetCaptureSlot = canonical.CallableSetCaptureSlot;
+pub const CanonicalCallableSetMember = canonical.CanonicalCallableSetMember;
+pub const CanonicalCallableSetDescriptor = canonical.CanonicalCallableSetDescriptor;
 
 pub const CallableMemberInstanceId = struct {
     proc_base: canonical.ProcBaseKeyRef,
@@ -96,10 +60,7 @@ pub const CallableMemberInstanceId = struct {
     lambda_solved_instance: ProcRepresentationInstanceId,
 };
 
-pub const CallableRepresentation = union(enum) {
-    finite: CanonicalCallableSetKey,
-    erased: ErasedFnSigKey,
-};
+pub const CallableRepresentation = canonical.CallableRepresentation;
 
 pub const CallableReprMode = enum {
     direct,
@@ -207,12 +168,7 @@ pub const AlreadyErasedCallablePlan = struct {
     provenance: []const BoxBoundaryId = &.{},
 };
 
-pub const ErasedAdapterKey = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    callable_set_key: CanonicalCallableSetKey,
-    erased_fn_sig_key: ErasedFnSigKey,
-    capture_shape_key: CaptureShapeKey,
-};
+pub const ErasedAdapterKey = canonical.ErasedAdapterKey;
 
 pub const CallableValueEmissionPlan = union(enum) {
     finite: CanonicalCallableSetKey,

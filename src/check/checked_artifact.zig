@@ -4673,6 +4673,363 @@ pub const CompileTimeRootTable = struct {
     }
 };
 
+pub const CallableLeafInstance = struct {
+    proc_value: canonical.ProcedureCallableRef,
+};
+
+pub const CallableLeafReificationPlan = union(enum) {
+    finite: CallableResultPlanId,
+    erased_boxed: CallableResultPlanId,
+    already_resolved: CallableLeafInstance,
+};
+
+pub const ConstRecordFieldPlan = struct {
+    field: canonical.RecordFieldLabelId,
+    value: ConstGraphReificationPlanId,
+};
+
+pub const ConstTupleElemPlan = struct {
+    index: u32,
+    value: ConstGraphReificationPlanId,
+};
+
+pub const ConstTagPayloadPlan = struct {
+    index: u32,
+    value: ConstGraphReificationPlanId,
+};
+
+pub const ConstTagVariantPlan = struct {
+    tag: canonical.TagLabelId,
+    payloads: []const ConstTagPayloadPlan,
+};
+
+pub const ConstGraphReificationPlan = union(enum) {
+    scalar: CheckedTypeId,
+    string: CheckedTypeId,
+    list: struct {
+        elem: ConstGraphReificationPlanId,
+    },
+    box: struct {
+        payload: ConstGraphReificationPlanId,
+    },
+    tuple: []const ConstTupleElemPlan,
+    record: []const ConstRecordFieldPlan,
+    tag_union: []const ConstTagVariantPlan,
+    transparent_alias: struct {
+        alias: canonical.NominalTypeKey,
+        backing: ConstGraphReificationPlanId,
+    },
+    nominal: struct {
+        nominal: canonical.NominalTypeKey,
+        backing: ConstGraphReificationPlanId,
+    },
+    callable_leaf: CallableLeafReificationPlan,
+    recursive_ref: ConstGraphReificationPlanId,
+};
+
+pub const SerializableCaptureLeafPlan = struct {
+    const_ref: ConstRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+    schema: ComptimeSchemaId,
+};
+
+pub const CaptureRecordFieldPlan = struct {
+    field: canonical.RecordFieldLabelId,
+    value: CaptureSlotReificationPlanId,
+};
+
+pub const CaptureTupleElemPlan = struct {
+    index: u32,
+    value: CaptureSlotReificationPlanId,
+};
+
+pub const CaptureTagPayloadPlan = struct {
+    index: u32,
+    value: CaptureSlotReificationPlanId,
+};
+
+pub const CaptureTagVariantPlan = struct {
+    tag: canonical.TagLabelId,
+    payloads: []const CaptureTagPayloadPlan,
+};
+
+pub const CaptureSlotReificationPlan = union(enum) {
+    serializable_leaf: SerializableCaptureLeafPlan,
+    callable_leaf: CallableResultPlanId,
+    record: []const CaptureRecordFieldPlan,
+    tuple: []const CaptureTupleElemPlan,
+    tag_union: []const CaptureTagVariantPlan,
+    list: []const CaptureSlotReificationPlanId,
+    box: CaptureSlotReificationPlanId,
+    nominal: struct {
+        nominal: canonical.NominalTypeKey,
+        backing: CaptureSlotReificationPlanId,
+    },
+    recursive_ref: CaptureSlotReificationPlanId,
+};
+
+pub const CallableResultMemberPlan = struct {
+    member: canonical.CallableSetMemberId,
+    capture_slots: []const CaptureSlotReificationPlanId,
+};
+
+pub const FiniteCallableResultPlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    callable_set_key: canonical.CanonicalCallableSetKey,
+    members: []const CallableResultMemberPlan,
+};
+
+pub const ErasedCaptureReificationPlan = union(enum) {
+    none,
+    zero_sized_typed: canonical.CanonicalExecValueTypeKey,
+    values: []const CaptureSlotReificationPlanId,
+};
+
+pub const ErasedCallableResultPlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    sig_key: canonical.ErasedFnSigKey,
+    provenance: []const canonical.BoxBoundaryId,
+    code: canonical.ErasedCallableCodeRef,
+    capture: ErasedCaptureReificationPlan,
+};
+
+pub const CallableResultPlan = union(enum) {
+    finite: FiniteCallableResultPlan,
+    erased: ErasedCallableResultPlan,
+};
+
+pub const FiniteCallablePromotionPlan = struct {
+    result_plan: CallableResultPlanId,
+    selected_member: canonical.CallableSetMemberId,
+    promoted_proc: PromotedProcedureRef,
+};
+
+pub const ErasedCallablePromotionPlan = struct {
+    result_plan: CallableResultPlanId,
+    promoted_proc: PromotedProcedureRef,
+};
+
+pub const CallablePromotionPlan = union(enum) {
+    finite: FiniteCallablePromotionPlan,
+    erased: ErasedCallablePromotionPlan,
+};
+
+pub const PrivateCaptureNode = union(enum) {
+    serializable_leaf: SerializableCaptureLeafPlan,
+    callable_leaf: CallableLeafInstance,
+    record: []const CaptureRecordFieldPlan,
+    tuple: []const CaptureTupleElemPlan,
+    tag_union: []const CaptureTagVariantPlan,
+    list: []const CaptureSlotReificationPlanId,
+    box: CaptureSlotReificationPlanId,
+    nominal: struct {
+        nominal: canonical.NominalTypeKey,
+        backing: PrivateCaptureNodeId,
+    },
+    recursive_ref: PrivateCaptureNodeId,
+};
+
+pub const CompileTimePlanStore = struct {
+    const_graphs: std.ArrayList(ConstGraphReificationPlan) = .empty,
+    callable_results: std.ArrayList(CallableResultPlan) = .empty,
+    callable_promotions: std.ArrayList(CallablePromotionPlan) = .empty,
+    capture_slots: std.ArrayList(CaptureSlotReificationPlan) = .empty,
+    private_captures: std.ArrayList(PrivateCaptureNode) = .empty,
+
+    pub fn deinit(self: *CompileTimePlanStore, allocator: Allocator) void {
+        for (self.const_graphs.items) |*plan| deinitConstGraphReificationPlan(allocator, plan);
+        for (self.callable_results.items) |*plan| deinitCallableResultPlan(allocator, plan);
+        for (self.capture_slots.items) |*plan| deinitCaptureSlotReificationPlan(allocator, plan);
+        for (self.private_captures.items) |*node| deinitPrivateCaptureNode(allocator, node);
+        self.private_captures.deinit(allocator);
+        self.capture_slots.deinit(allocator);
+        self.callable_promotions.deinit(allocator);
+        self.callable_results.deinit(allocator);
+        self.const_graphs.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn verifySealed(self: *const CompileTimePlanStore) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
+        for (self.callable_results.items) |plan| verifyCallableResultPlan(self, plan);
+        for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
+        for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, plan);
+        for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, node);
+    }
+};
+
+fn deinitConstGraphReificationPlan(allocator: Allocator, plan: *ConstGraphReificationPlan) void {
+    switch (plan.*) {
+        .scalar,
+        .string,
+        .list,
+        .box,
+        .transparent_alias,
+        .nominal,
+        .callable_leaf,
+        .recursive_ref,
+        => {},
+        .tuple => |items| allocator.free(items),
+        .record => |fields| allocator.free(fields),
+        .tag_union => |variants| {
+            for (variants) |variant| allocator.free(variant.payloads);
+            allocator.free(variants);
+        },
+    }
+}
+
+fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) void {
+    switch (plan.*) {
+        .finite => |finite| {
+            for (finite.members) |member| allocator.free(member.capture_slots);
+            allocator.free(finite.members);
+        },
+        .erased => |erased| {
+            allocator.free(erased.provenance);
+            switch (erased.capture) {
+                .none,
+                .zero_sized_typed,
+                => {},
+                .values => |values| allocator.free(values),
+            }
+        },
+    }
+}
+
+fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReificationPlan) void {
+    switch (plan.*) {
+        .serializable_leaf,
+        .callable_leaf,
+        .box,
+        .nominal,
+        .recursive_ref,
+        => {},
+        .record => |fields| allocator.free(fields),
+        .tuple => |items| allocator.free(items),
+        .tag_union => |variants| {
+            for (variants) |variant| allocator.free(variant.payloads);
+            allocator.free(variants);
+        },
+        .list => |items| allocator.free(items),
+    }
+}
+
+fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) void {
+    switch (node.*) {
+        .serializable_leaf,
+        .callable_leaf,
+        .box,
+        .nominal,
+        .recursive_ref,
+        => {},
+        .record => |fields| allocator.free(fields),
+        .tuple => |items| allocator.free(items),
+        .tag_union => |variants| {
+            for (variants) |variant| allocator.free(variant.payloads);
+            allocator.free(variants);
+        },
+        .list => |items| allocator.free(items),
+    }
+}
+
+fn verifyConstGraphRef(store: *const CompileTimePlanStore, id: ConstGraphReificationPlanId) void {
+    std.debug.assert(@intFromEnum(id) < store.const_graphs.items.len);
+}
+
+fn verifyCallableResultRef(store: *const CompileTimePlanStore, id: CallableResultPlanId) void {
+    std.debug.assert(@intFromEnum(id) < store.callable_results.items.len);
+}
+
+fn verifyCaptureSlotRef(store: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) void {
+    std.debug.assert(@intFromEnum(id) < store.capture_slots.items.len);
+}
+
+fn verifyPrivateCaptureRef(store: *const CompileTimePlanStore, id: PrivateCaptureNodeId) void {
+    std.debug.assert(@intFromEnum(id) < store.private_captures.items.len);
+}
+
+fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: ConstGraphReificationPlan) void {
+    switch (plan) {
+        .scalar,
+        .string,
+        => {},
+        .list => |list| verifyConstGraphRef(store, list.elem),
+        .box => |box| verifyConstGraphRef(store, box.payload),
+        .tuple => |items| for (items) |item| verifyConstGraphRef(store, item.value),
+        .record => |fields| for (fields) |field| verifyConstGraphRef(store, field.value),
+        .tag_union => |variants| for (variants) |variant| {
+            for (variant.payloads) |payload| verifyConstGraphRef(store, payload.value);
+        },
+        .transparent_alias => |alias| verifyConstGraphRef(store, alias.backing),
+        .nominal => |nominal| verifyConstGraphRef(store, nominal.backing),
+        .callable_leaf => |leaf| switch (leaf) {
+            .finite,
+            .erased_boxed,
+            => |result| verifyCallableResultRef(store, result),
+            .already_resolved => {},
+        },
+        .recursive_ref => |ref| verifyConstGraphRef(store, ref),
+    }
+}
+
+fn verifyCallableResultPlan(store: *const CompileTimePlanStore, plan: CallableResultPlan) void {
+    switch (plan) {
+        .finite => |finite| {
+            for (finite.members) |member| {
+                for (member.capture_slots) |capture| verifyCaptureSlotRef(store, capture);
+            }
+        },
+        .erased => |erased| switch (erased.capture) {
+            .none,
+            .zero_sized_typed,
+            => {},
+            .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+        },
+    }
+}
+
+fn verifyCallablePromotionPlan(store: *const CompileTimePlanStore, plan: CallablePromotionPlan) void {
+    switch (plan) {
+        .finite => |finite| verifyCallableResultRef(store, finite.result_plan),
+        .erased => |erased| verifyCallableResultRef(store, erased.result_plan),
+    }
+}
+
+fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: CaptureSlotReificationPlan) void {
+    switch (plan) {
+        .serializable_leaf => {},
+        .callable_leaf => |callable| verifyCallableResultRef(store, callable),
+        .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
+        .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
+        .tag_union => |variants| for (variants) |variant| {
+            for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
+        },
+        .list => |items| for (items) |item| verifyCaptureSlotRef(store, item),
+        .box => |payload| verifyCaptureSlotRef(store, payload),
+        .nominal => |nominal| verifyCaptureSlotRef(store, nominal.backing),
+        .recursive_ref => |ref| verifyCaptureSlotRef(store, ref),
+    }
+}
+
+fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCaptureNode) void {
+    switch (node) {
+        .serializable_leaf,
+        .callable_leaf,
+        => {},
+        .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
+        .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
+        .tag_union => |variants| for (variants) |variant| {
+            for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
+        },
+        .list => |items| for (items) |item| verifyCaptureSlotRef(store, item),
+        .box => |payload| verifyCaptureSlotRef(store, payload),
+        .nominal => |nominal| verifyPrivateCaptureRef(store, nominal.backing),
+        .recursive_ref => |ref| verifyPrivateCaptureRef(store, ref),
+    }
+}
+
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
     owner: ConstOwner,
@@ -4861,6 +5218,7 @@ pub const ComptimeSchema = union(enum) {
     tag_union: []ComptimeVariantSchema,
     alias: ComptimeWrappedSchema,
     nominal: ComptimeWrappedSchema,
+    callable: canonical.CanonicalTypeKey,
 };
 
 pub const ComptimeVariantValue = struct {
@@ -5012,6 +5370,7 @@ pub const CompileTimeValueStore = struct {
             .box,
             .alias,
             .nominal,
+            .callable,
             => {},
             .tuple => |items| self.allocator.free(items),
             .record => |fields| self.allocator.free(fields),
@@ -5062,7 +5421,8 @@ pub const CallableBindingInstanceId = enum(u32) { _ };
 pub const SemanticInstantiationProcedureId = enum(u32) { _ };
 pub const CallableResultPlanId = enum(u32) { _ };
 pub const CallablePromotionPlanId = enum(u32) { _ };
-pub const ConstReificationPlanId = enum(u32) { _ };
+pub const ConstReificationPlanId = ConstGraphReificationPlanId;
+pub const CaptureSlotReificationPlanId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
 pub const ComptimeValuePathKey = struct {
@@ -6526,6 +6886,7 @@ pub const CheckedModuleArtifact = struct {
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
+    comptime_plans: CompileTimePlanStore = .{},
     promoted_procedures: PromotedProcedureTable,
     const_templates: ConstTemplateTable,
     comptime_values: CompileTimeValueStore,
@@ -6555,6 +6916,7 @@ pub const CheckedModuleArtifact = struct {
         self.const_instances.deinit(allocator);
         self.const_templates.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
+        self.comptime_plans.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
@@ -6843,6 +7205,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
+        self.comptime_plans.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
         self.callable_binding_instances.verifySealed();
@@ -6922,6 +7285,7 @@ pub const ImportedModuleView = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
     comptime_values: *const CompileTimeValueStore,
+    comptime_plans: *const CompileTimePlanStore,
     const_instances: ConstInstantiationStoreView,
     callable_binding_instances: CallableBindingInstantiationStoreView,
     semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
@@ -6955,6 +7319,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
         .comptime_values = &artifact.comptime_values,
+        .comptime_plans = &artifact.comptime_plans,
         .const_instances = artifact.const_instances.view(),
         .callable_binding_instances = artifact.callable_binding_instances.view(),
         .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures.view(),

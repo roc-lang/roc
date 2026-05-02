@@ -114,6 +114,77 @@ pub const ProcedureCallableRef = struct {
     source_fn_ty: CanonicalTypeKey,
 };
 
+pub const BoxBoundaryId = enum(u32) { _ };
+pub const CallableSetMemberId = enum(u32) { _ };
+
+pub const CanonicalCallableSetKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const CaptureShapeKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const CanonicalExecValueTypeKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const ErasedFnAbiKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const ErasedFnSigKey = struct {
+    source_fn_ty: CanonicalTypeKey,
+    abi: ErasedFnAbiKey,
+    capture_ty: ?CanonicalExecValueTypeKey = null,
+};
+
+pub const CallableSetMemberRef = struct {
+    callable_set_key: CanonicalCallableSetKey,
+    member_index: CallableSetMemberId,
+};
+
+pub const CallableSetCaptureSlot = struct {
+    slot: u32,
+    source_ty: CanonicalTypeKey,
+    exec_value_ty: CanonicalExecValueTypeKey,
+};
+
+pub const CanonicalCallableSetMember = struct {
+    member: CallableSetMemberId,
+    proc_value: ProcedureCallableRef,
+    source_proc: MirProcedureRef,
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+
+pub const CanonicalCallableSetDescriptor = struct {
+    key: CanonicalCallableSetKey,
+    members: []const CanonicalCallableSetMember,
+};
+
+pub const CallableRepresentation = union(enum) {
+    finite: CanonicalCallableSetKey,
+    erased: ErasedFnSigKey,
+};
+
+pub const ErasedAdapterKey = struct {
+    source_fn_ty: CanonicalTypeKey,
+    callable_set_key: CanonicalCallableSetKey,
+    erased_fn_sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+};
+
+pub const ErasedDirectProcCodeRef = struct {
+    proc_value: ProcedureCallableRef,
+    capture_shape_key: CaptureShapeKey,
+};
+
+pub const ErasedCallableCodeRef = union(enum) {
+    direct_proc_value: ErasedDirectProcCodeRef,
+    finite_set_adapter: ErasedAdapterKey,
+};
+
 pub fn procedureCallableRefEql(a: ProcedureCallableRef, b: ProcedureCallableRef) bool {
     return callableProcedureTemplateRefEql(a.template, b.template) and
         std.mem.eql(u8, &a.source_fn_ty.bytes, &b.source_fn_ty.bytes);
