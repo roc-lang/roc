@@ -311,8 +311,8 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
 
     var interp = try Interpreter.init(
         allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
+        &lowered.view.store,
+        &lowered.view.layouts,
         runtime_env.get_ops(),
     );
     defer interp.deinit();
@@ -321,7 +321,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     defer allocator.free(arg_layouts);
 
     const eval_result = interp.eval(.{
-        .proc_id = lowered.main_proc,
+        .proc_id = lowered.mainProc(),
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
         error.Crash => return runtime_env.snapshot(allocator),
@@ -337,19 +337,19 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
 fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
     var codegen = try HostLirCodeGen.init(
         allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
+        &lowered.view.store,
+        &lowered.view.layouts,
         null,
     );
     defer codegen.deinit();
-    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
-    const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_host_effects_main",
-        lowered.main_proc,
+        lowered.mainProc(),
         arg_layouts,
         proc.ret_layout,
     );
@@ -366,7 +366,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
     defer if (arg_buffer) |buf| allocator.free(buf);
 
     const ret_layout = proc.ret_layout;
-    const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
+    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
     const alloc_len = @max(size_align.size, 1);
     const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
     defer allocator.free(ret_buf);

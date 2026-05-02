@@ -4,11 +4,13 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const builtins = @import("builtins");
 const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const ipc = @import("ipc");
 const lir = @import("lir");
 
 const builtin_loading = @import("builtin_loading.zig");
@@ -27,6 +29,9 @@ const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
+const LirProcSpecId = lir.LirProcSpecId;
+const RuntimeImage = lir.RuntimeImage;
+const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
 pub const SourceKind = enum {
     expr,
@@ -87,7 +92,36 @@ pub const ParsedResources = struct {
     }
 };
 
-pub const LoweredProgram = lir.CheckedPipeline.LoweredProgram;
+const EVAL_SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024
+else if (builtin.os.tag == .macos)
+    8 * 1024 * 1024 * 1024
+else
+    2 * 1024 * 1024 * 1024 * 1024;
+
+pub const RuntimeImageProgram = struct {
+    shm: SharedMemoryAllocator,
+    view: RuntimeImage.ProgramView,
+
+    /// First explicit LIR root for eval helpers. The root set was selected by
+    /// checked-artifact publication and lowering; runtime evaluators must not
+    /// rediscover roots from compiler data.
+    pub fn mainProc(self: *const RuntimeImageProgram) LirProcSpecId {
+        if (self.view.root_procs.len == 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("eval runtime image invariant violated: no root procedures", .{});
+            }
+            unreachable;
+        }
+        return self.view.root_procs[0];
+    }
+
+    pub fn deinit(self: *RuntimeImageProgram, allocator: Allocator) void {
+        self.shm.deinit(allocator);
+    }
+};
+
+pub const LoweredProgram = RuntimeImageProgram;
 
 pub const CompiledProgram = struct {
     resources: ParsedResources,
@@ -95,8 +129,8 @@ pub const CompiledProgram = struct {
     wasm_lowered: LoweredProgram,
 
     pub fn deinit(self: *CompiledProgram, allocator: Allocator) void {
-        self.wasm_lowered.deinit();
-        self.lowered.deinit();
+        self.wasm_lowered.deinit(allocator);
+        self.lowered.deinit(allocator);
         cleanupParseAndCanonical(allocator, self.resources);
     }
 };
@@ -128,13 +162,13 @@ pub fn compileProgram(
     const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
     errdefer {
         var owned = lowered;
-        owned.deinit();
+        owned.deinit(allocator);
     }
 
     const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
-        owned.deinit();
+        owned.deinit(allocator);
     }
 
     return .{
@@ -156,13 +190,13 @@ pub fn compileInspectedProgram(
     const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
     errdefer {
         var owned = lowered;
-        owned.deinit();
+        owned.deinit(allocator);
     }
 
     const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
-        owned.deinit();
+        owned.deinit(allocator);
     }
 
     return .{
@@ -513,8 +547,15 @@ fn lowerParsedProgramToLir(
         import_views[i] = check.CheckedArtifact.importedView(artifact);
     }
 
-    return lir.CheckedPipeline.lowerArtifactsToLir(
-        allocator,
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(EVAL_SHARED_MEMORY_SIZE, page_size);
+    errdefer shm.deinit(allocator);
+
+    const shm_allocator = shm.allocator();
+    const runtime_header = try shm_allocator.create(RuntimeImage.Header);
+
+    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        shm_allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
@@ -524,6 +565,22 @@ fn lowerParsedProgramToLir(
             .target_usize = target_usize,
         },
     );
+
+    try RuntimeImage.fillHeaderInSharedMemory(
+        runtime_header,
+        shm.base_ptr,
+        shm.getUsedSize(),
+        &lowered.lir_result,
+        lowered.target_usize,
+        &.{},
+    );
+    shm.updateHeader();
+
+    const view = try RuntimeImage.viewMappedImage(runtime_header, shm.base_ptr, shm.getUsedSize());
+    return .{
+        .shm = shm,
+        .view = view,
+    };
 }
 
 fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
@@ -732,17 +789,17 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
 }
 
 pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) ![]LayoutIdx {
-    const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
-    const arg_locals = lowered.lir_result.store.getLocalSpan(proc.args);
+    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
+    const arg_locals = lowered.view.store.getLocalSpan(proc.args);
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
     for (arg_locals, 0..) |local_id, i| {
-        arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+        arg_layouts[i] = lowered.view.store.getLocal(local_id).layout_idx;
     }
     return arg_layouts;
 }
 
 pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
-    const layouts = &lowered.lir_result.layouts;
+    const layouts = &lowered.view.layouts;
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
@@ -779,8 +836,8 @@ pub fn zeroedEntrypointArgBuffer(
         defer allocator.free(ordered);
 
         for (arg_layouts, 0..) |arg_layout, i| {
-            const size_align = lowered.lir_result.layouts.layoutSizeAlign(
-                lowered.lir_result.layouts.getLayout(arg_layout),
+            const size_align = lowered.view.layouts.layoutSizeAlign(
+                lowered.view.layouts.getLayout(arg_layout),
             );
             const slot_size = entrypointParamSlotSize(lowered, arg_layout);
             ordered[i] = .{
@@ -825,8 +882,8 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
     var interp = try Interpreter.init(
         allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
+        &lowered.view.store,
+        &lowered.view.layouts,
         runtime_env.get_ops(),
     );
     defer interp.deinit();
@@ -835,17 +892,17 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
     defer allocator.free(arg_layouts);
 
     const result = interp.eval(.{
-        .proc_id = lowered.main_proc,
+        .proc_id = lowered.mainProc(),
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
         error.RuntimeError => return error.Crash,
         error.Crash => return error.Crash,
         else => return err,
     };
-    const ret_layout = lowered.lir_result.store.getProcSpec(lowered.main_proc).ret_layout;
+    const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
     return copyReturnedRocStr(
         allocator,
-        &lowered.lir_result.layouts,
+        &lowered.view.layouts,
         ret_layout,
         result.value.ptr,
         null,
@@ -855,19 +912,19 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     var codegen = try HostLirCodeGen.init(
         allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
+        &lowered.view.store,
+        &lowered.view.layouts,
         null,
     );
     defer codegen.deinit();
-    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
-    const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
     const entrypoint = try codegen.generateEntrypointWrapper(
         "roc_eval_test_main",
-        lowered.main_proc,
+        lowered.mainProc(),
         arg_layouts,
         proc.ret_layout,
     );
@@ -884,7 +941,7 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
     defer if (arg_buffer) |buf| allocator.free(buf);
 
     const ret_layout = proc.ret_layout;
-    const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
+    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
     const alloc_len = @max(size_align.size, 1);
     const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
     defer allocator.free(ret_buf);
@@ -907,7 +964,7 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
 
     return copyReturnedRocStr(
         allocator,
-        &lowered.lir_result.layouts,
+        &lowered.view.layouts,
         ret_layout,
         ret_buf.ptr,
         runtime_env.get_ops(),
@@ -918,13 +975,13 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
+        &lowered.view.store,
+        &lowered.view.layouts,
     );
     defer codegen.deinit();
 
-    const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
-    const wasm_result = codegen.generateModule(lowered.main_proc, proc.ret_layout) catch return error.OutOfMemory;
+    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
+    const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout) catch return error.OutOfMemory;
     defer allocator.free(wasm_result.wasm_bytes);
 
     return @import("wasm_runner.zig").runWasmStr(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);

@@ -208,8 +208,11 @@ const ForkResult = union(enum) {
 
 /// Fork a child process to evaluate a backend, communicating the result via pipe.
 ///
-/// The child calls `eval_fn(page_allocator, module_env, expr_idx, builtin_env)`,
-/// writes the resulting string to the pipe, and `_exit(0)`. On error it `_exit(1)`.
+/// The child calls `eval_fn(page_allocator, lowered_runtime_image)`, where
+/// `lowered_runtime_image` is already a zero-copy view over ARC-inserted LIR
+/// allocated in shared memory. Backend children must not inspect CIR, checked
+/// artifacts, MIR, or IR; they write only the resulting string to the pipe and
+/// `_exit(0)`. On error they `_exit(1)`.
 ///
 /// The parent reads the pipe until EOF (important: before waitpid to avoid pipe
 /// buffer deadlock), then reaps the child.
