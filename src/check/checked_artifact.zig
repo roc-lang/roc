@@ -5061,6 +5061,7 @@ pub const CallablePromotionPlan = union(enum) {
 };
 
 pub const PrivateCaptureNode = union(enum) {
+    pending,
     serializable_leaf: SerializableCaptureLeafPlan,
     callable_leaf: CallableLeafInstance,
     record: []const CaptureRecordFieldPlan,
@@ -5178,6 +5179,32 @@ pub const CompileTimePlanStore = struct {
         return id;
     }
 
+    pub fn reservePrivateCapture(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+    ) Allocator.Error!PrivateCaptureNodeId {
+        return try self.appendPrivateCapture(allocator, .pending);
+    }
+
+    pub fn fillPrivateCapture(
+        self: *CompileTimePlanStore,
+        id: PrivateCaptureNodeId,
+        node: PrivateCaptureNode,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.private_captures.items.len) {
+            checkedArtifactInvariant("private capture node id is out of range", .{});
+        }
+        switch (node) {
+            .pending => checkedArtifactInvariant("cannot fill private capture node with pending", .{}),
+            else => {},
+        }
+        switch (self.private_captures.items[index]) {
+            .pending => self.private_captures.items[index] = node,
+            else => checkedArtifactInvariant("private capture node was filled twice", .{}),
+        }
+    }
+
     pub fn privateCapture(self: *const CompileTimePlanStore, id: PrivateCaptureNodeId) PrivateCaptureNode {
         const index = @intFromEnum(id);
         if (index >= self.private_captures.items.len) {
@@ -5265,6 +5292,7 @@ fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReif
 
 fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) void {
     switch (node.*) {
+        .pending,
         .serializable_leaf,
         .box,
         .nominal,
@@ -5452,6 +5480,7 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
 
 fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCaptureNode) void {
     switch (node) {
+        .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
         .serializable_leaf => {},
         .callable_leaf => |leaf| verifyCallableLeafInstance(store, leaf),
         .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
