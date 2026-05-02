@@ -15,6 +15,7 @@ const Layouts = @import("layouts.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 const repr = LambdaSolved.Representation;
 
 pub const Proc = struct {
@@ -238,15 +239,460 @@ fn lowerExecutableSyntheticProc(
     synthetic: ids.ExecutableSyntheticProc,
     executable_proc: Ast.ExecutableProcId,
 ) Allocator.Error!Ast.DefId {
-    _ = allocator;
-    _ = program;
-    _ = executable_proc;
     switch (synthetic.body) {
-        .erased_promoted_wrapper => |erased| {
-            _ = erased;
-            executableInvariant("executable erased promoted wrapper lowering requires canonical executable type payload lowering");
-        },
+        .erased_promoted_wrapper => |erased| return try lowerErasedPromotedWrapperProc(
+            allocator,
+            program,
+            synthetic,
+            executable_proc,
+            erased,
+        ),
     }
+}
+
+fn lowerErasedPromotedWrapperProc(
+    allocator: Allocator,
+    program: *Program,
+    synthetic: ids.ExecutableSyntheticProc,
+    executable_proc: Ast.ExecutableProcId,
+    erased: checked_artifact.ErasedPromotedWrapperBodyPlan,
+) Allocator.Error!Ast.DefId {
+    var published_types = PublishedTypeLowerer.init(
+        allocator,
+        synthetic.executable_type_payloads,
+        &program.types,
+        &program.row_shapes,
+    );
+    defer published_types.deinit();
+
+    const signature = erased.executable_signature;
+    if (signature.wrapper_params.len != erased.params.len) {
+        executableInvariant("executable erased promoted wrapper signature param count differs from wrapper body plan");
+    }
+
+    const args = try lowerErasedPromotedWrapperParams(allocator, &program.ast, &published_types, signature.wrapper_params);
+    const body = try lowerErasedPromotedWrapperBody(
+        allocator,
+        program,
+        &published_types,
+        args,
+        signature,
+        erased,
+    );
+
+    return try program.ast.addDef(.{
+        .proc = executable_proc,
+        .source_proc = synthetic.source_proc,
+        .specialization_key = try repr.cloneExecutableSpecializationKey(allocator, signature.specialization_key),
+        .value = .{ .fn_ = .{
+            .args = args,
+            .body = body,
+        } },
+    });
+}
+
+fn lowerErasedPromotedWrapperParams(
+    allocator: Allocator,
+    ast: *Ast.Store,
+    published_types: *PublishedTypeLowerer,
+    params: []const checked_artifact.ExecutableProcedureParamPayload,
+) Allocator.Error!Ast.Span(Ast.TypedValue) {
+    if (params.len == 0) return Ast.Span(Ast.TypedValue).empty();
+    const out = try allocator.alloc(Ast.TypedValue, params.len);
+    defer allocator.free(out);
+    for (params, 0..) |param, i| {
+        out[i] = .{
+            .ty = try published_types.lower(param.exec_ty, param.exec_ty_key),
+            .value = ast.freshValueRef(),
+        };
+    }
+    return try ast.addTypedValueSpan(out);
+}
+
+fn lowerErasedPromotedWrapperBody(
+    allocator: Allocator,
+    program: *Program,
+    published_types: *PublishedTypeLowerer,
+    args: Ast.Span(Ast.TypedValue),
+    signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
+    erased: checked_artifact.ErasedPromotedWrapperBodyPlan,
+) Allocator.Error!Ast.ExprId {
+    if (erased.arg_bridges.len != 0 or erased.result_bridge != null) {
+        executableInvariant("executable erased promoted wrapper requires explicit bridge lowering before body emission");
+    }
+    if (signature.erased_call_args.len != signature.wrapper_params.len) {
+        executableInvariant("executable erased promoted wrapper erased-call arity differs from wrapper params");
+    }
+
+    const wrapper_args = program.ast.typed_values.items[args.start..][0..args.len];
+    if (wrapper_args.len != signature.wrapper_params.len) {
+        executableInvariant("executable erased promoted wrapper arg span differs from signature params");
+    }
+
+    const wrapper_ret_ty = try published_types.lower(signature.wrapper_ret, signature.wrapper_ret_key);
+    if (!repr.canonicalExecValueTypeKeyEql(signature.wrapper_ret_key, signature.erased_call_ret_key)) {
+        executableInvariant("executable erased promoted wrapper requires result bridge lowering for differing return payloads");
+    }
+
+    const capture_ty = if (signature.hidden_capture) |hidden|
+        try published_types.lower(hidden.exec_ty, hidden.exec_ty_key)
+    else
+        null;
+    const capture = try lowerErasedPromotedCapture(
+        program,
+        capture_ty,
+        erased.capture,
+        erased.hidden_capture_arg,
+    );
+
+    const code_proc = executableProcForErasedCode(program, erased.code);
+    const packed_ty = try program.types.addType(.{ .erased_fn = .{
+        .sig_key = erased.sig_key,
+        .capture_shape = signature.specialization_key.capture_shape_key,
+        .capture_ty = capture_ty,
+    } });
+    const packed_value = program.ast.freshValueRef();
+    const packed_expr = try program.ast.addExpr(packed_ty, packed_value, .{ .packed_erased_fn = .{
+        .sig_key = erased.sig_key,
+        .code = code_proc,
+        .capture = capture.value,
+        .capture_ty = capture_ty,
+        .capture_shape = signature.specialization_key.capture_shape_key,
+    } });
+
+    const call_args: []Ast.ExecutableValueRef = if (wrapper_args.len == 0)
+        &.{}
+    else
+        try allocator.alloc(Ast.ExecutableValueRef, wrapper_args.len);
+    defer if (call_args.len > 0) allocator.free(call_args);
+    for (wrapper_args, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |arg, erased_arg, erased_arg_key, i| {
+        _ = erased_arg;
+        if (!repr.canonicalExecValueTypeKeyEql(signature.wrapper_params[i].exec_ty_key, erased_arg_key)) {
+            executableInvariant("executable erased promoted wrapper requires arg bridge lowering for differing arg payloads");
+        }
+        call_args[i] = arg.value;
+    }
+
+    const call_value = program.ast.freshValueRef();
+    const call_expr = try program.ast.addExpr(wrapper_ret_ty, call_value, .{ .call_erased = .{
+        .func = packed_value,
+        .args = try program.ast.addValueRefSpan(call_args),
+        .sig_key = erased.sig_key,
+        .capture_ty = capture_ty,
+    } });
+
+    const stmt_count: usize = 1 + if (capture.stmt != null) @as(usize, 1) else @as(usize, 0);
+    const stmts = try allocator.alloc(Ast.StmtId, stmt_count);
+    defer allocator.free(stmts);
+    var stmt_index: usize = 0;
+    if (capture.stmt) |stmt| {
+        stmts[stmt_index] = stmt;
+        stmt_index += 1;
+    }
+    stmts[stmt_index] = try program.ast.addStmt(.{ .decl = .{
+        .value = packed_value,
+        .body = packed_expr,
+    } });
+    return try program.ast.addExpr(wrapper_ret_ty, call_value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmts),
+        .final_expr = call_expr,
+    } });
+}
+
+const ErasedPromotedCaptureLowering = struct {
+    value: ?Ast.ExecutableValueRef = null,
+    stmt: ?Ast.StmtId = null,
+};
+
+fn lowerErasedPromotedCapture(
+    program: *Program,
+    capture_ty: ?Type.TypeId,
+    capture: checked_artifact.ErasedCaptureReificationPlan,
+    hidden_arg: checked_artifact.ErasedHiddenCaptureArgPlan,
+) Allocator.Error!ErasedPromotedCaptureLowering {
+    if (capture_ty == null) {
+        switch (capture) {
+            .none => {},
+            else => executableInvariant("executable erased promoted wrapper has capture materialization but no hidden capture type"),
+        }
+        switch (hidden_arg) {
+            .none => {},
+            else => executableInvariant("executable erased promoted wrapper has hidden arg materialization but no hidden capture type"),
+        }
+        return .{};
+    }
+    const ty = capture_ty.?;
+    switch (capture) {
+        .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no capture materialization"),
+        .zero_sized_typed => {},
+        .values,
+        .finite_callable_set,
+        => executableInvariant("executable erased promoted wrapper capture materialization requires private const/callable lowering"),
+    }
+    switch (hidden_arg) {
+        .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no hidden arg"),
+        .materialized_capture => {},
+    }
+    const value = program.ast.freshValueRef();
+    const expr = try program.ast.addExpr(ty, value, .unit);
+    return .{
+        .value = value,
+        .stmt = try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = expr,
+        } }),
+    };
+}
+
+fn executableProcForErasedCode(
+    program: *const Program,
+    code: canonical.ErasedCallableCodeRef,
+) Ast.ExecutableProcId {
+    return switch (code) {
+        .direct_proc_value => |direct| executableProcForCallable(program, direct.proc_value),
+        .finite_set_adapter => executableInvariant("executable erased promoted finite-set adapter body emission is not implemented"),
+    };
+}
+
+fn executableProcForCallable(
+    program: *const Program,
+    callable: canonical.ProcedureCallableRef,
+) Ast.ExecutableProcId {
+    for (program.procs.items) |proc| {
+        if (canonical.procedureCallableRefEql(proc.source_proc.callable, callable)) return proc.executable_proc;
+    }
+    executableInvariant("executable erased promoted wrapper referenced an unreserved callable procedure");
+}
+
+const PublishedTypeLowerer = struct {
+    allocator: Allocator,
+    payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    output: *Type.Store,
+    row_shapes: *MonoRow.Store,
+    active: std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId),
+
+    fn init(
+        allocator: Allocator,
+        payloads: *const checked_artifact.ExecutableTypePayloadStore,
+        output: *Type.Store,
+        row_shapes: *MonoRow.Store,
+    ) PublishedTypeLowerer {
+        return .{
+            .allocator = allocator,
+            .payloads = payloads,
+            .output = output,
+            .row_shapes = row_shapes,
+            .active = std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *PublishedTypeLowerer) void {
+        self.active.deinit();
+    }
+
+    fn lower(
+        self: *PublishedTypeLowerer,
+        ref: checked_artifact.ExecutableTypePayloadRef,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!Type.TypeId {
+        _ = expected_key;
+        if (@intFromEnum(ref.payload) >= self.payloads.payloads.len) {
+            executableInvariant("executable published type payload ref is out of range");
+        }
+        return try self.lowerPayload(ref.payload);
+    }
+
+    fn lowerPayload(
+        self: *PublishedTypeLowerer,
+        id: checked_artifact.ExecutableTypePayloadId,
+    ) Allocator.Error!Type.TypeId {
+        if (self.active.get(id)) |existing| return existing;
+
+        const ty = try self.output.addType(.placeholder);
+        try self.active.put(id, ty);
+        errdefer _ = self.active.remove(id);
+
+        const lowered = try self.lowerPayloadContent(self.payloads.get(id));
+        self.output.types.items[@intFromEnum(ty)] = lowered;
+        _ = self.active.remove(id);
+        return ty;
+    }
+
+    fn lowerPayloadContent(
+        self: *PublishedTypeLowerer,
+        payload: checked_artifact.ExecutableTypePayload,
+    ) Allocator.Error!Type.Content {
+        return switch (payload) {
+            .pending => executableInvariant("executable published type payload was pending"),
+            .primitive => |prim| .{ .primitive = publishedPrimitive(prim) },
+            .record => |fields| try self.lowerRecordPayload(fields),
+            .tuple => |items| .{ .tuple = try self.lowerTuplePayload(items) },
+            .tag_union => |variants| try self.lowerTagUnionPayload(variants),
+            .list => |child| .{ .list = try self.lower(child.ty, child.key) },
+            .box => |child| .{ .box = try self.lower(child.ty, child.key) },
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.lower(nominal.backing, nominal.backing_key),
+            } },
+            .callable_set => |callable_set| try self.lowerCallableSetPayload(callable_set),
+            .erased_fn => |erased| .{ .erased_fn = .{
+                .sig_key = erased.sig_key,
+                .capture_shape = erased.capture_shape_key,
+                .capture_ty = if (erased.capture_ty) |capture| blk: {
+                    const capture_key = erased.capture_ty_key orelse executableInvariant("executable erased payload capture ref has no key");
+                    break :blk try self.lower(capture, capture_key);
+                } else null,
+            } },
+            .recursive_ref => |ref| .{ .link = try self.lowerPayload(ref) },
+        };
+    }
+
+    fn lowerRecordPayload(
+        self: *PublishedTypeLowerer,
+        fields: []const checked_artifact.ExecutableRecordFieldPayload,
+    ) Allocator.Error!Type.Content {
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.field;
+        const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != fields.len) {
+            executableInvariant("executable published record payload shape arity mismatch");
+        }
+
+        const out = try self.allocator.alloc(Type.RecordFieldType, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .field = shape_fields[i],
+                .ty = try self.lower(field.ty, field.key),
+            };
+        }
+        return .{ .record = .{
+            .shape = shape,
+            .fields = out,
+        } };
+    }
+
+    fn lowerTuplePayload(
+        self: *PublishedTypeLowerer,
+        items: []const checked_artifact.ExecutableTupleElemPayload,
+    ) Allocator.Error![]const Type.TypeId {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TypeId, items.len);
+        errdefer self.allocator.free(out);
+        const seen = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (items) |item| {
+            const index: usize = @intCast(item.index);
+            if (index >= items.len) executableInvariant("executable published tuple payload index exceeded arity");
+            if (seen[index]) executableInvariant("executable published tuple payload index was duplicated");
+            out[index] = try self.lower(item.ty, item.key);
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) executableInvariant("executable published tuple payload was not dense");
+        }
+        return out;
+    }
+
+    fn lowerTagUnionPayload(
+        self: *PublishedTypeLowerer,
+        variants: []const checked_artifact.ExecutableTagVariantPayload,
+    ) Allocator.Error!Type.Content {
+        const descriptors = try self.allocator.alloc(MonoRow.TagShapeDescriptor, variants.len);
+        defer self.allocator.free(descriptors);
+        for (variants, 0..) |variant, i| {
+            descriptors[i] = .{
+                .name = variant.tag,
+                .payload_arity = @intCast(variant.payloads.len),
+            };
+        }
+        const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+        const shape_tags = self.row_shapes.tagUnionTags(shape);
+        if (shape_tags.len != variants.len) executableInvariant("executable published tag payload shape arity mismatch");
+
+        const out = try self.allocator.alloc(Type.TagType, variants.len);
+        for (out) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.payloads);
+            self.allocator.free(out);
+        }
+        for (variants, 0..) |variant, i| {
+            const payloads = try self.lowerTagPayloads(shape_tags[i], variant.payloads);
+            out[i] = .{
+                .tag = shape_tags[i],
+                .payloads = payloads,
+            };
+        }
+        return .{ .tag_union = .{
+            .shape = shape,
+            .tags = out,
+        } };
+    }
+
+    fn lowerTagPayloads(
+        self: *PublishedTypeLowerer,
+        tag: MonoRow.TagId,
+        payloads: []const checked_artifact.ExecutableTagPayload,
+    ) Allocator.Error![]const Type.TagPayloadType {
+        if (payloads.len == 0) return &.{};
+        const shape_payloads = self.row_shapes.tagPayloads(tag);
+        if (shape_payloads.len != payloads.len) executableInvariant("executable published tag payload arity mismatch");
+        const out = try self.allocator.alloc(Type.TagPayloadType, payloads.len);
+        errdefer self.allocator.free(out);
+        for (payloads, 0..) |payload, i| {
+            if (payload.index != i) executableInvariant("executable published tag payload indexes are not canonical");
+            out[i] = .{
+                .payload = shape_payloads[i],
+                .ty = try self.lower(payload.ty, payload.key),
+            };
+        }
+        return out;
+    }
+
+    fn lowerCallableSetPayload(
+        self: *PublishedTypeLowerer,
+        callable_set: checked_artifact.ExecutableCallableSetPayload,
+    ) Allocator.Error!Type.Content {
+        const members = try self.allocator.alloc(Type.CallableSetMemberType, callable_set.members.len);
+        errdefer self.allocator.free(members);
+        for (callable_set.members, 0..) |member, i| {
+            members[i] = .{
+                .member = member.member,
+                .payload_ty = if (member.payload_ty) |payload| blk: {
+                    const payload_key = member.payload_ty_key orelse executableInvariant("executable callable-set member payload ref has no key");
+                    break :blk try self.lower(payload, payload_key);
+                } else null,
+            };
+        }
+        return .{ .callable_set = .{
+            .key = callable_set.key,
+            .members = members,
+        } };
+    }
+};
+
+fn publishedPrimitive(prim: checked_artifact.ExecutablePrimitive) Type.Prim {
+    return switch (prim) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .erased => .erased,
+    };
 }
 
 const TypeLowerer = struct {
