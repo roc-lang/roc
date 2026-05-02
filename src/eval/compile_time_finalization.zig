@@ -126,6 +126,14 @@ fn evaluateConstantRoot(
         .procedure_binding => compileTimeFinalizationInvariant("constant root top-level value was a procedure binding"),
     };
 
+    var plan_builder = ConstGraphPlanBuilder{
+        .allocator = allocator,
+        .artifact = artifact,
+        .active = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ConstGraphReificationPlanId).init(allocator),
+    };
+    defer plan_builder.deinit();
+    const reification_plan = try plan_builder.planFor(root.checked_type);
+
     const result = try interpreter.eval(.{
         .proc_id = lir_root,
         .arg_layouts = &.{},
@@ -136,10 +144,11 @@ fn evaluateConstantRoot(
     var reifier = ComptimeReifier{
         .allocator = allocator,
         .values = &artifact.comptime_values,
+        .plans = &artifact.comptime_plans,
         .checked_types = &artifact.checked_types,
         .layouts = &lowered.lir_result.layouts,
     };
-    const reified = try reifier.reify(root.checked_type, ret_layout, result.value);
+    const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
 
     artifact.const_templates.fillValueGraph(const_ref, .{
         .schema = reified.schema,
@@ -191,6 +200,150 @@ fn rootSourceEql(a: checked_artifact.RootSource, b: checked_artifact.RootSource)
     };
 }
 
+const ConstGraphPlanBuilder = struct {
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    active: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.ConstGraphReificationPlanId),
+
+    fn deinit(self: *ConstGraphPlanBuilder) void {
+        self.active.deinit();
+    }
+
+    fn planFor(
+        self: *ConstGraphPlanBuilder,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlanId {
+        if (self.active.get(checked_ty)) |active| {
+            const recursive = try self.artifact.comptime_plans.reserveConstGraph(self.allocator);
+            self.artifact.comptime_plans.fillConstGraph(recursive, .{ .recursive_ref = active });
+            return recursive;
+        }
+
+        const id = try self.artifact.comptime_plans.reserveConstGraph(self.allocator);
+        try self.active.put(checked_ty, id);
+        errdefer _ = self.active.remove(checked_ty);
+
+        const plan = try self.buildPlan(checked_ty);
+        self.artifact.comptime_plans.fillConstGraph(id, plan);
+        _ = self.active.remove(checked_ty);
+        return id;
+    }
+
+    fn buildPlan(
+        self: *ConstGraphPlanBuilder,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
+        return switch (self.checkedPayload(checked_ty)) {
+            .empty_record => .{ .record = &.{} },
+            .record => |record| .{ .record = try self.recordFields(record.fields) },
+            .record_unbound => |fields| .{ .record = try self.recordFields(fields) },
+            .tuple => |items| .{ .tuple = try self.tupleItems(items) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags) },
+            .empty_tag_union => planBuilderInvariant("attempted to plan empty tag union constant"),
+            .alias => |alias| .{ .transparent_alias = .{
+                .alias = .{
+                    .module_name = alias.origin_module,
+                    .type_name = alias.name,
+                },
+                .backing = try self.planFor(alias.backing),
+            } },
+            .nominal => |nominal| try self.nominalPlan(checked_ty, nominal),
+            .function => planBuilderInvariant("callable constant leaf requires an explicit callable reification plan"),
+            .flex, .rigid => planBuilderInvariant("compile-time constant planning reached unresolved type variable"),
+            .pending => planBuilderInvariant("compile-time constant planning reached pending checked type"),
+        };
+    }
+
+    fn nominalPlan(
+        self: *ConstGraphPlanBuilder,
+        checked_ty: checked_artifact.CheckedTypeId,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
+        if (nominal.builtin) |builtin_nominal| {
+            return switch (builtin_nominal) {
+                .str => .{ .string = checked_ty },
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .{ .scalar = checked_ty },
+                .list => .{ .list = .{ .elem = try self.planFor(nominalArg(nominal, 0)) } },
+                .box => .{ .box = .{ .payload = try self.planFor(nominalArg(nominal, 0)) } },
+                .bool => self.buildPlan(nominal.backing),
+            };
+        }
+
+        return .{ .nominal = .{
+            .nominal = .{
+                .module_name = nominal.origin_module,
+                .type_name = nominal.name,
+            },
+            .backing = try self.planFor(nominal.backing),
+        } };
+    }
+
+    fn recordFields(
+        self: *ConstGraphPlanBuilder,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const checked_artifact.ConstRecordFieldPlan {
+        if (fields.len == 0) return &.{};
+        const plans = try self.allocator.alloc(checked_artifact.ConstRecordFieldPlan, fields.len);
+        errdefer self.allocator.free(plans);
+        for (fields, 0..) |field, i| {
+            plans[i] = .{
+                .field = field.name,
+                .value = try self.planFor(field.ty),
+            };
+        }
+        return plans;
+    }
+
+    fn tupleItems(
+        self: *ConstGraphPlanBuilder,
+        items: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const checked_artifact.ConstTupleElemPlan {
+        if (items.len == 0) return &.{};
+        const plans = try self.allocator.alloc(checked_artifact.ConstTupleElemPlan, items.len);
+        errdefer self.allocator.free(plans);
+        for (items, 0..) |item, i| {
+            plans[i] = .{
+                .index = @intCast(i),
+                .value = try self.planFor(item),
+            };
+        }
+        return plans;
+    }
+
+    fn tagVariants(
+        self: *ConstGraphPlanBuilder,
+        tags: []const checked_artifact.CheckedTag,
+    ) Allocator.Error![]const checked_artifact.ConstTagVariantPlan {
+        const variants = try self.allocator.alloc(checked_artifact.ConstTagVariantPlan, tags.len);
+        errdefer {
+            for (variants) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(variants);
+        }
+        for (tags, 0..) |tag, i| {
+            const payloads = try self.allocator.alloc(checked_artifact.ConstTagPayloadPlan, tag.args.len);
+            errdefer self.allocator.free(payloads);
+            for (tag.args, 0..) |arg_ty, arg_i| {
+                payloads[arg_i] = .{
+                    .index = @intCast(arg_i),
+                    .value = try self.planFor(arg_ty),
+                };
+            }
+            variants[i] = .{
+                .tag = tag.name,
+                .payloads = payloads,
+            };
+        }
+        return variants;
+    }
+
+    fn checkedPayload(
+        self: *const ConstGraphPlanBuilder,
+        ty: checked_artifact.CheckedTypeId,
+    ) checked_artifact.CheckedTypePayload {
+        return self.artifact.checked_types.payloads[@intFromEnum(ty)];
+    }
+};
+
 const ReifiedValue = struct {
     schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValueId,
@@ -204,48 +357,89 @@ const PhysicalValue = struct {
 const ComptimeReifier = struct {
     allocator: Allocator,
     values: *checked_artifact.CompileTimeValueStore,
+    plans: *const checked_artifact.CompileTimePlanStore,
     checked_types: *const checked_artifact.CheckedTypeStore,
     layouts: *const layout_mod.Store,
 
-    fn reify(
+    fn reifyPlan(
         self: *ComptimeReifier,
-        checked_ty: checked_artifact.CheckedTypeId,
+        plan_id: checked_artifact.ConstGraphReificationPlanId,
         layout_idx: layout_mod.Idx,
         value: Value,
     ) Allocator.Error!ReifiedValue {
-        const payload = self.checkedPayload(checked_ty);
-        return switch (payload) {
-            .empty_record => self.reifyZst(),
-            .record => |record| self.reifyRecord(record.fields, layout_idx, value),
-            .record_unbound => |fields| self.reifyRecord(fields, layout_idx, value),
-            .tuple => |items| self.reifyTuple(items, layout_idx, value),
-            .tag_union => |tag_union| self.reifyTagUnion(tag_union, layout_idx, value),
-            .empty_tag_union => reifierInvariant("attempted to reify empty tag union value"),
-            .alias => |alias| self.reifyAlias(alias, layout_idx, value),
-            .nominal => |nominal| self.reifyNominal(nominal, layout_idx, value),
-            .function => reifierInvariant("callable constant leaf reification requires callable promotion plans"),
-            .flex, .rigid => reifierInvariant("compile-time reification reached unresolved type variable"),
-            .pending => reifierInvariant("compile-time reification reached pending checked type"),
+        const plan = self.plans.constGraph(plan_id);
+        return switch (plan) {
+            .pending => reifierInvariant("compile-time reification reached pending const graph plan"),
+            .scalar => self.reifyScalar(layout_idx, value),
+            .string => self.reifyStr(layout_idx, value),
+            .list => |list| self.reifyListPlan(list.elem, layout_idx, value),
+            .box => |box| self.reifyBoxPlan(box.payload, layout_idx, value),
+            .tuple => |items| self.reifyTuplePlan(items, layout_idx, value),
+            .record => |fields| self.reifyRecordPlan(fields, layout_idx, value),
+            .tag_union => |variants| self.reifyTagUnionPlan(variants, layout_idx, value),
+            .transparent_alias => |alias| self.reifyWrappedPlan(alias.alias, alias.backing, layout_idx, value, .alias),
+            .nominal => |nominal| self.reifyWrappedPlan(nominal.nominal, nominal.backing, layout_idx, value, .nominal),
+            .callable_leaf => |leaf| self.reifyCallableLeaf(leaf),
+            .recursive_ref => |ref| self.reifyPlan(ref, layout_idx, value),
         };
     }
 
-    fn schemaFor(
+    fn schemaForPlan(
+        self: *ComptimeReifier,
+        plan_id: checked_artifact.ConstGraphReificationPlanId,
+    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+        const plan = self.plans.constGraph(plan_id);
+        return switch (plan) {
+            .pending => reifierInvariant("compile-time schema construction reached pending const graph plan"),
+            .scalar => |checked_ty| self.schemaForScalarCheckedType(checked_ty),
+            .string => self.values.addSchema(.str),
+            .list => |list| self.values.addSchema(.{ .list = try self.schemaForPlan(list.elem) }),
+            .box => |box| self.values.addSchema(.{ .box = try self.schemaForPlan(box.payload) }),
+            .tuple => |items| self.schemaForTuplePlan(items),
+            .record => |fields| self.schemaForRecordPlan(fields),
+            .tag_union => |variants| self.schemaForTagUnionPlan(variants),
+            .transparent_alias => |alias| self.values.addSchema(.{ .alias = .{
+                .type_name = alias.alias,
+                .backing = try self.schemaForPlan(alias.backing),
+            } }),
+            .nominal => |nominal| self.values.addSchema(.{ .nominal = .{
+                .type_name = nominal.nominal,
+                .backing = try self.schemaForPlan(nominal.backing),
+                .is_opaque = false,
+            } }),
+            .callable_leaf => |leaf| self.schemaForCallableLeaf(leaf),
+            .recursive_ref => |ref| self.schemaForPlan(ref),
+        };
+    }
+
+    fn schemaForScalarCheckedType(
         self: *ComptimeReifier,
         checked_ty: checked_artifact.CheckedTypeId,
     ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        const payload = self.checkedPayload(checked_ty);
-        return switch (payload) {
-            .empty_record => self.values.addSchema(.zst),
-            .record => |record| self.schemaForRecord(record.fields),
-            .record_unbound => |fields| self.schemaForRecord(fields),
-            .tuple => |items| self.schemaForTuple(items),
-            .tag_union => |tag_union| self.schemaForTagUnion(tag_union),
-            .empty_tag_union => reifierInvariant("attempted to build schema for empty tag union value"),
-            .alias => |alias| self.schemaForAlias(alias),
-            .nominal => |nominal| self.schemaForNominal(nominal),
-            .function => reifierInvariant("callable constant leaf schema requires callable promotion plans"),
-            .flex, .rigid => reifierInvariant("compile-time schema construction reached unresolved type variable"),
-            .pending => reifierInvariant("compile-time schema construction reached pending checked type"),
+        const nominal = switch (self.checkedPayload(checked_ty)) {
+            .nominal => |nominal| nominal,
+            else => reifierInvariant("scalar const graph plan did not reference a nominal scalar type"),
+        };
+        const builtin_nominal = nominal.builtin orelse reifierInvariant("scalar const graph plan referenced non-builtin nominal type");
+        return switch (builtin_nominal) {
+            .u8 => self.values.addSchema(.{ .int = .u8 }),
+            .i8 => self.values.addSchema(.{ .int = .i8 }),
+            .u16 => self.values.addSchema(.{ .int = .u16 }),
+            .i16 => self.values.addSchema(.{ .int = .i16 }),
+            .u32 => self.values.addSchema(.{ .int = .u32 }),
+            .i32 => self.values.addSchema(.{ .int = .i32 }),
+            .u64 => self.values.addSchema(.{ .int = .u64 }),
+            .i64 => self.values.addSchema(.{ .int = .i64 }),
+            .u128 => self.values.addSchema(.{ .int = .u128 }),
+            .i128 => self.values.addSchema(.{ .int = .i128 }),
+            .f32 => self.values.addSchema(.{ .frac = .f32 }),
+            .f64 => self.values.addSchema(.{ .frac = .f64 }),
+            .dec => self.values.addSchema(.{ .frac = .dec }),
+            .str,
+            .list,
+            .box,
+            .bool,
+            => reifierInvariant("scalar const graph plan referenced non-scalar builtin nominal type"),
         };
     }
 
@@ -256,104 +450,285 @@ const ComptimeReifier = struct {
         };
     }
 
-    fn reifyAlias(
+    fn reifyCallableLeaf(
         self: *ComptimeReifier,
-        alias: checked_artifact.CheckedAliasType,
-        layout_idx: layout_mod.Idx,
-        value: Value,
+        leaf: checked_artifact.CallableLeafReificationPlan,
     ) Allocator.Error!ReifiedValue {
-        const backing = try self.reify(alias.backing, layout_idx, value);
-        const schema = try self.values.addSchema(.{ .alias = .{
-            .type_name = .{
-                .module_name = alias.origin_module,
-                .type_name = alias.name,
+        return switch (leaf) {
+            .already_resolved => |resolved| .{
+                .schema = try self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
+                .value = try self.values.addValue(.{ .callable = resolved.proc_value }),
             },
-            .backing = backing.schema,
-        } });
-        return .{
-            .schema = schema,
-            .value = try self.values.addValue(.{ .alias = backing.value }),
+            .finite,
+            .erased_boxed,
+            => reifierInvariant("callable constant leaf reification requires sealed callable promotion output"),
         };
     }
 
-    fn schemaForAlias(
+    fn schemaForCallableLeaf(
         self: *ComptimeReifier,
-        alias: checked_artifact.CheckedAliasType,
+        leaf: checked_artifact.CallableLeafReificationPlan,
     ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        return self.values.addSchema(.{ .alias = .{
-            .type_name = .{
-                .module_name = alias.origin_module,
-                .type_name = alias.name,
-            },
-            .backing = try self.schemaFor(alias.backing),
-        } });
-    }
-
-    fn reifyNominal(
-        self: *ComptimeReifier,
-        nominal: checked_artifact.CheckedNominalType,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        if (nominal.builtin) |builtin_nominal| {
-            return switch (builtin_nominal) {
-                .str => self.reifyStr(layout_idx, value),
-                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => self.reifyScalar(layout_idx, value),
-                .list => self.reifyList(nominalArg(nominal, 0), layout_idx, value),
-                .box => self.reifyBox(nominalArg(nominal, 0), layout_idx, value),
-                .bool => self.reify(nominal.backing, layout_idx, value),
-            };
-        }
-
-        const backing = try self.reify(nominal.backing, layout_idx, value);
-        const schema = try self.values.addSchema(.{ .nominal = .{
-            .type_name = .{
-                .module_name = nominal.origin_module,
-                .type_name = nominal.name,
-            },
-            .backing = backing.schema,
-            .is_opaque = nominal.is_opaque,
-        } });
-        return .{
-            .schema = schema,
-            .value = try self.values.addValue(.{ .nominal = backing.value }),
+        return switch (leaf) {
+            .already_resolved => |resolved| self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
+            .finite,
+            .erased_boxed,
+            => reifierInvariant("callable constant leaf schema requires sealed callable promotion output"),
         };
     }
 
-    fn schemaForNominal(
+    fn reifyWrappedPlan(
         self: *ComptimeReifier,
-        nominal: checked_artifact.CheckedNominalType,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        if (nominal.builtin) |builtin_nominal| {
-            return switch (builtin_nominal) {
-                .str => self.values.addSchema(.str),
-                .u8 => self.values.addSchema(.{ .int = .u8 }),
-                .i8 => self.values.addSchema(.{ .int = .i8 }),
-                .u16 => self.values.addSchema(.{ .int = .u16 }),
-                .i16 => self.values.addSchema(.{ .int = .i16 }),
-                .u32 => self.values.addSchema(.{ .int = .u32 }),
-                .i32 => self.values.addSchema(.{ .int = .i32 }),
-                .u64 => self.values.addSchema(.{ .int = .u64 }),
-                .i64 => self.values.addSchema(.{ .int = .i64 }),
-                .u128 => self.values.addSchema(.{ .int = .u128 }),
-                .i128 => self.values.addSchema(.{ .int = .i128 }),
-                .f32 => self.values.addSchema(.{ .frac = .f32 }),
-                .f64 => self.values.addSchema(.{ .frac = .f64 }),
-                .dec => self.values.addSchema(.{ .frac = .dec }),
-                .list => self.values.addSchema(.{ .list = try self.schemaFor(nominalArg(nominal, 0)) }),
-                .box => self.values.addSchema(.{ .box = try self.schemaFor(nominalArg(nominal, 0)) }),
-                .bool => self.schemaFor(nominal.backing),
-            };
+        type_name: check.CanonicalNames.NominalTypeKey,
+        backing_plan: checked_artifact.ConstGraphReificationPlanId,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+        comptime wrapper: enum { alias, nominal },
+    ) Allocator.Error!ReifiedValue {
+        const backing = try self.reifyPlan(backing_plan, layout_idx, value);
+        const schema = switch (wrapper) {
+            .alias => try self.values.addSchema(.{ .alias = .{
+                .type_name = type_name,
+                .backing = backing.schema,
+            } }),
+            .nominal => try self.values.addSchema(.{ .nominal = .{
+                .type_name = type_name,
+                .backing = backing.schema,
+                .is_opaque = false,
+            } }),
+        };
+        return .{
+            .schema = schema,
+            .value = switch (wrapper) {
+                .alias => try self.values.addValue(.{ .alias = backing.value }),
+                .nominal => try self.values.addValue(.{ .nominal = backing.value }),
+            },
+        };
+    }
+
+    fn reifyListPlan(
+        self: *ComptimeReifier,
+        elem_plan: checked_artifact.ConstGraphReificationPlanId,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const layout = self.layouts.getLayout(layout_idx);
+        const elem_layout_idx = switch (layout.tag) {
+            .list => layout.data.list,
+            .list_of_zst => layout_mod.Idx.zst,
+            else => reifierInvariant("List(T) const graph plan did not lower to list layout"),
+        };
+        const elem_layout = self.layouts.getLayout(elem_layout_idx);
+        const elem_size: usize = @intCast(self.layouts.layoutSize(elem_layout));
+        const elem_schema = try self.schemaForPlan(elem_plan);
+
+        const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        const items = try self.allocator.alloc(checked_artifact.ComptimeValueId, roc_list.len());
+        errdefer self.allocator.free(items);
+
+        var i: usize = 0;
+        while (i < roc_list.len()) : (i += 1) {
+            const elem_value = if (elem_size == 0)
+                Value.zst
+            else
+                Value{ .ptr = (roc_list.bytes orelse reifierInvariant("non-empty list had null bytes pointer")) + i * elem_size };
+            items[i] = (try self.reifyPlan(elem_plan, elem_layout_idx, elem_value)).value;
         }
 
-        return self.values.addSchema(.{ .nominal = .{
-            .type_name = .{
-                .module_name = nominal.origin_module,
-                .type_name = nominal.name,
-            },
-            .backing = try self.schemaFor(nominal.backing),
-            .is_opaque = nominal.is_opaque,
-        } });
+        return .{
+            .schema = try self.values.addSchema(.{ .list = elem_schema }),
+            .value = try self.values.addValue(.{ .list = items }),
+        };
+    }
+
+    fn reifyBoxPlan(
+        self: *ComptimeReifier,
+        payload_plan: checked_artifact.ConstGraphReificationPlanId,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const layout = self.layouts.getLayout(layout_idx);
+        const elem_layout_idx = switch (layout.tag) {
+            .box => layout.data.box,
+            .box_of_zst => layout_mod.Idx.zst,
+            else => reifierInvariant("Box(T) const graph plan did not lower to box layout"),
+        };
+        const child = if (layout.tag == .box_of_zst)
+            try self.reifyPlan(payload_plan, elem_layout_idx, Value.zst)
+        else blk: {
+            const payload = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer");
+            break :blk try self.reifyPlan(payload_plan, elem_layout_idx, .{ .ptr = payload });
+        };
+        return .{
+            .schema = try self.values.addSchema(.{ .box = child.schema }),
+            .value = try self.values.addValue(.{ .box = child.value }),
+        };
+    }
+
+    fn reifyRecordPlan(
+        self: *ComptimeReifier,
+        fields: []const checked_artifact.ConstRecordFieldPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        if (fields.len == 0) return self.reifyZst();
+        const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag != .struct_) reifierInvariant("record const graph plan did not lower to struct layout");
+
+        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
+        errdefer self.allocator.free(schema_fields);
+        const value_fields = try self.allocator.alloc(checked_artifact.ComptimeValueId, fields.len);
+        errdefer self.allocator.free(value_fields);
+
+        for (fields, 0..) |field, i| {
+            const field_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const field_layout = self.layouts.getLayout(field_layout_idx);
+            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const field_value = if (self.layouts.layoutSize(field_layout) == 0) Value.zst else physical.value.offset(offset);
+            const reified = try self.reifyPlan(field.value, field_layout_idx, field_value);
+            schema_fields[i] = .{ .name = field.field, .schema = reified.schema };
+            value_fields[i] = reified.value;
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .record = schema_fields }),
+            .value = try self.values.addValue(.{ .record = value_fields }),
+        };
+    }
+
+    fn schemaForRecordPlan(
+        self: *ComptimeReifier,
+        fields: []const checked_artifact.ConstRecordFieldPlan,
+    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+        if (fields.len == 0) return self.values.addSchema(.zst);
+
+        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
+        errdefer self.allocator.free(schema_fields);
+        for (fields, 0..) |field, i| {
+            schema_fields[i] = .{
+                .name = field.field,
+                .schema = try self.schemaForPlan(field.value),
+            };
+        }
+        return self.values.addSchema(.{ .record = schema_fields });
+    }
+
+    fn reifyTuplePlan(
+        self: *ComptimeReifier,
+        items: []const checked_artifact.ConstTupleElemPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        if (items.len == 0) return self.reifyZst();
+        const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag != .struct_) reifierInvariant("tuple const graph plan did not lower to struct layout");
+
+        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
+        errdefer self.allocator.free(schemas);
+        const values = try self.allocator.alloc(checked_artifact.ComptimeValueId, items.len);
+        errdefer self.allocator.free(values);
+
+        for (items, 0..) |item, i| {
+            const item_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const item_layout = self.layouts.getLayout(item_layout_idx);
+            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
+            const item_value = if (self.layouts.layoutSize(item_layout) == 0) Value.zst else physical.value.offset(offset);
+            const reified = try self.reifyPlan(item.value, item_layout_idx, item_value);
+            schemas[i] = reified.schema;
+            values[i] = reified.value;
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .tuple = schemas }),
+            .value = try self.values.addValue(.{ .tuple = values }),
+        };
+    }
+
+    fn schemaForTuplePlan(
+        self: *ComptimeReifier,
+        items: []const checked_artifact.ConstTupleElemPlan,
+    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+        if (items.len == 0) return self.values.addSchema(.zst);
+
+        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
+        errdefer self.allocator.free(schemas);
+        for (items, 0..) |item, i| {
+            schemas[i] = try self.schemaForPlan(item.value);
+        }
+        return self.values.addSchema(.{ .tuple = schemas });
+    }
+
+    fn reifyTagUnionPlan(
+        self: *ComptimeReifier,
+        variants_plan: []const checked_artifact.ConstTagVariantPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const physical = self.logicalAggregateValue(layout_idx, value, .tag_union);
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag != .tag_union) reifierInvariant("tag union const graph plan did not lower to tag-union layout");
+        const info = self.layouts.getTagUnionInfo(layout);
+        const discriminant = info.data.readDiscriminant(physical.value.ptr);
+        if (discriminant >= variants_plan.len) reifierInvariant("tag union discriminant was outside const graph plan");
+
+        const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, variants_plan.len);
+        errdefer {
+            for (variants) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(variants);
+        }
+
+        for (variants_plan, 0..) |variant_plan, i| {
+            const payloads = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, variant_plan.payloads.len);
+            errdefer self.allocator.free(payloads);
+            for (variant_plan.payloads, 0..) |payload_plan, payload_i| {
+                payloads[payload_i] = try self.schemaForPlan(payload_plan.value);
+            }
+            variants[i] = .{ .name = variant_plan.tag, .payloads = payloads };
+        }
+
+        const active_variant = variants_plan[discriminant];
+        const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
+        const payload_values = try self.allocator.alloc(checked_artifact.ComptimeValueId, active_variant.payloads.len);
+        errdefer self.allocator.free(payload_values);
+        for (active_variant.payloads, 0..) |payload_plan, payload_i| {
+            const arg_layout_idx = payloadLayoutForTagArg(self.layouts, active_payload_layout, active_variant.payloads.len, @intCast(payload_i));
+            const arg_layout = self.layouts.getLayout(arg_layout_idx);
+            const offset = payloadOffsetForTagArg(self.layouts, active_payload_layout, active_variant.payloads.len, @intCast(payload_i));
+            const arg_value = if (self.layouts.layoutSize(arg_layout) == 0) Value.zst else physical.value.offset(offset);
+            payload_values[payload_i] = (try self.reifyPlan(payload_plan.value, arg_layout_idx, arg_value)).value;
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .tag_union = variants }),
+            .value = try self.values.addValue(.{ .tag_union = .{
+                .variant_index = discriminant,
+                .payloads = payload_values,
+            } }),
+        };
+    }
+
+    fn schemaForTagUnionPlan(
+        self: *ComptimeReifier,
+        variants_plan: []const checked_artifact.ConstTagVariantPlan,
+    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+        const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, variants_plan.len);
+        errdefer {
+            for (variants) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(variants);
+        }
+
+        for (variants_plan, 0..) |variant_plan, i| {
+            const payloads = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, variant_plan.payloads.len);
+            errdefer self.allocator.free(payloads);
+            for (variant_plan.payloads, 0..) |payload_plan, payload_i| {
+                payloads[payload_i] = try self.schemaForPlan(payload_plan.value);
+            }
+            variants[i] = .{ .name = variant_plan.tag, .payloads = payloads };
+        }
+
+        return self.values.addSchema(.{ .tag_union = variants });
     }
 
     fn reifyScalar(
@@ -409,231 +784,6 @@ const ComptimeReifier = struct {
             .schema = try self.values.addSchema(.str),
             .value = try self.values.addValue(.{ .str = owned }),
         };
-    }
-
-    fn reifyList(
-        self: *ComptimeReifier,
-        elem_ty: checked_artifact.CheckedTypeId,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        const layout = self.layouts.getLayout(layout_idx);
-        const elem_layout_idx = switch (layout.tag) {
-            .list => layout.data.list,
-            .list_of_zst => layout_mod.Idx.zst,
-            else => reifierInvariant("List(T) checked type did not lower to list layout"),
-        };
-        const elem_layout = self.layouts.getLayout(elem_layout_idx);
-        const elem_size: usize = @intCast(self.layouts.layoutSize(elem_layout));
-        const elem_schema = try self.schemaFor(elem_ty);
-
-        const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
-        const items = try self.allocator.alloc(checked_artifact.ComptimeValueId, roc_list.len());
-        errdefer self.allocator.free(items);
-
-        var i: usize = 0;
-        while (i < roc_list.len()) : (i += 1) {
-            const elem_value = if (elem_size == 0)
-                Value.zst
-            else
-                Value{ .ptr = (roc_list.bytes orelse reifierInvariant("non-empty list had null bytes pointer")) + i * elem_size };
-            items[i] = (try self.reify(elem_ty, elem_layout_idx, elem_value)).value;
-        }
-
-        return .{
-            .schema = try self.values.addSchema(.{ .list = elem_schema }),
-            .value = try self.values.addValue(.{ .list = items }),
-        };
-    }
-
-    fn reifyBox(
-        self: *ComptimeReifier,
-        elem_ty: checked_artifact.CheckedTypeId,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        const layout = self.layouts.getLayout(layout_idx);
-        const elem_layout_idx = switch (layout.tag) {
-            .box => layout.data.box,
-            .box_of_zst => layout_mod.Idx.zst,
-            else => reifierInvariant("Box(T) checked type did not lower to box layout"),
-        };
-        const child = if (layout.tag == .box_of_zst)
-            try self.reify(elem_ty, elem_layout_idx, Value.zst)
-        else blk: {
-            const payload = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer");
-            break :blk try self.reify(elem_ty, elem_layout_idx, .{ .ptr = payload });
-        };
-        return .{
-            .schema = try self.values.addSchema(.{ .box = child.schema }),
-            .value = try self.values.addValue(.{ .box = child.value }),
-        };
-    }
-
-    fn reifyRecord(
-        self: *ComptimeReifier,
-        fields: []const checked_artifact.CheckedRecordField,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        if (fields.len == 0) return self.reifyZst();
-        const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
-        const layout = self.layouts.getLayout(physical.layout_idx);
-        if (layout.tag != .struct_) reifierInvariant("record checked type did not lower to struct layout");
-
-        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
-        errdefer self.allocator.free(schema_fields);
-        const value_fields = try self.allocator.alloc(checked_artifact.ComptimeValueId, fields.len);
-        errdefer self.allocator.free(value_fields);
-
-        for (fields, 0..) |field, i| {
-            const field_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
-            const field_layout = self.layouts.getLayout(field_layout_idx);
-            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
-            const field_value = if (self.layouts.layoutSize(field_layout) == 0) Value.zst else physical.value.offset(offset);
-            const reified = try self.reify(field.ty, field_layout_idx, field_value);
-            schema_fields[i] = .{ .name = field.name, .schema = reified.schema };
-            value_fields[i] = reified.value;
-        }
-
-        return .{
-            .schema = try self.values.addSchema(.{ .record = schema_fields }),
-            .value = try self.values.addValue(.{ .record = value_fields }),
-        };
-    }
-
-    fn schemaForRecord(
-        self: *ComptimeReifier,
-        fields: []const checked_artifact.CheckedRecordField,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        if (fields.len == 0) return self.values.addSchema(.zst);
-
-        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
-        errdefer self.allocator.free(schema_fields);
-        for (fields, 0..) |field, i| {
-            schema_fields[i] = .{
-                .name = field.name,
-                .schema = try self.schemaFor(field.ty),
-            };
-        }
-        return self.values.addSchema(.{ .record = schema_fields });
-    }
-
-    fn reifyTuple(
-        self: *ComptimeReifier,
-        items: []const checked_artifact.CheckedTypeId,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        if (items.len == 0) return self.reifyZst();
-        const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
-        const layout = self.layouts.getLayout(physical.layout_idx);
-        if (layout.tag != .struct_) reifierInvariant("tuple checked type did not lower to struct layout");
-
-        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
-        errdefer self.allocator.free(schemas);
-        const values = try self.allocator.alloc(checked_artifact.ComptimeValueId, items.len);
-        errdefer self.allocator.free(values);
-
-        for (items, 0..) |item_ty, i| {
-            const item_layout_idx = self.layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(i));
-            const item_layout = self.layouts.getLayout(item_layout_idx);
-            const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
-            const item_value = if (self.layouts.layoutSize(item_layout) == 0) Value.zst else physical.value.offset(offset);
-            const reified = try self.reify(item_ty, item_layout_idx, item_value);
-            schemas[i] = reified.schema;
-            values[i] = reified.value;
-        }
-
-        return .{
-            .schema = try self.values.addSchema(.{ .tuple = schemas }),
-            .value = try self.values.addValue(.{ .tuple = values }),
-        };
-    }
-
-    fn schemaForTuple(
-        self: *ComptimeReifier,
-        items: []const checked_artifact.CheckedTypeId,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        if (items.len == 0) return self.values.addSchema(.zst);
-
-        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
-        errdefer self.allocator.free(schemas);
-        for (items, 0..) |item_ty, i| {
-            schemas[i] = try self.schemaFor(item_ty);
-        }
-        return self.values.addSchema(.{ .tuple = schemas });
-    }
-
-    fn reifyTagUnion(
-        self: *ComptimeReifier,
-        tag_union: checked_artifact.CheckedTagUnionType,
-        layout_idx: layout_mod.Idx,
-        value: Value,
-    ) Allocator.Error!ReifiedValue {
-        const physical = self.logicalAggregateValue(layout_idx, value, .tag_union);
-        const layout = self.layouts.getLayout(physical.layout_idx);
-        if (layout.tag != .tag_union) reifierInvariant("tag union checked type did not lower to tag-union layout");
-        const info = self.layouts.getTagUnionInfo(layout);
-        const discriminant = info.data.readDiscriminant(physical.value.ptr);
-        if (discriminant >= tag_union.tags.len) reifierInvariant("tag union discriminant was outside checked tag set");
-
-        const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, tag_union.tags.len);
-        errdefer {
-            for (variants) |variant| self.allocator.free(variant.payloads);
-            self.allocator.free(variants);
-        }
-
-        for (tag_union.tags, 0..) |tag, i| {
-            const payloads = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, tag.args.len);
-            errdefer self.allocator.free(payloads);
-            for (tag.args, 0..) |arg_ty, arg_i| {
-                payloads[arg_i] = try self.schemaFor(arg_ty);
-            }
-            variants[i] = .{ .name = tag.name, .payloads = payloads };
-        }
-
-        const active_tag = tag_union.tags[discriminant];
-        const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
-        const payload_values = try self.allocator.alloc(checked_artifact.ComptimeValueId, active_tag.args.len);
-        errdefer self.allocator.free(payload_values);
-        for (active_tag.args, 0..) |arg_ty, arg_i| {
-            const arg_layout_idx = payloadLayoutForTagArg(self.layouts, active_payload_layout, active_tag.args.len, @intCast(arg_i));
-            const arg_layout = self.layouts.getLayout(arg_layout_idx);
-            const offset = payloadOffsetForTagArg(self.layouts, active_payload_layout, active_tag.args.len, @intCast(arg_i));
-            const arg_value = if (self.layouts.layoutSize(arg_layout) == 0) Value.zst else physical.value.offset(offset);
-            payload_values[arg_i] = (try self.reify(arg_ty, arg_layout_idx, arg_value)).value;
-        }
-
-        return .{
-            .schema = try self.values.addSchema(.{ .tag_union = variants }),
-            .value = try self.values.addValue(.{ .tag_union = .{
-                .variant_index = discriminant,
-                .payloads = payload_values,
-            } }),
-        };
-    }
-
-    fn schemaForTagUnion(
-        self: *ComptimeReifier,
-        tag_union: checked_artifact.CheckedTagUnionType,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, tag_union.tags.len);
-        errdefer {
-            for (variants) |variant| self.allocator.free(variant.payloads);
-            self.allocator.free(variants);
-        }
-
-        for (tag_union.tags, 0..) |tag, i| {
-            const payloads = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, tag.args.len);
-            errdefer self.allocator.free(payloads);
-            for (tag.args, 0..) |arg_ty, arg_i| {
-                payloads[arg_i] = try self.schemaFor(arg_ty);
-            }
-            variants[i] = .{ .name = tag.name, .payloads = payloads };
-        }
-
-        return self.values.addSchema(.{ .tag_union = variants });
     }
 
     fn checkedPayload(self: *const ComptimeReifier, ty: checked_artifact.CheckedTypeId) checked_artifact.CheckedTypePayload {
@@ -701,6 +851,13 @@ fn payloadOffsetForTagArg(
 fn reifierInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
         std.debug.panic("compile-time reifier invariant violated: " ++ message, .{});
+    }
+    unreachable;
+}
+
+fn planBuilderInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("compile-time plan builder invariant violated: " ++ message, .{});
     }
     unreachable;
 }

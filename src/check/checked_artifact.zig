@@ -4704,6 +4704,7 @@ pub const ConstTagVariantPlan = struct {
 };
 
 pub const ConstGraphReificationPlan = union(enum) {
+    pending,
     scalar: CheckedTypeId,
     string: CheckedTypeId,
     list: struct {
@@ -4836,6 +4837,38 @@ pub const CompileTimePlanStore = struct {
     capture_slots: std.ArrayList(CaptureSlotReificationPlan) = .empty,
     private_captures: std.ArrayList(PrivateCaptureNode) = .empty,
 
+    pub fn reserveConstGraph(
+        self: *CompileTimePlanStore,
+        allocator: Allocator,
+    ) Allocator.Error!ConstGraphReificationPlanId {
+        const id: ConstGraphReificationPlanId = @enumFromInt(@as(u32, @intCast(self.const_graphs.items.len)));
+        try self.const_graphs.append(allocator, .pending);
+        return id;
+    }
+
+    pub fn fillConstGraph(
+        self: *CompileTimePlanStore,
+        id: ConstGraphReificationPlanId,
+        plan: ConstGraphReificationPlan,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.const_graphs.items.len) {
+            checkedArtifactInvariant("const graph reification plan id is out of range", .{});
+        }
+        switch (self.const_graphs.items[index]) {
+            .pending => self.const_graphs.items[index] = plan,
+            else => checkedArtifactInvariant("const graph reification plan was filled twice", .{}),
+        }
+    }
+
+    pub fn constGraph(self: *const CompileTimePlanStore, id: ConstGraphReificationPlanId) ConstGraphReificationPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.const_graphs.items.len) {
+            checkedArtifactInvariant("const graph reification plan id is out of range", .{});
+        }
+        return self.const_graphs.items[index];
+    }
+
     pub fn deinit(self: *CompileTimePlanStore, allocator: Allocator) void {
         for (self.const_graphs.items) |*plan| deinitConstGraphReificationPlan(allocator, plan);
         for (self.callable_results.items) |*plan| deinitCallableResultPlan(allocator, plan);
@@ -4862,6 +4895,7 @@ pub const CompileTimePlanStore = struct {
 
 fn deinitConstGraphReificationPlan(allocator: Allocator, plan: *ConstGraphReificationPlan) void {
     switch (plan.*) {
+        .pending,
         .scalar,
         .string,
         .list,
@@ -4952,6 +4986,7 @@ fn verifyPrivateCaptureRef(store: *const CompileTimePlanStore, id: PrivateCaptur
 
 fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: ConstGraphReificationPlan) void {
     switch (plan) {
+        .pending => std.debug.panic("checked artifact invariant violated: published const graph plan is pending", .{}),
         .scalar,
         .string,
         => {},
