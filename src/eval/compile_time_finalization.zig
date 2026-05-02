@@ -479,8 +479,8 @@ const ComptimeReifier = struct {
     ) Allocator.Error!ReifiedValue {
         return switch (leaf) {
             .already_resolved => |resolved| .{
-                .schema = try self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
-                .value = try self.values.addValue(.{ .callable = resolved.proc_value }),
+                .schema = try self.values.addSchema(.{ .callable = callableLeafSourceFnTy(resolved) }),
+                .value = try self.values.addValue(.{ .callable = resolved }),
             },
             .finite => |result_plan| blk: {
                 const proc_value = existingNoCaptureCallableResult(
@@ -493,7 +493,7 @@ const ComptimeReifier = struct {
                 );
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = proc_value.source_fn_ty }),
-                    .value = try self.values.addValue(.{ .callable = proc_value }),
+                    .value = try self.values.addValue(.{ .callable = .{ .finite = .{ .proc_value = proc_value } } }),
                 };
             },
             .erased_boxed,
@@ -506,7 +506,7 @@ const ComptimeReifier = struct {
         leaf: checked_artifact.CallableLeafReificationPlan,
     ) Allocator.Error!checked_artifact.ComptimeSchemaId {
         return switch (leaf) {
-            .already_resolved => |resolved| self.values.addSchema(.{ .callable = resolved.proc_value.source_fn_ty }),
+            .already_resolved => |resolved| self.values.addSchema(.{ .callable = callableLeafSourceFnTy(resolved) }),
             .finite => |result_plan| switch (self.plans.callableResult(result_plan)) {
                 .finite => |finite| self.values.addSchema(.{ .callable = finite.source_fn_ty }),
                 .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
@@ -853,6 +853,15 @@ const ComptimeReifier = struct {
         }
     }
 };
+
+fn callableLeafSourceFnTy(
+    leaf: checked_artifact.CallableLeafInstance,
+) check.CanonicalNames.CanonicalTypeKey {
+    return switch (leaf) {
+        .finite => |finite| finite.proc_value.source_fn_ty,
+        .erased_boxed => |erased| erased.source_fn_ty,
+    };
+}
 
 fn payloadLayoutForTagArg(
     layouts: *const layout_mod.Store,

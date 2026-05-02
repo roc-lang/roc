@@ -4684,8 +4684,21 @@ pub const CompileTimeRootTable = struct {
     }
 };
 
-pub const CallableLeafInstance = struct {
+pub const FiniteCallableLeafInstance = struct {
     proc_value: canonical.ProcedureCallableRef,
+};
+
+pub const ErasedCallableLeafInstance = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    sig_key: canonical.ErasedFnSigKey,
+    provenance: []const canonical.BoxBoundaryId,
+    code: canonical.ErasedCallableCodeRef,
+    capture: ErasedCaptureReificationPlan,
+};
+
+pub const CallableLeafInstance = union(enum) {
+    finite: FiniteCallableLeafInstance,
+    erased_boxed: ErasedCallableLeafInstance,
 };
 
 pub const CallableLeafReificationPlan = union(enum) {
@@ -4985,9 +4998,9 @@ fn deinitConstGraphReificationPlan(allocator: Allocator, plan: *ConstGraphReific
         .box,
         .transparent_alias,
         .nominal,
-        .callable_leaf,
         .recursive_ref,
         => {},
+        .callable_leaf => |*leaf| deinitCallableLeafReificationPlan(allocator, leaf),
         .tuple => |items| allocator.free(items),
         .record => |fields| allocator.free(fields),
         .tag_union => |variants| {
@@ -5005,12 +5018,7 @@ fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) voi
         },
         .erased => |erased| {
             allocator.free(erased.provenance);
-            switch (erased.capture) {
-                .none,
-                .zero_sized_typed,
-                => {},
-                .values => |values| allocator.free(values),
-            }
+            deinitErasedCaptureReificationPlan(allocator, erased.capture);
         },
     }
 }
@@ -5036,11 +5044,11 @@ fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReif
 fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) void {
     switch (node.*) {
         .serializable_leaf,
-        .callable_leaf,
         .box,
         .nominal,
         .recursive_ref,
         => {},
+        .callable_leaf => |*leaf| deinitCallableLeafInstance(allocator, leaf),
         .record => |fields| allocator.free(fields),
         .tuple => |items| allocator.free(items),
         .tag_union => |variants| {
@@ -5048,6 +5056,34 @@ fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) voi
             allocator.free(variants);
         },
         .list => |items| allocator.free(items),
+    }
+}
+
+fn deinitCallableLeafReificationPlan(allocator: Allocator, leaf: *CallableLeafReificationPlan) void {
+    switch (leaf.*) {
+        .finite,
+        .erased_boxed,
+        => {},
+        .already_resolved => |*instance| deinitCallableLeafInstance(allocator, instance),
+    }
+}
+
+fn deinitCallableLeafInstance(allocator: Allocator, leaf: *CallableLeafInstance) void {
+    switch (leaf.*) {
+        .finite => {},
+        .erased_boxed => |erased| {
+            allocator.free(erased.provenance);
+            deinitErasedCaptureReificationPlan(allocator, erased.capture);
+        },
+    }
+}
+
+fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptureReificationPlan) void {
+    switch (capture) {
+        .none,
+        .zero_sized_typed,
+        => {},
+        .values => |values| allocator.free(values),
     }
 }
 
@@ -5086,7 +5122,7 @@ fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: Con
             .finite,
             .erased_boxed,
             => |result| verifyCallableResultRef(store, result),
-            .already_resolved => {},
+            .already_resolved => |resolved| verifyCallableLeafInstance(store, resolved),
         },
         .recursive_ref => |ref| verifyConstGraphRef(store, ref),
     }
@@ -5133,9 +5169,8 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
 
 fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCaptureNode) void {
     switch (node) {
-        .serializable_leaf,
-        .callable_leaf,
-        => {},
+        .serializable_leaf => {},
+        .callable_leaf => |leaf| verifyCallableLeafInstance(store, leaf),
         .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
         .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
         .tag_union => |variants| for (variants) |variant| {
@@ -5145,6 +5180,23 @@ fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCap
         .box => |payload| verifyCaptureSlotRef(store, payload),
         .nominal => |nominal| verifyPrivateCaptureRef(store, nominal.backing),
         .recursive_ref => |ref| verifyPrivateCaptureRef(store, ref),
+    }
+}
+
+fn verifyCallableLeafInstance(store: *const CompileTimePlanStore, leaf: CallableLeafInstance) void {
+    switch (leaf) {
+        .finite => {},
+        .erased_boxed => |erased| {
+            if (erased.provenance.len == 0) {
+                std.debug.panic("checked artifact invariant violated: erased callable leaf has no Box(T) provenance", .{});
+            }
+            switch (erased.capture) {
+                .none,
+                .zero_sized_typed,
+                => {},
+                .values => |values| for (values) |value| verifyCaptureSlotRef(store, value),
+            }
+        },
     }
 }
 
@@ -5359,7 +5411,7 @@ pub const ComptimeValue = union(enum) {
     tag_union: ComptimeVariantValue,
     alias: ComptimeValueId,
     nominal: ComptimeValueId,
-    callable: canonical.ProcedureCallableRef,
+    callable: CallableLeafInstance,
 };
 
 pub const ComptimeBinding = struct {
@@ -5510,8 +5562,8 @@ pub const CompileTimeValueStore = struct {
             .box,
             .alias,
             .nominal,
-            .callable,
             => {},
+            .callable => |*leaf| deinitCallableLeafInstance(self.allocator, leaf),
             .str => |bytes| self.allocator.free(bytes),
             .list => |items| self.allocator.free(items),
             .tuple => |items| self.allocator.free(items),
