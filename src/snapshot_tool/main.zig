@@ -15,6 +15,8 @@ const reporting = @import("reporting");
 const check = @import("check");
 const builtins = @import("builtins");
 const compile = @import("compile");
+const lir = @import("lir");
+const backend = @import("backend");
 const fmt = @import("fmt");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
@@ -3802,39 +3804,850 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
     }
 }
 
+fn snapshotRootRequestByOrder(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    order: u32,
+) check.CheckedArtifact.RootRequest {
+    for (root_artifact.root_requests.requests) |request| {
+        if (request.order == order) return request;
+    }
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
+    }
+    unreachable;
+}
+
+fn snapshotProvidedEntrypointName(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) []const u8 {
+    const module_env = root_artifact.moduleEnvConst();
+    const def_idx = switch (root.source) {
+        .def => |def| def,
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
+            }
+            unreachable;
+        },
+    };
+    const def = module_env.store.getDef(def_idx);
+    const pattern = module_env.store.getPattern(def.pattern);
+    const ident = switch (pattern) {
+        .assign => |assign| assign.ident,
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("snapshot invariant violated: exported platform root definition is not an assignment", .{});
+            }
+            unreachable;
+        },
+    };
+
+    for (module_env.provides_entries.items.items) |entry| {
+        if (entry.ident == ident) {
+            return module_env.getString(entry.ffi_symbol);
+        }
+    }
+
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic(
+            "snapshot invariant violated: exported platform root {s} has no published FFI symbol",
+            .{module_env.getIdent(ident)},
+        );
+    }
+    unreachable;
+}
+
+fn snapshotNativeEntrypoints(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ![]backend.Entrypoint {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+
+    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    errdefer {
+        for (entrypoints.items) |entrypoint| {
+            allocator.free(entrypoint.symbol_name);
+            allocator.free(entrypoint.arg_layouts);
+        }
+        entrypoints.deinit(allocator);
+    }
+
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi != .platform or metadata.exposure != .exported) continue;
+        const root = snapshotRootRequestByOrder(root_artifact, metadata.order);
+        if (root.kind != .provided_export) continue;
+
+        const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
+        const arg_layouts = try allocator.alloc(layout.Idx, arg_locals.len);
+        var arg_layouts_owned = true;
+        errdefer if (arg_layouts_owned) allocator.free(arg_layouts);
+
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+        }
+
+        const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
+        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
+        var symbol_name_owned = true;
+        errdefer if (symbol_name_owned) allocator.free(symbol_name);
+
+        try entrypoints.append(allocator, .{
+            .symbol_name = symbol_name,
+            .proc = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc_spec.ret_layout,
+        });
+        arg_layouts_owned = false;
+        symbol_name_owned = false;
+    }
+
+    return try entrypoints.toOwnedSlice(allocator);
+}
+
 /// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
-/// lower to Mono IR, cross-compile for all targets, and record blake3 hashes.
+/// lower through checked artifacts to LIR, cross-compile for all targets, and
+/// record blake3 hashes.
 fn processDevObjectSnapshot(
     allocator: Allocator,
     content: Content,
     output_path: []const u8,
     config: *const Config,
 ) !bool {
-    _ = allocator;
-    _ = content;
-    _ = output_path;
-    _ = config;
-    @compileError("Phase 2 must route dev-object snapshots through checked artifacts");
+    log("Processing dev_object snapshot: {s}", .{output_path});
+
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err("dev_object snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return false;
+    }
+
+    var tmp_dir_name_buf: [256]u8 = undefined;
+    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_dev_{d}", .{
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+    }) catch return false;
+
+    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        return false;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.fs.cwd().writeFile(.{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            return false;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    defer allocator.free(app_path);
+
+    const BuildEnv = compile.BuildEnv;
+    const native_target = roc_target.RocTarget.detectNative();
+
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
+        std.log.err("Failed to init BuildEnv: {}", .{err});
+        return false;
+    };
+    defer build_env.deinit();
+
+    build_env.build(app_path) catch |err| {
+        std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
+        return false;
+    };
+
+    const modules = build_env.getModulesInSerializationOrder(allocator) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return false;
+    };
+    defer allocator.free(modules);
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return false;
+    }
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    defer allocator.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    defer allocator.free(relation_artifacts);
+    const module_envs = try build_env.collectModuleEnvViews(allocator);
+    defer allocator.free(module_envs);
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    );
+    defer lowered.deinit();
+
+    const entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, &lowered);
+    defer {
+        for (entrypoints) |entrypoint| {
+            allocator.free(entrypoint.symbol_name);
+            allocator.free(entrypoint.arg_layouts);
+        }
+        allocator.free(entrypoints);
+    }
+
+    if (entrypoints.len == 0) {
+        std.log.err("Failed to lower any exported platform entrypoints", .{});
+        return false;
+    }
+
+    const RocTarget = roc_target.RocTarget;
+    const Blake3 = std.crypto.hash.Blake3;
+    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+
+    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+
+    inline for (roc_target_fields, 0..) |field, i| {
+        const target: RocTarget = @enumFromInt(field.value);
+        hash_results[i].target_name = field.name;
+
+        const arch = target.toCpuArch();
+        if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
+            if (object_compiler.compileToObjectFile(
+                &lowered.lir_result.store,
+                &lowered.lir_result.layouts,
+                entrypoints,
+                lowered.lir_result.store.getProcSpecs(),
+                target,
+            )) |result| {
+                var hasher = Blake3.init(.{});
+                hasher.update(result.object_bytes);
+                var hash: [32]u8 = undefined;
+                hasher.final(&hash);
+                hash_results[i].hash_hex = std.fmt.bytesToHex(hash, .lower);
+                hash_results[i].supported = true;
+                result.allocator.free(result.object_bytes);
+            } else |_| {
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+            }
+        } else {
+            hash_results[i].hash_hex = undefined;
+            hash_results[i].supported = false;
+        }
+    }
+
+    var md_buffer = std.ArrayList(u8).empty;
+    defer md_buffer.deinit(allocator);
+    var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
+
+    try md_writer.writer.writeAll(Section.META);
+    try content.meta.format(&md_writer.writer);
+    try md_writer.writer.writeAll("\n" ++ Section.SECTION_END);
+
+    try md_writer.writer.writeAll(Section.SOURCE_MULTI);
+    try md_writer.writer.writeAll(content.source);
+    if (content.source.len > 0 and content.source[content.source.len - 1] != '\n') {
+        try md_writer.writer.writeByte('\n');
+    }
+
+    try md_writer.writer.writeAll(Section.MONO);
+    for (modules) |mod| {
+        const mod_env = mod.semantic.env;
+        const mod_name = base.module_path.getModuleName(mod_env.module_name);
+
+        var emitter = can.RocEmitter.init(allocator, mod_env);
+        defer emitter.deinit();
+
+        const defs = mod_env.store.sliceDefs(mod_env.all_defs);
+        if (defs.len == 0) continue;
+
+        try md_writer.writer.writeAll("# ");
+        try md_writer.writer.writeAll(mod_name);
+        try md_writer.writer.writeByte('\n');
+
+        for (defs) |def_idx| {
+            const def = mod_env.store.getDef(def_idx);
+
+            emitter.reset();
+            try emitter.emitPattern(def.pattern);
+            const pattern_str = try allocator.dupe(u8, emitter.getOutput());
+            defer allocator.free(pattern_str);
+
+            emitter.reset();
+            try emitter.emitExpr(def.expr);
+
+            try md_writer.writer.writeAll(pattern_str);
+            try md_writer.writer.writeAll(" = ");
+            try md_writer.writer.writeAll(emitter.getOutput());
+            try md_writer.writer.writeByte('\n');
+        }
+        try md_writer.writer.writeByte('\n');
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    var new_hash_buf = std.ArrayList(u8).empty;
+    defer new_hash_buf.deinit(allocator);
+    for (&hash_results) |result| {
+        try new_hash_buf.appendSlice(allocator, result.target_name);
+        try new_hash_buf.append(allocator, '=');
+        if (result.supported) {
+            try new_hash_buf.appendSlice(allocator, &result.hash_hex);
+        } else {
+            try new_hash_buf.appendSlice(allocator, "NOT_IMPLEMENTED");
+        }
+        try new_hash_buf.append(allocator, '\n');
+    }
+    const new_hash_text = new_hash_buf.items;
+
+    var success = true;
+    const write_new_hashes = blk: {
+        if (content.dev_output == null) break :blk true;
+        switch (config.expected_section_command) {
+            .update => break :blk true,
+            .check => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT mismatch in {s}\n\n", .{output_path});
+                    printHashMismatchTable(content.dev_output.?, new_hash_text);
+                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
+                    success = false;
+                }
+                break :blk false;
+            },
+            .none => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT warning: hashes changed in {s}\n", .{output_path});
+                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                }
+                break :blk false;
+            },
+        }
+    };
+
+    try md_writer.writer.writeAll(Section.DEV_OUTPUT);
+    if (write_new_hashes) {
+        try md_writer.writer.writeAll(new_hash_text);
+    } else {
+        try md_writer.writer.writeAll(content.dev_output.?);
+        if (content.dev_output.?.len > 0 and content.dev_output.?[content.dev_output.?.len - 1] != '\n') {
+            try md_writer.writer.writeByte('\n');
+        }
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    md_buffer = md_writer.toArrayList();
+
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+    return success;
 }
 
 
 // REPL Snapshot Processing
 
+const SnapshotReplDefinitionKind = enum {
+    value,
+    type_annotation,
+    type_declaration,
+    import,
+    file_import,
+};
+
+const SnapshotReplDefinition = struct {
+    kind: SnapshotReplDefinitionKind,
+    name: []u8,
+    source: []u8,
+
+    fn deinit(self: *SnapshotReplDefinition, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.source);
+    }
+};
+
+const SnapshotReplSession = struct {
+    definitions: std.ArrayList(SnapshotReplDefinition) = .empty,
+
+    fn deinit(self: *SnapshotReplSession, allocator: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(allocator);
+        }
+        self.definitions.deinit(allocator);
+    }
+
+    fn hasDefinition(self: *const SnapshotReplSession, kind: SnapshotReplDefinitionKind, name: []const u8) bool {
+        for (self.definitions.items) |definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn upsertDefinition(
+        self: *SnapshotReplSession,
+        allocator: Allocator,
+        kind: SnapshotReplDefinitionKind,
+        name: []const u8,
+        source: []const u8,
+    ) Allocator.Error!void {
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        for (self.definitions.items) |*definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                definition.deinit(allocator);
+                definition.* = .{
+                    .kind = kind,
+                    .name = owned_name,
+                    .source = owned_source,
+                };
+                return;
+            }
+        }
+
+        try self.definitions.append(allocator, .{
+            .kind = kind,
+            .name = owned_name,
+            .source = owned_source,
+        });
+    }
+};
+
+const SnapshotReplInputKind = enum {
+    definition,
+    expression,
+};
+
+const SnapshotReplDefinitionIdentity = struct {
+    kind: SnapshotReplDefinitionKind,
+    name: []const u8,
+};
+
+fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .expr => .expression,
+        .decl,
+        .@"var",
+        .import,
+        .file_import,
+        .type_decl,
+        .type_anno,
+        => .definition,
+        .malformed => null,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        => .expression,
+    };
+}
+
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) !?SnapshotReplDefinitionIdentity {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .decl => |decl| blk: {
+            const pattern = ast.store.getPattern(decl.pattern);
+            break :blk switch (pattern) {
+                .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                else => null,
+            };
+        },
+        .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
+        .type_anno => |anno| .{ .kind = .type_annotation, .name = ast.resolve(anno.name) },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk null;
+            break :blk .{ .kind = .type_declaration, .name = ast.resolve(header.name) };
+        },
+        .import => |import| .{
+            .kind = .import,
+            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+        },
+        .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
+        else => null,
+    };
+}
+
+fn writeSnapshotReplDefinitionsWithReplacement(
+    writer: *std.Io.Writer,
+    session: *const SnapshotReplSession,
+    replacement: ?SnapshotReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) !void {
+    var replaced = false;
+    for (session.definitions.items) |definition| {
+        if (replacement) |identity| {
+            if (definition.kind == identity.kind and std.mem.eql(u8, definition.name, identity.name)) {
+                try writer.writeAll(replacement_source.?);
+                try writer.writeAll("\n");
+                replaced = true;
+                continue;
+            }
+        }
+
+        try writer.writeAll(definition.source);
+        try writer.writeAll("\n");
+    }
+
+    if (!replaced) {
+        if (replacement_source) |source| {
+            try writer.writeAll(source);
+            try writer.writeAll("\n");
+        }
+    }
+}
+
+fn buildSnapshotReplModuleSource(
+    allocator: Allocator,
+    session: *const SnapshotReplSession,
+    replacement: ?SnapshotReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) ![]u8 {
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer source_writer.deinit();
+
+    try writeSnapshotReplDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
+    try source_writer.writer.flush();
+
+    return source_writer.toOwnedSlice();
+}
+
+fn compileSnapshotReplInspectedModule(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
+    return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
+}
+
+fn snapshotReplDefinitionStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+) ![]const u8 {
+    const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
+    const identity = maybe_identity orelse
+        return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
+
+    const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
+    const validation_main_source = if (defines_main or session.hasDefinition(.value, "main"))
+        null
+    else
+        "main = \"\"";
+
+    const validation_base = try buildSnapshotReplModuleSource(
+        allocator,
+        session,
+        identity,
+        input,
+    );
+    defer allocator.free(validation_base);
+
+    const validation_with_main = if (validation_main_source) |main_source| blk: {
+        var source_writer: std.Io.Writer.Allocating = .init(allocator);
+        errdefer source_writer.deinit();
+        try source_writer.writer.writeAll(validation_base);
+        try source_writer.writer.writeAll(main_source);
+        try source_writer.writer.writeAll("\n");
+        try source_writer.writer.flush();
+        break :blk try source_writer.toOwnedSlice();
+    } else validation_base;
+    defer if (validation_main_source != null) allocator.free(validation_with_main);
+
+    var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main) catch |err| {
+        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+    };
+    compiled.deinit(allocator);
+
+    try session.upsertDefinition(allocator, identity.kind, identity.name, input);
+    return try std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name});
+}
+
+fn snapshotReplExpressionStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+) ![]const u8 {
+    const main_source = try std.fmt.allocPrint(allocator, "main = {s}", .{input});
+    defer allocator.free(main_source);
+
+    const source = try buildSnapshotReplModuleSource(
+        allocator,
+        session,
+        .{ .kind = .value, .name = "main" },
+        main_source,
+    );
+    defer allocator.free(source);
+
+    var compiled = compileSnapshotReplInspectedModule(allocator, source) catch |err| {
+        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+    };
+    defer compiled.deinit(allocator);
+
+    return eval_mod.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+    };
+}
+
+fn snapshotReplStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+) ![]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
+
+    const maybe_input_kind = try classifySnapshotReplInput(allocator, trimmed);
+    const input_kind = maybe_input_kind orelse
+        return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
+
+    return switch (input_kind) {
+        .definition => snapshotReplDefinitionStep(allocator, session, trimmed),
+        .expression => snapshotReplExpressionStep(allocator, session, trimmed),
+    };
+}
+
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
-    _ = allocator;
-    _ = content;
-    _ = output_path;
-    _ = config;
-    @compileError("Phase 2 must route REPL snapshots through checked artifacts");
+    if (gpa_poisoned) return false;
+
+    var success = true;
+    log("Processing REPL snapshot: {s}", .{output_path});
+
+    var md_buffer_unmanaged = std.ArrayList(u8).empty;
+    var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
+    defer if (!gpa_poisoned) md_buffer_unmanaged.deinit(allocator);
+
+    var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
+    var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
+    defer if (!gpa_poisoned) {
+        if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
+    };
+
+    var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
+
+    try generateHtmlWrapper(&output, &content);
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    success = try generateReplOutputSection(&output, output_path, &content, config) and success;
+    try generateReplProblemsSection(&output, &content);
+    try generateHtmlClosing(&output);
+
+    md_buffer_unmanaged = md_writer_allocating.toArrayList();
+    if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
+
+    if (!config.disable_updates) {
+        const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+            std.log.err("Failed to create {s}: {}", .{ output_path, err });
+            return false;
+        };
+        defer md_file.close();
+
+        try md_file.writeAll(md_buffer_unmanaged.items);
+
+        if (html_buffer_unmanaged) |*buf| {
+            writeHtmlFile(allocator, output_path, buf) catch |err| {
+                warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+            };
+        }
+    }
+
+    return success;
 }
 
 
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
-    _ = output;
-    _ = snapshot_path;
-    _ = content;
-    _ = config;
-    @compileError("Phase 2 must route REPL snapshot output through checked artifacts");
+    if (gpa_poisoned) return false;
+
+    var success = true;
+    var inputs = std.array_list.Managed([]const u8).init(output.gpa);
+    defer if (!gpa_poisoned) inputs.deinit();
+
+    var parts = std.mem.splitSequence(u8, content.source, "»");
+    _ = parts.next();
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len > 0) {
+            try inputs.append(trimmed);
+        }
+    }
+
+    var session = SnapshotReplSession{};
+    defer if (!gpa_poisoned) session.deinit(output.gpa);
+
+    var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
+    defer if (!gpa_poisoned) {
+        for (actual_outputs.items) |item| {
+            output.gpa.free(item);
+        }
+        actual_outputs.deinit();
+    };
+
+    for (inputs.items) |input| {
+        const repl_output = try snapshotReplStep(output.gpa, &session, input);
+        try actual_outputs.append(repl_output);
+    }
+
+    switch (config.output_section_command) {
+        .update => {
+            try output.begin_section("OUTPUT");
+            for (actual_outputs.items, 0..) |repl_output, i| {
+                if (i > 0) {
+                    try output.md_writer.writer.writeAll("---\n");
+                }
+                try output.md_writer.writer.writeAll(repl_output);
+                try output.md_writer.writer.writeByte('\n');
+
+                if (output.html_writer) |writer| {
+                    if (i > 0) {
+                        try writer.writer.writeAll("                <hr>\n");
+                    }
+                    try writer.writer.writeAll("                <div class=\"repl-output\">");
+                    for (repl_output) |char| {
+                        try escapeHtmlChar(&writer.writer, char);
+                    }
+                    try writer.writer.writeAll("</div>\n");
+                }
+            }
+            try output.end_section();
+        },
+        .check, .none => {
+            const emit_error = config.output_section_command == .check;
+
+            if (content.output) |expected| {
+                try output.begin_section("OUTPUT");
+                var expected_outputs = std.array_list.Managed([]const u8).init(output.gpa);
+                defer expected_outputs.deinit();
+
+                var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
+                while (expected_lines.next()) |output_str| {
+                    const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
+                    if (trimmed.len > 0) {
+                        try expected_outputs.append(trimmed);
+                    }
+                }
+
+                if (actual_outputs.items.len != expected_outputs.items.len) {
+                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
+                        actual_outputs.items.len,
+                        expected_outputs.items.len,
+                        snapshot_path,
+                    });
+                    success = success and !emit_error;
+                } else {
+                    for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                        if (!std.mem.eql(u8, actual, expected_output)) {
+                            success = success and !emit_error;
+                            std.debug.print(
+                                "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
+                                .{ i, actual, expected_output, snapshot_path },
+                            );
+                        }
+                    }
+                }
+
+                for (expected_outputs.items, 0..) |expected_output, i| {
+                    if (i > 0) {
+                        try output.md_writer.writer.writeAll("---\n");
+                    }
+                    try output.md_writer.writer.writeAll(expected_output);
+                    try output.md_writer.writer.writeByte('\n');
+
+                    if (output.html_writer) |writer| {
+                        if (i > 0) {
+                            try writer.writer.writeAll("                <hr>\n");
+                        }
+                        try writer.writer.writeAll("                <div class=\"repl-output\">");
+                        for (expected_output) |char| {
+                            try escapeHtmlChar(&writer.writer, char);
+                        }
+                        try writer.writer.writeAll("</div>\n");
+                    }
+                }
+                try output.end_section();
+            } else {
+                try output.begin_section("OUTPUT");
+                for (actual_outputs.items, 0..) |repl_output, i| {
+                    if (i > 0) {
+                        try output.md_writer.writer.writeAll("---\n");
+                    }
+                    try output.md_writer.writer.writeAll(repl_output);
+                    try output.md_writer.writer.writeByte('\n');
+
+                    if (output.html_writer) |writer| {
+                        if (i > 0) {
+                            try writer.writer.writeAll("                <hr>\n");
+                        }
+                        try writer.writer.writeAll("                <div class=\"repl-output\">");
+                        for (repl_output) |char| {
+                            try escapeHtmlChar(&writer.writer, char);
+                        }
+                        try writer.writer.writeAll("</div>\n");
+                    }
+                }
+                try output.end_section();
+            }
+        },
+    }
+
+    return success;
 }
 
 
