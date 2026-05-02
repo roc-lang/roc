@@ -4637,6 +4637,18 @@ pub const CompileTimeRootTable = struct {
         return self.roots[@intFromEnum(id)];
     }
 
+    pub fn fillPayload(
+        self: *CompileTimeRootTable,
+        id: ComptimeRootId,
+        payload: CompileTimeRootPayload,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.roots.len) {
+            checkedArtifactInvariant("compile-time root id is out of range", .{});
+        }
+        self.roots[index].payload = payload;
+    }
+
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
         allocator.free(self.roots);
         self.* = .{};

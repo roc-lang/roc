@@ -83,6 +83,7 @@ fn finalize(
 
     for (compile_time_roots, lowered.lir_result.root_procs.items, lowered.compile_time_root_payloads) |root_request, lir_root, payload| {
         const root = compileTimeRootForRequest(artifact, root_request);
+        artifact.compile_time_roots.fillPayload(root.id, payload);
         switch (root.kind) {
             .constant => try evaluateConstantRoot(
                 allocator,
