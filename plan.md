@@ -603,7 +603,7 @@ const ErasedPromotedWrapperBodyPlan = struct {
     executable_signature: ErasedPromotedProcedureExecutableSignature,
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
-    capture: ErasedCaptureMaterializationPlan,
+    capture: ErasedCaptureExecutableMaterializationPlan,
     arg_bridges: Span(BridgeId),
     hidden_capture_arg: ?ErasedHiddenCaptureArgPlan,
     result_bridge: ?BridgeId,
@@ -787,8 +787,9 @@ fixed-arity Roc parameters in source order. `arg_bridges` describe how each
 ordinary parameter is converted into the erased ABI described by `sig_key`.
 `ErasedFnSigKey` already contains the exact `ErasedFnAbiKey`; there must not be
 a second standalone ABI field that can diverge from it. `capture` is a sealed
-post-evaluation `ErasedCaptureMaterializationPlan`, not a pre-evaluation
-`ErasedCaptureReificationPlan`. `hidden_capture_arg` records whether that exact
+post-evaluation `ErasedCaptureExecutableMaterializationPlan`, not a
+pre-evaluation `ErasedCaptureReificationPlan`, source-level private capture
+graph, or callable leaf. `hidden_capture_arg` records whether that exact
 materialized capture value is passed to the erased call. `result_bridge`
 converts the erased-call result back to the wrapper's required result
 representation. `provenance` is non-empty and contains only explicit
@@ -796,15 +797,18 @@ representation. `provenance` is non-empty and contains only explicit
 these decisions from the code ref, source syntax, runtime bytes, layout shape,
 or shape comparison.
 
-`ErasedCaptureReificationPlan` and `ErasedCaptureMaterializationPlan` are
-different type states. `ErasedCallableResultPlan` may contain a reification plan
-while checking finalization has not yet interpreted the compile-time root. That
-plan is a recipe for reading the root's LIR interpreter result and converting
-it into compiler-owned data. When `publishErasedCallableResult` seals the
-promoted wrapper, it must consume the interpreter result and replace the recipe
-with an explicit materialization plan. A sealed `ErasedPromotedWrapperBodyPlan`
-must never contain `CaptureSlotReificationPlanId`, `CallableResultPlanId`, or
-any other pre-evaluation recipe as the data executable MIR is expected to lower.
+`ErasedCaptureReificationPlan`, source-level private capture graphs, and
+`ErasedCaptureExecutableMaterializationPlan` are different type states.
+`ErasedCallableResultPlan` may contain a reification plan while checking
+finalization has not yet interpreted the compile-time root. That plan is a
+recipe for reading the root's LIR interpreter result and converting it into
+compiler-owned data. When `publishErasedCallableResult` seals the promoted
+wrapper, it must consume the interpreter result and replace the recipe with an
+explicit executable materialization plan. A sealed
+`ErasedPromotedWrapperBodyPlan` must never contain
+`CaptureSlotReificationPlanId`, `CallableResultPlanId`, `PrivateCaptureRef`,
+`CallableLeafInstance`, or any other pre-executable record as the data
+executable MIR is expected to lower.
 
 `ErasedPromotedProcedureExecutableSignature` is mandatory because an erased
 promoted procedure body skips mono, row-finalized mono, lifted MIR, and
@@ -937,74 +941,159 @@ callable code ref may store a finite callable leaf, executable specialization
 key, layout id, generated symbol text, runtime function pointer, or target ABI
 handle.
 
-`ErasedCaptureMaterializationPlan` must have an explicit value-source shape.
+`CallableLeafInstance` remains a pre-executable, source-level value record. It
+is valid in compile-time value graphs, public constants, and private promoted
+capture graphs that will still pass through mono, row-finalized mono, lifted
+MIR, and lambda-solved MIR. Its finite case must remain exactly:
+
+```zig
+const FiniteCallableLeafInstance = struct {
+    proc_value: ProcedureCallableRef,
+};
+```
+
+A finite callable leaf must not store `CanonicalCallableSetKey`,
+`CallableSetMemberId`, `CaptureShapeKey`, executable specialization keys,
+layout ids, generated symbol text, runtime function pointers, or runtime capture
+pointers. Those are not known at this type state, and adding them here would
+create a second source of truth competing with lambda-solved callable-set
+descriptors.
+
+Sealed erased promoted wrappers are different. An
+`ErasedPromotedWrapperBodyPlan` is consumed first by executable MIR, because the
+wrapper body intentionally skips mono, row-finalized mono, lifted MIR, and
+lambda-solved body lowering. Therefore its capture field must not contain
+source-level private capture refs or callable leaves that still require those
+skipped stages. The sealed executable input is an
+`ErasedCaptureExecutableMaterializationPlan`, not a generic private capture graph
+and not a compile-time reification recipe.
+
 Conceptually:
 
 ```zig
-const ErasedCaptureMaterializationPlan = union(enum) {
+const ErasedCaptureExecutableMaterializationPlan = union(enum) {
     none,
     zero_sized_typed: CanonicalExecValueTypeKey,
-    node: ErasedCaptureMaterializationNodeId,
+    node: ErasedCaptureExecutableMaterializationNodeId,
 };
 
-const ErasedCaptureMaterializationNode = union(enum) {
-    public_constant: ConstInstanceRef,
-    private_capture: PrivateCaptureRef,
-    callable_leaf: CallableLeafInstance,
-    finite_callable_set: MaterializedFiniteCallableSetCapture,
-    record: Span(ErasedCaptureFieldPlan),
-    tuple: Span(ErasedCaptureMaterializationNodeId),
-    tag_union: ErasedCaptureTagPlan,
-    list: Span(ErasedCaptureMaterializationNodeId),
-    box: ErasedCaptureBoxPlan,
-    nominal: ErasedCaptureNominalPlan,
-    recursive_ref: ErasedCaptureMaterializationNodeId,
+const ErasedCaptureExecutableMaterializationNode = union(enum) {
+    pure_const: PureConstInstanceRef,
+    finite_callable_set: MaterializedFiniteCallableSetValue,
+    erased_callable: MaterializedErasedCallableValue,
+    record: ExecutableRecordMaterialization,
+    tuple: Span(ErasedCaptureExecutableMaterializationNodeId),
+    tag_union: ExecutableTagMaterialization,
+    list: ExecutableListMaterialization,
+    box: ExecutableBoxMaterialization,
+    nominal: ExecutableNominalMaterialization,
+    recursive_ref: ErasedCaptureExecutableMaterializationNodeId,
 };
 
-const MaterializedFiniteCallableSetCapture = struct {
+const PureConstInstanceRef = struct {
+    const_instance: ConstInstanceRef,
+    no_reachable_callable_slots: NoReachableCallableSlotsProof,
+};
+
+const MaterializedFiniteCallableSetValue = struct {
     source_fn_ty: CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,
     selected_member: CallableSetMemberId,
-    member_proc: ProcedureCallableRef,
-    member_capture_shape: CaptureShapeKey,
-    member_capture_slots: Span(CallableSetCaptureSlot),
-    captures: Span(PrivateCaptureRef),
+    captures: Span(ErasedCaptureExecutableMaterializationPlan),
+};
+
+const MaterializedErasedCallableValue = struct {
+    source_fn_ty: CanonicalTypeKey,
+    sig_key: ErasedFnSigKey,
+    code: ErasedCallableCodeRef,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+    provenance: NonEmptySpan(BoxBoundaryId),
 };
 
 const ErasedCaptureFieldPlan = struct {
     field: RecordFieldId,
-    value: ErasedCaptureMaterializationNodeId,
+    value: ErasedCaptureExecutableMaterializationNodeId,
 };
 
 const ErasedHiddenCaptureArgPlan = union(enum) {
     none,
-    materialized_capture: ErasedCaptureMaterializationPlan,
+    materialized_capture: ErasedCaptureExecutableMaterializationPlan,
 };
 ```
 
-The exact Zig names may differ, but the distinctions must not. Compile-time,
-promoted, imported, and constant capture data must enter erased-callable packing
-through `ConstInstanceRef`, `PrivateCaptureRef`, `CallableLeafInstance`, or
-structured capture nodes assembled from those explicit leaves. A finite
-callable-set adapter capture must enter through
-`MaterializedFiniteCallableSetCapture`, which is the post-evaluation selected
-finite callable value plus its already-reified private captures. No sealed
-erased promoted wrapper may contain a source expression, source symbol,
-interpreter memory address, runtime closure object, backend function pointer,
-raw pointer/nullness test, byte size, layout id, `ExecutableValueRef`, or
-syntax-derived lookup.
+The exact Zig names may differ, but the type-state boundary must not. A sealed
+erased promoted wrapper may contain only executable-ready materialization
+records. It must not contain `PrivateCaptureRef`, `CallableLeafInstance`,
+`CaptureSlotReificationPlanId`, `CallableResultPlanId`, source expressions,
+source symbols, interpreter memory addresses, runtime closure objects, backend
+function pointers, raw pointer/nullness tests, runtime byte sizes, layout ids,
+`ExecutableValueRef`, or syntax-derived lookup.
+
+`PureConstInstanceRef` is allowed only when the referenced constant instance has
+no reachable callable slots. If the exact constant instance contains a function
+anywhere in a record, tuple, tag payload, list element, `Box(T)` payload,
+transparent alias, or nominal backing value, checking finalization must expand
+that portion into structural executable materialization nodes with explicit
+`finite_callable_set` or `erased_callable` leaves. Executable MIR must never
+open a generic compile-time constant graph to rediscover callables.
 
 Finite callable-set adapter captures are the important selected-finite case.
-The materialized capture must name the same `source_fn_ty`, `callable_set_key`,
-selected member, member procedure, capture shape, and member capture-slot schema
-that executable MIR will dispatch with `callable_match`. The selected member's
-captures are explicit `PrivateCaptureRef` values in canonical capture-slot
-order. Executable MIR materializes those private captures, constructs the
-finite `callable_set_value`, packs that value as the erased hidden capture, and
-reserves the adapter under the full `ErasedAdapterKey`. If the materialized
-finite callable-set capture disagrees with the adapter key or descriptor,
-the artifact is invalid: debug builds assert immediately and release builds use
-`unreachable`.
+`MaterializedFiniteCallableSetValue` stores exactly the source function type,
+callable-set key, selected member, and executable-ready materialized capture
+values in canonical descriptor capture-slot order. It must not cache member
+procedure refs, source proc refs, capture shapes, capture-slot schemas,
+executable proc ids, or layout data. Those records live in the published
+callable-set descriptor store described below. Duplicating them here would create
+parallel semantic inputs that could diverge.
+
+Executable MIR materializes the `captures`, constructs the finite
+`callable_set_value`, packs that value as the erased hidden capture, and reserves
+the adapter under the full `ErasedAdapterKey`. If the materialized finite
+callable-set value disagrees with the adapter key or descriptor, the artifact is
+invalid: debug builds assert immediately and release builds use `unreachable`.
+
+Checking finalization must publish an artifact-owned callable-set descriptor
+store. This store is not a cache and not a lookup accelerator; it is semantic
+input required after the lambda-solved session that created a descriptor is no
+longer available.
+
+Conceptually:
+
+```zig
+const CallableSetDescriptorRef = struct {
+    artifact: ArtifactRef,
+    key: CanonicalCallableSetKey,
+};
+
+const CallableSetDescriptorStore = struct {
+    descriptors: Span(CanonicalCallableSetDescriptor),
+};
+```
+
+Every `CanonicalCallableSetDescriptor` reachable from any of these records must
+be copied into the owning checked artifact before publication:
+
+- `CallableResultPlan.finite`
+- `CallableValueEmissionPlan.finite`
+- `CallableSetConstructionPlan`
+- `ErasedAdapterKey`
+- `ErasedCallableCodeRef.finite_set_adapter`
+- `ExecutableTypePayload.callable_set`
+- `MaterializedFiniteCallableSetValue`
+- promoted wrapper bodies
+- compile-time constants and private capture graphs that contain callable
+  values
+- imported template closures that expose any of the above
+
+The descriptor record must include every member's `CallableSetMemberId`,
+`ProcedureCallableRef`, `MirProcedureRef`, `CaptureShapeKey`, and dense
+`CallableSetCaptureSlot` list. Executable MIR may build a transient hash table
+from key to descriptor for performance during one lowering run, but the
+published descriptor store remains the single semantic input. Debug builds must
+assert that every duplicate key carries an identical descriptor, every selected
+member exists, every capture list length equals the descriptor member's slot
+list length, and every capture executable type key equals the descriptor slot's
+`exec_value_ty`. Release builds must not retain verifier scanning cost.
 
 The old ambiguous `values: Span(CaptureSlotReificationPlan)` shape is forbidden
 in sealed erased promoted wrapper bodies. Before interpretation, the producer
@@ -1018,9 +1107,12 @@ must distinguish at least these recipe shapes:
   selects a finite callable-set member for a finite-set erased adapter
 
 Checking finalization consumes those recipes against the interpreted LIR value
-and publishes only the materialized form above. Executable MIR must never
-receive the recipe form and must never decide which of these cases it has by
-looking at arity, type shape, capture byte size, or code-ref variant.
+while the lambda-solved representation store and callable-set descriptors are
+still available. It then publishes only
+`ErasedCaptureExecutableMaterializationPlan` plus descriptor-store entries.
+Executable MIR must never receive the recipe form and must never decide which of
+these cases it has by looking at arity, type shape, capture byte size, code-ref
+variant, or runtime data.
 
 `ErasedHiddenCaptureArgPlan` must say exactly which materialized capture value
 is passed to erased code, or state that no hidden capture argument is passed.
@@ -3350,10 +3442,10 @@ For boxing, executable MIR lowers the payload expression under
   the full `ErasedAdapterKey { source_fn_ty, callable_set_key,
   erased_fn_sig_key, capture_shape_key }`, not just the callable-set key. The
   adapter captures the already-emitted finite callable-set value through an
-  explicit `RuntimeErasedCaptureValue`/`ExecutableValueRef` handle whose
-  `exec_ty` is the finite callable-set executable type and whose
-  `capture_shape_key` matches the adapter key. The adapter body dispatches with
-  `callable_match`, including singleton finite sets.
+  explicit `ExecutableValueRef` handle whose executable type is the finite
+  callable-set executable type and whose `capture_shape_key` matches the adapter
+  key. The adapter body dispatches with `callable_match`, including singleton
+  finite sets.
 - `already-erased value -> erased` passes through after verifying the erased
   function type matches exactly.
 - structural payload components are already constrained by lambda-solved MIR to
@@ -3444,13 +3536,27 @@ conceptually for call arguments, bridge inputs, aggregate assembly operands,
 branch join inputs, and packed erased capture payloads.
 
 A `private_capture` executable value is a compiler-owned value handle that can
-appear only while lowering a promoted callable wrapper. Executable MIR must
-materialize it by following the already-published private capture graph:
-serializable leaves become concrete `const_instance` reads, callable leaves
-become `proc_value` handles, and structural nodes become ordinary aggregate
-constructions or projections with finalized row/tag ids. It must not ask the
-compile-time interpreter to run again, read a runtime closure environment, or
-recover private captures from source syntax.
+appear only while lowering a promoted callable wrapper that still passed through
+the normal MIR-family stages. It is valid for finite promoted wrappers and other
+source-level promoted bodies whose private capture graph is consumed by mono,
+row-finalized mono, lifted MIR, lambda-solved MIR, and executable MIR in order.
+It is not valid inside a sealed erased promoted wrapper body, because that body
+skips those earlier stages.
+
+For finite/source-level promoted bodies, executable MIR materializes
+`private_capture` by following already-published value metadata from earlier MIR
+stages: serializable leaves become concrete `const_instance` reads, callable
+leaves become already-solved finite callable-set or erased callable values, and
+structural nodes become ordinary aggregate constructions or projections with
+finalized row/tag ids. Executable MIR must not ask the compile-time interpreter
+to run again, read a runtime closure environment, recover private captures from
+source syntax, infer row/tag positions from names, or convert a source-level
+`PrivateCaptureRef` into an executable erased wrapper capture.
+
+For sealed erased promoted wrappers, checking finalization must have already
+converted the private capture graph into
+`ErasedCaptureExecutableMaterializationPlan`. Executable MIR consumes that
+executable-ready materialization directly.
 
 Packed erased function values have one ABI shape:
 
@@ -5833,10 +5939,12 @@ callable result, the plan carries the exact `ErasedFnSigKey`, erased code
 ref, capture reification plan, and non-empty `BoxBoundaryId` provenance. The
 code ref has the same exact two-case shape everywhere: direct erased procedure
 code with procedure value occurrence plus capture shape, or finite-set adapter
-ref with source function type and canonical callable-set key. No erased callable
-result may be reified or promoted without explicit `Box(T)` provenance, and no
-erased callable result may record only a code symbol, only an erased signature,
-only a finite callable leaf, or only an executable specialization key.
+ref with the full `ErasedAdapterKey { source_fn_ty, callable_set_key,
+erased_fn_sig_key, capture_shape_key }`. No erased callable result may be
+reified or promoted without explicit `Box(T)` provenance, and no erased callable
+result may record only a code symbol, only an erased signature, only a finite
+callable leaf, only `source_fn_ty + callable_set_key`, or only an executable
+specialization key.
 
 Promotion consumes a precomputed promotion plan:
 
@@ -6672,7 +6780,7 @@ const ErasedCallableTemplate = struct {
 const ErasedCallableValueRef = struct {
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
-    capture: ErasedCaptureMaterializationPlan,
+    capture: ErasedCaptureExecutableMaterializationPlan,
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 ```
@@ -6799,8 +6907,8 @@ field. Later stages instantiate callable leaf templates into ordinary
 targets from source syntax, layout shape, runtime bytes, generated symbol text,
 or field/tag names.
 
-`PrivateCaptureRef` is still needed for promoted-procedure capture data because
-private capture graphs are not source-visible top-level constants:
+`PrivateCaptureRef` is still needed for source-level promoted-procedure capture
+data because private capture graphs are not source-visible top-level constants:
 
 ```zig
 const PrivateCaptureRef = struct {
@@ -6828,12 +6936,19 @@ const PrivateCaptureNode = union(enum) {
 };
 ```
 
-Top-level constants and private capture graphs both may contain callable
-leaves. A `top_level_binding` constant is source-visible and importable through
-its `ConstRef`; a `PrivateCaptureRef` is reachable only from promoted procedure
-bodies. Later stages must consume the explicit constant nodes or private capture
-nodes and must not rediscover callable leaves from source syntax, runtime
-values, field names, layout order, or expression shape.
+Top-level constants and source-level private capture graphs both may contain
+callable leaves. A `top_level_binding` constant is source-visible and importable
+through its `ConstRef`; a `PrivateCaptureRef` is reachable only from promoted
+procedure bodies that still pass through the normal MIR-family stages. Later
+stages must consume the explicit constant nodes or private capture nodes and
+must not rediscover callable leaves from source syntax, runtime values, field
+names, layout order, or expression shape.
+
+Sealed erased promoted wrappers are not consumers of `PrivateCaptureRef`.
+Checking finalization must recursively convert any private capture graph needed
+by such a wrapper into `ErasedCaptureExecutableMaterializationPlan` before the
+wrapper is published. After publication, executable MIR consumes only the
+executable-ready materialization records and the callable-set descriptor store.
 
 Private captures follow the same template/instance rule as public constants.
 The promoted procedure's `MonoSpecializationKey` supplies the concrete source
@@ -6925,7 +7040,7 @@ const ErasedCallableMaterialization = struct {
     leaf: ErasedCallableValueRef,
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeMaterializationPlan,
-    capture: ErasedCaptureMaterializationPlan,
+    capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
 const ErasedCallableCodeMaterializationPlan = union(enum) {
@@ -8418,6 +8533,15 @@ is a viewable LIR runtime image, not a live or cached `ModuleEnv` and not a
 checked artifact. Shared memory is the allocator for the runtime image at this
 boundary. The child process turns offsets in the mapped region into read-only
 views.
+
+IPC execution must not serialize or deserialize the LIR runtime image between
+the parent and child processes. The parent allocates and fills the
+offset-addressed image in the existing shared-memory region, then hands the child
+the shared-memory mapping information. The child validates the header and builds
+zero-copy views over the mapped bytes. Any serialization format used for checked
+artifact caches, deterministic debug output, or a future file-backed embedded
+runtime image is separate from the `roc run` shared-memory IPC path and must not
+be reused as a parent-child transport.
 
 For embedded interpreter builds, any file-backed runtime image must preserve the
 same view-oriented contract: the embedded payload is made viewable as the LIR
@@ -13030,6 +13154,31 @@ Compile-time constants:
   top-level closure object, publish a runtime erased callable object, or use a
   canonical executable key as a substitute for an explicit executable type
   payload.
+- top-level function-valued declarations that evaluate to erased callable values
+  must include the captured finite-callable adapter case:
+
+  ```roc
+  make_adder : I64 -> Box(I64 -> I64)
+  make_adder = |n| Box.box(|x| x + n)
+
+  add5 : I64 -> I64
+  add5 = Box.unbox(make_adder(5))
+
+  main : I64
+  main = add5(10)
+  ```
+
+  The expected checked artifact publishes `add5` as a normal
+  `procedure_binding` whose erased promoted wrapper body has an
+  `ErasedCaptureExecutableMaterializationPlan`. The hidden capture materializes
+  a finite callable-set value whose selected member is the lambda created by
+  `|x| x + n`, and whose single capture is the executable-ready materialization
+  of `5`. The sealed erased wrapper body must not contain `PrivateCaptureRef`,
+  `CallableLeafInstance`, `CaptureSlotReificationPlanId`, `CallableResultPlanId`,
+  or any runtime closure object. Executable MIR packs that finite callable-set
+  value as the erased hidden capture, reserves the adapter using the full
+  `ErasedAdapterKey`, and the adapter body dispatches with `callable_match`,
+  even though the callable set is a singleton.
 - erased compile-time callable values and erased callable leaves must store
   exact erased code refs. Direct erased code refs carry
   `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`. Finite-set
@@ -13045,6 +13194,15 @@ Compile-time constants:
   `source_fn_ty + callable_set_key` but different `erased_fn_sig_key`, and two
   adapters with the same `source_fn_ty + callable_set_key + erased_fn_sig_key`
   but different `capture_shape_key`.
+- sealed erased promoted wrapper materialization must be executable-ready. Tests
+  must corrupt an erased promoted wrapper by inserting a `PrivateCaptureRef`,
+  `CallableLeafInstance`, `CaptureSlotReificationPlanId`, or
+  `CallableResultPlanId` in its sealed capture and require a debug-only verifier
+  panic. Tests must also corrupt the callable-set descriptor store by removing
+  the selected member, changing the member's `ProcedureCallableRef`, changing
+  the member's `CaptureShapeKey`, changing a capture slot's `exec_value_ty`, or
+  changing the capture arity. Each corruption is a compiler invariant violation
+  in debug builds and `unreachable` in release builds.
 - promoted procedures have no runtime capture environment; serializable
   top-level captures are consumed through published `ConstRef` templates plus
   sealed concrete `ConstInstanceRef` values, local captures are consumed through
@@ -13580,9 +13738,12 @@ The cutover is complete only when all of these are true:
 - packed erased function values carry typed capture metadata that distinguishes
   no capture, zero-sized typed capture, and boxed runtime capture payload
 - callable-set member ordering uses `ProcOrderKey`, not `Symbol.raw()`
-- callable-set member identity resolves through
-  `CanonicalCallableSetDescriptor`; cached member procedure refs, capture shapes,
-  and capture-slot schemas are debug-verified accelerators only
+- callable-set member identity resolves through the artifact-owned
+  `CallableSetDescriptorStore`; sealed wrapper captures and materialized finite
+  callable-set values carry only `source_fn_ty`, `callable_set_key`,
+  `selected_member`, and executable-ready captures, and must not duplicate member
+  procedure refs, capture shapes, capture-slot schemas, executable proc ids, or
+  layout data
 - executable specialization keys use semantic base/type/representation keys,
   not `ProcOrderKey`, raw type ids, expression ids, or side-table ids
 - executable MIR consumes `BoxPayloadRepresentationPlan` instead of making
