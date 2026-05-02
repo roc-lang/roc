@@ -336,6 +336,7 @@ pub const RootRequest = struct {
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
+    procedure_template: ?canonical.ProcedureTemplateRef = null,
 };
 
 pub const RootRequestTable = struct {
@@ -346,6 +347,7 @@ pub const RootRequestTable = struct {
         module: TypedCIR.Module,
         checked_types: *const CheckedTypeStore,
         compile_time_roots: *const CompileTimeRootTable,
+        entry_wrappers: *const EntryWrapperTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
@@ -392,12 +394,19 @@ pub const RootRequestTable = struct {
                     .expect => .test_expect,
                 },
                 .source = root.source,
-                .checked_type = root.checked_type,
+                .checked_type = switch (root.kind) {
+                    .expect => entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
+                    .constant, .callable_binding => root.checked_type,
+                },
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
                     .constant, .callable_binding => .compile_time,
                 },
                 .exposure = .private,
+                .procedure_template = switch (root.kind) {
+                    .expect => templateForEntryWrapperRoot(entry_wrappers, root.id),
+                    .constant, .callable_binding => null,
+                },
             });
         }
 
@@ -543,6 +552,7 @@ const RootRequestWithoutOrder = struct {
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
+    procedure_template: ?canonical.ProcedureTemplateRef = null,
 };
 
 fn appendRoot(
@@ -558,7 +568,28 @@ fn appendRoot(
         .checked_type = request.checked_type,
         .abi = request.abi,
         .exposure = request.exposure,
+        .procedure_template = request.procedure_template,
     });
+}
+
+fn templateForEntryWrapperRoot(
+    entry_wrappers: *const EntryWrapperTable,
+    root: ComptimeRootId,
+) canonical.ProcedureTemplateRef {
+    return entryWrapperForRoot(entry_wrappers, root).template;
+}
+
+fn entryWrapperForRoot(
+    entry_wrappers: *const EntryWrapperTable,
+    root: ComptimeRootId,
+) EntryWrapper {
+    const wrapper = entry_wrappers.lookupByRoot(root) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: expect root has no entry wrapper", .{});
+        }
+        unreachable;
+    };
+    return wrapper;
 }
 
 fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
@@ -810,6 +841,68 @@ pub const CheckedTypeStore = struct {
         return null;
     }
 
+    pub fn appendSyntheticFunctionRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        kind: CheckedFunctionKind,
+        args: []const CheckedTypeId,
+        ret: CheckedTypeId,
+    ) Allocator.Error!CheckedTypeId {
+        const key = syntheticFunctionTypeKey(self, kind, args, ret);
+        if (self.rootForKey(key)) |existing| return existing;
+
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+        const owned_args = try allocator.dupe(CheckedTypeId, args);
+        errdefer allocator.free(owned_args);
+
+        const old_roots = self.roots;
+        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
+        @memcpy(new_roots[0..old_roots.len], old_roots);
+        new_roots[old_roots.len] = .{ .id = id, .key = key };
+        errdefer allocator.free(new_roots);
+
+        const old_payloads = self.payloads;
+        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
+        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
+        new_payloads[old_payloads.len] = .{ .function = .{
+            .kind = kind,
+            .args = owned_args,
+            .ret = ret,
+            .needs_instantiation = false,
+        } };
+        errdefer allocator.free(new_payloads);
+
+        allocator.free(old_roots);
+        allocator.free(old_payloads);
+        self.roots = new_roots;
+        self.payloads = new_payloads;
+
+        try self.ensureSyntheticSchemeForRoot(allocator, id, key);
+        return id;
+    }
+
+    fn ensureSyntheticSchemeForRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        root: CheckedTypeId,
+        key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!void {
+        const scheme_key = syntheticSchemeKeyForType(key);
+        if (self.schemeForKey(scheme_key) != null) return;
+
+        const old = self.schemes;
+        const next = try allocator.alloc(CheckedTypeScheme, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = .{
+            .id = @enumFromInt(@as(u32, @intCast(old.len))),
+            .key = scheme_key,
+            .root = root,
+            .generalized_vars = &.{},
+        };
+        allocator.free(old);
+        self.schemes = next;
+    }
+
     pub fn deinit(self: *CheckedTypeStore, allocator: Allocator) void {
         for (self.payloads) |*payload| deinitCheckedTypePayload(allocator, payload);
         for (self.schemes) |scheme| allocator.free(scheme.generalized_vars);
@@ -819,6 +912,30 @@ pub const CheckedTypeStore = struct {
         self.* = .{};
     }
 };
+
+fn syntheticFunctionTypeKey(
+    store: *const CheckedTypeStore,
+    kind: CheckedFunctionKind,
+    args: []const CheckedTypeId,
+    ret: CheckedTypeId,
+) canonical.CanonicalTypeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashByteSlice(&hasher, "checked_synthetic_function");
+    hashByteSlice(&hasher, @tagName(kind));
+    hashU32(&hasher, @intCast(args.len));
+    for (args) |arg| {
+        hasher.update(&store.roots[@intFromEnum(arg)].key.bytes);
+    }
+    hasher.update(&store.roots[@intFromEnum(ret)].key.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn syntheticSchemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashByteSlice(&hasher, "checked_synthetic_type_scheme");
+    hasher.update(&key.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
 
 fn appendCheckedTypeRoot(
     allocator: Allocator,
@@ -2294,6 +2411,58 @@ pub const CheckedProcedureBody = union(enum) {
     entry_wrapper: canonical.EntryWrapperId,
 };
 
+pub const EntryWrapper = struct {
+    id: canonical.EntryWrapperId,
+    root: ComptimeRootId,
+    template: canonical.ProcedureTemplateRef,
+    checked_fn_root: CheckedTypeId,
+    body_expr: CheckedExprId,
+};
+
+pub const EntryWrapperTable = struct {
+    wrappers: []EntryWrapper = &.{},
+
+    pub fn append(
+        self: *EntryWrapperTable,
+        allocator: Allocator,
+        root: ComptimeRootId,
+        template: canonical.ProcedureTemplateRef,
+        checked_fn_root: CheckedTypeId,
+        body_expr: CheckedExprId,
+    ) Allocator.Error!canonical.EntryWrapperId {
+        const id: canonical.EntryWrapperId = @enumFromInt(@as(u32, @intCast(self.wrappers.len)));
+        const old = self.wrappers;
+        const next = try allocator.alloc(EntryWrapper, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = .{
+            .id = id,
+            .root = root,
+            .template = template,
+            .checked_fn_root = checked_fn_root,
+            .body_expr = body_expr,
+        };
+        allocator.free(old);
+        self.wrappers = next;
+        return id;
+    }
+
+    pub fn get(self: *const EntryWrapperTable, id: canonical.EntryWrapperId) EntryWrapper {
+        return self.wrappers[@intFromEnum(id)];
+    }
+
+    pub fn lookupByRoot(self: *const EntryWrapperTable, root: ComptimeRootId) ?EntryWrapper {
+        for (self.wrappers) |wrapper| {
+            if (wrapper.root == root) return wrapper;
+        }
+        return null;
+    }
+
+    pub fn deinit(self: *EntryWrapperTable, allocator: Allocator) void {
+        allocator.free(self.wrappers);
+        self.* = .{};
+    }
+};
+
 pub const StaticDispatchPlanTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
@@ -2989,6 +3158,7 @@ fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
+    entry_wrappers: *const EntryWrapperTable,
     templates: *CheckedProcedureTemplateTable,
     static_dispatch_plans: *static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: *ResolvedValueRefTable,
@@ -3004,10 +3174,13 @@ fn sealCheckedProcedureTemplateRefs(
                 const body = checked_bodies.body(body_id);
                 try collector.collectExpr(body.root_expr);
             },
+            .entry_wrapper => |wrapper_id| {
+                const wrapper = entry_wrappers.get(wrapper_id);
+                try collector.collectExpr(wrapper.body_expr);
+            },
             .promoted_callable_wrapper,
             .hosted_wrapper,
             .intrinsic_wrapper,
-            .entry_wrapper,
             => {},
         }
 
@@ -3299,6 +3472,7 @@ pub const NestedProcSiteTable = struct {
     pub fn fromTemplates(
         allocator: Allocator,
         checked_bodies: *const CheckedBodyStore,
+        entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
     ) Allocator.Error!NestedProcSiteTable {
         var builder = NestedProcSiteBuilder.init(allocator, checked_bodies);
@@ -3309,10 +3483,10 @@ pub const NestedProcSiteTable = struct {
             const start: u32 = @intCast(builder.template_refs.items.len);
             switch (template.body) {
                 .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
+                .entry_wrapper => |wrapper_id| try builder.scanEntryWrapper(entry_wrappers.get(wrapper_id), template),
                 .promoted_callable_wrapper,
                 .hosted_wrapper,
                 .intrinsic_wrapper,
-                .entry_wrapper,
                 => {},
             }
             template.nested_proc_sites = .{
@@ -3457,6 +3631,70 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.by_def[raw];
     }
 
+    pub fn appendEntryWrappersForRoots(
+        self: *CheckedProcedureTemplateTable,
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.ArtifactRef,
+        checked_types: *CheckedTypeStore,
+        entry_wrappers: *EntryWrapperTable,
+        compile_time_roots: *const CompileTimeRootTable,
+    ) Allocator.Error!void {
+        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+
+        for (compile_time_roots.roots) |root| {
+            if (root.kind != .expect) continue;
+
+            const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
+                allocator,
+                .pure,
+                &.{},
+                root.checked_type,
+            );
+            const checked_fn_scheme = syntheticSchemeKeyForType(checked_types.roots[@intFromEnum(checked_fn_root)].key);
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = null,
+                .kind = .entry_wrapper,
+                .ordinal = @intFromEnum(root.id),
+                .source_def_idx = null,
+            });
+            const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.len)));
+            const template_ref = canonical.ProcedureTemplateRef{
+                .artifact = owner_artifact,
+                .proc_base = proc_base,
+                .template = template_id,
+            };
+            const wrapper_id = try entry_wrappers.append(allocator, root.id, template_ref, checked_fn_root, root.expr);
+            try self.appendTemplate(allocator, .{
+                .proc_base = proc_base,
+                .template_id = template_id,
+                .body = .{ .entry_wrapper = wrapper_id },
+                .checked_fn_scheme = checked_fn_scheme,
+                .checked_fn_root = checked_fn_root,
+                .static_dispatch_plans = .{},
+                .resolved_value_refs = .{},
+                .top_level_value_uses = .{},
+                .nested_proc_sites = .{},
+                .target = .entry,
+            });
+        }
+    }
+
+    fn appendTemplate(
+        self: *CheckedProcedureTemplateTable,
+        allocator: Allocator,
+        template: CheckedProcedureTemplate,
+    ) Allocator.Error!void {
+        const old = self.templates;
+        const next = try allocator.alloc(CheckedProcedureTemplate, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = template;
+        allocator.free(old);
+        self.templates = next;
+    }
+
     pub fn get(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) CheckedProcedureTemplate {
         return self.templates[@intFromEnum(id)];
     }
@@ -3520,6 +3758,15 @@ const NestedProcSiteBuilder = struct {
         const body = self.checked_bodies.body(body_id);
         self.path.clearRetainingCapacity();
         try self.scanExpr(body.root_expr, body.owner_template, true);
+    }
+
+    fn scanEntryWrapper(
+        self: *NestedProcSiteBuilder,
+        wrapper: EntryWrapper,
+        _: *const CheckedProcedureTemplate,
+    ) Allocator.Error!void {
+        self.path.clearRetainingCapacity();
+        try self.scanExpr(wrapper.body_expr, wrapper.template, false);
     }
 
     fn addSite(
@@ -6269,6 +6516,7 @@ pub const CheckedModuleArtifact = struct {
     resolved_value_refs: ResolvedValueRefTable,
     nested_proc_sites: NestedProcSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable,
+    entry_wrappers: EntryWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -6315,6 +6563,7 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
+        self.entry_wrappers.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
         self.nested_proc_sites.deinit(allocator);
         self.resolved_value_refs.deinit(allocator);
@@ -6341,6 +6590,13 @@ pub const CheckedModuleArtifact = struct {
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.len);
+            if (request.kind == .test_expect) {
+                const template_ref = request.procedure_template orelse {
+                    std.debug.panic("checked artifact invariant violated: test root has no entry wrapper template", .{});
+                };
+                std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
+            }
         }
 
         for (self.compile_time_roots.roots, 0..) |root, i| {
@@ -6410,8 +6666,16 @@ pub const CheckedModuleArtifact = struct {
                 .promoted_callable_wrapper,
                 .hosted_wrapper,
                 .intrinsic_wrapper,
-                .entry_wrapper,
                 => {},
+                .entry_wrapper => |wrapper_id| {
+                    const wrapper = self.entry_wrappers.get(wrapper_id);
+                    std.debug.assert(@intFromEnum(wrapper.body_expr) < self.checked_bodies.exprs.len);
+                    std.debug.assert(@intFromEnum(wrapper.checked_fn_root) < self.checked_types.roots.len);
+                    std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
+                    std.debug.assert(wrapper.template.template == template.template_id);
+                    std.debug.assert(wrapper.template.proc_base == template.proc_base);
+                    std.debug.assert(std.mem.eql(u8, &wrapper.template.artifact.bytes, &self.key.bytes));
+                },
             }
 
             const nested_end = template.nested_proc_sites.start + template.nested_proc_sites.len;
@@ -6987,11 +7251,24 @@ pub fn publishFromTypedModule(
     var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types);
     errdefer compile_time_roots.deinit(allocator);
 
+    var entry_wrappers = EntryWrapperTable{};
+    errdefer entry_wrappers.deinit(allocator);
+    try checked_procedure_templates.appendEntryWrappersForRoots(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &checked_types,
+        &entry_wrappers,
+        &compile_time_roots,
+    );
+
     var root_requests = try RootRequestTable.fromModule(
         allocator,
         module,
         &checked_types,
         &compile_time_roots,
+        &entry_wrappers,
         &platform_required_bindings,
         inputs.explicit_roots,
     );
@@ -7050,12 +7327,13 @@ pub fn publishFromTypedModule(
     try sealCheckedProcedureTemplateRefs(
         allocator,
         &checked_bodies,
+        &entry_wrappers,
         &checked_procedure_templates,
         &static_dispatch_plans,
         &resolved_value_refs,
     );
 
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &checked_procedure_templates);
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
 
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
@@ -7110,6 +7388,7 @@ pub fn publishFromTypedModule(
         .resolved_value_refs = resolved_value_refs,
         .nested_proc_sites = nested_proc_sites,
         .checked_procedure_templates = checked_procedure_templates,
+        .entry_wrappers = entry_wrappers,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,

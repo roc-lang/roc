@@ -205,6 +205,7 @@ const CheckedTemplateLookup = struct {
     resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
     nested_proc_sites: *const checked_artifact.NestedProcSiteTable,
     hosted_procs: *const checked_artifact.HostedProcTable,
+    entry_wrappers: ?*const checked_artifact.EntryWrapperTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
 
@@ -220,6 +221,7 @@ fn checkedTemplateForKey(
             .resolved_value_refs = &input.root.artifact.resolved_value_refs,
             .nested_proc_sites = &input.root.artifact.nested_proc_sites,
             .hosted_procs = &input.root.artifact.hosted_procs,
+            .entry_wrappers = &input.root.artifact.entry_wrappers,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
     }
@@ -237,6 +239,7 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = imported.resolved_value_refs,
                     .nested_proc_sites = imported.nested_proc_sites,
                     .hosted_procs = imported.hosted_procs,
+                    .entry_wrappers = null,
                     .template = exported.template_data,
                 };
             }
@@ -258,6 +261,7 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = related.resolved_value_refs,
                     .nested_proc_sites = related.nested_proc_sites,
                     .hosted_procs = related.hosted_procs,
+                    .entry_wrappers = null,
                     .template = exported.template_data,
                 };
             }
@@ -1238,12 +1242,41 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.DefId {
         return switch (self.template_lookup.template.body) {
             .checked_body => |body_id| try self.lowerCheckedBody(reserved, fn_ty, body_id),
+            .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperDef(reserved, fn_ty, wrapper_id),
             .promoted_callable_wrapper,
             .hosted_wrapper,
             .intrinsic_wrapper,
-            .entry_wrapper,
             => invariantViolation("mono body lowering reached a wrapper template before wrapper lowering was implemented"),
         };
+    }
+
+    fn lowerEntryWrapperDef(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        wrapper_id: canonical.EntryWrapperId,
+    ) Allocator.Error!Ast.DefId {
+        const entry_wrappers = self.template_lookup.entry_wrappers orelse {
+            debug.invariant(false, "mono body lowering invariant violated: entry wrapper template came from a view without entry wrappers");
+            unreachable;
+        };
+        const wrapper = entry_wrappers.get(wrapper_id);
+        const body = try self.lowerExpr(wrapper.body_expr);
+        const bind = Ast.TypedSymbol{
+            .ty = fn_ty,
+            .symbol = try self.program.addProcSymbol(reserved.local_handle),
+        };
+        return try self.program.ast.addDef(.{
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .debug_name = null,
+            .value = .{ .fn_ = .{
+                .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
+                .recursive = false,
+                .bind = bind,
+                .args = Ast.Span(Ast.TypedSymbol).empty(),
+                .body = body,
+            } },
+        });
     }
 
     fn lowerCheckedBody(
@@ -2662,6 +2695,8 @@ fn templateForRoot(
     concrete_source_types: *const ConcreteSourceType.Store,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
 ) ?canonical.ProcedureTemplateRef {
+    if (root.procedure_template) |template| return template;
+
     const artifact = input.root.artifact;
     const requested_key = concrete_source_types.key(requested_fn_ty);
     switch (root.source) {

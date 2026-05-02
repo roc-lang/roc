@@ -4008,10 +4008,281 @@ fn replayTestCache(
     }
 }
 
+const CliTestResult = enum { passed, failed };
+
+const CliTestResultItem = struct {
+    result: CliTestResult,
+    region: base.Region,
+    error_msg: ?[]const u8,
+};
+
+const CliModuleTestResult = struct {
+    env: *const ModuleEnv,
+    path: []const u8,
+    results: []const CliTestResultItem,
+};
+
+const CliTestRunSummary = struct {
+    passed: u32 = 0,
+    failed: u32 = 0,
+};
+
+fn collectTestRootRequests(
+    allocator: std.mem.Allocator,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]check.CheckedArtifact.RootRequest {
+    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    errdefer roots.deinit(allocator);
+
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind != .test_expect) continue;
+        try roots.append(allocator, root);
+    }
+
+    return try roots.toOwnedSlice(allocator);
+}
+
+fn testRootRegion(
+    env: *const ModuleEnv,
+    root: check.CheckedArtifact.RootRequest,
+) base.Region {
+    return switch (root.source) {
+        .statement => |statement| env.store.getStatementRegion(statement),
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("CLI test invariant violated: test root was not published from an expect statement", .{});
+            }
+            unreachable;
+        },
+    };
+}
+
+fn testRootByOrder(
+    roots: []const check.CheckedArtifact.RootRequest,
+    order: u32,
+) check.CheckedArtifact.RootRequest {
+    for (roots) |root| {
+        if (root.order == order) return root;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("CLI test invariant violated: lowered test root order {d} was not in the explicit test root set", .{order});
+    }
+    unreachable;
+}
+
+fn interpreterTestFailureMessage(
+    allocator: std.mem.Allocator,
+    interpreter: *const eval.LirInterpreter,
+    err: eval.LirInterpreter.Error,
+) std.mem.Allocator.Error![]const u8 {
+    const message = switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
+        error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
+        error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
+    };
+    return try allocator.dupe(u8, message);
+}
+
+fn runCheckedArtifactTests(
+    ctx: *CliContext,
+    build_env: *BuildEnv,
+    module: BuildEnv.CompiledModuleInfo,
+    module_envs: []const *const ModuleEnv,
+    module_results: *std.ArrayList(CliModuleTestResult),
+) !CliTestRunSummary {
+    const artifact = module.semantic.checked_artifact orelse return .{};
+    const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
+    defer ctx.gpa.free(test_roots);
+    if (test_roots.len == 0) return .{};
+
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
+    defer ctx.gpa.free(relation_artifacts);
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = test_roots },
+        .{
+            .module_envs = module_envs,
+            .target_usize = base.target.TargetUsize.native,
+        },
+    );
+    defer lowered.deinit();
+
+    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var interpreter = try eval.LirInterpreter.init(
+        ctx.gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
+    var results = std.ArrayList(CliTestResultItem).empty;
+    errdefer {
+        for (results.items) |result| {
+            if (result.error_msg) |message| ctx.gpa.free(message);
+        }
+        results.deinit(ctx.gpa);
+    }
+
+    var summary = CliTestRunSummary{};
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.kind != .test_expect) continue;
+        const root = testRootByOrder(test_roots, metadata.order);
+        const region = testRootRegion(module.semantic.env, root);
+        const proc = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_layouts = try argLayoutsForProc(ctx.gpa, &lowered.lir_result.store, root_proc);
+        defer ctx.gpa.free(arg_layouts);
+
+        const eval_result = interpreter.eval(.{
+            .proc_id = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+        }) catch |err| {
+            summary.failed += 1;
+            try results.append(ctx.gpa, .{
+                .result = .failed,
+                .region = region,
+                .error_msg = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
+            });
+            continue;
+        };
+
+        const passed = switch (eval_result) {
+            .value => |value| blk: {
+                const ok = value.read(u8) != 0;
+                interpreter.dropValue(value, proc.ret_layout);
+                break :blk ok;
+            },
+        };
+
+        if (passed) {
+            summary.passed += 1;
+            try results.append(ctx.gpa, .{ .result = .passed, .region = region, .error_msg = null });
+        } else {
+            summary.failed += 1;
+            try results.append(ctx.gpa, .{ .result = .failed, .region = region, .error_msg = null });
+        }
+    }
+
+    try module_results.append(ctx.gpa, .{
+        .env = module.semantic.env,
+        .path = module.path,
+        .results = try ctx.gpa.dupe(CliTestResultItem, results.items),
+    });
+    results.deinit(ctx.gpa);
+
+    return summary;
+}
+
 fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
-    _ = ctx;
-    _ = args;
-    @compileError("Phase 2 must route tests through checked artifacts");
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start_time = std.time.nanoTimestamp();
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    if (!args.no_cache) {
+        const cache_manager = try ctx.gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, FsIo.default());
+        build_env.setCacheManager(cache_manager);
+    }
+
+    build_env.discoverDependencies(args.path) catch |err| {
+        _ = build_env.renderDiagnostics(stderr);
+        return err;
+    };
+    build_env.compileDiscovered() catch |err| {
+        _ = build_env.renderDiagnostics(stderr);
+        return err;
+    };
+
+    const diag = build_env.renderDiagnostics(stderr);
+    if (diag.errors > 0) return error.CompilationFailed;
+
+    const modules = try build_env.getCompiledModules(ctx.gpa);
+    defer ctx.gpa.free(modules);
+    const module_envs = try build_env.collectModuleEnvViews(ctx.gpa);
+    defer ctx.gpa.free(module_envs);
+
+    var module_results = std.ArrayList(CliModuleTestResult).empty;
+    defer {
+        for (module_results.items) |module_result| {
+            for (module_result.results) |result| {
+                if (result.error_msg) |message| ctx.gpa.free(message);
+            }
+            ctx.gpa.free(module_result.results);
+        }
+        module_results.deinit(ctx.gpa);
+    }
+
+    var total = CliTestRunSummary{};
+    for (modules) |module| {
+        const summary = try runCheckedArtifactTests(ctx, &build_env, module, module_envs, &module_results);
+        total.passed += summary.passed;
+        total.failed += summary.failed;
+    }
+
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    if (total.failed == 0) {
+        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ total.passed, elapsed_ms });
+        if (args.verbose) {
+            for (module_results.items) |module_result| {
+                for (module_result.results) |result| {
+                    const region_info = module_result.env.calcRegionInfo(result.region);
+                    if (result.result == .passed) {
+                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    const total_tests = total.passed + total.failed;
+    try stderr.print("Ran {} tests in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, total.passed, total.failed });
+
+    for (module_results.items) |module_result| {
+        for (module_result.results) |result| {
+            const region_info = module_result.env.calcRegionInfo(result.region);
+            if (result.result == .passed) {
+                if (args.verbose) {
+                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
+                }
+            } else {
+                try printTestFailure(stderr, module_result.path, module_result.env, result.region, region_info, result.error_msg);
+            }
+        }
+    }
+
+    return error.TestsFailed;
 }
 
 

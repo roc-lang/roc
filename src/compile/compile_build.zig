@@ -1916,6 +1916,8 @@ pub const BuildEnv = struct {
     pub const CompiledModuleInfo = struct {
         /// Module name (e.g., "Main", "Stdout")
         name: []const u8,
+        /// Source file path for reporting and CLI diagnostics.
+        path: []const u8,
         /// Paired semantic data retained after type checking
         semantic: SemanticModuleData,
         /// Source code of the module
@@ -1974,6 +1976,7 @@ pub const BuildEnv = struct {
 
                     try modules.append(allocator, .{
                         .name = sched_mod.name,
+                        .path = sched_mod.path,
                         .semantic = .{
                             .env = env_ptr,
                             .checked_artifact = if (semantic.checked_artifact) |*artifact| artifact else null,
