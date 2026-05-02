@@ -295,7 +295,7 @@ const IrBuilder = struct {
             },
             .packed_erased_fn => |packed| try self.lowerPackedErasedFn(expr, packed, stmts),
             .call_erased => |call| try self.lowerCallErased(expr, call, stmts),
-            .const_ref,
+            .const_instance,
             .crash,
             .runtime_error,
             => irInvariant("IR lowering reached executable expression form whose IR lowering is still missing"),

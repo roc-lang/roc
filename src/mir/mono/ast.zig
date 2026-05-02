@@ -158,7 +158,7 @@ pub const Expr = struct {
             field: canonical.RecordFieldLabelId,
             field_index: u16,
         },
-        const_ref: checked_artifact.ConstRef,
+        const_instance: checked_artifact.ConstInstanceRef,
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,

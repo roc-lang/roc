@@ -122,7 +122,7 @@ pub const Expr = struct {
         dec_lit: i128,
         bool_lit: bool,
         str_lit: ProgramLiteralId,
-        const_ref: check.CheckedArtifact.ConstRef,
+        const_instance: check.CheckedArtifact.ConstInstanceRef,
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,

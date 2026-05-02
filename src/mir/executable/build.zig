@@ -1150,7 +1150,7 @@ const BodyBuilder = struct {
             .str_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .str_lit = literal }),
             .bool_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .bool_lit = literal }),
             .unit => try self.addValueExpr(expr.ty, expr.value_info, .unit),
-            .const_ref => |const_ref| try self.addValueExpr(expr.ty, expr.value_info, .{ .const_ref = const_ref }),
+            .const_instance => |const_instance| try self.addValueExpr(expr.ty, expr.value_info, .{ .const_instance = const_instance }),
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.assembly_order);
                 break :blk try self.output.addExpr(

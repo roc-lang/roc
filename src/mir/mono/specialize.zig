@@ -1569,7 +1569,7 @@ const BodyLowerer = struct {
             .top_level_const,
             .imported_const,
             .platform_required_const,
-            => |const_use| try self.program.ast.addExpr(ty, .{ .const_ref = const_use.const_ref }),
+            => |const_use| try self.lowerConstUse(ty, const_use, record.checked_ty),
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -1582,6 +1582,25 @@ const BodyLowerer = struct {
             } }),
             .platform_required_declaration => invariantViolation("mono body lowering reached platform-required declaration lookup as a runtime value"),
         };
+    }
+
+    fn lowerConstUse(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        const_use: checked_artifact.ConstUseTemplate,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const concrete_ref = try self.type_instantiator.concreteRefForTemplateType(checked_ty);
+        const requested_key = self.program.concrete_source_types.key(concrete_ref);
+        const key = checked_artifact.ConstInstantiationKey{
+            .const_ref = const_use.const_ref,
+            .requested_source_ty = requested_key,
+        };
+        const instance = self.input.root.artifact.const_instances.lookup(key) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the consuming artifact");
+            unreachable;
+        };
+        return try self.program.ast.addExpr(ty, .{ .const_instance = instance });
     }
 
     fn lowerList(

@@ -256,7 +256,7 @@ const BodyLifter = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .bool_lit => |value| .{ .bool_lit = value },
             .str_lit => |literal| .{ .str_lit = literal },
-            .const_ref => |const_ref| .{ .const_ref = const_ref },
+            .const_instance => |const_instance| .{ .const_instance = const_instance },
             .tag => |tag| .{ .tag = .{
                 .union_shape = tag.union_shape,
                 .tag = tag.tag,
@@ -736,7 +736,7 @@ const BodyLifter = struct {
             .dec_lit,
             .bool_lit,
             .str_lit,
-            .const_ref,
+            .const_instance,
             .unit,
             .crash,
             .runtime_error,
