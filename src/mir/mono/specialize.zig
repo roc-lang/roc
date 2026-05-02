@@ -78,6 +78,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(ids.RootMetadata),
 
@@ -92,6 +93,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
         };
@@ -100,6 +102,7 @@ pub const Program = struct {
     pub fn deinit(self: *Program) void {
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        self.executable_synthetic_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -124,6 +127,16 @@ pub const Program = struct {
             .fn_ty = fn_ty,
             .body = body,
         });
+    }
+
+    pub fn addExecutableSyntheticProc(
+        self: *Program,
+        proc: ids.ExecutableSyntheticProc,
+    ) Allocator.Error!void {
+        for (self.executable_synthetic_procs.items) |existing| {
+            if (canonical.mirProcedureRefEql(existing.source_proc, proc.source_proc)) return;
+        }
+        try self.executable_synthetic_procs.append(self.allocator, proc);
     }
 
     pub fn addPatternBinderSymbol(
@@ -189,6 +202,11 @@ pub fn run(
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
         const template_lookup = checkedTemplateForKey(input, key.template);
+        if (executableSyntheticProcForReserved(key, reserved, template_lookup)) |synthetic| {
+            try program.addExecutableSyntheticProc(synthetic);
+            queue.markLowered(key);
+            continue;
+        }
         var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types, &name_resolver, template_lookup.artifact);
         defer type_instantiator.deinit();
         try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
@@ -290,6 +308,34 @@ fn checkedTemplateForKey(
 
     debug.invariant(false, "mono specialization invariant violated: template artifact was not available to lowering");
     unreachable;
+}
+
+fn executableSyntheticProcForReserved(
+    key: canonical.MonoSpecializationKey,
+    reserved: ReservedMonoProc,
+    template_lookup: CheckedTemplateLookup,
+) ?ids.ExecutableSyntheticProc {
+    return switch (template_lookup.template.body) {
+        .promoted_callable_wrapper => |wrapper_id| blk: {
+            const wrapper = template_lookup.promoted_callable_wrappers.get(wrapper_id);
+            const body_plan = template_lookup.promoted_callable_body_plans.get(wrapper.body_plan);
+            break :blk switch (body_plan) {
+                .erased => |erased| erased_blk: {
+                    if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &key.requested_mono_fn_ty.bytes)) {
+                        invariantViolation("erased promoted callable wrapper source function type disagrees with mono specialization request");
+                    }
+                    break :erased_blk ids.ExecutableSyntheticProc{
+                        .source_proc = canonical.mirProcedureRefFromMono(reserved.proc),
+                        .template = key.template,
+                        .body = .{ .erased_promoted_wrapper = erased },
+                    };
+                },
+                .finite => null,
+                .pending => invariantViolation("mono specialization reached unsealed promoted callable wrapper body plan"),
+            };
+        },
+        else => null,
+    };
 }
 
 const TypeInstantiator = struct {
@@ -1285,7 +1331,7 @@ const BodyLowerer = struct {
                     .body = try self.lowerFinitePromotedCallableWrapperBody(reserved, fn_ty, wrapper_id, finite, params.exprs),
                 };
             },
-            .erased => invariantViolation("mono body lowering reached erased promoted callable wrapper before erased wrapper lowering was implemented"),
+            .erased => invariantViolation("mono body lowering reached executable-owned erased promoted callable wrapper"),
             .pending => invariantViolation("mono body lowering reached unsealed promoted callable wrapper body plan"),
         };
         const bind = Ast.TypedSymbol{
@@ -3704,6 +3750,14 @@ fn verifyProgram(program: *const Program) void {
             {
                 found = true;
                 break;
+            }
+        }
+        if (!found) {
+            for (program.executable_synthetic_procs.items) |proc| {
+                if (canonical.mirProcedureRefEql(proc.source_proc, root)) {
+                    found = true;
+                    break;
+                }
             }
         }
         std.debug.assert(found);

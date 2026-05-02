@@ -1,6 +1,10 @@
 //! Shared MIR-family identifiers.
 
 const std = @import("std");
+const check = @import("check");
+
+const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 
 pub const RootKind = enum {
     runtime_entrypoint,
@@ -34,6 +38,16 @@ pub const RootMetadata = struct {
     kind: RootKind,
     abi: RootAbi,
     exposure: RootExposure,
+};
+
+pub const ExecutableSyntheticProcBody = union(enum) {
+    erased_promoted_wrapper: checked_artifact.ErasedPromotedWrapperBodyPlan,
+};
+
+pub const ExecutableSyntheticProc = struct {
+    source_proc: canonical.MirProcedureRef,
+    template: canonical.ProcedureTemplateRef,
+    body: ExecutableSyntheticProcBody,
 };
 
 pub const RecordShapeId = enum(u32) { _ };

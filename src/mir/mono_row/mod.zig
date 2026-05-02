@@ -329,6 +329,7 @@ pub const Program = struct {
     types: Mono.Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(ids.RootMetadata),
 
@@ -341,6 +342,7 @@ pub const Program = struct {
             .types = Mono.Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
         };
@@ -349,6 +351,7 @@ pub const Program = struct {
     pub fn deinit(self: *Program) void {
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        self.executable_synthetic_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -413,6 +416,8 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .body = try finalizer.lowerDef(proc.body),
         });
     }
+    try program.executable_synthetic_procs.appendSlice(allocator, owned_mono.executable_synthetic_procs.items);
+    owned_mono.executable_synthetic_procs.clearRetainingCapacity();
     try program.root_procs.appendSlice(allocator, owned_mono.root_procs.items);
     try program.root_metadata.appendSlice(allocator, owned_mono.root_metadata.items);
     owned_mono.root_procs.clearRetainingCapacity();
@@ -420,6 +425,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     owned_mono.ast.deinit();
     owned_mono.root_metadata.deinit(allocator);
     owned_mono.root_procs.deinit(allocator);
+    owned_mono.executable_synthetic_procs.deinit(allocator);
     owned_mono.procs.deinit(allocator);
 
     const result = Result{

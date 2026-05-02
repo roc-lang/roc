@@ -29,6 +29,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(ids.RootMetadata),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
@@ -45,6 +46,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
             .solve_sessions = .empty,
@@ -68,6 +70,7 @@ pub const Program = struct {
         self.solve_sessions.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        self.executable_synthetic_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -154,6 +157,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .representation_instance = instance,
         });
     }
+    try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
     try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
 

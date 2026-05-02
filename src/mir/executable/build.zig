@@ -89,7 +89,11 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
     defer proc_instance_map.deinit();
     var proc_exec_map = std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId).init(allocator);
     defer proc_exec_map.deinit();
-    try proc_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+    const normal_proc_count = input.procs.items.len;
+    const executable_synthetic_proc_count = input.executable_synthetic_procs.items.len;
+    const total_proc_count = normal_proc_count + executable_synthetic_proc_count;
+
+    try proc_map.ensureTotalCapacity(@intCast(total_proc_count));
     try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     for (input.procs.items, 0..) |proc, i| {
@@ -98,8 +102,12 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
         proc_instance_map.putAssumeCapacity(proc.proc, proc.representation_instance);
         proc_exec_map.putAssumeCapacity(proc.representation_instance, executable_proc);
     }
+    for (input.executable_synthetic_procs.items, 0..) |proc, i| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + i)));
+        proc_map.putAssumeCapacity(proc.source_proc, executable_proc);
+    }
 
-    try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
+    try program.procs.ensureTotalCapacity(allocator, total_proc_count);
     var type_lowerer = TypeLowerer.init(allocator, &input.types, &program.types, &program.row_shapes);
     defer type_lowerer.deinit();
 
@@ -135,6 +143,14 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .executable_proc = executable_proc,
             .source_proc = proc.proc,
             .body = try builder.lowerDef(proc.body),
+        });
+    }
+    for (input.executable_synthetic_procs.items, 0..) |synthetic, i| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + i)));
+        program.procs.appendAssumeCapacity(.{
+            .executable_proc = executable_proc,
+            .source_proc = synthetic.source_proc,
+            .body = try lowerExecutableSyntheticProc(allocator, &program, synthetic, executable_proc),
         });
     }
 
@@ -214,6 +230,23 @@ fn deinitCallableSetDescriptor(
 ) void {
     for (descriptor.members) |member| allocator.free(member.capture_slots);
     allocator.free(descriptor.members);
+}
+
+fn lowerExecutableSyntheticProc(
+    allocator: Allocator,
+    program: *Program,
+    synthetic: ids.ExecutableSyntheticProc,
+    executable_proc: Ast.ExecutableProcId,
+) Allocator.Error!Ast.DefId {
+    _ = allocator;
+    _ = program;
+    _ = executable_proc;
+    switch (synthetic.body) {
+        .erased_promoted_wrapper => |erased| {
+            _ = erased;
+            executableInvariant("executable erased promoted wrapper lowering requires canonical executable type payload lowering");
+        },
+    }
 }
 
 const TypeLowerer = struct {
