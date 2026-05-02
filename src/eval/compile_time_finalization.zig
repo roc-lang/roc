@@ -207,8 +207,14 @@ fn evaluateCallableBindingRoot(
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
-    const callable = existingNoCaptureCallableResult(artifact, lowered, result_plan);
     const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+    const callable = existingNoCaptureCallableResult(
+        artifact,
+        lowered,
+        result_plan,
+        ret_layout,
+        result.value,
+    );
     if (!std.mem.eql(u8, &callable.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
@@ -234,16 +240,27 @@ fn existingNoCaptureCallableResult(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     result_plan_id: checked_artifact.CallableResultPlanId,
+    layout_idx: layout_mod.Idx,
+    value: Value,
 ) check.CanonicalNames.ProcedureCallableRef {
     const plan = artifact.comptime_plans.callableResult(result_plan_id);
     const finite = switch (plan) {
         .finite => |finite| finite,
         .erased => compileTimeFinalizationInvariant("erased compile-time callable promotion is not sealed yet"),
     };
-    if (finite.members.len != 1) {
-        compileTimeFinalizationInvariant("multi-member compile-time callable promotion is not sealed yet");
+    if (finite.members.len == 0) {
+        compileTimeFinalizationInvariant("finite compile-time callable result plan had no members");
     }
-    const planned_member = finite.members[0];
+
+    const selected_member_id = readCallableSetMemberDiscriminant(
+        &lowered.lir_result.layouts,
+        layout_idx,
+        value,
+        finite.members.len,
+    );
+    const planned_member = callableResultMember(finite.members, selected_member_id) orelse {
+        compileTimeFinalizationInvariant("compile-time callable result selected a member outside the result plan");
+    };
     if (planned_member.capture_slots.len != 0) {
         compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
     }
@@ -261,6 +278,34 @@ fn existingNoCaptureCallableResult(
         compileTimeFinalizationInvariant("compile-time callable descriptor member source type differs from result plan");
     }
     return member.proc_value;
+}
+
+fn readCallableSetMemberDiscriminant(
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+    member_count: usize,
+) check.CanonicalNames.CallableSetMemberId {
+    const layout = layouts.getLayout(layout_idx);
+    if (layout.tag != .tag_union) {
+        compileTimeFinalizationInvariant("finite compile-time callable result did not lower to tag-union layout");
+    }
+    const info = layouts.getTagUnionInfo(layout);
+    const discriminant = info.data.readDiscriminant(value.ptr);
+    if (discriminant >= member_count) {
+        compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
+    }
+    return @enumFromInt(discriminant);
+}
+
+fn callableResultMember(
+    members: []const checked_artifact.CallableResultMemberPlan,
+    member_id: check.CanonicalNames.CallableSetMemberId,
+) ?checked_artifact.CallableResultMemberPlan {
+    for (members) |member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
 }
 
 fn callableSetDescriptor(
