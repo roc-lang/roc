@@ -4560,6 +4560,7 @@ pub const CompileTimeRootKind = enum {
 };
 
 pub const CompileTimeRootPayload = union(enum) {
+    pending,
     const_graph: ConstGraphReificationPlanId,
     callable_result: CallableResultPlanId,
     expect,
@@ -4616,10 +4617,7 @@ pub const CompileTimeRootTable = struct {
                 .pattern = def.pattern.idx,
                 .expr = def.expr.idx,
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
-                .payload = if (is_callable)
-                    .{ .callable_result = @enumFromInt(@as(u32, @intCast(roots.items.len))) }
-                else
-                    .{ .const_graph = @enumFromInt(@as(u32, @intCast(roots.items.len))) },
+                .payload = .pending,
             });
         }
 
@@ -4646,6 +4644,7 @@ pub const CompileTimeRootTable = struct {
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
         }
+        verifyCompileTimeRootPayloadMatchesKind(self.roots[index].kind, payload);
         self.roots[index].payload = payload;
     }
 
@@ -4683,6 +4682,25 @@ pub const CompileTimeRootTable = struct {
         });
     }
 };
+
+fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
+    const matches = switch (kind) {
+        .constant => switch (payload) {
+            .const_graph => true,
+            else => false,
+        },
+        .callable_binding => switch (payload) {
+            .callable_result => true,
+            else => false,
+        },
+        .expect => switch (payload) {
+            .expect => true,
+            else => false,
+        },
+    };
+    if (matches) return;
+    checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
+}
 
 pub const FiniteCallableLeafInstance = struct {
     proc_value: canonical.ProcedureCallableRef,
@@ -7149,6 +7167,23 @@ pub const CheckedModuleArtifact = struct {
                 }
             }
         }
+
+        for (self.compile_time_roots.roots, 0..) |root, i| {
+            std.debug.assert(@intFromEnum(root.id) == i);
+            std.debug.assert(root.module_idx == self.module_identity.module_idx);
+            switch (root.kind) {
+                .constant,
+                .callable_binding,
+                => switch (root.payload) {
+                    .pending => {},
+                    else => std.debug.panic("checked artifact invariant violated: compile-time root payload was filled before checking finalization completed", .{}),
+                },
+                .expect => switch (root.payload) {
+                    .expect => {},
+                    else => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
+                },
+            }
+        }
     }
 
     pub fn verifyPublished(self: *const CheckedModuleArtifact) void {
@@ -7174,6 +7209,10 @@ pub const CheckedModuleArtifact = struct {
         for (self.compile_time_roots.roots, 0..) |root, i| {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
+            switch (root.payload) {
+                .pending => std.debug.panic("checked artifact invariant violated: published compile-time root has pending payload", .{}),
+                else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+            }
         }
 
         std.debug.assert(std.mem.eql(
