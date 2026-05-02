@@ -9,6 +9,7 @@ const builtins = @import("builtins");
 const check = @import("check");
 const layout_mod = @import("layout");
 const lir = @import("lir");
+const mir = @import("mir");
 
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -95,7 +96,18 @@ fn finalize(
                     else => compileTimeFinalizationInvariant("constant root did not publish a const graph plan"),
                 },
             ),
-            .callable_binding => compileTimeFinalizationInvariant("compile-time callable binding promotion is not sealed yet"),
+            .callable_binding => try evaluateCallableBindingRoot(
+                allocator,
+                artifact,
+                &interpreter,
+                &lowered,
+                root,
+                lir_root,
+                switch (payload) {
+                    .callable_result => |plan| plan,
+                    else => compileTimeFinalizationInvariant("callable root did not publish a callable result plan"),
+                },
+            ),
             .expect => {},
         }
     }
@@ -167,6 +179,107 @@ fn evaluateConstantRoot(
         .schema = reified.schema,
         .value = reified.value,
     });
+}
+
+fn evaluateCallableBindingRoot(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    interpreter: *Interpreter,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    root: checked_artifact.CompileTimeRoot,
+    lir_root: lir.LIR.LirProcSpecId,
+    result_plan: checked_artifact.CallableResultPlanId,
+) anyerror!void {
+    const pattern = root.pattern orelse compileTimeFinalizationInvariant("callable root had no top-level pattern");
+    const top_level = artifact.top_level_values.lookupByPattern(pattern) orelse {
+        compileTimeFinalizationInvariant("callable root had no top-level value entry");
+    };
+    const binding_ref = switch (top_level.value) {
+        .procedure_binding => |binding| binding,
+        .const_ref => compileTimeFinalizationInvariant("callable root top-level value was a const"),
+    };
+
+    const result = try interpreter.eval(.{
+        .proc_id = lir_root,
+        .arg_layouts = &.{},
+    });
+    const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
+    defer interpreter.dropValue(result.value, ret_layout);
+
+    const callable = existingNoCaptureCallableResult(artifact, lowered, result_plan);
+    const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+    if (!std.mem.eql(u8, &callable.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
+    }
+
+    const key = checked_artifact.CallableBindingInstantiationKey{
+        .binding = .{ .top_level = binding_ref },
+        .requested_source_fn_ty = requested_source_fn_ty,
+    };
+    const instance_ref = try artifact.callable_binding_instances.reserve(allocator, key);
+    artifact.callable_binding_instances.markEvaluating(instance_ref);
+    artifact.callable_binding_instances.fill(instance_ref, .{
+        .key = key,
+        .dependency_summary = @enumFromInt(@intFromEnum(root.dependency_summary_request)),
+        .executable_root = root.id,
+        .result_plan = result_plan,
+        .promotion_plan = null,
+        .promotion_output = .{ .existing_procedure = callable },
+        .proc_value = callable,
+    });
+}
+
+fn existingNoCaptureCallableResult(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    result_plan_id: checked_artifact.CallableResultPlanId,
+) check.CanonicalNames.ProcedureCallableRef {
+    const plan = artifact.comptime_plans.callableResult(result_plan_id);
+    const finite = switch (plan) {
+        .finite => |finite| finite,
+        .erased => compileTimeFinalizationInvariant("erased compile-time callable promotion is not sealed yet"),
+    };
+    if (finite.members.len != 1) {
+        compileTimeFinalizationInvariant("multi-member compile-time callable promotion is not sealed yet");
+    }
+    const planned_member = finite.members[0];
+    if (planned_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("captured compile-time callable promotion is not sealed yet");
+    }
+
+    const descriptor = callableSetDescriptor(lowered.callable_set_descriptors, finite.callable_set_key) orelse {
+        compileTimeFinalizationInvariant("compile-time callable result descriptor was not preserved");
+    };
+    const member = callableSetMember(descriptor, planned_member.member) orelse {
+        compileTimeFinalizationInvariant("compile-time callable result selected missing descriptor member");
+    };
+    if (member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("descriptor member for no-capture callable result had captures");
+    }
+    if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("compile-time callable descriptor member source type differs from result plan");
+    }
+    return member.proc_value;
+}
+
+fn callableSetDescriptor(
+    descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    key: check.CanonicalNames.CanonicalCallableSetKey,
+) ?*const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor {
+    for (descriptors) |*descriptor| {
+        if (mir.LambdaSolved.Representation.callableSetKeyEql(descriptor.key, key)) return descriptor;
+    }
+    return null;
+}
+
+fn callableSetMember(
+    descriptor: *const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    member_id: check.CanonicalNames.CallableSetMemberId,
+) ?*const check.CanonicalNames.CanonicalCallableSetMember {
+    for (descriptor.members) |*member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
 }
 
 fn compileTimeRootForRequest(
