@@ -22,6 +22,7 @@ const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
 const check = @import("check");
@@ -231,7 +232,80 @@ var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
-const ReplSession = struct {};
+const ReplDefinitionKind = enum {
+    value,
+    type_annotation,
+    type_declaration,
+    import,
+    file_import,
+};
+
+const ReplDefinition = struct {
+    kind: ReplDefinitionKind,
+    name: []u8,
+    source: []u8,
+
+    fn deinit(self: *ReplDefinition, alloc: Allocator) void {
+        alloc.free(self.name);
+        alloc.free(self.source);
+    }
+};
+
+const ReplSession = struct {
+    definitions: std.ArrayList(ReplDefinition) = .empty,
+
+    fn deinit(self: *ReplSession, alloc: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(alloc);
+        }
+        self.definitions.deinit(alloc);
+    }
+
+    fn clear(self: *ReplSession, alloc: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(alloc);
+        }
+        self.definitions.clearRetainingCapacity();
+    }
+
+    fn hasDefinition(self: *const ReplSession, kind: ReplDefinitionKind, name: []const u8) bool {
+        for (self.definitions.items) |definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn upsertDefinition(
+        self: *ReplSession,
+        alloc: Allocator,
+        kind: ReplDefinitionKind,
+        name: []const u8,
+        source: []const u8,
+    ) Allocator.Error!void {
+        const owned_name = try alloc.dupe(u8, name);
+        errdefer alloc.free(owned_name);
+        const owned_source = try alloc.dupe(u8, source);
+        errdefer alloc.free(owned_source);
+
+        for (self.definitions.items) |*definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                definition.deinit(alloc);
+                definition.* = .{
+                    .kind = kind,
+                    .name = owned_name,
+                    .source = owned_source,
+                };
+                return;
+            }
+        }
+
+        try self.definitions.append(alloc, .{
+            .kind = kind,
+            .name = owned_name,
+            .source = owned_source,
+        });
+    }
+};
 
 var repl_session: ?ReplSession = null;
 
@@ -386,6 +460,9 @@ const ResponseWriteError = error{
 };
 
 fn cleanupReplState() void {
+    if (repl_session) |*session| {
+        session.deinit(allocator);
+    }
     repl_session = null;
 }
 
@@ -557,9 +634,14 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeLoadedResponse(response_buffer, result);
         },
         .INIT_REPL => {
+            if (compiler_data) |*data| {
+                data.deinit();
+                compiler_data = null;
+            }
             cleanupReplState();
-            _ = response_buffer;
-            @compileError("Phase 2 must route playground REPL initialization through checked artifacts");
+            repl_session = .{};
+            current_state = .REPL_ACTIVE;
+            try writeReplInitResponse(response_buffer);
         },
         .RESET => {
             resetGlobalState();
@@ -624,10 +706,359 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
-    _ = message_type;
-    _ = root;
-    _ = response_buffer;
-    @compileError("Phase 2 must route playground REPL through checked artifacts");
+    const session = if (repl_session) |*session| session else {
+        try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
+        return;
+    };
+
+    switch (message_type) {
+        .REPL_STEP => {
+            const input_value = root.object.get("input") orelse {
+                try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing input for REPL_STEP");
+                return;
+            };
+
+            try runReplStep(session, input_value.string, response_buffer);
+        },
+        .CLEAR_REPL => {
+            session.clear(allocator);
+            if (compiler_data) |*data| {
+                data.deinit();
+                compiler_data = null;
+            }
+            try writeReplClearResponse(response_buffer);
+        },
+        .RESET => {
+            resetGlobalState();
+
+            current_state = .READY;
+
+            const compiler_version = build_options.compiler_version;
+            try writeSuccessResponse(response_buffer, compiler_version, null);
+        },
+        .QUERY_CIR => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeCanCirResponse(response_buffer, data);
+        },
+        .QUERY_TYPES => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeTypesResponse(response_buffer, data);
+        },
+        .GET_HOVER_INFO => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeHoverInfoResponse(response_buffer, data, root);
+        },
+        .QUERY_TOKENS => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeTokensResponse(response_buffer, data);
+        },
+        .QUERY_AST => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeParseAstResponse(response_buffer, data);
+        },
+        .QUERY_FORMATTED => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeFormattedResponse(response_buffer, data);
+        },
+        else => {
+            try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
+        },
+    }
+}
+
+const ReplInputKind = enum {
+    definition,
+    expression,
+};
+
+const ReplDefinitionIdentity = struct {
+    kind: ReplDefinitionKind,
+    name: []const u8,
+};
+
+fn classifyReplInput(line: []const u8) !?ReplInputKind {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .expr => .expression,
+        .decl,
+        .@"var",
+        .import,
+        .file_import,
+        .type_decl,
+        .type_anno,
+        => .definition,
+        .malformed => null,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        => .expression,
+    };
+}
+
+fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .decl => |decl| blk: {
+            const pattern = ast.store.getPattern(decl.pattern);
+            break :blk switch (pattern) {
+                .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                else => null,
+            };
+        },
+        .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
+        .type_anno => |anno| .{ .kind = .type_annotation, .name = ast.resolve(anno.name) },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk null;
+            break :blk .{ .kind = .type_declaration, .name = ast.resolve(header.name) };
+        },
+        .import => |import| .{
+            .kind = .import,
+            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+        },
+        .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
+        else => null,
+    };
+}
+
+fn writeDefinitionsWithReplacement(
+    writer: *std.Io.Writer,
+    session: *const ReplSession,
+    replacement: ?ReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) !void {
+    var replaced = false;
+    for (session.definitions.items) |definition| {
+        if (replacement) |identity| {
+            if (definition.kind == identity.kind and std.mem.eql(u8, definition.name, identity.name)) {
+                try writer.writeAll(replacement_source.?);
+                try writer.writeAll("\n");
+                replaced = true;
+                continue;
+            }
+        }
+
+        try writer.writeAll(definition.source);
+        try writer.writeAll("\n");
+    }
+
+    if (!replaced) {
+        if (replacement_source) |source| {
+            try writer.writeAll(source);
+            try writer.writeAll("\n");
+        }
+    }
+}
+
+fn buildReplModuleSource(
+    session: *const ReplSession,
+    replacement: ?ReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+    main_expr: ?[]const u8,
+) ![]u8 {
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer source_writer.deinit();
+
+    try writeDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
+    if (main_expr) |expr| {
+        try source_writer.writer.print("main = {s}\n", .{expr});
+    }
+    try source_writer.writer.flush();
+
+    return source_writer.toOwnedSlice();
+}
+
+fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledProgram {
+    return eval.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
+}
+
+fn replaceCompilerDataFromReplSource(source: []const u8) !void {
+    if (compiler_data) |*data| {
+        data.deinit();
+        compiler_data = null;
+    }
+
+    compiler_data = try compileSource(source, "main");
+}
+
+fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
+    try writeReplStepResultJson(response_buffer, .{
+        .output = message,
+        .try_type = .@"error",
+        .error_stage = stage,
+        .error_details = message,
+    });
+}
+
+fn runReplDefinition(
+    session: *ReplSession,
+    input: []const u8,
+    response_buffer: []u8,
+) ResponseWriteError!void {
+    const identity = replDefinitionIdentity(input) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    } orelse {
+        try writeReplStaticError(response_buffer, "REPL definitions must bind a top-level identifier", .canonicalize);
+        return;
+    };
+
+    const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
+    const validation_main_expr: ?[]const u8 = if (defines_main or session.hasDefinition(.value, "main")) null else "\"\"";
+    const validation_source = buildReplModuleSource(session, identity, input, validation_main_expr) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(validation_source);
+
+    var compiled = compileReplInspectedModule(validation_source) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
+        return;
+    };
+    compiled.deinit(allocator);
+
+    session.upsertDefinition(allocator, identity.kind, identity.name, input) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+
+    const display_source = buildReplModuleSource(session, null, null, null) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(display_source);
+
+    const compiler_available = if (replaceCompilerDataFromReplSource(display_source)) true else |err| blk: {
+        logDebug("REPL definition display compile failed: {}\n", .{err});
+        break :blk false;
+    };
+
+    const output = std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name}) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(output);
+
+    try writeReplStepResultJson(response_buffer, .{
+        .output = output,
+        .try_type = .definition,
+        .compiler_available = compiler_available,
+    });
+}
+
+fn runReplExpression(
+    session: *ReplSession,
+    input: []const u8,
+    response_buffer: []u8,
+) ResponseWriteError!void {
+    const main_source = std.fmt.allocPrint(allocator, "main = {s}", .{input}) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(main_source);
+
+    const source = buildReplModuleSource(
+        session,
+        .{ .kind = .value, .name = "main" },
+        main_source,
+        null,
+    ) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(source);
+
+    var compiled = compileReplInspectedModule(source) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
+        return;
+    };
+    defer compiled.deinit(allocator);
+
+    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.wasm_lowered) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
+        return;
+    };
+    defer allocator.free(output);
+
+    const compiler_available = if (replaceCompilerDataFromReplSource(source)) true else |err| blk: {
+        logDebug("REPL expression display compile failed: {}\n", .{err});
+        break :blk false;
+    };
+
+    try writeReplStepResultJson(response_buffer, .{
+        .output = output,
+        .try_type = .expression,
+        .compiler_available = compiler_available,
+    });
+}
+
+fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) ResponseWriteError!void {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) {
+        try writeReplStaticError(response_buffer, "UNEXPECTED TOKEN", .parse);
+        return;
+    }
+
+    const input_kind = classifyReplInput(trimmed) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    } orelse {
+        try writeReplStaticError(response_buffer, "UNEXPECTED TOKEN", .parse);
+        return;
+    };
+
+    switch (input_kind) {
+        .definition => try runReplDefinition(session, trimmed, response_buffer),
+        .expression => try runReplExpression(session, trimmed, response_buffer),
+    }
 }
 
 
@@ -1321,10 +1752,158 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try resp_writer.finalize();
 }
 
+fn collectPlaygroundTestRootRequests(
+    alloc: Allocator,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]check.CheckedArtifact.RootRequest {
+    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    errdefer roots.deinit(alloc);
+
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind != .test_expect) continue;
+        try roots.append(alloc, root);
+    }
+
+    return try roots.toOwnedSlice(alloc);
+}
+
+fn argLayoutsForProc(
+    alloc: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) Allocator.Error![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
+    errdefer alloc.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
+    var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
+        allocator,
+        .module,
+        data.module_env.common.source,
+        &.{},
+    );
+    defer eval.test_helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const test_roots = try collectPlaygroundTestRootRequests(allocator, &resources.checked_artifact);
+    defer allocator.free(test_roots);
+
+    var html_writer_allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer html_writer_allocating.deinit();
+    const html_writer = &html_writer_allocating.writer;
+
+    try html_writer.writeAll("<div class=\"test-results\">");
+    if (test_roots.len == 0) {
+        try html_writer.writeAll("<p>No tests found</p></div>");
+        try html_writer.flush();
+        return html_writer_allocating.toOwnedSlice();
+    }
+
+    var module_envs = try allocator.alloc(*const ModuleEnv, resources.extra_modules.len + 2);
+    defer allocator.free(module_envs);
+    module_envs[0] = resources.module_env;
+    module_envs[1] = resources.builtin_module.env;
+    for (resources.extra_modules, 0..) |module, i| {
+        module_envs[i + 2] = module.module_env;
+    }
+
+    var import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    defer allocator.free(import_views);
+    for (resources.import_artifacts, 0..) |*artifact, i| {
+        import_views[i] = check.CheckedArtifact.importedView(artifact);
+    }
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = test_roots },
+        .{
+            .module_envs = module_envs,
+            .target_usize = .u32,
+        },
+    );
+    defer lowered.deinit();
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    var interpreter = try eval.LirInterpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    var passed: u32 = 0;
+    var failed: u32 = 0;
+    try html_writer.writeAll("<ul>");
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
+        if (metadata.kind != .test_expect) continue;
+
+        const proc = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_layouts = try argLayoutsForProc(allocator, &lowered.lir_result.store, root_proc);
+        defer allocator.free(arg_layouts);
+
+        const eval_result = interpreter.eval(.{
+            .proc_id = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+        }) catch |err| {
+            failed += 1;
+            try html_writer.print("<li class=\"failed\">FAILED: {s}</li>", .{@errorName(err)});
+            continue;
+        };
+
+        const ok = switch (eval_result) {
+            .value => |value| blk: {
+                const result = value.read(u8) != 0;
+                interpreter.dropValue(value, proc.ret_layout);
+                break :blk result;
+            },
+        };
+
+        if (ok) {
+            passed += 1;
+            try html_writer.writeAll("<li class=\"passed\">PASSED</li>");
+        } else {
+            failed += 1;
+            try html_writer.writeAll("<li class=\"failed\">FAILED</li>");
+        }
+    }
+    try html_writer.writeAll("</ul>");
+    try html_writer.print("<p>{} passed, {} failed</p></div>", .{ passed, failed });
+    try html_writer.flush();
+
+    return html_writer_allocating.toOwnedSlice();
+}
+
 fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    _ = response_buffer;
-    _ = data;
-    @compileError("Phase 2 must route playground test evaluation through checked artifacts");
+    const html = buildEvaluateTestsHtml(data) catch |err| {
+        try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+        return;
+    };
+    defer allocator.free(html);
+
+    var resp_writer = ResponseWriter.init(response_buffer);
+    resp_writer.pos = @sizeOf(u32);
+    const w = &resp_writer.interface;
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+    try writeJsonString(w, html);
+    try w.writeAll("\"}");
+    try resp_writer.finalize();
 }
 
 

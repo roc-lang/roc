@@ -187,6 +187,31 @@ pub fn parseAndCanonicalizeProgramWrapped(
     imports: []const ModuleSource,
     inspect_wrap: bool,
 ) !ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap });
+}
+
+pub fn parseAndCanonicalizeProgramPublishedRoots(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) !ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only);
+}
+
+const PublishedRootMode = union(enum) {
+    eval_root: bool,
+    published_roots_only,
+};
+
+fn parseAndCanonicalizeProgramWithRootMode(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    inspect_wrap: bool,
+    root_mode: PublishedRootMode,
+) !ParsedResources {
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try builtin_loading.loadCompiledModule(
         allocator,
@@ -285,19 +310,27 @@ pub fn parseAndCanonicalizeProgramWrapped(
     const publish_imports = try publishImportKeys(allocator, import_artifacts);
     defer allocator.free(publish_imports);
 
-    const root_name = evalRootName(source_kind, inspect_wrap);
-    const root_def_idx = findDefByAssignedName(main_checked.module_env, root_name) orelse {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
-        }
-        unreachable;
-    };
-    const explicit_roots = [_]check.CheckedArtifact.ExplicitRootRequestInput{.{
-        .kind = .dev_expr,
-        .source = .{ .def = root_def_idx },
-        .abi = .roc,
-        .exposure = .private,
-    }};
+    var explicit_root_storage: [1]check.CheckedArtifact.ExplicitRootRequestInput = undefined;
+    var explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput = &.{};
+    switch (root_mode) {
+        .eval_root => |root_inspect_wrap| {
+            const root_name = evalRootName(source_kind, root_inspect_wrap);
+            const root_def_idx = findDefByAssignedName(main_checked.module_env, root_name) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
+                }
+                unreachable;
+            };
+            explicit_root_storage[0] = .{
+                .kind = .dev_expr,
+                .source = .{ .def = root_def_idx },
+                .abi = .roc,
+                .exposure = .private,
+            };
+            explicit_roots = explicit_root_storage[0..];
+        },
+        .published_roots_only => {},
+    }
 
     var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
@@ -306,7 +339,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
         .{
             .module_env_storage = .{ .checked_source = main_checked.module_env },
             .imports = publish_imports,
-            .explicit_roots = &explicit_roots,
+            .explicit_roots = explicit_roots,
         },
     );
     errdefer checked_artifact.deinit(allocator);
