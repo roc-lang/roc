@@ -610,6 +610,11 @@ const ErasedPromotedWrapperBodyPlan = struct {
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 
+const PromotedWrapperStageOwner = union(enum) {
+    mono_finite,
+    executable_erased,
+};
+
 const MonoSpecializationRequest = struct {
     template: ProcedureTemplateRef,
     requested_fn_ty: ConcreteSourceTypeRef,
@@ -629,11 +634,63 @@ const MonoSpecializationReason = union(enum) {
 entry. `CallableProcedureTemplateRef` classifies the origin of a callable
 procedure template: `checked` for ordinary source-defined or imported checked
 procedures, `lifted` for local functions/closures lifted out of an owning mono
-specialization, and `synthetic` for compiler-created procedure templates such as
-promoted compile-time callable results. A `lifted` callable procedure template is
-not allowed to pretend to be a checked top-level procedure; a `synthetic`
-callable procedure template must carry a real compiler-created template and
-origin payload, not a generated name.
+specialization, and `synthetic` for compiler-created procedure identities such
+as promoted compile-time callable results. A `lifted` callable procedure
+template is not allowed to pretend to be a checked top-level procedure; a
+`synthetic` callable procedure template must carry a real compiler-created
+template and origin payload, not a generated name.
+
+Promoted callable wrappers have two different body owners, and the distinction
+is mandatory:
+
+- finite promoted wrappers are source-level synthetic procedure bodies owned by
+  mono MIR. They receive ordinary fixed-arity Roc parameters, materialize finite
+  private captures as mono values, build a finite `proc_value`, and call it with
+  `call_value`. They do not contain erased ABI information.
+- erased promoted wrappers are executable-level synthetic procedure bodies owned
+  by executable MIR. Checking finalization still publishes their stable
+  `ProcedureValueRef`, `ProcBaseKeyRef`, source function type, and complete
+  `ErasedPromotedWrapperBodyPlan`, but mono MIR must not lower their body and
+  must not import `ErasedFnSigKey`, `CanonicalExecValueTypeKey`, erased bridges,
+  hidden erased capture arguments, or any other executable call signature data.
+
+This is not a runtime thunk or a runtime closure object. For example:
+
+```roc
+makeAdder : I64 -> (I64 -> I64)
+makeAdder = |n| |x| x + n
+
+add5 : I64 -> I64
+add5 = makeAdder(5)
+```
+
+`add5` is a finite promoted callable. Checking finalization evaluates the
+function-valued root, reifies the selected finite callable member and private
+captured `5`, reserves a promoted procedure identity, and seals a finite wrapper
+body. Mono lowers that wrapper to ordinary source-level MIR. No runtime thunk,
+runtime initializer procedure, runtime top-level closure object, or runtime
+global callable-value object is created.
+
+```roc
+makeBoxed : {} -> Box(I64 -> I64)
+makeBoxed = |_| Box.box(|x| x + 1)
+
+add1 : I64 -> I64
+add1 = Box.unbox(makeBoxed({}))
+```
+
+`add1` is an erased promoted callable. The erased representation exists only
+because the result flowed through the explicit `Box(I64 -> I64)` boundary.
+Checking finalization evaluates the function-valued root, reifies the exact
+erased code ref, `ErasedFnSigKey`, erased capture materialization plan, bridges,
+result executable type, and non-empty `BoxBoundaryId` provenance, then reserves a
+promoted procedure identity. Mono may call or pass that procedure identity as an
+opaque `ProcedureValueRef` at the source function type `I64 -> I64`, but mono
+does not lower the body. Executable MIR later emits the synthetic procedure body
+from the published erased plan by materializing the explicit capture, applying
+the argument bridges, issuing `call_erased`, and applying the result bridge. No
+runtime thunk, runtime initializer procedure, runtime top-level erased callable
+object, runtime closure object, or source-shape recovery is allowed.
 
 `MonoSpecializationKey` is keyed by a checked `ProcedureTemplateRef` and the
 requested monomorphic source function type. `MonoSpecializedProcRef` is the
@@ -705,6 +762,18 @@ contains only explicit `BoxBoundaryId` values. A promoted erased wrapper must
 not rediscover any of these decisions from the code ref, source syntax, runtime
 bytes, or shape comparison.
 
+An erased promoted wrapper plan is consumed by executable MIR, not by mono MIR.
+The checked artifact publishes it early so that all later stages have explicit
+procedure identity and dependency information, but executable MIR is the first
+stage allowed to read `sig_key`, `hidden_capture_arg`, `result_ty`, erased
+bridges, or erased capture materialization. Mono, row-finalized mono, lifted
+MIR, and lambda-solved MIR may carry the erased promoted wrapper's opaque
+procedure identity and source function type through `call_proc`, `proc_value`,
+and `call_value` operands, but they must not lower or inspect its body. If mono
+specialization attempts to lower an erased promoted wrapper body, that is a
+compiler invariant violation: debug builds assert immediately and release builds
+use `unreachable`.
+
 The finite promoted wrapper plan is the selected finite callable value after
 compile-time evaluation, not a bare function symbol. `source_fn_ty` is the exact
 canonical fixed-arity function type of the promoted callable result.
@@ -717,6 +786,15 @@ debug builds must assert that they match and release builds must treat a mismatc
 as `unreachable`. A finite promoted wrapper must not store only `entry_proc:
 Symbol`, because that loses the callable-set member context and the capture
 payload shape that Cor/LSS preserves when it builds callable-set tags.
+
+A finite promoted wrapper plan is consumed by mono MIR. It is intentionally
+source-level: it names the selected finite callable-set member, ordinary Roc
+parameters, ordinary private captures, and optional source-level bridge ids.
+Because it contains no erased ABI, mono can lower it to ordinary `proc_value`
+and `call_value` MIR. If a finite promoted wrapper needs to cross a later
+explicit `Box(T)` erased boundary, lambda-solved/executable MIR handle that as
+the normal finite-callable-to-erased adapter case at the boundary; mono must not
+pre-package it as erased.
 
 `ProcedureCallableRef` is the canonical identity for one resolved procedure
 value occurrence before executable representation solving. `template` is the
@@ -10451,7 +10529,9 @@ verification proves:
 - every exported source procedure has either a checked procedure template or an
   explicit non-procedure top-level value entry
 - every exported promoted procedure has a `PromotedProcedureTable` row whose
-  template points at a sealed promoted callable wrapper body
+  template points at either a sealed finite promoted callable wrapper body owned
+  by mono MIR or a sealed erased promoted callable wrapper plan owned by
+  executable MIR
 - every checked procedure template has checked type identity, checked type
   payload, checked body identity, checked body payload, static-dispatch plan
   coverage, and top-level-use summaries
@@ -10494,9 +10574,13 @@ const ReservedMonoProc = struct {
 The exact Zig names may differ, but the lifecycle must not:
 
 1. Checking finalization registers checked procedure templates for source,
-   hosted, intrinsic, entry-wrapper, and promoted callable procedures. Promoted
+   hosted, intrinsic, entry-wrapper, and promoted callable procedures. Finite
+   promoted callable templates are appended only after compile-time callable
+   promotion has sealed their mono-owned wrapper bodies. Erased promoted
    callable templates are appended only after compile-time callable promotion
-   has sealed their wrapper bodies.
+   has sealed their executable-owned erased wrapper plans. The two cases share
+   stable procedure identity and source function type metadata, but they do not
+   share a body-lowering stage.
 2. Root binding, direct calls, static-dispatch targets, and first-class
    `proc_value` uses create concrete `MonoSpecializationRequest` values whose
    `template` field is a checked `ProcedureTemplateRef` and whose
@@ -10506,7 +10590,10 @@ The exact Zig names may differ, but the lifecycle must not:
    callable values may also carry `CallableProcedureTemplateRef.lifted` or
    `CallableProcedureTemplateRef.synthetic`, but those are not ordinary
    checked-template mono requests; they follow the lifted or synthetic procedure
-   identity path described above.
+   identity path described above. A request whose template is an erased promoted
+   callable wrapper reserves the opaque procedure identity for call sites, but
+   mono must not lower its body; executable MIR emits that body from the sealed
+   `ErasedPromotedWrapperBodyPlan`.
 3. The queue reserves the output `MonoSpecializedProcRef`, including its output
    `ProcedureValueRef` and implementation-local `MonoProcHandle`, for each
    `MonoSpecializationKey` before lowering the body. The queue entry retains the
@@ -11439,9 +11526,13 @@ procedure, lifted lambda, or callable-set member plus compiler-owned captures.
 The erased case names the `ErasedFnSigKey`, exact erased callable code ref, and
 compiler-owned erased capture value. Erased callable promotion is allowed only
 when the erased callable carries explicit `BoxBoundaryId` provenance. Promotion
-must produce a closed ordinary procedure that performs the known erased call.
-It must not publish a runtime packed erased callable object, runtime top-level
-closure object, runtime global callable-value object, or runtime thunk.
+must produce a closed ordinary procedure identity whose body is owned by
+executable MIR and performs the known erased call from the sealed
+`ErasedPromotedWrapperBodyPlan`. Mono, row-finalized mono, lifted MIR, and
+lambda-solved MIR carry that procedure identity opaquely at its source function
+type; they must not lower the erased body or read the erased ABI fields. It must
+not publish a runtime packed erased callable object, runtime top-level closure
+object, runtime global callable-value object, or runtime thunk.
 
 Promotion consumes `CallablePromotionPlan` records produced before evaluation.
 The plan names the root, source function type, dependency summary, and
@@ -12786,7 +12877,11 @@ Compile-time constants:
   then consumed as `procedure_binding`
 - top-level function-valued declarations that evaluate to erased callable values
   with explicit `BoxBoundaryId` provenance are promoted to closed ordinary
-  procedures that perform the known erased call
+  procedure identities whose bodies are emitted by executable MIR from sealed
+  `ErasedPromotedWrapperBodyPlan` records. Mono may call or pass those procedure
+  identities at their source function type, but mono must not lower their bodies
+  and must not carry `ErasedFnSigKey`, erased bridges, hidden capture arguments,
+  executable result type keys, or erased capture ABI data.
 - erased compile-time callable values and erased callable leaves must store
   exact erased code refs. Direct erased code refs carry
   `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`. Finite-set
