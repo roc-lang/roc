@@ -105,17 +105,25 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     var type_importer = TypeImporter.init(allocator, &input.types, &program.types);
     defer type_importer.deinit();
 
+    var proc_instance_map = std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId).init(allocator);
+    defer proc_instance_map.deinit();
+    try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+
     for (input.procs.items, 0..) |proc, i| {
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
-        const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(i)));
-        const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(i)));
-
         program.solve_sessions.appendAssumeCapacity(.{
             .members = &.{},
             .representation_store = repr.RepresentationStore.init(allocator),
             .state = .building,
         });
         program.value_stores.appendAssumeCapacity(repr.ValueInfoStore.init(allocator));
+        proc_instance_map.putAssumeCapacity(proc.proc, instance);
+    }
+
+    for (input.procs.items, 0..) |proc, i| {
+        const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
+        const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(i)));
+        const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(i)));
 
         var solver = BodySolver{
             .allocator = allocator,
@@ -128,6 +136,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(allocator),
             .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(allocator),
             .instance = instance,
+            .proc_instance_map = &proc_instance_map,
         };
         defer solver.deinit();
 
@@ -285,6 +294,7 @@ const BodySolver = struct {
     env: std.AutoHashMap(Ast.Symbol, repr.BindingInfoId),
     expr_map: std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
     instance: repr.ProcRepresentationInstanceId,
+    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     public_roots: ?repr.ProcPublicValueRoots = null,
     active_captures: ?repr.Span(repr.ValueInfoId) = null,
 
