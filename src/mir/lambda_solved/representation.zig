@@ -2459,19 +2459,6 @@ pub fn sessionExecutableTypeEndpointForValueIntoStore(
     return try builder.endpointForValue(value);
 }
 
-pub fn sessionExecutableTypeEndpointForType(
-    allocator: std.mem.Allocator,
-    names: *const canonical.CanonicalNameStore,
-    row_shapes: *row.Store,
-    types: *const type_mod.Store,
-    representation_store: *RepresentationStore,
-    ty: type_mod.TypeVarId,
-) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-    var builder = SessionExecutableTypePayloadBuilder.init(allocator, names, row_shapes, types, representation_store, null);
-    defer builder.deinit();
-    return try builder.endpointForType(ty);
-}
-
 const SessionExecutableTypePayloadBuilder = struct {
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
