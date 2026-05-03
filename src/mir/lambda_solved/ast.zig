@@ -231,7 +231,10 @@ pub const Expr = struct {
             projection_info: repr.ProjectionInfoId,
         },
         list: Span(ExprId),
-        return_: ExprId,
+        return_: struct {
+            expr: ExprId,
+            return_info: repr.ReturnInfoId,
+        },
         crash: ProgramLiteralId,
         runtime_error,
         for_: struct {
@@ -260,7 +263,10 @@ pub const Stmt = union(enum) {
     debug: ExprId,
     expect: ExprId,
     crash: ProgramLiteralId,
-    return_: ExprId,
+    return_: struct {
+        expr: ExprId,
+        return_info: repr.ReturnInfoId,
+    },
     break_,
     for_: struct {
         patt: PatId,

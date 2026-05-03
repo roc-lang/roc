@@ -17,6 +17,7 @@ pub const BindingInfoId = enum(u32) { _ };
 pub const ProjectionInfoId = enum(u32) { _ };
 pub const CallSiteInfoId = enum(u32) { _ };
 pub const JoinInfoId = enum(u32) { _ };
+pub const ReturnInfoId = enum(u32) { _ };
 pub const BoxBoundaryId = canonical.BoxBoundaryId;
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
@@ -27,7 +28,7 @@ pub const SourceMatchId = enum(u32) { _ };
 pub const SourceMatchBranchId = enum(u32) { _ };
 pub const SourceMatchAlternativeId = enum(u32) { _ };
 pub const IfExprId = enum(u32) { _ };
-pub const ProcedureBoundaryId = enum(u32) { _ };
+pub const ProcedureBoundaryId = ReturnInfoId;
 pub const CaptureBoundaryId = enum(u32) { _ };
 pub const MutableJoinId = enum(u32) { _ };
 pub const LoopPhiId = enum(u32) { _ };
@@ -879,6 +880,11 @@ pub const JoinInfo = struct {
     input_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
 };
 
+pub const ReturnInfo = struct {
+    value: ValueInfoId,
+    transform: ?ValueTransformBoundaryId = null,
+};
+
 pub const ProcPublicValueRoots = struct {
     params: Span(ValueInfoId),
     ret: ValueInfoId,
@@ -1304,6 +1310,7 @@ pub const ValueInfoStore = struct {
     projections: std.ArrayList(ProjectionInfo),
     call_sites: std.ArrayList(CallSiteInfo),
     joins: std.ArrayList(JoinInfo),
+    returns: std.ArrayList(ReturnInfo),
     join_inputs: std.ArrayList(JoinInputInfo),
     value_ids: std.ArrayList(ValueInfoId),
     value_transform_boundary_ids: std.ArrayList(ValueTransformBoundaryId),
@@ -1316,6 +1323,7 @@ pub const ValueInfoStore = struct {
             .projections = .empty,
             .call_sites = .empty,
             .joins = .empty,
+            .returns = .empty,
             .join_inputs = .empty,
             .value_ids = .empty,
             .value_transform_boundary_ids = .empty,
@@ -1336,6 +1344,7 @@ pub const ValueInfoStore = struct {
         self.value_ids.deinit(self.allocator);
         self.value_transform_boundary_ids.deinit(self.allocator);
         self.join_inputs.deinit(self.allocator);
+        self.returns.deinit(self.allocator);
         self.joins.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
@@ -1371,6 +1380,12 @@ pub const ValueInfoStore = struct {
     pub fn addJoin(self: *ValueInfoStore, join: JoinInfo) std.mem.Allocator.Error!JoinInfoId {
         const id: JoinInfoId = @enumFromInt(@as(u32, @intCast(self.joins.items.len)));
         try self.joins.append(self.allocator, join);
+        return id;
+    }
+
+    pub fn addReturn(self: *ValueInfoStore, ret: ReturnInfo) std.mem.Allocator.Error!ReturnInfoId {
+        const id: ReturnInfoId = @enumFromInt(@as(u32, @intCast(self.returns.items.len)));
+        try self.returns.append(self.allocator, ret);
         return id;
     }
 

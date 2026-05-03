@@ -4952,12 +4952,12 @@ const BodyBuilder = struct {
                     } },
                 );
             },
-            .return_ => |child| blk: {
-                const lowered_child = try self.lowerExpr(child);
+            .return_ => |return_| blk: {
+                const body = try self.lowerReturnValue(return_.expr, return_.return_info);
                 break :blk try self.output.addExpr(
-                    self.output.getExpr(lowered_child).ty,
-                    self.exprValue(lowered_child),
-                    .{ .return_ = lowered_child },
+                    self.output.getExpr(body).ty,
+                    self.exprValue(body),
+                    .{ .return_ = body },
                 );
             },
             .bool_not => |child| blk: {
@@ -5039,6 +5039,28 @@ const BodyBuilder = struct {
         then_body: Ast.ExprId,
         else_body: Ast.ExprId,
     };
+
+    fn lowerReturnValue(
+        self: *BodyBuilder,
+        expr: LambdaSolved.Ast.ExprId,
+        return_info: repr.ReturnInfoId,
+    ) Allocator.Error!Ast.ExprId {
+        const body = try self.lowerExpr(expr);
+        const boundary = self.returnTransformBoundary(return_info);
+        self.verifyReturnBoundary(boundary, return_info);
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+
+        const return_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, self.exprValue(body));
+        const return_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
+        const final_expr = try self.output.addExpr(return_ty, return_value, .{ .value_ref = return_value });
+        if (stmt_ids.items.len == 0) return final_expr;
+
+        return try self.output.addExpr(return_ty, return_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
+        } });
+    }
 
     fn wrapIfBranches(
         self: *BodyBuilder,
@@ -5174,6 +5196,51 @@ const BodyBuilder = struct {
             => false,
             else => true,
         };
+    }
+
+    fn returnTransformBoundary(
+        self: *BodyBuilder,
+        return_info_id: repr.ReturnInfoId,
+    ) repr.ValueTransformBoundary {
+        const index = @intFromEnum(return_info_id);
+        if (index >= self.value_store.returns.items.len) {
+            executableInvariant("executable return referenced missing return info");
+        }
+        const ret = self.value_store.returns.items[index];
+        const boundary_id = ret.transform orelse {
+            executableInvariant("executable return reached unfinalized return transform");
+        };
+        return self.representation_store.valueTransformBoundary(boundary_id);
+    }
+
+    fn verifyReturnBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        return_info_id: repr.ReturnInfoId,
+    ) void {
+        const ret = self.value_store.returns.items[@intFromEnum(return_info_id)];
+        const actual_return = switch (boundary.kind) {
+            .return_value => |return_value| return_value,
+            else => executableInvariant("executable return boundary has non-return kind"),
+        };
+        if (@intFromEnum(actual_return) != @intFromEnum(return_info_id)) {
+            executableInvariant("executable return boundary points at a different return");
+        }
+        if (boundary.from_value != ret.value) {
+            executableInvariant("executable return boundary source value differs from return info");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable return boundary source endpoint is not local_value"),
+        };
+        if (from != ret.value) {
+            executableInvariant("executable return boundary source endpoint differs from return info");
+        }
+        switch (boundary.to_endpoint.owner) {
+            .procedure_return => {},
+            else => executableInvariant("executable return boundary target endpoint is not procedure_return"),
+        }
+        _ = self;
     }
 
     fn verifyJoinInputBoundary(
@@ -5804,9 +5871,8 @@ const BodyBuilder = struct {
             .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
             .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
             .crash => |literal| .{ .crash = literal },
-            .return_ => |expr| blk: {
-                const body = try self.lowerExpr(expr);
-                break :blk .{ .return_ = self.exprValue(body) };
+            .return_ => |return_| blk: {
+                break :blk .{ .return_ = try self.lowerReturnValue(return_.expr, return_.return_info) };
             },
             .break_ => .break_,
             .for_ => |for_| blk: {

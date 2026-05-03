@@ -1421,8 +1421,8 @@ const IrBuilder = struct {
                 const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .expect = value }));
             },
-            .return_ => |value_ref| {
-                const value = self.value_env.get(value_ref) orelse irInvariant("IR lowering reached return value before it was bound");
+            .return_ => |expr| {
+                const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .return_ = value }));
             },
             .for_ => |for_| try self.appendForList(for_, stmts),

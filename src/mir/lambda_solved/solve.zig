@@ -188,6 +188,7 @@ fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
         };
         try finalizer.finalizeCallSites();
         try finalizer.finalizeJoins();
+        try finalizer.finalizeReturns();
     }
 }
 
@@ -235,6 +236,27 @@ const ValueTransformFinalizer = struct {
             }
 
             join.input_transforms = try self.valueStore().addValueTransformBoundarySpan(boundaries);
+        }
+    }
+
+    fn finalizeReturns(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.returns.items, 0..) |*ret, raw_return| {
+            if (ret.transform != null) {
+                lambdaInvariant("lambda-solved value transform finalization reached an already-finalized return");
+            }
+
+            const from = try self.localEndpoint(ret.value);
+            const to = try self.targetReturnEndpoint(self.instance_id, self.instance);
+            const transform = try self.appendIdentityTransform(from, to);
+            ret.transform = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = .{ .return_value = @enumFromInt(@as(u32, @intCast(raw_return))) },
+                .from_value = ret.value,
+                .to_value = self.instance.public_roots.ret,
+                .from_endpoint = from,
+                .to_endpoint = to,
+                .transform = transform,
+            });
         }
     }
 
@@ -1155,7 +1177,16 @@ const BodySolver = struct {
                 break :blk .{ .list = lowered_items.exprs };
             },
             .unit => .unit,
-            .return_ => |child| .{ .return_ = try self.lowerExpr(child) },
+            .return_ => |child| blk: {
+                const lowered_child = try self.lowerExpr(child);
+                const return_info = try self.value_store.addReturn(.{
+                    .value = self.exprValue(lowered_child),
+                });
+                break :blk .{ .return_ = .{
+                    .expr = lowered_child,
+                    .return_info = return_info,
+                } };
+            },
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
             .match_ => |match_| blk: {
@@ -1435,7 +1466,16 @@ const BodySolver = struct {
             .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
             .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
             .crash => |literal| .{ .crash = literal },
-            .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
+            .return_ => |expr| blk: {
+                const lowered_child = try self.lowerExpr(expr);
+                const return_info = try self.value_store.addReturn(.{
+                    .value = self.exprValue(lowered_child),
+                });
+                break :blk .{ .return_ = .{
+                    .expr = lowered_child,
+                    .return_info = return_info,
+                } };
+            },
             .break_ => .break_,
             .for_ => |for_| blk: {
                 var saved = std.ArrayList(SavedBinding).empty;

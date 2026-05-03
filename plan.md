@@ -3633,6 +3633,11 @@ const JoinInfo = struct {
     kind: JoinKind,
     input_transforms: Span(ValueTransformBoundaryId),
 };
+
+const ReturnInfo = struct {
+    value: ValueInfoId,
+    transform: ?ValueTransformBoundaryId,
+};
 ```
 
 `inputs` is ordered for deterministic storage, but the order is not semantic
@@ -3665,6 +3670,16 @@ lowering does the same for each returning `then` or `else` body and leaves
 non-returning bodies unchanged. IR lowering may build switch/join control flow
 from those executable branch bodies, but it must not look at `JoinInfo`, branch
 indexes, source patterns, or layout compatibility to create missing transforms.
+
+Procedure `return` expressions and statement returns use the same explicit
+boundary model. Lambda-solved MIR records a `ReturnInfo` for every source
+`return` child expression that produces the procedure's return value. Boundary
+finalization publishes a `return_value` boundary from that child value's local
+endpoint to the sealed `procedure_return` endpoint for the current
+`ProcRepresentationInstance`. Executable MIR must apply that transform before
+emitting the executable return expression or return statement. IR lowering then
+receives an ordinary executable expression for the return value; it must not
+look at procedure result layouts or reconstruct a missing return conversion.
 
 Intrinsic and low-level value-flow behavior is also represented through this
 same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:

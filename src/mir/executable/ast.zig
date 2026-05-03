@@ -440,7 +440,7 @@ pub const Stmt = union(enum) {
     debug: ExprId,
     expect: ExprId,
     crash: ProgramLiteralId,
-    return_: ExecutableValueRef,
+    return_: ExprId,
     break_,
     for_: struct {
         patt: PatId,
