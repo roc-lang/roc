@@ -1196,6 +1196,13 @@ it may answer "which already-published payload entry has this key?" for
 debug-only verification and for ABI publication, but it must never synthesize a
 payload for a missing key. Missing key entries are compiler bugs.
 
+Session payload publication has the same ownership rule as artifact payload
+publication: a successful append transfers ownership of the supplied structural
+payload to the store. If the key is already present, the store returns the
+existing `SessionExecutableTypePayloadRef` and destroys the duplicate payload it
+was given. Reusing an entry by key is legal only because the corresponding
+structural payload was already explicitly published in the same solve session.
+
 `ExecutableValueTransformRef` may appear at every child edge inside a session
 transform. Executable MIR must dispatch on the explicit owner:
 
@@ -1491,6 +1498,15 @@ stored key equals the endpoint key next to the ref. Erased ABI publication may
 look up already-published entries by key only to attach explicit refs to
 wrapper signatures or to verify completeness. A missing key is not recovered by
 rebuilding from source or layout; it is a compiler invariant violation.
+
+Artifact payload publication owns the payload value passed to the store. If a
+publication request discovers that the same `CanonicalExecValueTypeKey` is
+already present, it must return the existing `ExecutableTypePayloadRef` and
+destroy the duplicate payload value it was given. The duplicate is not kept as a
+second semantic source, and callers must not keep ownership after a successful
+append. This makes keyed reuse explicit without turning the store into a cache:
+the store only reuses an already-published structural payload, and it never
+constructs one from the key.
 
 For an erased promoted procedure:
 

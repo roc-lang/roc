@@ -186,7 +186,11 @@ pub const SessionExecutableTypePayloadStore = struct {
         key: CanonicalExecValueTypeKey,
         payload: SessionExecutableTypePayload,
     ) std.mem.Allocator.Error!SessionExecutableTypePayloadId {
-        if (self.by_key.get(key)) |existing| return existing;
+        if (self.by_key.get(key)) |existing| {
+            var duplicate = payload;
+            deinitSessionExecutableTypePayload(allocator, &duplicate);
+            return existing;
+        }
         return try self.appendNew(allocator, key, payload);
     }
 
@@ -199,6 +203,7 @@ pub const SessionExecutableTypePayloadStore = struct {
         const id: SessionExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.entries.len)));
         const old = self.entries;
         const next = try allocator.alloc(SessionExecutableTypePayloadEntry, old.len + 1);
+        errdefer allocator.free(next);
         @memcpy(next[0..old.len], old);
         next[old.len] = .{
             .key = key,
@@ -1624,8 +1629,7 @@ const SessionExecutableTypePayloadBuilder = struct {
             value,
         );
         if (self.active_values.get(value)) |active| {
-            const recursive = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .recursive_ref = active });
-            return .{ .ty = refFor(recursive), .key = key };
+            return .{ .ty = refFor(active), .key = key };
         }
         if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
             return .{ .ty = existing, .key = key };
@@ -1652,8 +1656,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         const key = try execValueTypeKey(self.allocator, self.names, self.types, ty);
         const root = self.types.unlinkConst(ty);
         if (self.active_types.get(root)) |active| {
-            const recursive = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .recursive_ref = active });
-            return .{ .ty = refFor(recursive), .key = key };
+            return .{ .ty = refFor(active), .key = key };
         }
         if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
             return .{ .ty = existing, .key = key };
@@ -1951,7 +1954,11 @@ const SessionExecutableTypePayloadBuilder = struct {
         expected_key: ?CanonicalExecValueTypeKey,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
         if (captures.len == 0) {
-            const key = expected_key orelse .{};
+            const key = expected_key orelse blk: {
+                var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                key_hasher.update("capture_tuple");
+                break :blk CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
+            };
             const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .tuple = &.{} });
             return .{
                 .ty = refFor(id),

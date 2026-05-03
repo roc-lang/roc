@@ -362,9 +362,10 @@ const ExecutableTypePayloadBuilder = struct {
 
     fn appendPayload(
         self: *ExecutableTypePayloadBuilder,
+        key: canonical.CanonicalExecValueTypeKey,
         payload: checked_artifact.ExecutableTypePayload,
     ) Allocator.Error!checked_artifact.ExecutableTypePayloadRef {
-        const id = try self.artifact.executable_type_payloads.append(self.allocator, payload);
+        const id = try self.artifact.executable_type_payloads.append(self.allocator, key, payload);
         return self.refFor(id);
     }
 
@@ -401,12 +402,18 @@ const ExecutableTypePayloadBuilder = struct {
         };
         if (self.active_values.get(active_key)) |active| {
             return .{
-                .ref = try self.appendPayload(.{ .recursive_ref = active }),
+                .ref = self.refFor(active),
+                .key = key,
+            };
+        }
+        if (self.artifact.executable_type_payloads.refForKey(self.artifactRef(), key)) |existing| {
+            return .{
+                .ref = existing,
                 .key = key,
             };
         }
 
-        const id = try self.artifact.executable_type_payloads.reserve(self.allocator);
+        const id = try self.artifact.executable_type_payloads.reserve(self.allocator, key);
         try self.active_values.put(active_key, id);
         errdefer _ = self.active_values.remove(active_key);
 
@@ -439,12 +446,18 @@ const ExecutableTypePayloadBuilder = struct {
         const root = self.context.types.unlinkConst(ty);
         if (self.active_types.get(root)) |active| {
             return .{
-                .ref = try self.appendPayload(.{ .recursive_ref = active }),
+                .ref = self.refFor(active),
+                .key = key,
+            };
+        }
+        if (self.artifact.executable_type_payloads.refForKey(self.artifactRef(), key)) |existing| {
+            return .{
+                .ref = existing,
                 .key = key,
             };
         }
 
-        const id = try self.artifact.executable_type_payloads.reserve(self.allocator);
+        const id = try self.artifact.executable_type_payloads.reserve(self.allocator, key);
         try self.active_types.put(root, id);
         errdefer _ = self.active_types.remove(root);
 
@@ -899,7 +912,7 @@ const ExecutableTypePayloadBuilder = struct {
         key: repr.CanonicalCallableSetKey,
         expected_key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        const payload_ref = try self.appendPayload(.{ .callable_set = try self.callableSetPayload(key, self.context.representation_store) });
+        const payload_ref = try self.appendPayload(expected_key, .{ .callable_set = try self.callableSetPayload(key, self.context.representation_store) });
         return .{
             .ref = payload_ref,
             .key = expected_key,
@@ -915,10 +928,15 @@ const ExecutableTypePayloadBuilder = struct {
         expected_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
         if (captures.len == 0) {
-            const ref = try self.appendPayload(.{ .tuple = &.{} });
+            const key = expected_key orelse blk: {
+                var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                key_hasher.update("capture_tuple");
+                break :blk canonical.CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
+            };
+            const ref = try self.appendPayload(key, .{ .tuple = &.{} });
             return .{
                 .ref = ref,
-                .key = expected_key orelse .{},
+                .key = key,
             };
         }
         const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, captures.len);
@@ -934,10 +952,11 @@ const ExecutableTypePayloadBuilder = struct {
                 .key = child.key,
             };
         }
-        const ref = try self.appendPayload(.{ .tuple = items });
+        const key = expected_key orelse canonical.CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
+        const ref = try self.appendPayload(key, .{ .tuple = items });
         return .{
             .ref = ref,
-            .key = expected_key orelse .{ .bytes = key_hasher.finalResult() },
+            .key = key,
         };
     }
 

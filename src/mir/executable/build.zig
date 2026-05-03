@@ -3367,9 +3367,12 @@ const PublishedTypeLowerer = struct {
         ref: checked_artifact.ExecutableTypePayloadRef,
         expected_key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!Type.TypeId {
-        _ = expected_key;
-        if (@intFromEnum(ref.payload) >= self.payloads.payloads.len) {
+        if (@intFromEnum(ref.payload) >= self.payloads.entries.len) {
             executableInvariant("executable published type payload ref is out of range");
+        }
+        const actual_key = self.payloads.keyFor(ref.payload);
+        if (!repr.canonicalExecValueTypeKeyEql(actual_key, expected_key)) {
+            executableInvariant("executable published type payload key differs from endpoint key");
         }
         return try self.lowerPayload(ref.payload);
     }

@@ -2791,8 +2791,8 @@ pub const ExecutableValueTransformPlanStore = struct {
     ) void {
         if (builtin.mode != .Debug) return;
         for (self.plans) |plan| {
-            verifyExecutableTypePayloadRef(payloads, artifact_key, plan.from.ty);
-            verifyExecutableTypePayloadRef(payloads, artifact_key, plan.to.ty);
+            verifyExecutableTypePayloadRefKey(payloads, artifact_key, plan.from.ty, plan.from.key);
+            verifyExecutableTypePayloadRefKey(payloads, artifact_key, plan.to.ty, plan.to.key);
             verifyValueTransformProvenance(plan.provenance);
             switch (plan.op) {
                 .callable_to_erased => switch (plan.provenance) {
@@ -2904,28 +2904,62 @@ pub const ExecutableTypePayload = union(enum) {
     recursive_ref: ExecutableTypePayloadId,
 };
 
+pub const ExecutableTypePayloadEntry = struct {
+    key: canonical.CanonicalExecValueTypeKey,
+    payload: ExecutableTypePayload,
+};
+
 pub const ExecutableTypePayloadStore = struct {
-    payloads: []ExecutableTypePayload = &.{},
+    entries: []ExecutableTypePayloadEntry = &.{},
+    by_key: std.AutoHashMap(canonical.CanonicalExecValueTypeKey, ExecutableTypePayloadId),
+
+    pub fn init(allocator: Allocator) ExecutableTypePayloadStore {
+        return .{
+            .by_key = std.AutoHashMap(canonical.CanonicalExecValueTypeKey, ExecutableTypePayloadId).init(allocator),
+        };
+    }
 
     pub fn reserve(
         self: *ExecutableTypePayloadStore,
         allocator: Allocator,
+        key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutableTypePayloadId {
-        return try self.append(allocator, .pending);
+        if (self.by_key.get(key) != null) checkedArtifactInvariant("executable type payload reserve saw duplicate key", .{});
+        return try self.appendNew(allocator, key, .pending);
     }
 
     pub fn append(
         self: *ExecutableTypePayloadStore,
         allocator: Allocator,
+        key: canonical.CanonicalExecValueTypeKey,
         payload: ExecutableTypePayload,
     ) Allocator.Error!ExecutableTypePayloadId {
-        const id: ExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.payloads.len)));
-        const old = self.payloads;
-        const next = try allocator.alloc(ExecutableTypePayload, old.len + 1);
+        if (self.by_key.get(key)) |existing| {
+            var duplicate = payload;
+            deinitExecutableTypePayload(allocator, &duplicate);
+            return existing;
+        }
+        return try self.appendNew(allocator, key, payload);
+    }
+
+    fn appendNew(
+        self: *ExecutableTypePayloadStore,
+        allocator: Allocator,
+        key: canonical.CanonicalExecValueTypeKey,
+        payload: ExecutableTypePayload,
+    ) Allocator.Error!ExecutableTypePayloadId {
+        const id: ExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.entries.len)));
+        const old = self.entries;
+        const next = try allocator.alloc(ExecutableTypePayloadEntry, old.len + 1);
+        errdefer allocator.free(next);
         @memcpy(next[0..old.len], old);
-        next[old.len] = payload;
+        next[old.len] = .{
+            .key = key,
+            .payload = payload,
+        };
+        try self.by_key.put(key, id);
         allocator.free(old);
-        self.payloads = next;
+        self.entries = next;
         return id;
     }
 
@@ -2935,25 +2969,45 @@ pub const ExecutableTypePayloadStore = struct {
         payload: ExecutableTypePayload,
     ) void {
         const index = @intFromEnum(id);
-        if (index >= self.payloads.len) {
+        if (index >= self.entries.len) {
             checkedArtifactInvariant("executable type payload id is out of range", .{});
         }
         switch (payload) {
             .pending => checkedArtifactInvariant("cannot fill executable type payload with pending", .{}),
             else => {},
         }
-        switch (self.payloads[index]) {
-            .pending => self.payloads[index] = payload,
+        switch (self.entries[index].payload) {
+            .pending => self.entries[index].payload = payload,
             else => checkedArtifactInvariant("executable type payload was filled twice", .{}),
         }
     }
 
     pub fn get(self: *const ExecutableTypePayloadStore, id: ExecutableTypePayloadId) ExecutableTypePayload {
         const index = @intFromEnum(id);
-        if (index >= self.payloads.len) {
+        if (index >= self.entries.len) {
             checkedArtifactInvariant("executable type payload id is out of range", .{});
         }
-        return self.payloads[index];
+        return self.entries[index].payload;
+    }
+
+    pub fn keyFor(self: *const ExecutableTypePayloadStore, id: ExecutableTypePayloadId) canonical.CanonicalExecValueTypeKey {
+        const index = @intFromEnum(id);
+        if (index >= self.entries.len) {
+            checkedArtifactInvariant("executable type payload id is out of range", .{});
+        }
+        return self.entries[index].key;
+    }
+
+    pub fn refForKey(
+        self: *const ExecutableTypePayloadStore,
+        artifact: canonical.ArtifactRef,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) ?ExecutableTypePayloadRef {
+        const id = self.by_key.get(key) orelse return null;
+        return .{
+            .artifact = artifact,
+            .payload = id,
+        };
     }
 
     pub fn verifyPublished(
@@ -2962,13 +3016,22 @@ pub const ExecutableTypePayloadStore = struct {
         erased_fn_abis: *const canonical.ErasedFnAbiStore,
     ) void {
         if (builtin.mode != .Debug) return;
-        for (self.payloads) |payload| verifyExecutableTypePayload(self, artifact_key, erased_fn_abis, payload);
+        for (self.entries, 0..) |entry, i| {
+            const indexed = self.by_key.get(entry.key) orelse {
+                std.debug.panic("checked artifact invariant violated: executable type payload key was missing from index", .{});
+            };
+            if (@intFromEnum(indexed) != i) {
+                std.debug.panic("checked artifact invariant violated: executable type payload key index pointed at the wrong entry", .{});
+            }
+            verifyExecutableTypePayload(self, artifact_key, erased_fn_abis, entry.payload);
+        }
     }
 
     pub fn deinit(self: *ExecutableTypePayloadStore, allocator: Allocator) void {
-        for (self.payloads) |*payload| deinitExecutableTypePayload(allocator, payload);
-        allocator.free(self.payloads);
-        self.* = .{};
+        for (self.entries) |*entry| deinitExecutableTypePayload(allocator, &entry.payload);
+        allocator.free(self.entries);
+        self.by_key.deinit();
+        self.* = ExecutableTypePayloadStore.init(allocator);
     }
 };
 
@@ -6661,8 +6724,21 @@ fn verifyExecutableTypePayloadRef(
     if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: executable type payload ref belongs to a different artifact", .{});
     }
-    if (@intFromEnum(ref.payload) >= payloads.payloads.len) {
+    if (@intFromEnum(ref.payload) >= payloads.entries.len) {
         std.debug.panic("checked artifact invariant violated: executable type payload ref is out of range", .{});
+    }
+}
+
+fn verifyExecutableTypePayloadRefKey(
+    payloads: *const ExecutableTypePayloadStore,
+    artifact_key: CheckedModuleArtifactKey,
+    ref: ExecutableTypePayloadRef,
+    expected_key: canonical.CanonicalExecValueTypeKey,
+) void {
+    verifyExecutableTypePayloadRef(payloads, artifact_key, ref);
+    const actual_key = payloads.keyFor(ref.payload);
+    if (!std.mem.eql(u8, &actual_key.bytes, &expected_key.bytes)) {
+        std.debug.panic("checked artifact invariant violated: executable type payload ref key differs from endpoint key", .{});
     }
 }
 
@@ -6675,19 +6751,19 @@ fn verifyExecutableTypePayload(
     switch (payload) {
         .pending => std.debug.panic("checked artifact invariant violated: executable type payload was not filled", .{}),
         .primitive => {},
-        .record => |fields| for (fields) |field| verifyExecutableTypePayloadRef(payloads, artifact_key, field.ty),
-        .tuple => |items| for (items) |item| verifyExecutableTypePayloadRef(payloads, artifact_key, item.ty),
+        .record => |fields| for (fields) |field| verifyExecutableTypePayloadRefKey(payloads, artifact_key, field.ty, field.key),
+        .tuple => |items| for (items) |item| verifyExecutableTypePayloadRefKey(payloads, artifact_key, item.ty, item.key),
         .tag_union => |variants| for (variants) |variant| {
-            for (variant.payloads) |tag_payload| verifyExecutableTypePayloadRef(payloads, artifact_key, tag_payload.ty);
+            for (variant.payloads) |tag_payload| verifyExecutableTypePayloadRefKey(payloads, artifact_key, tag_payload.ty, tag_payload.key);
         },
-        .list => |child| verifyExecutableTypePayloadRef(payloads, artifact_key, child.ty),
-        .box => |child| verifyExecutableTypePayloadRef(payloads, artifact_key, child.ty),
-        .nominal => |nominal| verifyExecutableTypePayloadRef(payloads, artifact_key, nominal.backing),
+        .list => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
+        .box => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
+        .nominal => |nominal| verifyExecutableTypePayloadRefKey(payloads, artifact_key, nominal.backing, nominal.backing_key),
         .callable_set => |callable_set| for (callable_set.members) |member| {
             if ((member.payload_ty == null) != (member.payload_ty_key == null)) {
                 std.debug.panic("checked artifact invariant violated: callable-set executable payload member has mismatched payload ref/key presence", .{});
             }
-            if (member.payload_ty) |payload_ty| verifyExecutableTypePayloadRef(payloads, artifact_key, payload_ty);
+            if (member.payload_ty) |payload_ty| verifyExecutableTypePayloadRefKey(payloads, artifact_key, payload_ty, member.payload_ty_key.?);
         },
         .erased_fn => |erased| {
             const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
@@ -6696,7 +6772,7 @@ fn verifyExecutableTypePayload(
             if ((erased.capture_ty == null) != (erased.capture_ty_key == null)) {
                 std.debug.panic("checked artifact invariant violated: erased executable payload has mismatched capture ref/key presence", .{});
             }
-            if (erased.capture_ty) |capture| verifyExecutableTypePayloadRef(payloads, artifact_key, capture);
+            if (erased.capture_ty) |capture| verifyExecutableTypePayloadRefKey(payloads, artifact_key, capture, erased.capture_ty_key.?);
             if (erased.sig_key.capture_ty == null and erased.capture_ty != null) {
                 std.debug.panic("checked artifact invariant violated: erased executable payload has capture payload but signature has no capture", .{});
             }
@@ -6708,7 +6784,7 @@ fn verifyExecutableTypePayload(
             }
         },
         .recursive_ref => |ref| {
-            if (@intFromEnum(ref) >= payloads.payloads.len) {
+            if (@intFromEnum(ref) >= payloads.entries.len) {
                 std.debug.panic("checked artifact invariant violated: executable recursive type payload ref is out of range", .{});
             }
         },
@@ -6750,16 +6826,18 @@ fn verifyErasedPromotedProcedureExecutableSignature(
         if (!std.mem.eql(u8, &param_payload.exec_ty_key.bytes, &arg_key.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable param key differs from specialization key", .{});
         }
-        verifyExecutableTypePayloadRef(payloads, artifact_key, param_payload.exec_ty);
+        verifyExecutableTypePayloadRefKey(payloads, artifact_key, param_payload.exec_ty, param_payload.exec_ty_key);
     }
-    verifyExecutableTypePayloadRef(payloads, artifact_key, signature.wrapper_ret);
-    verifyExecutableTypePayloadRef(payloads, artifact_key, signature.erased_call_ret);
-    for (signature.erased_call_args) |arg| verifyExecutableTypePayloadRef(payloads, artifact_key, arg);
-    if (!std.mem.eql(u8, &signature.wrapper_ret_key.bytes, &signature.specialization_key.exec_ret_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
-    }
+    verifyExecutableTypePayloadRefKey(payloads, artifact_key, signature.wrapper_ret, signature.wrapper_ret_key);
+    verifyExecutableTypePayloadRefKey(payloads, artifact_key, signature.erased_call_ret, signature.erased_call_ret_key);
     if (signature.erased_call_args.len != signature.erased_call_arg_keys.len) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg refs/keys differ in length", .{});
+    }
+    for (signature.erased_call_args, signature.erased_call_arg_keys) |arg, arg_key| {
+        verifyExecutableTypePayloadRefKey(payloads, artifact_key, arg, arg_key);
+    }
+    if (!std.mem.eql(u8, &signature.wrapper_ret_key.bytes, &signature.specialization_key.exec_ret_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
     }
     if (signature.erased_call_arg_keys.len != abi.fixed_arity) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arity differs from ABI payload", .{});
@@ -6783,7 +6861,7 @@ fn verifyErasedPromotedProcedureExecutableSignature(
         if (!std.mem.eql(u8, &hidden.exec_ty_key.bytes, &capture_ty.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture key differs from signature key", .{});
         }
-        verifyExecutableTypePayloadRef(payloads, artifact_key, hidden.exec_ty);
+        verifyExecutableTypePayloadRefKey(payloads, artifact_key, hidden.exec_ty, hidden.exec_ty_key);
     }
 }
 
@@ -8946,7 +9024,7 @@ pub const CheckedModuleArtifact = struct {
     entry_wrappers: EntryWrapperTable = .{},
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
-    executable_type_payloads: ExecutableTypePayloadStore = .{},
+    executable_type_payloads: ExecutableTypePayloadStore,
     executable_value_transforms: ExecutableValueTransformPlanStore = .{},
     callable_set_descriptors: CallableSetDescriptorStore = .{},
     erased_fn_abis: canonical.ErasedFnAbiStore = .{},
@@ -10057,6 +10135,7 @@ pub fn publishFromTypedModule(
         .entry_wrappers = entry_wrappers,
         .promoted_callable_wrappers = .{},
         .promoted_callable_body_plans = .{},
+        .executable_type_payloads = ExecutableTypePayloadStore.init(allocator),
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
@@ -10102,6 +10181,7 @@ test "artifact views are read-only projections" {
         .checked_procedure_templates = .{},
         .promoted_callable_wrappers = .{},
         .promoted_callable_body_plans = .{},
+        .executable_type_payloads = ExecutableTypePayloadStore.init(std.testing.allocator),
         .top_level_procedure_bindings = .{},
         .root_requests = .{},
         .hosted_procs = .{},
@@ -10128,6 +10208,7 @@ test "artifact views are read-only projections" {
         artifact.const_instances.deinit(std.testing.allocator);
         artifact.const_templates.deinit(std.testing.allocator);
         artifact.comptime_values.deinit(std.testing.allocator);
+        artifact.executable_type_payloads.deinit(std.testing.allocator);
         artifact.canonical_names.deinit();
     }
 
