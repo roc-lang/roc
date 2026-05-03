@@ -21,6 +21,15 @@ pub const Proc = struct {
     representation_instance: repr.ProcRepresentationInstanceId,
 };
 
+const ProcBuildRecord = struct {
+    proc: canonical.MirProcedureRef,
+    body: Ast.DefId,
+    representation_instance: repr.ProcRepresentationInstanceId,
+    solve_session: repr.RepresentationSolveSessionId,
+    value_store: repr.ValueInfoStoreId,
+    public_roots: repr.ProcPublicValueRoots,
+};
+
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -419,6 +428,9 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     try program.solve_sessions.ensureTotalCapacity(allocator, input.procs.items.len);
     try program.proc_instances.ensureTotalCapacity(allocator, input.procs.items.len);
     try program.value_stores.ensureTotalCapacity(allocator, input.procs.items.len);
+    var proc_build_records = std.ArrayList(ProcBuildRecord).empty;
+    defer proc_build_records.deinit(allocator);
+    try proc_build_records.ensureTotalCapacity(allocator, input.procs.items.len);
 
     var type_importer = TypeImporter.init(allocator, &input.types, &program.types);
     defer type_importer.deinit();
@@ -459,29 +471,17 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
         const body = try solver.lowerDef(proc.body);
         const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
-        const executable_key = try repr.executableSpecializationKeyForProc(
-            allocator,
-            &program.canonical_names,
-            &program.types,
-            &program.solve_sessions.items[session_index].representation_store,
-            &program.value_stores.items[i],
-            proc.proc,
-            roots,
-        );
-        program.proc_instances.appendAssumeCapacity(.{
+        proc_build_records.appendAssumeCapacity(.{
             .proc = proc.proc,
-            .executable_specialization_key = executable_key,
             .solve_session = session_id,
             .value_store = value_store_id,
             .public_roots = roots,
-        });
-        program.procs.appendAssumeCapacity(.{
-            .proc = proc.proc,
             .body = body,
             .representation_instance = instance,
         });
     }
-    try appendCrossProcedureRepresentationEdges(&program);
+    try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
+    try sealProcRepresentationInstances(&program, proc_build_records.items);
     try finalizeValueTransformBoundaries(&program);
     for (program.solve_sessions.items) |*session| {
         session.representation_store.verifySealed();
@@ -495,15 +495,44 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     return program;
 }
 
-fn appendCrossProcedureRepresentationEdges(program: *Program) Allocator.Error!void {
-    for (program.proc_instances.items, 0..) |*instance, raw_instance| {
-        const instance_id: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(raw_instance)));
+fn sealProcRepresentationInstances(
+    program: *Program,
+    records: []const ProcBuildRecord,
+) Allocator.Error!void {
+    for (records) |record| {
+        const session_index = @intFromEnum(record.solve_session);
+        const value_store_index = @intFromEnum(record.value_store);
+        const executable_key = try repr.executableSpecializationKeyForProc(
+            program.allocator,
+            &program.canonical_names,
+            &program.types,
+            &program.solve_sessions.items[session_index].representation_store,
+            &program.value_stores.items[value_store_index],
+            record.proc,
+            record.public_roots,
+        );
+        try program.proc_instances.append(program.allocator, .{
+            .proc = record.proc,
+            .executable_specialization_key = executable_key,
+            .solve_session = record.solve_session,
+            .value_store = record.value_store,
+            .public_roots = record.public_roots,
+        });
+        try program.procs.append(program.allocator, .{
+            .proc = record.proc,
+            .body = record.body,
+            .representation_instance = record.representation_instance,
+        });
+    }
+}
+
+fn appendCrossProcedureRepresentationEdges(program: *Program, records: []const ProcBuildRecord) Allocator.Error!void {
+    for (records) |*record| {
         var linker = CrossProcedureRepresentationLinker{
             .program = program,
-            .instance_id = instance_id,
-            .instance = instance,
-            .representation_store = &program.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store,
-            .value_store = &program.value_stores.items[@intFromEnum(instance.value_store)],
+            .records = records,
+            .representation_store = &program.solve_sessions.items[@intFromEnum(record.solve_session)].representation_store,
+            .value_store = &program.value_stores.items[@intFromEnum(record.value_store)],
         };
         try linker.appendCallSiteEdges();
         try linker.appendProcValueEdges();
@@ -512,8 +541,7 @@ fn appendCrossProcedureRepresentationEdges(program: *Program) Allocator.Error!vo
 
 const CrossProcedureRepresentationLinker = struct {
     program: *Program,
-    instance_id: repr.ProcRepresentationInstanceId,
-    instance: *const repr.ProcRepresentationInstance,
+    records: []const ProcBuildRecord,
     representation_store: *repr.RepresentationStore,
     value_store: *const repr.ValueInfoStore,
 
@@ -602,7 +630,7 @@ const CrossProcedureRepresentationLinker = struct {
     fn publicRootRef(
         self: *CrossProcedureRepresentationLinker,
         target_id: repr.ProcRepresentationInstanceId,
-        target: *const repr.ProcRepresentationInstance,
+        target: *const ProcBuildRecord,
         value: repr.ValueInfoId,
     ) repr.ProcPublicRootRef {
         return .{
@@ -616,8 +644,8 @@ const CrossProcedureRepresentationLinker = struct {
         self: *CrossProcedureRepresentationLinker,
         proc: canonical.MirProcedureRef,
     ) repr.ProcRepresentationInstanceId {
-        for (self.program.proc_instances.items, 0..) |instance, raw| {
-            if (canonical.mirProcedureRefEql(instance.proc, proc)) {
+        for (self.records, 0..) |record, raw| {
+            if (canonical.mirProcedureRefEql(record.proc, proc)) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
         }
@@ -627,17 +655,17 @@ const CrossProcedureRepresentationLinker = struct {
     fn procInstance(
         self: *CrossProcedureRepresentationLinker,
         id: repr.ProcRepresentationInstanceId,
-    ) *const repr.ProcRepresentationInstance {
+    ) *const ProcBuildRecord {
         const index = @intFromEnum(id);
-        if (index >= self.program.proc_instances.items.len) {
+        if (index >= self.records.len) {
             lambdaInvariant("lambda-solved cross-procedure representation edge referenced out-of-range procedure instance");
         }
-        return &self.program.proc_instances.items[index];
+        return &self.records[index];
     }
 
     fn valueStoreFor(
         self: *CrossProcedureRepresentationLinker,
-        instance: *const repr.ProcRepresentationInstance,
+        instance: *const ProcBuildRecord,
     ) *const repr.ValueInfoStore {
         return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
     }
