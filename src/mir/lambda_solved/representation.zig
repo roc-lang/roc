@@ -22,6 +22,7 @@ pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
 pub const ValueTransformBoundaryId = enum(u32) { _ };
+pub const SessionExecutableValueTransformId = checked_artifact.SessionExecutableValueTransformId;
 pub const SourceMatchId = enum(u32) { _ };
 pub const SourceMatchBranchId = enum(u32) { _ };
 pub const SourceMatchAlternativeId = enum(u32) { _ };
@@ -232,6 +233,171 @@ pub const AggregateValueInfo = union(enum) {
     },
 };
 
+pub const SessionExecutableValueEndpoint = struct {
+    value: ValueInfoId,
+    logical_ty: TypeVarId,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionValueTransformRecordField = struct {
+    field: row.RecordFieldId,
+    transform: checked_artifact.ExecutableValueTransformRef,
+};
+
+pub const SessionValueTransformTupleElem = struct {
+    index: u32,
+    transform: checked_artifact.ExecutableValueTransformRef,
+};
+
+pub const SessionValueTransformTagPayloadEdge = struct {
+    source_payload_index: u32,
+    target_payload_index: u32,
+    transform: checked_artifact.ExecutableValueTransformRef,
+};
+
+pub const SessionValueTransformTagCase = struct {
+    source_tag: row.TagId,
+    target_tag: row.TagId,
+    payloads: []const SessionValueTransformTagPayloadEdge = &.{},
+};
+
+pub const SessionBoxPayloadTransformPlan = struct {
+    boundary: BoxBoundaryId,
+    kind: checked_artifact.BoxPayloadTransformKind,
+    payload: checked_artifact.ExecutableValueTransformRef,
+};
+
+pub const SessionExecutableStructuralBridgePlan = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: checked_artifact.ExecutableValueTransformRef,
+    box_box: checked_artifact.ExecutableValueTransformRef,
+    singleton_to_tag_union: struct {
+        source_tag: row.TagId,
+        target_tag: row.TagId,
+        value_transform: ?checked_artifact.ExecutableValueTransformRef = null,
+    },
+    tag_union_to_singleton: struct {
+        source_tag: row.TagId,
+        target_tag: row.TagId,
+        value_transform: ?checked_artifact.ExecutableValueTransformRef = null,
+    },
+};
+
+pub const SessionCallableToErasedTransformPlan = union(enum) {
+    finite_value: FiniteSetErasePlan,
+    proc_value: ProcValueErasePlan,
+};
+
+pub const SessionExecutableValueTransformOp = union(enum) {
+    identity,
+    structural_bridge: SessionExecutableStructuralBridgePlan,
+    record: []const SessionValueTransformRecordField,
+    tuple: []const SessionValueTransformTupleElem,
+    tag_union: []const SessionValueTransformTagCase,
+    nominal: struct {
+        nominal: canonical.NominalTypeKey,
+        backing: checked_artifact.ExecutableValueTransformRef,
+    },
+    list: struct {
+        elem: checked_artifact.ExecutableValueTransformRef,
+    },
+    box_payload: SessionBoxPayloadTransformPlan,
+    callable_to_erased: SessionCallableToErasedTransformPlan,
+    already_erased_callable: AlreadyErasedCallablePlan,
+};
+
+pub const SessionExecutableValueTransformPlan = struct {
+    from: SessionExecutableValueEndpoint,
+    to: SessionExecutableValueEndpoint,
+    provenance: checked_artifact.ValueTransformProvenance = .none,
+    op: SessionExecutableValueTransformOp,
+};
+
+pub const SessionExecutableValueTransformStore = struct {
+    plans: std.ArrayList(SessionExecutableValueTransformPlan) = .empty,
+
+    pub fn append(
+        self: *SessionExecutableValueTransformStore,
+        allocator: std.mem.Allocator,
+        plan: SessionExecutableValueTransformPlan,
+    ) std.mem.Allocator.Error!SessionExecutableValueTransformId {
+        const id: SessionExecutableValueTransformId = @enumFromInt(@as(u32, @intCast(self.plans.items.len)));
+        try self.plans.append(allocator, plan);
+        return id;
+    }
+
+    pub fn get(self: *const SessionExecutableValueTransformStore, id: SessionExecutableValueTransformId) SessionExecutableValueTransformPlan {
+        const index = @intFromEnum(id);
+        if (index >= self.plans.items.len) {
+            debug.invariant(false, "lambda-solved invariant violated: session executable value transform id out of range");
+            unreachable;
+        }
+        return self.plans.items[index];
+    }
+
+    pub fn deinit(self: *SessionExecutableValueTransformStore, allocator: std.mem.Allocator) void {
+        for (self.plans.items) |*plan| deinitSessionExecutableValueTransformPlan(allocator, plan);
+        self.plans.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+fn deinitSessionExecutableValueTransformPlan(
+    allocator: std.mem.Allocator,
+    plan: *SessionExecutableValueTransformPlan,
+) void {
+    switch (plan.provenance) {
+        .none => {},
+        .box_erasure => |boundaries| if (boundaries.len > 0) allocator.free(boundaries),
+    }
+    switch (plan.op) {
+        .identity,
+        .structural_bridge,
+        .box_payload,
+        => {},
+        .record => |fields| if (fields.len > 0) allocator.free(fields),
+        .tuple => |items| if (items.len > 0) allocator.free(items),
+        .tag_union => |cases| {
+            for (cases) |case| {
+                if (case.payloads.len > 0) allocator.free(case.payloads);
+            }
+            if (cases.len > 0) allocator.free(cases);
+        },
+        .nominal,
+        .list,
+        => {},
+        .callable_to_erased => |callable| {
+            var owned = callable;
+            deinitSessionCallableToErasedTransformPlan(allocator, &owned);
+        },
+        .already_erased_callable => |erased| {
+            if (erased.provenance.len > 0) allocator.free(erased.provenance);
+        },
+    }
+    plan.* = undefined;
+}
+
+fn deinitSessionCallableToErasedTransformPlan(
+    allocator: std.mem.Allocator,
+    plan: *SessionCallableToErasedTransformPlan,
+) void {
+    switch (plan.*) {
+        .finite_value => |finite| {
+            if (finite.provenance.len > 0) allocator.free(finite.provenance);
+        },
+        .proc_value => |proc| {
+            var key = proc.executable_specialization_key;
+            deinitExecutableSpecializationKey(allocator, &key);
+            if (proc.capture_slots.len > 0) allocator.free(proc.capture_slots);
+            if (proc.provenance.len > 0) allocator.free(proc.provenance);
+        },
+    }
+    plan.* = undefined;
+}
+
 pub const FieldValueInfo = struct {
     field: row.RecordFieldId,
     value: ValueInfoId,
@@ -347,8 +513,8 @@ pub const ValueTransformBoundary = struct {
     kind: ValueTransformBoundaryKind,
     from_value: ValueInfoId,
     to_value: ValueInfoId,
-    from_endpoint: checked_artifact.ExecutableValueEndpoint,
-    to_endpoint: checked_artifact.ExecutableValueEndpoint,
+    from_endpoint: SessionExecutableValueEndpoint,
+    to_endpoint: SessionExecutableValueEndpoint,
     transform: checked_artifact.ExecutableValueTransformRef,
 };
 
@@ -368,6 +534,7 @@ pub const RepresentationStore = struct {
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
     box_boundaries: []const BoxBoundary = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
+    session_value_transforms: SessionExecutableValueTransformStore = .{},
 
     pub fn init(allocator: std.mem.Allocator) RepresentationStore {
         return .{
@@ -376,6 +543,7 @@ pub const RepresentationStore = struct {
     }
 
     pub fn deinit(self: *RepresentationStore) void {
+        self.session_value_transforms.deinit(self.allocator);
         for (self.callable_emission_plans) |plan| {
             switch (plan) {
                 .already_erased => |erased| {
@@ -449,6 +617,20 @@ pub const RepresentationStore = struct {
         if (old.len > 0) self.allocator.free(old);
         self.value_transform_boundaries = next;
         return id;
+    }
+
+    pub fn appendSessionExecutableValueTransform(
+        self: *RepresentationStore,
+        plan: SessionExecutableValueTransformPlan,
+    ) std.mem.Allocator.Error!SessionExecutableValueTransformId {
+        return try self.session_value_transforms.append(self.allocator, plan);
+    }
+
+    pub fn sessionExecutableValueTransform(
+        self: *const RepresentationStore,
+        id: SessionExecutableValueTransformId,
+    ) SessionExecutableValueTransformPlan {
+        return self.session_value_transforms.get(id);
     }
 
     pub fn callableEmissionPlan(
