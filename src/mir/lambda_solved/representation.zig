@@ -1038,6 +1038,7 @@ pub const ValueInfo = struct {
     source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
+    exec_ty: ?SessionExecutableTypeEndpoint = null,
     value_alias_source: ?ValueInfoId = null,
     projection_info: ?ProjectionInfoId = null,
     join_info: ?JoinInfoId = null,

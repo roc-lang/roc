@@ -552,6 +552,9 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
             if (value.solved_class == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
             }
+            if (value.exec_ty == null) {
+                lambdaInvariant("lambda-solved sealed program contains a value without a published executable type endpoint");
+            }
         }
         for (value_store.call_sites.items) |call_site| {
             if (call_site.dispatch == null) {
@@ -649,10 +652,10 @@ const SessionExecutablePayloadPublisher = struct {
             if (instance.solve_session != self.session_id) {
                 lambdaInvariant("lambda-solved executable payload publication session member pointed at another session");
             }
-            const value_store = self.valueStoreFor(instance);
+            const value_store = self.mutableValueStoreFor(instance);
             for (value_store.values.items, 0..) |_, raw_value| {
                 const value: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
-                _ = try repr.sessionExecutableTypeEndpointForValue(
+                const endpoint = try repr.sessionExecutableTypeEndpointForValue(
                     self.program.allocator,
                     &self.program.canonical_names,
                     &self.program.row_shapes,
@@ -661,6 +664,7 @@ const SessionExecutablePayloadPublisher = struct {
                     value_store,
                     value,
                 );
+                value_store.values.items[raw_value].exec_ty = endpoint;
             }
         }
     }
@@ -698,6 +702,13 @@ const SessionExecutablePayloadPublisher = struct {
         self: *SessionExecutablePayloadPublisher,
         instance: *const repr.ProcRepresentationInstance,
     ) *const repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
+    }
+
+    fn mutableValueStoreFor(
+        self: *SessionExecutablePayloadPublisher,
+        instance: *const repr.ProcRepresentationInstance,
+    ) *repr.ValueInfoStore {
         return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
     }
 

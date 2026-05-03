@@ -4268,21 +4268,11 @@ const BodyBuilder = struct {
         representation_store: *const repr.RepresentationStore,
     ) Allocator.Error!Type.TypeId {
         _ = logical_ty;
-        const key = try repr.execValueTypeKeyForValue(
-            self.allocator,
-            self.canonical_names,
-            self.type_lowerer.input,
-            representation_store,
-            value_store,
-            value_info_id,
-        );
-        const payload = representation_store.session_executable_type_payloads.refForKey(key) orelse {
-            executableInvariant("executable value type has no published session payload");
+        const value_info = value_store.values.items[@intFromEnum(value_info_id)];
+        const endpoint = value_info.exec_ty orelse {
+            executableInvariant("executable value type has no published endpoint");
         };
-        return try self.lowerSessionExecutableTypeInStore(
-            .{ .ty = payload, .key = key },
-            representation_store,
-        );
+        return try self.lowerSessionExecutableTypeInStore(endpoint, representation_store);
     }
 
     fn lowerCallableSetMemberPayloadType(
