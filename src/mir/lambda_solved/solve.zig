@@ -484,6 +484,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     try solveRepresentationSessions(&program, proc_build_records.items);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
     try finalizeValueTransformBoundaries(&program);
+    verifySealedLambdaSolvedProgram(&program);
     for (program.solve_sessions.items) |*session| {
         session.representation_store.verifySealed();
         session.state = .sealed;
@@ -494,6 +495,22 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
     input.deinit();
     return program;
+}
+
+fn verifySealedLambdaSolvedProgram(program: *const Program) void {
+    if (@import("builtin").mode != .Debug) return;
+    for (program.value_stores.items) |value_store| {
+        for (value_store.values.items) |value| {
+            if (value.solved_class == null) {
+                lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
+            }
+        }
+        for (value_store.call_sites.items) |call_site| {
+            if (call_site.dispatch == null) {
+                lambdaInvariant("lambda-solved sealed program contains an unresolved call-site dispatch");
+            }
+        }
+    }
 }
 
 fn sealProcRepresentationInstances(
