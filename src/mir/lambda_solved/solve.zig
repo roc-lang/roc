@@ -202,8 +202,8 @@ const ValueTransformFinalizer = struct {
             const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
             switch (call_site.dispatch) {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
+                .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
                 .call_value_finite,
-                .call_value_erased,
                 => {},
             }
         }
@@ -248,6 +248,56 @@ const ValueTransformFinalizer = struct {
         const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
             .kind = .{ .call_result = call_site_id },
             .from_value = target_instance.public_roots.ret,
+            .to_value = call_site.result,
+            .from_endpoint = result_from,
+            .to_endpoint = result_to,
+            .transform = result_transform,
+        });
+
+        call_site.arg_transforms = try self.valueStore().addValueTransformBoundarySpan(arg_boundaries);
+        call_site.result_transform = result_boundary;
+    }
+
+    fn finalizeCallValueErased(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        call_site: *repr.CallSiteInfo,
+        sig_key: repr.ErasedFnSigKey,
+    ) Allocator.Error!void {
+        const abi = self.representationStore().erased_fn_abis.abiFor(sig_key.abi) orelse {
+            lambdaInvariant("lambda-solved erased call boundary finalization referenced an unpublished ABI");
+        };
+        const args = self.valueStore().sliceValueSpan(call_site.args);
+        if (args.len != abi.arg_exec_keys.len or args.len != abi.fixed_arity) {
+            lambdaInvariant("lambda-solved erased call boundary finalization saw ABI arity mismatch");
+        }
+
+        const arg_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, args.len);
+        defer self.allocator.free(arg_boundaries);
+
+        for (args, 0..) |arg, i| {
+            const from = try self.localEndpoint(arg);
+            const to = self.rawArgEndpoint(call_site_id, @intCast(i), from.logical_ty, abi.arg_exec_keys[i]);
+            const transform = try self.appendIdentityTransform(from, to);
+            arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = .{ .call_arg = .{
+                    .call = call_site_id,
+                    .arg_index = @intCast(i),
+                } },
+                .from_value = arg,
+                .to_value = arg,
+                .from_endpoint = from,
+                .to_endpoint = to,
+                .transform = transform,
+            });
+        }
+
+        const result_to = try self.localEndpoint(call_site.result);
+        const result_from = self.rawResultEndpoint(call_site_id, result_to.logical_ty, abi.ret_exec_key);
+        const result_transform = try self.appendIdentityTransform(result_from, result_to);
+        const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
+            .kind = .{ .call_result = call_site_id },
+            .from_value = call_site.result,
             .to_value = call_site.result,
             .from_endpoint = result_from,
             .to_endpoint = result_to,
@@ -353,6 +403,49 @@ const ValueTransformFinalizer = struct {
             .owner = .{ .procedure_return = target_id },
             .logical_ty = target_info.logical_ty,
             .exec_ty = exec_ty,
+        };
+    }
+
+    fn rawArgEndpoint(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        index: u32,
+        logical_ty: Type.TypeVarId,
+        key: repr.CanonicalExecValueTypeKey,
+    ) repr.SessionExecutableValueEndpoint {
+        return .{
+            .owner = .{ .call_raw_arg = .{
+                .call = call_site_id,
+                .index = index,
+            } },
+            .logical_ty = logical_ty,
+            .exec_ty = self.sessionEndpointForPublishedKey(key),
+        };
+    }
+
+    fn rawResultEndpoint(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        logical_ty: Type.TypeVarId,
+        key: repr.CanonicalExecValueTypeKey,
+    ) repr.SessionExecutableValueEndpoint {
+        return .{
+            .owner = .{ .call_raw_result = call_site_id },
+            .logical_ty = logical_ty,
+            .exec_ty = self.sessionEndpointForPublishedKey(key),
+        };
+    }
+
+    fn sessionEndpointForPublishedKey(
+        self: *ValueTransformFinalizer,
+        key: repr.CanonicalExecValueTypeKey,
+    ) repr.SessionExecutableTypeEndpoint {
+        const payload = self.representationStore().session_executable_type_payloads.refForKey(key) orelse {
+            lambdaInvariant("lambda-solved raw ABI endpoint key has no session executable type payload");
+        };
+        return .{
+            .ty = payload,
+            .key = key,
         };
     }
 
