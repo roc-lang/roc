@@ -1555,6 +1555,12 @@ const TypeInstantiator = struct {
     }
 };
 
+const PrivateCaptureLoweringKey = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    node: checked_artifact.PrivateCaptureNodeId,
+    checked_ty: checked_artifact.CheckedTypeId,
+};
+
 const BodyLowerer = struct {
     allocator: Allocator,
     input: Input,
@@ -1564,6 +1570,8 @@ const BodyLowerer = struct {
     name_resolver: *ArtifactNames.ArtifactNameResolver,
     queue: *Queue,
     local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
+    lowered_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId),
+    active_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, void),
 
     fn init(
         allocator: Allocator,
@@ -1583,10 +1591,14 @@ const BodyLowerer = struct {
             .name_resolver = name_resolver,
             .queue = queue,
             .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
+            .lowered_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId).init(allocator),
+            .active_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, void).init(allocator),
         };
     }
 
     fn deinit(self: *BodyLowerer) void {
+        self.active_private_captures.deinit();
+        self.lowered_private_captures.deinit();
         self.local_symbols.deinit();
     }
 
@@ -1787,6 +1799,18 @@ const BodyLowerer = struct {
         node_id: checked_artifact.PrivateCaptureNodeId,
         checked_ty: checked_artifact.CheckedTypeId,
     ) Allocator.Error!Ast.ExprId {
+        const lowering_key = PrivateCaptureLoweringKey{
+            .artifact = artifact,
+            .node = node_id,
+            .checked_ty = checked_ty,
+        };
+        if (self.lowered_private_captures.get(lowering_key)) |existing| return existing;
+        if (self.active_private_captures.contains(lowering_key)) {
+            invariantViolation("mono body lowering reached a cyclic private capture value before it had an explicit bound value");
+        }
+        try self.active_private_captures.put(lowering_key, {});
+        errdefer _ = self.active_private_captures.remove(lowering_key);
+
         const plans = comptimePlansForKey(self.input, artifact) orelse {
             debug.invariant(false, "mono body lowering invariant violated: private capture plan artifact was not available");
             unreachable;
@@ -1799,7 +1823,7 @@ const BodyLowerer = struct {
         const ty = try self.lowerArtifactCheckedType(artifact, checked_ty);
         const source_ty = checkedTypeKey(checked_types, checked_ty);
 
-        return switch (node) {
+        const lowered = switch (node) {
             .pending => invariantViolation("mono body lowering reached pending private capture node"),
             .serializable_leaf => |leaf| try self.lowerPrivateSerializableLeaf(artifact, ty, leaf),
             .callable_leaf => |leaf| try self.lowerPrivateCallableLeaf(ty, source_ty, node_id, leaf),
@@ -1809,8 +1833,11 @@ const BodyLowerer = struct {
             .list => |items| try self.lowerPrivateListCapture(artifact, ty, checked_ty, items),
             .box => |payload| try self.lowerPrivateBoxCapture(artifact, ty, checked_ty, payload),
             .nominal => |nominal| try self.lowerPrivateNominalCapture(artifact, ty, checked_ty, nominal),
-            .recursive_ref => invariantViolation("mono body lowering reached recursive private capture materialization before recursive capture lowering was implemented"),
+            .recursive_ref => |ref| try self.lowerPrivateCaptureNode(artifact, ref, checked_ty),
         };
+        _ = self.active_private_captures.remove(lowering_key);
+        try self.lowered_private_captures.put(lowering_key, lowered);
+        return lowered;
     }
 
     fn lowerPrivateSerializableLeaf(
