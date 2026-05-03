@@ -1039,6 +1039,7 @@ pub const ValueInfo = struct {
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
     value_alias_source: ?ValueInfoId = null,
+    join_info: ?JoinInfoId = null,
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
     aggregate: ?AggregateValueInfo = null,
@@ -2462,6 +2463,13 @@ const SessionExecutableTypePayloadBuilder = struct {
                 }
                 return source_endpoint;
             }
+            if (info.join_info) |join_id| {
+                const join_endpoint = try self.endpointForJoin(value, join_id);
+                if (!canonicalExecValueTypeKeyEql(join_endpoint.key, key)) {
+                    representationInvariant("session executable type payload join input key disagrees with join value key");
+                }
+                return join_endpoint;
+            }
         }
 
         const id = try self.payload_store.reserve(self.allocator, key);
@@ -2500,6 +2508,34 @@ const SessionExecutableTypePayloadBuilder = struct {
         self.payload_store.fill(self.allocator, id, payload);
         _ = self.active_types.remove(root);
         return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn endpointForJoin(
+        self: *SessionExecutableTypePayloadBuilder,
+        value: ValueInfoId,
+        join_id: JoinInfoId,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        const values = self.value_store orelse representationInvariant("session executable type payload join has no value store");
+        const index = @intFromEnum(join_id);
+        if (index >= values.joins.items.len) {
+            representationInvariant("session executable type payload join id is out of range");
+        }
+        const join = values.joins.items[index];
+        if (join.result != value) {
+            representationInvariant("session executable type payload join is attached to a different result value");
+        }
+        const inputs = values.sliceJoinInputSpan(join.inputs);
+        if (inputs.len == 0) {
+            representationInvariant("session executable type payload join has no returning inputs");
+        }
+        const first = try self.endpointForValue(inputs[0].value);
+        for (inputs[1..]) |input| {
+            const endpoint = try self.endpointForValue(input.value);
+            if (!canonicalExecValueTypeKeyEql(first.key, endpoint.key)) {
+                representationInvariant("session executable type payload join inputs have different executable representations");
+            }
+        }
+        return first;
     }
 
     fn childForType(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
@@ -3158,8 +3194,46 @@ const ExecValueTypeKeyBuilder = struct {
     }
 
     fn keyForValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        if (try self.redirectedValueKey(value)) |key| return key;
         try self.writeValue(value);
         return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    fn redirectedValueKey(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!?CanonicalExecValueTypeKey {
+        const values = self.value_store orelse return null;
+        const info = values.values.items[@intFromEnum(value)];
+        if (info.callable != null or info.boxed != null or info.aggregate != null) return null;
+        if (info.value_alias_source) |source| return try self.valueKeySnapshot(source);
+        if (info.join_info) |join_id| return try self.joinValueKey(value, join_id);
+        return null;
+    }
+
+    fn joinValueKey(
+        self: *ExecValueTypeKeyBuilder,
+        value: ValueInfoId,
+        join_id: JoinInfoId,
+    ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        const values = self.value_store orelse representationInvariant("executable value type key for join value has no value store");
+        const index = @intFromEnum(join_id);
+        if (index >= values.joins.items.len) {
+            representationInvariant("executable value type key join id is out of range");
+        }
+        const join = values.joins.items[index];
+        if (join.result != value) {
+            representationInvariant("executable value type key join is attached to a different result value");
+        }
+        const inputs = values.sliceJoinInputSpan(join.inputs);
+        if (inputs.len == 0) {
+            representationInvariant("executable value type key join has no returning inputs");
+        }
+        const first = try self.valueKeySnapshot(inputs[0].value);
+        for (inputs[1..]) |input| {
+            const key = try self.valueKeySnapshot(input.value);
+            if (!canonicalExecValueTypeKeyEql(first, key)) {
+                representationInvariant("executable value type key join inputs have different executable representations");
+            }
+        }
+        return first;
     }
 
     fn writeValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!void {
@@ -3181,6 +3255,9 @@ const ExecValueTypeKeyBuilder = struct {
             try self.writeAggregateValue(info.logical_ty, aggregate);
         } else if (info.value_alias_source) |source| {
             try self.writeValue(source);
+        } else if (info.join_info) |join_id| {
+            const key = try self.joinValueKey(value, join_id);
+            self.writeCanonicalExecValueTypeKey(key);
         } else {
             try self.writeType(info.logical_ty);
         }
@@ -3194,7 +3271,8 @@ const ExecValueTypeKeyBuilder = struct {
     ) std.mem.Allocator.Error!void {
         self.writeTag("box_value");
         if (boxed.payload_value) |payload| {
-            try self.writeValue(payload);
+            const payload_key = try self.valueKeySnapshot(payload);
+            self.writeCanonicalExecValueTypeKey(payload_key);
             return;
         }
         try self.writeType(logical_ty);
@@ -3234,7 +3312,8 @@ const ExecValueTypeKeyBuilder = struct {
                 self.writeU32(@intCast(record.fields.len));
                 for (record.fields) |field| {
                     self.writeU32(@intFromEnum(field.field));
-                    try self.writeValue(field.value);
+                    const field_key = try self.valueKeySnapshot(field.value);
+                    self.writeCanonicalExecValueTypeKey(field_key);
                 }
             },
             .tuple => |tuple| {
@@ -3255,7 +3334,10 @@ const ExecValueTypeKeyBuilder = struct {
                 for (seen) |was_seen| {
                     if (!was_seen) representationInvariant("executable value type key tuple did not provide every element");
                 }
-                for (ordered) |elem| try self.writeValue(elem);
+                for (ordered) |elem| {
+                    const elem_key = try self.valueKeySnapshot(elem);
+                    self.writeCanonicalExecValueTypeKey(elem_key);
+                }
             },
             .tag => |tag| {
                 self.writeTag("tag_value");
@@ -3264,7 +3346,8 @@ const ExecValueTypeKeyBuilder = struct {
                 self.writeU32(@intCast(tag.payloads.len));
                 for (tag.payloads) |payload| {
                     self.writeU32(@intFromEnum(payload.payload));
-                    try self.writeValue(payload.value);
+                    const payload_key = try self.valueKeySnapshot(payload.value);
+                    self.writeCanonicalExecValueTypeKey(payload_key);
                 }
             },
             .list => |list| {

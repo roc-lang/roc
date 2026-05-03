@@ -555,13 +555,32 @@ const ExecutableTypePayloadBuilder = struct {
             };
         }
 
+        const info = value_store.values.items[@intFromEnum(value)];
+        if (info.callable == null and info.boxed == null and info.aggregate == null) {
+            if (info.value_alias_source) |source| {
+                const source_payload = try self.payloadForValueInStore(value_store_id, value_store, representation_store, source);
+                if (!repr.canonicalExecValueTypeKeyEql(source_payload.key, key)) {
+                    checkedPipelineInvariant("artifact executable payload alias source key disagrees with alias value key");
+                }
+                return source_payload;
+            }
+            if (info.join_info) |join_id| {
+                const join_payload = try self.payloadForJoinInStore(value_store_id, value_store, representation_store, value, join_id);
+                if (!repr.canonicalExecValueTypeKeyEql(join_payload.key, key)) {
+                    checkedPipelineInvariant("artifact executable payload join input key disagrees with join value key");
+                }
+                return join_payload;
+            }
+        }
+
         const id = try self.artifact.executable_type_payloads.reserve(self.allocator, key);
         try self.active_values.put(active_key, id);
         errdefer _ = self.active_values.remove(active_key);
 
-        const info = value_store.values.items[@intFromEnum(value)];
         const payload = if (info.callable) |callable|
             try self.callablePayload(value_store_id, value_store, representation_store, callable)
+        else if (info.boxed) |boxed|
+            try self.boxedPayload(value_store_id, value_store, representation_store, info.logical_ty, boxed)
         else if (info.aggregate) |aggregate|
             try self.aggregatePayload(value_store_id, value_store, representation_store, info.logical_ty, aggregate)
         else
@@ -573,6 +592,36 @@ const ExecutableTypePayloadBuilder = struct {
             .ref = self.refFor(id),
             .key = key,
         };
+    }
+
+    fn payloadForJoinInStore(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        value: repr.ValueInfoId,
+        join_id: repr.JoinInfoId,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const index = @intFromEnum(join_id);
+        if (index >= value_store.joins.items.len) {
+            checkedPipelineInvariant("artifact executable payload join id is out of range");
+        }
+        const join = value_store.joins.items[index];
+        if (join.result != value) {
+            checkedPipelineInvariant("artifact executable payload join is attached to a different result value");
+        }
+        const inputs = value_store.sliceJoinInputSpan(join.inputs);
+        if (inputs.len == 0) {
+            checkedPipelineInvariant("artifact executable payload join has no returning inputs");
+        }
+        const first = try self.payloadForValueInStore(value_store_id, value_store, representation_store, inputs[0].value);
+        for (inputs[1..]) |input| {
+            const payload = try self.payloadForValueInStore(value_store_id, value_store, representation_store, input.value);
+            if (!repr.canonicalExecValueTypeKeyEql(first.key, payload.key)) {
+                checkedPipelineInvariant("artifact executable payload join inputs have different executable representations");
+            }
+        }
+        return first;
     }
 
     fn payloadForType(
@@ -770,6 +819,21 @@ const ExecutableTypePayloadBuilder = struct {
         };
     }
 
+    fn boxedPayload(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+        boxed: repr.BoxedValueInfo,
+    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
+        const child = if (boxed.payload_value) |payload_value|
+            try self.payloadForValueInStore(value_store_id, value_store, representation_store, payload_value)
+        else
+            try self.childPayloadForType(try self.logicalBoxPayloadType(logical_ty));
+        return .{ .box = .{ .ty = child.ref, .key = child.key } };
+    }
+
     fn recordPayloadForValue(
         self: *ExecutableTypePayloadBuilder,
         value_store_id: repr.ValueInfoStoreId,
@@ -921,6 +985,21 @@ const ExecutableTypePayloadBuilder = struct {
                 else => checkedPipelineInvariant("list executable payload metadata attached to non-list type"),
             },
             else => checkedPipelineInvariant("list executable payload metadata attached to unresolved type"),
+        };
+    }
+
+    fn logicalBoxPayloadType(
+        self: *ExecutableTypePayloadBuilder,
+        logical_ty: mir.LambdaSolved.Type.TypeVarId,
+    ) Allocator.Error!mir.LambdaSolved.Type.TypeVarId {
+        const root = self.context.types.unlinkConst(logical_ty);
+        return switch (self.context.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalBoxPayloadType(nominal.backing),
+            .content => |content| switch (content) {
+                .box => |payload| payload,
+                else => checkedPipelineInvariant("box executable payload metadata attached to non-box type"),
+            },
+            else => checkedPipelineInvariant("box executable payload metadata attached to unresolved type"),
         };
     }
 

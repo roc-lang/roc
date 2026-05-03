@@ -518,11 +518,22 @@ pub fn run(
 fn verifySealedLambdaSolvedProgram(program: *const Program) void {
     if (@import("builtin").mode != .Debug) return;
     for (program.value_stores.items) |value_store| {
-        for (value_store.values.items) |value| {
+        for (value_store.values.items, 0..) |value, raw_value| {
             verifyConcreteSourcePayload(program, value.source_ty, value.source_ty_payload, "lambda-solved value");
             if (value.value_alias_source) |source| {
                 if (@intFromEnum(source) >= value_store.values.items.len) {
                     lambdaInvariant("lambda-solved value alias source points outside the value store");
+                }
+            }
+            if (value.join_info) |join_info| {
+                const join_index = @intFromEnum(join_info);
+                if (join_index >= value_store.joins.items.len) {
+                    lambdaInvariant("lambda-solved value join metadata points outside the join store");
+                }
+                const join = value_store.joins.items[join_index];
+                const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                if (join.result != value_id) {
+                    lambdaInvariant("lambda-solved value join metadata is attached to a different result value");
                 }
             }
             if (value.solved_class == null) {
@@ -3943,6 +3954,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .match_expr,
                 });
+                try self.publishJoinResult(value, join_info);
                 try self.publishJoinRepresentationEdges(value, branch_inputs);
                 break :blk .{ .match_ = .{
                     .cond = cond,
@@ -3982,6 +3994,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .if_expr,
                 });
+                try self.publishJoinResult(value, join_info);
                 try self.publishJoinRepresentationEdges(value, self.value_store.joins.items[@intFromEnum(join_info)].inputs);
                 break :blk .{ .if_ = .{
                     .cond = cond,
@@ -4465,6 +4478,19 @@ const BodySolver = struct {
                 .to = .{ .local = result_root },
                 .kind = .branch_join,
             });
+        }
+    }
+
+    fn publishJoinResult(
+        self: *BodySolver,
+        result: repr.ValueInfoId,
+        join_info: repr.JoinInfoId,
+    ) Allocator.Error!void {
+        const value_info = &self.value_store.values.items[@intFromEnum(result)];
+        if (value_info.join_info) |existing| {
+            if (existing != join_info) lambdaInvariant("lambda-solved join result already points at a different join");
+        } else {
+            value_info.join_info = join_info;
         }
     }
 
