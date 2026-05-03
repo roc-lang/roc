@@ -178,6 +178,11 @@ pub const SourceMatch = struct {
     branches: Span(BranchId),
 };
 
+pub const PayloadTransformTagBranch = struct {
+    discriminant: u16,
+    body: ExprId,
+};
+
 pub const PatternDecisionPlan = struct {
     scrutinees: Span(ExecutableValueRef),
     branches: Span(BranchId),
@@ -251,6 +256,10 @@ pub const Expr = struct {
             args: Span(ExprId),
         },
         source_match: SourceMatch,
+        payload_transform_tag_union: struct {
+            source: ExecutableValueRef,
+            branches: Span(PayloadTransformTagBranch),
+        },
         if_: struct {
             cond: ExprId,
             then_body: ExprId,
@@ -353,6 +362,7 @@ pub const Store = struct {
     capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
+    payload_transform_tag_branches: std.ArrayList(PayloadTransformTagBranch),
     pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
     bridge_plans: std.ArrayList(BridgePlan),
     tag_payload_patterns: std.ArrayList(TagPayloadPattern),
@@ -379,6 +389,7 @@ pub const Store = struct {
             .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
+            .payload_transform_tag_branches = .empty,
             .pattern_decision_plans = .empty,
             .bridge_plans = .empty,
             .tag_payload_patterns = .empty,
@@ -401,6 +412,7 @@ pub const Store = struct {
             repr.deinitExecutableSpecializationKey(self.allocator, &branch.executable_specialization_key);
         }
         self.callable_match_branches.deinit(self.allocator);
+        self.payload_transform_tag_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
@@ -581,6 +593,13 @@ pub const Store = struct {
         if (values.len == 0) return Span(CallableMatchBranch).empty();
         const start: u32 = @intCast(self.callable_match_branches.items.len);
         try self.callable_match_branches.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addPayloadTransformTagBranchSpan(self: *Store, values: []const PayloadTransformTagBranch) std.mem.Allocator.Error!Span(PayloadTransformTagBranch) {
+        if (values.len == 0) return Span(PayloadTransformTagBranch).empty();
+        const start: u32 = @intCast(self.payload_transform_tag_branches.items.len);
+        try self.payload_transform_tag_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 };

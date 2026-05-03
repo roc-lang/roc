@@ -283,6 +283,7 @@ const IrBuilder = struct {
             .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
+            .payload_transform_tag_union => |tag_transform| try self.lowerPayloadTransformTagUnion(expr, tag_transform, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
             .bridge => |bridge_expr| blk: {
@@ -583,6 +584,46 @@ const IrBuilder = struct {
 
         const result = try self.freshVar(try self.layoutForType(expr.ty));
         try self.appendSourceMatchBranchSwitch(branch_ids, 0, scrutinee, subject, result, stmts);
+        try self.value_env.put(expr.value, result);
+        return result;
+    }
+
+    fn lowerPayloadTransformTagUnion(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        tag_transform: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const source = self.value_env.get(tag_transform.source) orelse
+            irInvariant("IR lowering payload_transform_tag_union source value was not bound");
+        const discriminant = try self.bindExpr(
+            self.freshInternalValueRef(),
+            .{ .canonical = .u16 },
+            .{ .get_union_id = source },
+            stmts,
+        );
+
+        const input_branches = self.input.ast.payload_transform_tag_branches.items[tag_transform.branches.start..][0..tag_transform.branches.len];
+        if (input_branches.len == 0) irInvariant("IR lowering payload_transform_tag_union had no branches");
+        const branches = try self.allocator.alloc(Ast.Branch, input_branches.len);
+        defer self.allocator.free(branches);
+        for (input_branches, 0..) |branch, i| {
+            branches[i] = .{
+                .value = branch.discriminant,
+                .block = try self.lowerExprToBlock(branch.body),
+            };
+        }
+
+        const result = try self.freshVar(try self.layoutForType(expr.ty));
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+            .cond = discriminant,
+            .branches = try self.output.store.addBranchSpan(branches),
+            .default_block = try self.output.store.addBlock(.{
+                .stmts = Ast.Span(Ast.StmtId).empty(),
+                .term = .@"unreachable",
+            }),
+            .join = result,
+        } }));
         try self.value_env.put(expr.value, result);
         return result;
     }

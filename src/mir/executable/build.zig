@@ -853,9 +853,17 @@ fn applyPublishedExecutablePayloadTransform(
             nominal,
             value,
         ),
-        .tag_union,
-        .list,
-        => executableInvariant("executable aggregate payload transform lowering has not been implemented"),
+        .tag_union => |cases| try applyTagUnionPayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            plan,
+            cases,
+            value,
+        ),
+        .list => executableInvariant("executable list payload transform lowering has not been implemented"),
         .box_payload => |box| try applyBoxPayloadTransform(
             program,
             plans,
@@ -1105,6 +1113,194 @@ fn findPayloadTransformTupleElem(
         return item;
     }
     return null;
+}
+
+fn applyTagUnionPayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    cases: []const checked_artifact.PayloadTransformTagCase,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const source = switch (program.types.getType(from_ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => executableInvariant("tag-union payload transform source endpoint is not a tag union"),
+    };
+    const target = switch (program.types.getType(to_ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => executableInvariant("tag-union payload transform target endpoint is not a tag union"),
+    };
+    if (cases.len != source.tags.len) {
+        executableInvariant("tag-union payload transform case count differs from source tag-union arity");
+    }
+
+    const seen_cases = try program.allocator.alloc(bool, cases.len);
+    defer program.allocator.free(seen_cases);
+    @memset(seen_cases, false);
+
+    const branches = try program.allocator.alloc(Ast.PayloadTransformTagBranch, source.tags.len);
+    defer program.allocator.free(branches);
+    for (source.tags, 0..) |source_tag, source_i| {
+        const source_label = program.row_shapes.tag(source_tag.tag).label;
+        const case = findPayloadTransformTagCase(cases, source_label, seen_cases) orelse {
+            executableInvariant("tag-union payload transform omitted a source tag case");
+        };
+        const target_tag = tagTypeForLabel(program, target, case.target_tag);
+
+        var branch_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer branch_stmts.deinit(program.allocator);
+        const branch_body = try tagUnionPayloadTransformBranchBody(
+            program,
+            plans,
+            published_types,
+            transforms,
+            &branch_stmts,
+            from_ty,
+            to_ty,
+            source_tag,
+            target,
+            target_tag,
+            case,
+            value,
+        );
+
+        branches[source_i] = .{
+            .discriminant = @intCast(program.row_shapes.tag(source_tag.tag).logical_index),
+            .body = branch_body,
+        };
+    }
+    verifyAllSeen(seen_cases, "tag-union payload transform had an extra source tag case");
+
+    const transformed_value = program.ast.freshValueRef();
+    const transformed_expr = try program.ast.addExpr(to_ty, transformed_value, .{ .payload_transform_tag_union = .{
+        .source = value,
+        .branches = try program.ast.addPayloadTransformTagBranchSpan(branches),
+    } });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = transformed_value,
+        .body = transformed_expr,
+    } }));
+    return transformed_value;
+}
+
+fn tagUnionPayloadTransformBranchBody(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    branch_stmts: *std.ArrayList(Ast.StmtId),
+    source_union_ty: Type.TypeId,
+    target_union_ty: Type.TypeId,
+    source_tag: Type.TagType,
+    target_union: Type.TagUnionType,
+    target_tag: Type.TagType,
+    case: checked_artifact.PayloadTransformTagCase,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExprId {
+    if (case.payloads.len != target_tag.payloads.len) {
+        executableInvariant("tag-union payload transform payload edge count differs from target tag arity");
+    }
+
+    const source_expr = try program.ast.addExpr(source_union_ty, value, .{ .value_ref = value });
+    const seen_payloads = try program.allocator.alloc(bool, case.payloads.len);
+    defer program.allocator.free(seen_payloads);
+    @memset(seen_payloads, false);
+
+    const payload_exprs = try program.allocator.alloc(Ast.TagPayloadExpr, target_tag.payloads.len);
+    defer program.allocator.free(payload_exprs);
+    for (target_tag.payloads, 0..) |target_payload, target_i| {
+        const edge = findPayloadTransformPayloadEdge(case.payloads, @intCast(target_i), seen_payloads) orelse {
+            executableInvariant("tag-union payload transform omitted a target payload edge");
+        };
+        const source_payload_index: usize = @intCast(edge.source_payload_index);
+        if (source_payload_index >= source_tag.payloads.len) {
+            executableInvariant("tag-union payload transform source payload index exceeded source tag arity");
+        }
+        const source_payload = source_tag.payloads[source_payload_index];
+
+        const access_value = program.ast.freshValueRef();
+        const access_expr = try program.ast.addExpr(source_payload.ty, access_value, .{ .tag_payload = .{
+            .tag_union = source_expr,
+            .payload = source_payload.payload,
+        } });
+        try branch_stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+            .value = access_value,
+            .body = access_expr,
+        } }));
+
+        const transformed = try applyPublishedExecutablePayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            branch_stmts,
+            edge.transform,
+            access_value,
+        );
+        payload_exprs[target_i] = .{
+            .payload = target_payload.payload,
+            .expr = try program.ast.addExpr(target_payload.ty, transformed, .{ .value_ref = transformed }),
+            .ty = target_payload.ty,
+            .value = transformed,
+        };
+    }
+    verifyAllSeen(seen_payloads, "tag-union payload transform had an extra payload edge");
+
+    const tag_value = program.ast.freshValueRef();
+    const tag_expr = try program.ast.addExpr(target_union_ty, tag_value, .{ .tag = .{
+        .union_shape = target_union.shape,
+        .tag = target_tag.tag,
+        .payloads = try program.ast.addTagPayloadExprSpan(payload_exprs),
+    } });
+    if (branch_stmts.items.len == 0) return tag_expr;
+    return try program.ast.addExpr(target_union_ty, tag_value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(branch_stmts.items),
+        .final_expr = tag_expr,
+    } });
+}
+
+fn findPayloadTransformTagCase(
+    cases: []const checked_artifact.PayloadTransformTagCase,
+    source_label: canonical.TagLabelId,
+    seen: []bool,
+) ?checked_artifact.PayloadTransformTagCase {
+    for (cases, 0..) |case, i| {
+        if (case.source_tag != source_label) continue;
+        if (seen[i]) executableInvariant("tag-union payload transform duplicated a source tag case");
+        seen[i] = true;
+        return case;
+    }
+    return null;
+}
+
+fn findPayloadTransformPayloadEdge(
+    payloads: []const checked_artifact.PayloadTransformTagPayloadEdge,
+    target_payload_index: u32,
+    seen: []bool,
+) ?checked_artifact.PayloadTransformTagPayloadEdge {
+    for (payloads, 0..) |payload, i| {
+        if (payload.target_payload_index != target_payload_index) continue;
+        if (seen[i]) executableInvariant("tag-union payload transform duplicated a target payload edge");
+        seen[i] = true;
+        return payload;
+    }
+    return null;
+}
+
+fn tagTypeForLabel(
+    program: *const Program,
+    tag_union: Type.TagUnionType,
+    label: canonical.TagLabelId,
+) Type.TagType {
+    for (tag_union.tags) |tag| {
+        if (program.row_shapes.tag(tag.tag).label == label) return tag;
+    }
+    executableInvariant("tag-union payload transform target tag label is absent from target type");
 }
 
 fn applyBoxPayloadTransform(
