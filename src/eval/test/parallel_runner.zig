@@ -21,9 +21,12 @@
 //! ## Process pool
 //!
 //! A single-threaded parent process manages up to N concurrent child
-//! processes (one per test). Each child runs the full test pipeline
-//! (frontend + all backend evaluations) and serializes results back
-//! through a pipe. The parent multiplexes pipe reads using poll().
+//! processes (one per test). The parent runs the frontend once, lowers through
+//! checked artifacts to an ARC-inserted LIR runtime image, and allocates that
+//! image in shared memory. Children inherit or map that runtime image and run
+//! backend evaluation only; they never inspect CIR, checked artifacts, MIR, or
+//! IR. Children write only outcome text/metadata back through a pipe. The
+//! parent multiplexes pipe reads using poll().
 //!
 //! This avoids the fork-in-multithreaded-process hazard: forking from
 //! a threaded parent risks inheriting locked glibc mutexes, causing
