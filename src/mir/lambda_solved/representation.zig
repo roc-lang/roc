@@ -48,9 +48,18 @@ pub const TypeVarId = type_mod.TypeVarId;
 
 pub const RepresentationRootKind = union(enum) {
     unclassified,
-    local_value: ValueInfoId,
-    binding: BindingInfoId,
-    pattern_binder: BindingInfoId,
+    local_value: struct {
+        instance: ProcRepresentationInstanceId,
+        value: ValueInfoId,
+    },
+    binding: struct {
+        instance: ProcRepresentationInstanceId,
+        binding: BindingInfoId,
+    },
+    pattern_binder: struct {
+        instance: ProcRepresentationInstanceId,
+        binding: BindingInfoId,
+    },
     procedure_param: struct {
         instance: ProcRepresentationInstanceId,
         index: u32,
@@ -60,14 +69,27 @@ pub const RepresentationRootKind = union(enum) {
         instance: ProcRepresentationInstanceId,
         slot: u32,
     },
-    call_value_requested_fn: CallSiteInfoId,
-    call_proc_requested_fn: CallSiteInfoId,
-    proc_value_fn: ValueInfoId,
+    call_value_requested_fn: struct {
+        instance: ProcRepresentationInstanceId,
+        call_site: CallSiteInfoId,
+    },
+    call_proc_requested_fn: struct {
+        instance: ProcRepresentationInstanceId,
+        call_site: CallSiteInfoId,
+    },
+    proc_value_fn: struct {
+        instance: ProcRepresentationInstanceId,
+        value: ValueInfoId,
+    },
     mutable_var_version: struct {
+        instance: ProcRepresentationInstanceId,
         symbol: Symbol,
         version: u32,
     },
-    loop_phi: LoopPhiId,
+    loop_phi: struct {
+        instance: ProcRepresentationInstanceId,
+        phi: LoopPhiId,
+    },
 };
 
 pub const RepresentationEdgeKind = union(enum) {

@@ -2492,7 +2492,10 @@ const BodySolver = struct {
             .proc_value => |proc_value| blk: {
                 const captures = try self.lowerCaptureArgSpanWithValues(proc_value.captures);
                 const whole_function_root = self.representation_store.reserveRoot();
-                try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = value });
+                try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = .{
+                    .instance = self.instance,
+                    .value = value,
+                } });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(value) },
                     .to = .{ .local = whole_function_root },
@@ -2889,7 +2892,10 @@ const BodySolver = struct {
         result: repr.ValueInfoId,
         requested_fn_root: repr.RepRootId,
     ) Allocator.Error!void {
-        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_value_requested_fn = call_site });
+        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_value_requested_fn = .{
+            .instance = self.instance,
+            .call_site = call_site,
+        } });
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(callee_value) },
             .to = .{ .local = requested_fn_root },
@@ -2905,7 +2911,10 @@ const BodySolver = struct {
         result: repr.ValueInfoId,
         requested_fn_root: repr.RepRootId,
     ) Allocator.Error!void {
-        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_proc_requested_fn = call_site });
+        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_proc_requested_fn = .{
+            .instance = self.instance,
+            .call_site = call_site,
+        } });
         try self.publishRequestedFunctionArgAndReturnEdges(args, result, requested_fn_root);
     }
 
@@ -3405,7 +3414,10 @@ const BodySolver = struct {
             .root = root,
             .solved_class = class,
         });
-        try self.representation_store.publishRootKind(root, .{ .local_value = value });
+        try self.representation_store.publishRootKind(root, .{ .local_value = .{
+            .instance = self.instance,
+            .value = value,
+        } });
         return value;
     }
 
