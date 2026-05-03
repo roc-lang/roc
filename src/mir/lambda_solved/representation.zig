@@ -1557,9 +1557,15 @@ pub const RepresentationStore = struct {
             .capture_values = capture_values,
         });
         const construction = self.callableConstructionPlan(construction_plan);
+        const callable_root = self.reserveRoot();
+        _ = try self.appendRepresentationEdge(.{
+            .from = .{ .local = whole_function_root },
+            .to = .{ .local = callable_root },
+            .kind = .function_callable,
+        });
         return .{
             .whole_function_root = whole_function_root,
-            .callable_root = self.reserveRoot(),
+            .callable_root = callable_root,
             .source = .{ .proc_value = .{
                 .proc = proc,
                 .captures = construction.capture_values,

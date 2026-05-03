@@ -546,6 +546,11 @@ const CrossProcedureRepresentationLinker = struct {
             });
         }
         _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.function_root) },
+            .to = .{ .local = call_site.requested_fn_root },
+            .kind = .value_alias,
+        });
+        _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
             .to = .{ .local = self.valueRoot(call_site.result) },
             .kind = .function_return,
@@ -2434,14 +2439,22 @@ const BodySolver = struct {
                 const callee_value = self.exprValue(func);
                 const lowered_args = try self.lowerExprSpanWithValues(call.args);
                 const requested_fn_ty = try self.type_importer.importType(call.requested_fn_ty);
+                const requested_fn_root = self.representation_store.reserveRoot();
                 const call_site = try self.value_store.addCallSite(.{
                     .callee = callee_value,
                     .args = lowered_args.values,
                     .result = value,
-                    .requested_fn_root = self.representation_store.reserveRoot(),
+                    .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
                     .dispatch = self.callSiteDispatchForCallee(callee_value),
                 });
+                try self.publishCallValueRequestedFunctionEdges(
+                    call_site,
+                    callee_value,
+                    lowered_args.values,
+                    value,
+                    requested_fn_root,
+                );
                 break :blk .{ .call_value = .{
                     .func = func,
                     .args = lowered_args.exprs,
@@ -2453,14 +2466,21 @@ const BodySolver = struct {
             .call_proc => |call| blk: {
                 const lowered_args = try self.lowerExprSpanWithValues(call.args);
                 const requested_fn_ty = try self.type_importer.importType(call.requested_fn_ty);
+                const requested_fn_root = self.representation_store.reserveRoot();
                 const call_site = try self.value_store.addCallSite(.{
                     .callee = null,
                     .args = lowered_args.values,
                     .result = value,
-                    .requested_fn_root = self.representation_store.reserveRoot(),
+                    .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
                     .dispatch = .{ .call_proc = self.procRepresentationInstance(call.proc) },
                 });
+                try self.publishCallProcRequestedFunctionEdges(
+                    call_site,
+                    lowered_args.values,
+                    value,
+                    requested_fn_root,
+                );
                 break :blk .{ .call_proc = .{
                     .proc = call.proc,
                     .args = lowered_args.exprs,
@@ -2471,12 +2491,19 @@ const BodySolver = struct {
             },
             .proc_value => |proc_value| blk: {
                 const captures = try self.lowerCaptureArgSpanWithValues(proc_value.captures);
+                const whole_function_root = self.representation_store.reserveRoot();
+                try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = value });
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(value) },
+                    .to = .{ .local = whole_function_root },
+                    .kind = .value_alias,
+                });
                 const callable = try self.representation_store.addSingletonProcValueCallable(
                     self.canonical_names,
                     self.type_importer.output,
                     self.value_store,
                     value,
-                    self.valueRoot(value),
+                    whole_function_root,
                     proc_value.proc,
                     self.value_store.sliceValueSpan(captures.values),
                 );
@@ -2853,6 +2880,54 @@ const BodySolver = struct {
         exprs: Ast.Span(Ast.ExprId),
         values: repr.Span(repr.ValueInfoId),
     };
+
+    fn publishCallValueRequestedFunctionEdges(
+        self: *BodySolver,
+        call_site: repr.CallSiteInfoId,
+        callee_value: repr.ValueInfoId,
+        args: repr.Span(repr.ValueInfoId),
+        result: repr.ValueInfoId,
+        requested_fn_root: repr.RepRootId,
+    ) Allocator.Error!void {
+        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_value_requested_fn = call_site });
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = self.valueRoot(callee_value) },
+            .to = .{ .local = requested_fn_root },
+            .kind = .value_alias,
+        });
+        try self.publishRequestedFunctionArgAndReturnEdges(args, result, requested_fn_root);
+    }
+
+    fn publishCallProcRequestedFunctionEdges(
+        self: *BodySolver,
+        call_site: repr.CallSiteInfoId,
+        args: repr.Span(repr.ValueInfoId),
+        result: repr.ValueInfoId,
+        requested_fn_root: repr.RepRootId,
+    ) Allocator.Error!void {
+        try self.representation_store.publishRootKind(requested_fn_root, .{ .call_proc_requested_fn = call_site });
+        try self.publishRequestedFunctionArgAndReturnEdges(args, result, requested_fn_root);
+    }
+
+    fn publishRequestedFunctionArgAndReturnEdges(
+        self: *BodySolver,
+        args: repr.Span(repr.ValueInfoId),
+        result: repr.ValueInfoId,
+        requested_fn_root: repr.RepRootId,
+    ) Allocator.Error!void {
+        for (self.value_store.sliceValueSpan(args), 0..) |arg, i| {
+            _ = try self.representation_store.appendRepresentationEdge(.{
+                .from = .{ .local = self.valueRoot(arg) },
+                .to = .{ .local = requested_fn_root },
+                .kind = .{ .function_arg = @intCast(i) },
+            });
+        }
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = requested_fn_root },
+            .to = .{ .local = self.valueRoot(result) },
+            .kind = .function_return,
+        });
+    }
 
     fn lowerExprSpanWithValues(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!LoweredExprSpan {
         const input_items = self.input.sliceExprSpan(span);
