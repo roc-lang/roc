@@ -1256,6 +1256,7 @@ const ErasedCaptureExecutableMaterializationNode = union(enum) {
     // must use the full callable-aware constant materialization path.
     const_instance: ConstInstanceRef,
     pure_const: PureConstInstanceRef,
+    pure_value: PureComptimeValueRef,
     finite_callable_set: MaterializedFiniteCallableSetValue,
     erased_callable: MaterializedErasedCallableValue,
     record: StableErasedCaptureRecordMaterialization,
@@ -1269,6 +1270,12 @@ const ErasedCaptureExecutableMaterializationNode = union(enum) {
 
 const PureConstInstanceRef = struct {
     const_instance: ConstInstanceRef,
+    no_reachable_callable_slots: NoReachableCallableSlotsProof,
+};
+
+const PureComptimeValueRef = struct {
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
     no_reachable_callable_slots: NoReachableCallableSlotsProof,
 };
 
@@ -7328,7 +7335,7 @@ const PrivateCaptureInstantiationKey = struct {
 
 const PrivateCaptureNode = union(enum) {
     const_instance_leaf: PrivateCaptureConstLeaf,
-    finite_callable_leaf_template: FiniteCallableLeafTemplate,
+    finite_callable_leaf: FiniteCallableLeafInstance,
     record: Span(PrivateCaptureField),
     tuple: Span(PrivateCaptureNodeId),
     tag_union: PrivateCaptureTagNode,
@@ -7339,12 +7346,15 @@ const PrivateCaptureNode = union(enum) {
 };
 
 const PrivateCaptureConstLeaf = struct {
+    const_ref: ConstRef,
     const_instance: ConstInstanceRef,
+    requested_source_ty: CanonicalTypeKey,
+    schema: ComptimeSchemaId,
     mode: PrivateCaptureConstMode,
 };
 
-const PrivateCaptureConstMode = union(enum) {
-    pure_no_callable_slots: NoReachableCallableSlotsProof,
+const PrivateCaptureConstMode = enum {
+    pure_no_callable_slots,
     general_may_contain_callable_slots,
 };
 ```
