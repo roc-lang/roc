@@ -187,6 +187,7 @@ fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
             .instance = instance,
         };
         try finalizer.finalizeCallSites();
+        try finalizer.finalizeJoins();
     }
 }
 
@@ -206,6 +207,56 @@ const ValueTransformFinalizer = struct {
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
             }
         }
+    }
+
+    fn finalizeJoins(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.joins.items, 0..) |*join, raw_join| {
+            if (!join.input_transforms.isEmpty()) {
+                lambdaInvariant("lambda-solved value transform finalization reached an already-finalized join");
+            }
+            const join_id: repr.JoinInfoId = @enumFromInt(@as(u32, @intCast(raw_join)));
+            const inputs = value_store.sliceJoinInputSpan(join.inputs);
+            const boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, inputs.len);
+            defer self.allocator.free(boundaries);
+
+            const result_to = try self.localEndpoint(join.result);
+            for (inputs, 0..) |input, i| {
+                const from = try self.localEndpoint(input.value);
+                const transform = try self.appendIdentityTransform(from, result_to);
+                boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+                    .kind = self.joinBoundaryKind(join_id, input.source),
+                    .from_value = input.value,
+                    .to_value = join.result,
+                    .from_endpoint = from,
+                    .to_endpoint = result_to,
+                    .transform = transform,
+                });
+            }
+
+            join.input_transforms = try self.valueStore().addValueTransformBoundarySpan(boundaries);
+        }
+    }
+
+    fn joinBoundaryKind(
+        self: *ValueTransformFinalizer,
+        join_id: repr.JoinInfoId,
+        source: repr.JoinInputSource,
+    ) repr.ValueTransformBoundaryKind {
+        _ = self;
+        _ = join_id;
+        return switch (source) {
+            .if_branch => |if_branch| .{ .if_branch_result = .{
+                .if_expr = if_branch.if_expr,
+                .branch = if_branch.branch,
+            } },
+            .source_match_branch => |match_branch| .{ .source_match_branch_result = .{
+                .match = match_branch.match,
+                .branch = match_branch.branch,
+                .alternative = match_branch.alternative,
+            } },
+            .loop_phi => |loop_phi| .{ .loop_phi = loop_phi },
+        };
     }
 
     fn finalizeCallProc(
@@ -668,6 +719,8 @@ const BodySolver = struct {
     proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     public_roots: ?repr.ProcPublicValueRoots = null,
     active_captures: ?repr.Span(repr.ValueInfoId) = null,
+    next_source_match_id: u32 = 0,
+    next_if_expr_id: u32 = 0,
 
     fn deinit(self: *BodySolver) void {
         self.expr_map.deinit();
@@ -1106,12 +1159,13 @@ const BodySolver = struct {
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
             .match_ => |match_| blk: {
+                const match_id = self.freshSourceMatchId();
                 const cond = try self.lowerExpr(match_.cond);
                 const lowered_branches = try self.lowerBranchSpan(match_.branches);
-                const branch_values = try self.valuesForBranches(lowered_branches);
+                const branch_inputs = try self.joinInputsForBranches(match_id, lowered_branches);
                 const join_info = try self.value_store.addJoin(.{
                     .result = value,
-                    .inputs = branch_values,
+                    .inputs = branch_inputs,
                     .root = self.valueRoot(value),
                     .kind = .match_expr,
                 });
@@ -1123,13 +1177,33 @@ const BodySolver = struct {
                 } };
             },
             .if_ => |if_| blk: {
+                const if_expr_id = self.freshIfExprId();
                 const cond = try self.lowerExpr(if_.cond);
                 const then_body = try self.lowerExpr(if_.then_body);
                 const else_body = try self.lowerExpr(if_.else_body);
-                const inputs = [_]repr.ValueInfoId{ self.exprValue(then_body), self.exprValue(else_body) };
+                var inputs = std.ArrayList(repr.JoinInputInfo).empty;
+                defer inputs.deinit(self.allocator);
+                if (self.exprReturnsValue(then_body)) {
+                    try inputs.append(self.allocator, .{
+                        .source = .{ .if_branch = .{
+                            .if_expr = if_expr_id,
+                            .branch = .then_,
+                        } },
+                        .value = self.exprValue(then_body),
+                    });
+                }
+                if (self.exprReturnsValue(else_body)) {
+                    try inputs.append(self.allocator, .{
+                        .source = .{ .if_branch = .{
+                            .if_expr = if_expr_id,
+                            .branch = .else_,
+                        } },
+                        .value = self.exprValue(else_body),
+                    });
+                }
                 const join_info = try self.value_store.addJoin(.{
                     .result = value,
-                    .inputs = try self.value_store.addValueSpan(&inputs),
+                    .inputs = try self.value_store.addJoinInputSpan(inputs.items),
                     .root = self.valueRoot(value),
                     .kind = .if_expr,
                 });
@@ -1508,15 +1582,52 @@ const BodySolver = struct {
         return try self.output.addBranchSpan(output_items);
     }
 
-    fn valuesForBranches(self: *BodySolver, span: Ast.Span(Ast.BranchId)) Allocator.Error!repr.Span(repr.ValueInfoId) {
-        if (span.len == 0) return repr.Span(repr.ValueInfoId).empty();
+    fn joinInputsForBranches(
+        self: *BodySolver,
+        match_id: repr.SourceMatchId,
+        span: Ast.Span(Ast.BranchId),
+    ) Allocator.Error!repr.Span(repr.JoinInputInfo) {
+        if (span.len == 0) return repr.Span(repr.JoinInputInfo).empty();
         const branch_ids = self.output.branch_ids.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(repr.ValueInfoId, branch_ids.len);
-        defer self.allocator.free(values);
+        const inputs = try self.allocator.alloc(repr.JoinInputInfo, branch_ids.len);
+        defer self.allocator.free(inputs);
+        var input_len: usize = 0;
         for (branch_ids, 0..) |branch_id, i| {
-            values[i] = self.exprValue(self.output.branches.items[@intFromEnum(branch_id)].body);
+            const body = self.output.branches.items[@intFromEnum(branch_id)].body;
+            if (!self.exprReturnsValue(body)) continue;
+            inputs[input_len] = .{
+                .source = .{ .source_match_branch = .{
+                    .match = match_id,
+                    .branch = @enumFromInt(@as(u32, @intCast(i))),
+                    .alternative = @enumFromInt(@as(u32, @intCast(i))),
+                } },
+                .value = self.exprValue(body),
+            };
+            input_len += 1;
         }
-        return try self.value_store.addValueSpan(values);
+        return try self.value_store.addJoinInputSpan(inputs[0..input_len]);
+    }
+
+    fn exprReturnsValue(self: *const BodySolver, expr_id: Ast.ExprId) bool {
+        return switch (self.output.exprs.items[@intFromEnum(expr_id)].data) {
+            .return_,
+            .crash,
+            .runtime_error,
+            => false,
+            else => true,
+        };
+    }
+
+    fn freshSourceMatchId(self: *BodySolver) repr.SourceMatchId {
+        const id: repr.SourceMatchId = @enumFromInt(self.next_source_match_id);
+        self.next_source_match_id += 1;
+        return id;
+    }
+
+    fn freshIfExprId(self: *BodySolver) repr.IfExprId {
+        const id: repr.IfExprId = @enumFromInt(self.next_if_expr_id);
+        self.next_if_expr_id += 1;
+        return id;
     }
 
     const LoweredCaptureArgs = struct {

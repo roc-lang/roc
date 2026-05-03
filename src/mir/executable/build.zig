@@ -4971,37 +4971,39 @@ const BodyBuilder = struct {
             .crash => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .crash = literal }),
             .runtime_error => try self.addValueExpr(expr.ty, expr.value_info, .runtime_error),
             .match_ => |match_| blk: {
-                _ = match_.join_info;
                 const cond = try self.lowerExpr(match_.cond);
                 const scrutinee_exprs = [_]Ast.ExprId{cond};
                 const scrutinees = [_]Ast.ExecutableValueRef{self.exprValue(cond)};
                 const lowered_branches = try self.lowerBranchSpan(match_.branches);
+                const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const transformed_branches = try self.wrapSourceMatchBranches(match_.join_info, lowered_branches, result_ty);
                 const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
                 const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
-                const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, lowered_branches);
+                const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, transformed_branches);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    result_ty,
                     self.output.freshValueRef(),
                     .{ .source_match = .{
                         .scrutinee_exprs = scrutinee_expr_span,
                         .scrutinees = scrutinee_span,
                         .decision_plan = decision_plan,
-                        .branches = lowered_branches,
+                        .branches = transformed_branches,
                     } },
                 );
             },
             .if_ => |if_| blk: {
-                _ = if_.join_info;
                 const cond = try self.lowerExpr(if_.cond);
                 const then_body = try self.lowerExpr(if_.then_body);
                 const else_body = try self.lowerExpr(if_.else_body);
+                const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const transformed = try self.wrapIfBranches(if_.join_info, then_body, else_body, result_ty);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    result_ty,
                     self.output.freshValueRef(),
                     .{ .if_ = .{
                         .cond = cond,
-                        .then_body = then_body,
-                        .else_body = else_body,
+                        .then_body = transformed.then_body,
+                        .else_body = transformed.else_body,
                     } },
                 );
             },
@@ -5032,6 +5034,197 @@ const BodyBuilder = struct {
         path_value: Ast.PatternPathValuePlanId,
         test: Ast.PatternTest,
     };
+
+    const TransformedIfBranches = struct {
+        then_body: Ast.ExprId,
+        else_body: Ast.ExprId,
+    };
+
+    fn wrapIfBranches(
+        self: *BodyBuilder,
+        join_id: repr.JoinInfoId,
+        then_body: Ast.ExprId,
+        else_body: Ast.ExprId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!TransformedIfBranches {
+        const join = self.value_store.joins.items[@intFromEnum(join_id)];
+        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
+        const transforms = self.value_store.sliceValueTransformBoundarySpan(join.input_transforms);
+        if (inputs.len != transforms.len or inputs.len > 2) {
+            executableInvariant("executable if join transform count differs from published join inputs");
+        }
+
+        var result: TransformedIfBranches = .{
+            .then_body = then_body,
+            .else_body = else_body,
+        };
+        var saw_then = false;
+        var saw_else = false;
+        for (inputs, transforms) |input, transform_id| {
+            const boundary = self.representation_store.valueTransformBoundary(transform_id);
+            const source = switch (input.source) {
+                .if_branch => |if_branch| if_branch,
+                else => executableInvariant("executable if join input has non-if source"),
+            };
+            self.verifyJoinInputBoundary(boundary, input);
+            switch (source.branch) {
+                .then_ => {
+                    if (saw_then) executableInvariant("executable if join saw duplicate then branch");
+                    if (!self.executableExprReturnsValue(then_body)) {
+                        executableInvariant("executable if join input referenced non-returning then branch");
+                    }
+                    result.then_body = try self.wrapJoinInputBody(then_body, boundary, result_ty);
+                    saw_then = true;
+                },
+                .else_ => {
+                    if (saw_else) executableInvariant("executable if join saw duplicate else branch");
+                    if (!self.executableExprReturnsValue(else_body)) {
+                        executableInvariant("executable if join input referenced non-returning else branch");
+                    }
+                    result.else_body = try self.wrapJoinInputBody(else_body, boundary, result_ty);
+                    saw_else = true;
+                },
+            }
+        }
+        return result;
+    }
+
+    fn wrapSourceMatchBranches(
+        self: *BodyBuilder,
+        join_id: repr.JoinInfoId,
+        branches: Ast.Span(Ast.BranchId),
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        const join = self.value_store.joins.items[@intFromEnum(join_id)];
+        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
+        const transforms = self.value_store.sliceValueTransformBoundarySpan(join.input_transforms);
+        if (inputs.len != transforms.len or inputs.len > branch_ids.len) {
+            executableInvariant("executable source_match join transform count differs from published join inputs");
+        }
+
+        const out = try self.allocator.alloc(Ast.BranchId, branch_ids.len);
+        defer self.allocator.free(out);
+        var input_index: usize = 0;
+        for (branch_ids, 0..) |branch_id, i| {
+            const branch = self.output.branches.items[@intFromEnum(branch_id)];
+            if (!self.executableExprReturnsValue(branch.body)) {
+                out[i] = branch_id;
+                continue;
+            }
+            if (input_index >= inputs.len) {
+                executableInvariant("executable source_match returning branch has no published join input");
+            }
+            const input = inputs[input_index];
+            const transform_id = transforms[input_index];
+            const source = switch (input.source) {
+                .source_match_branch => |source| source,
+                else => executableInvariant("executable source_match join input has non-match source"),
+            };
+            if (@intFromEnum(source.branch) != @as(u32, @intCast(i))) {
+                executableInvariant("executable source_match join input branch id differs from branch order");
+            }
+            const boundary = self.representation_store.valueTransformBoundary(transform_id);
+            self.verifyJoinInputBoundary(boundary, input);
+            out[i] = try self.output.addBranch(.{
+                .pat = branch.pat,
+                .guard = branch.guard,
+                .body = try self.wrapJoinInputBody(branch.body, boundary, result_ty),
+                .degenerate = branch.degenerate,
+            });
+            input_index += 1;
+        }
+        if (input_index != inputs.len) {
+            executableInvariant("executable source_match join inputs were not consumed by returning branches");
+        }
+        return try self.output.addBranchSpan(out);
+    }
+
+    fn wrapJoinInputBody(
+        self: *BodyBuilder,
+        body: Ast.ExprId,
+        boundary: repr.ValueTransformBoundary,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!self.executableExprReturnsValue(body)) {
+            executableInvariant("executable join transform attempted to wrap a non-returning body");
+        }
+
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+
+        const body_value = self.exprValue(body);
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = body_value,
+            .body = body,
+        } }));
+        const result_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, body_value);
+        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
+        } });
+    }
+
+    fn executableExprReturnsValue(self: *const BodyBuilder, expr_id: Ast.ExprId) bool {
+        return switch (self.output.getExpr(expr_id).data) {
+            .return_,
+            .crash,
+            .runtime_error,
+            => false,
+            else => true,
+        };
+    }
+
+    fn verifyJoinInputBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        input: repr.JoinInputInfo,
+    ) void {
+        if (boundary.from_value != input.value) {
+            executableInvariant("executable join input boundary source value differs from join input");
+        }
+        const local = switch (boundary.from_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable join input boundary source endpoint is not local_value"),
+        };
+        if (local != input.value) {
+            executableInvariant("executable join input boundary source endpoint differs from join input");
+        }
+        switch (input.source) {
+            .if_branch => |expected| {
+                const actual = switch (boundary.kind) {
+                    .if_branch_result => |if_branch| if_branch,
+                    else => executableInvariant("executable if join input boundary has non-if kind"),
+                };
+                if (actual.if_expr != expected.if_expr or actual.branch != expected.branch) {
+                    executableInvariant("executable if join input boundary source identity differs from join input");
+                }
+            },
+            .source_match_branch => |expected| {
+                const actual = switch (boundary.kind) {
+                    .source_match_branch_result => |match_branch| match_branch,
+                    else => executableInvariant("executable source_match join input boundary has non-match kind"),
+                };
+                if (actual.match != expected.match or
+                    actual.branch != expected.branch or
+                    actual.alternative != expected.alternative)
+                {
+                    executableInvariant("executable source_match join input boundary source identity differs from join input");
+                }
+            },
+            .loop_phi => |expected| {
+                const actual = switch (boundary.kind) {
+                    .loop_phi => |loop_phi| loop_phi,
+                    else => executableInvariant("executable loop join input boundary has non-loop kind"),
+                };
+                if (actual != expected) {
+                    executableInvariant("executable loop join input boundary source identity differs from join input");
+                }
+            },
+        }
+        _ = self;
+    }
 
     fn buildSourceMatchDecisionPlan(
         self: *BodyBuilder,

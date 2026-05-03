@@ -3604,6 +3604,68 @@ adds explicit transform metadata so Box-only erased callable representation,
 recursive aggregate children, and imported/published values remain correct
 without shape recovery.
 
+The join record must carry exact incoming-value identity, not only an ordered
+list of values:
+
+```zig
+const JoinInputSource = union(enum) {
+    if_branch: struct {
+        if_expr: IfExprId,
+        branch: IfBranch,
+    },
+    source_match_branch: struct {
+        match: SourceMatchId,
+        branch: SourceMatchBranchId,
+        alternative: SourceMatchAlternativeId,
+    },
+    loop_phi: LoopPhiId,
+};
+
+const JoinInputInfo = struct {
+    source: JoinInputSource,
+    value: ValueInfoId,
+};
+
+const JoinInfo = struct {
+    result: ValueInfoId,
+    inputs: Span(JoinInputInfo),
+    root: RepRootId,
+    kind: JoinKind,
+    input_transforms: Span(ValueTransformBoundaryId),
+};
+```
+
+`inputs` is ordered for deterministic storage, but the order is not semantic
+authority. Each input's `source` field is the semantic owner used to create the
+`source_match_branch_result`, `if_branch_result`, or `loop_phi` boundary. If the
+current MIR branch store represents each source `match` alternative as one
+lowered branch item, then the branch item must still receive explicit
+`SourceMatchBranchId` and `SourceMatchAlternativeId` values during
+lambda-solved lowering. Later stages must not infer those ids from source syntax,
+pattern text, branch body equality, or the index of a value in the join input
+array.
+
+Only incoming expressions that actually produce the join value appear in
+`inputs`. A branch body that is `return`, `crash`, or `runtime_error` does not
+flow a value into the surrounding join, so lambda-solved MIR must not publish a
+`JoinInputInfo` or `ValueTransformBoundaryId` for it. This is still explicit:
+the absence of an input is determined when lowering the already-built
+lambda-solved expression, and executable MIR must assert that every published
+input points at a returning branch body. For source `match`, skipped
+non-returning alternatives do not renumber later alternatives; the
+`SourceMatchBranchId` and `SourceMatchAlternativeId` on each published input
+remain the original source-match identities.
+
+Executable MIR must consume `JoinInfo.input_transforms` before handing control
+flow to IR. For source `match`, executable lowering wraps each returning branch
+body in an executable block that evaluates the original branch body once,
+applies the boundary's mandatory transform, and returns the transformed value
+with the match expression's result executable type. For `if`, executable
+lowering does the same for each returning `then` or `else` body and leaves
+non-returning bodies unchanged. IR lowering may build switch/join control flow
+from those executable branch bodies, but it must not look at `JoinInfo`, branch
+indexes, source patterns, or layout compatibility to create missing transforms.
+
 Intrinsic and low-level value-flow behavior is also represented through this
 same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
 

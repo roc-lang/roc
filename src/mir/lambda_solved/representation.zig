@@ -853,11 +853,30 @@ pub const JoinKind = enum {
     loop_expr,
 };
 
+pub const JoinInputSource = union(enum) {
+    if_branch: struct {
+        if_expr: IfExprId,
+        branch: IfBranch,
+    },
+    source_match_branch: struct {
+        match: SourceMatchId,
+        branch: SourceMatchBranchId,
+        alternative: SourceMatchAlternativeId,
+    },
+    loop_phi: LoopPhiId,
+};
+
+pub const JoinInputInfo = struct {
+    source: JoinInputSource,
+    value: ValueInfoId,
+};
+
 pub const JoinInfo = struct {
     result: ValueInfoId,
-    inputs: Span(ValueInfoId),
+    inputs: Span(JoinInputInfo),
     root: RepRootId,
     kind: JoinKind,
+    input_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
 };
 
 pub const ProcPublicValueRoots = struct {
@@ -1285,6 +1304,7 @@ pub const ValueInfoStore = struct {
     projections: std.ArrayList(ProjectionInfo),
     call_sites: std.ArrayList(CallSiteInfo),
     joins: std.ArrayList(JoinInfo),
+    join_inputs: std.ArrayList(JoinInputInfo),
     value_ids: std.ArrayList(ValueInfoId),
     value_transform_boundary_ids: std.ArrayList(ValueTransformBoundaryId),
 
@@ -1296,6 +1316,7 @@ pub const ValueInfoStore = struct {
             .projections = .empty,
             .call_sites = .empty,
             .joins = .empty,
+            .join_inputs = .empty,
             .value_ids = .empty,
             .value_transform_boundary_ids = .empty,
         };
@@ -1314,6 +1335,7 @@ pub const ValueInfoStore = struct {
         }
         self.value_ids.deinit(self.allocator);
         self.value_transform_boundary_ids.deinit(self.allocator);
+        self.join_inputs.deinit(self.allocator);
         self.joins.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
@@ -1350,6 +1372,18 @@ pub const ValueInfoStore = struct {
         const id: JoinInfoId = @enumFromInt(@as(u32, @intCast(self.joins.items.len)));
         try self.joins.append(self.allocator, join);
         return id;
+    }
+
+    pub fn addJoinInputSpan(self: *ValueInfoStore, inputs: []const JoinInputInfo) std.mem.Allocator.Error!Span(JoinInputInfo) {
+        if (inputs.len == 0) return Span(JoinInputInfo).empty();
+        const start: u32 = @intCast(self.join_inputs.items.len);
+        try self.join_inputs.appendSlice(self.allocator, inputs);
+        return .{ .start = start, .len = @intCast(inputs.len) };
+    }
+
+    pub fn sliceJoinInputSpan(self: *const ValueInfoStore, span: Span(JoinInputInfo)) []const JoinInputInfo {
+        if (span.len == 0) return &.{};
+        return self.join_inputs.items[span.start..][0..span.len];
     }
 
     pub fn addValueSpan(self: *ValueInfoStore, values: []const ValueInfoId) std.mem.Allocator.Error!Span(ValueInfoId) {
