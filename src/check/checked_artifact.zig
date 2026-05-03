@@ -2497,6 +2497,105 @@ pub const PromotedWrapperArg = union(enum) {
 
 pub const PromotedWrapperBridgeId = enum(u32) { _ };
 
+pub const PromotedWrapperBridgeEndpoint = struct {
+    ty: ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
+pub const PromotedWrapperRecordFieldBridge = struct {
+    field: canonical.RecordFieldLabelId,
+    bridge: PromotedWrapperBridgeId,
+};
+
+pub const PromotedWrapperTupleElemBridge = struct {
+    index: u32,
+    bridge: PromotedWrapperBridgeId,
+};
+
+pub const PromotedWrapperTagPayloadBridge = struct {
+    index: u32,
+    bridge: PromotedWrapperBridgeId,
+};
+
+pub const PromotedWrapperTagBridge = struct {
+    tag: canonical.TagLabelId,
+    payloads: []const PromotedWrapperTagPayloadBridge = &.{},
+};
+
+pub const PromotedWrapperBridgeOp = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: PromotedWrapperBridgeId,
+    box_box: PromotedWrapperBridgeId,
+    record: []const PromotedWrapperRecordFieldBridge,
+    tuple: []const PromotedWrapperTupleElemBridge,
+    tag_union: []const PromotedWrapperTagBridge,
+    singleton_to_tag_union: struct {
+        source_tag: canonical.TagLabelId,
+        target_tag: canonical.TagLabelId,
+        payload_bridge: ?PromotedWrapperBridgeId = null,
+    },
+    tag_union_to_singleton: struct {
+        source_tag: canonical.TagLabelId,
+        target_tag: canonical.TagLabelId,
+        payload_bridge: ?PromotedWrapperBridgeId = null,
+    },
+};
+
+pub const PromotedWrapperBridgePlan = struct {
+    from: PromotedWrapperBridgeEndpoint,
+    to: PromotedWrapperBridgeEndpoint,
+    op: PromotedWrapperBridgeOp,
+};
+
+pub const PromotedWrapperBridgePlanStore = struct {
+    plans: []PromotedWrapperBridgePlan = &.{},
+
+    pub fn append(
+        self: *PromotedWrapperBridgePlanStore,
+        allocator: Allocator,
+        plan: PromotedWrapperBridgePlan,
+    ) Allocator.Error!PromotedWrapperBridgeId {
+        const id: PromotedWrapperBridgeId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
+        const old = self.plans;
+        const next = try allocator.alloc(PromotedWrapperBridgePlan, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = plan;
+        allocator.free(old);
+        self.plans = next;
+        return id;
+    }
+
+    pub fn get(self: *const PromotedWrapperBridgePlanStore, id: PromotedWrapperBridgeId) PromotedWrapperBridgePlan {
+        const index = @intFromEnum(id);
+        if (index >= self.plans.len) {
+            checkedArtifactInvariant("promoted wrapper bridge id is out of range", .{});
+        }
+        return self.plans[index];
+    }
+
+    pub fn verifyPublished(
+        self: *const PromotedWrapperBridgePlanStore,
+        payloads: *const ExecutableTypePayloadStore,
+        artifact_key: CheckedModuleArtifactKey,
+    ) void {
+        if (builtin.mode != .Debug) return;
+        for (self.plans) |plan| {
+            verifyExecutableTypePayloadRef(payloads, artifact_key, plan.from.ty);
+            verifyExecutableTypePayloadRef(payloads, artifact_key, plan.to.ty);
+            verifyPromotedWrapperBridgeOp(self, plan.op);
+        }
+    }
+
+    pub fn deinit(self: *PromotedWrapperBridgePlanStore, allocator: Allocator) void {
+        for (self.plans) |*plan| deinitPromotedWrapperBridgePlan(allocator, plan);
+        allocator.free(self.plans);
+        self.* = .{};
+    }
+};
+
 pub const ExecutableTypePayloadId = enum(u32) { _ };
 
 pub const ExecutableTypePayloadRef = struct {
@@ -2820,7 +2919,6 @@ pub const FinitePromotedWrapperBodyPlan = struct {
     captures: []const PrivateCaptureRef = &.{},
     params: []const PromotedWrapperParam = &.{},
     call_args: []const PromotedWrapperArg = &.{},
-    result_bridge: ?PromotedWrapperBridgeId = null,
 };
 
 pub const ErasedHiddenCaptureArgPlan = union(enum) {
@@ -5916,6 +6014,26 @@ fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePay
     payload.* = .pending;
 }
 
+fn deinitPromotedWrapperBridgePlan(allocator: Allocator, plan: *PromotedWrapperBridgePlan) void {
+    switch (plan.op) {
+        .direct,
+        .zst,
+        .list_reinterpret,
+        .nominal_reinterpret,
+        .box_unbox,
+        .box_box,
+        .singleton_to_tag_union,
+        .tag_union_to_singleton,
+        => {},
+        .record => |fields| allocator.free(fields),
+        .tuple => |items| allocator.free(items),
+        .tag_union => |tags| {
+            for (tags) |tag| allocator.free(tag.payloads);
+            allocator.free(tags);
+        },
+    }
+}
+
 fn deinitExecutableSpecializationKey(allocator: Allocator, key: *canonical.ExecutableSpecializationKey) void {
     allocator.free(key.exec_arg_tys);
     key.exec_arg_tys = &.{};
@@ -6381,10 +6499,36 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     }
 }
 
+fn verifyPromotedWrapperBridgeRef(store: *const PromotedWrapperBridgePlanStore, bridge: PromotedWrapperBridgeId) void {
+    if (@intFromEnum(bridge) >= store.plans.len) {
+        std.debug.panic("checked artifact invariant violated: promoted wrapper bridge id is out of range", .{});
+    }
+}
+
+fn verifyPromotedWrapperBridgeOp(store: *const PromotedWrapperBridgePlanStore, op: PromotedWrapperBridgeOp) void {
+    switch (op) {
+        .direct,
+        .zst,
+        .list_reinterpret,
+        .nominal_reinterpret,
+        => {},
+        .box_unbox => |child| verifyPromotedWrapperBridgeRef(store, child),
+        .box_box => |child| verifyPromotedWrapperBridgeRef(store, child),
+        .record => |fields| for (fields) |field| verifyPromotedWrapperBridgeRef(store, field.bridge),
+        .tuple => |items| for (items) |item| verifyPromotedWrapperBridgeRef(store, item.bridge),
+        .tag_union => |tags| for (tags) |tag| {
+            for (tag.payloads) |payload| verifyPromotedWrapperBridgeRef(store, payload.bridge);
+        },
+        .singleton_to_tag_union => |singleton| if (singleton.payload_bridge) |payload| verifyPromotedWrapperBridgeRef(store, payload),
+        .tag_union_to_singleton => |singleton| if (singleton.payload_bridge) |payload| verifyPromotedWrapperBridgeRef(store, payload),
+    }
+}
+
 fn verifyPromotedCallableBodyPlan(
     store: *const CompileTimePlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
+    promoted_wrapper_bridges: *const PromotedWrapperBridgePlanStore,
     artifact_key: CheckedModuleArtifactKey,
     plan: PromotedCallableBodyPlan,
 ) void {
@@ -6409,6 +6553,11 @@ fn verifyPromotedCallableBodyPlan(
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
             }
+            if (erased.arg_bridges.len != 0 and erased.arg_bridges.len != erased.params.len) {
+                std.debug.panic("checked artifact invariant violated: erased promoted callable arg bridge count differs from wrapper params", .{});
+            }
+            for (erased.arg_bridges) |bridge| verifyPromotedWrapperBridgeRef(promoted_wrapper_bridges, bridge);
+            if (erased.result_bridge) |bridge| verifyPromotedWrapperBridgeRef(promoted_wrapper_bridges, bridge);
             verifyErasedPromotedProcedureExecutableSignature(
                 executable_type_payloads,
                 artifact_key,
@@ -8473,6 +8622,7 @@ pub const CheckedModuleArtifact = struct {
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     executable_type_payloads: ExecutableTypePayloadStore = .{},
+    promoted_wrapper_bridges: PromotedWrapperBridgePlanStore = .{},
     callable_set_descriptors: CallableSetDescriptorStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
@@ -8643,6 +8793,7 @@ pub const CheckedModuleArtifact = struct {
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
         self.callable_set_descriptors.deinit(allocator);
+        self.promoted_wrapper_bridges.deinit(allocator);
         self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
@@ -8955,11 +9106,13 @@ pub const CheckedModuleArtifact = struct {
 
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key);
+        self.promoted_wrapper_bridges.verifyPublished(&self.executable_type_payloads, self.key);
         self.callable_set_descriptors.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
             &self.callable_set_descriptors,
             &self.executable_type_payloads,
+            &self.promoted_wrapper_bridges,
             self.key,
         );
         self.promoted_callable_wrappers.verifyPublished(
@@ -9045,6 +9198,7 @@ pub const ImportedModuleView = struct {
     promoted_callable_wrappers: *const PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
     executable_type_payloads: *const ExecutableTypePayloadStore,
+    promoted_wrapper_bridges: *const PromotedWrapperBridgePlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
@@ -9083,6 +9237,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
         .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
         .executable_type_payloads = &artifact.executable_type_payloads,
+        .promoted_wrapper_bridges = &artifact.promoted_wrapper_bridges,
         .callable_set_descriptors = &artifact.callable_set_descriptors,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),

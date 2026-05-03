@@ -570,7 +570,6 @@ const FinitePromotedWrapperBodyPlan = struct {
     captures: Span(PrivateCaptureRef),
     params: Span(PromotedWrapperParam),
     call_args: Span(PromotedWrapperArg),
-    result_bridge: ?BridgeId,
 };
 
 const ProcedureCallableRef = struct {
@@ -604,11 +603,66 @@ const ErasedPromotedWrapperBodyPlan = struct {
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    arg_bridges: Span(BridgeId),
+    arg_bridges: Span(PromotedWrapperBridgeId),
     hidden_capture_arg: ?ErasedHiddenCaptureArgPlan,
-    result_bridge: ?BridgeId,
+    result_bridge: ?PromotedWrapperBridgeId,
     result_ty: CanonicalExecValueTypeKey,
     provenance: NonEmptySpan(BoxBoundaryId),
+};
+
+const PromotedWrapperBridgeId = enum(u32) { _ };
+
+const PromotedWrapperBridgeEndpoint = struct {
+    ty: ExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const PromotedWrapperRecordFieldBridge = struct {
+    field: RecordFieldLabelId,
+    bridge: PromotedWrapperBridgeId,
+};
+
+const PromotedWrapperTupleElemBridge = struct {
+    index: u32,
+    bridge: PromotedWrapperBridgeId,
+};
+
+const PromotedWrapperTagPayloadBridge = struct {
+    index: u32,
+    bridge: PromotedWrapperBridgeId,
+};
+
+const PromotedWrapperTagBridge = struct {
+    tag: TagLabelId,
+    payloads: Span(PromotedWrapperTagPayloadBridge),
+};
+
+const PromotedWrapperBridgeOp = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: PromotedWrapperBridgeId,
+    box_box: PromotedWrapperBridgeId,
+    record: Span(PromotedWrapperRecordFieldBridge),
+    tuple: Span(PromotedWrapperTupleElemBridge),
+    tag_union: Span(PromotedWrapperTagBridge),
+    singleton_to_tag_union: struct {
+        source_tag: TagLabelId,
+        target_tag: TagLabelId,
+        payload_bridge: ?PromotedWrapperBridgeId,
+    },
+    tag_union_to_singleton: struct {
+        source_tag: TagLabelId,
+        target_tag: TagLabelId,
+        payload_bridge: ?PromotedWrapperBridgeId,
+    },
+};
+
+const PromotedWrapperBridgePlan = struct {
+    from: PromotedWrapperBridgeEndpoint,
+    to: PromotedWrapperBridgeEndpoint,
+    op: PromotedWrapperBridgeOp,
 };
 
 const ErasedPromotedProcedureExecutableSignature = struct {
@@ -797,6 +851,41 @@ representation. `provenance` is non-empty and contains only explicit
 these decisions from the code ref, source syntax, runtime bytes, layout shape,
 or shape comparison.
 
+`PromotedWrapperBridgeId` is an artifact-owned bridge-plan id. It is not an
+executable-MIR `BridgeId`, an IR `BridgePlanId`, a layout id, a row-finalized
+MIR field id, or a run-local type id. The checked artifact must publish a
+`PromotedWrapperBridgePlanStore` next to the promoted wrapper body plans. Every
+`arg_bridges` entry and every `result_bridge` points into that store. Executable
+MIR lowers a promoted-wrapper bridge by first lowering the bridge endpoint
+`ExecutableTypePayloadRef`s into the current executable type store, then
+translating the published bridge op to executable MIR's local `BridgePlan`.
+Executable MIR may use the `key` fields only for debug-only verification that
+the published endpoint payloads match the expected canonical executable types.
+It must not derive the bridge by comparing source and target shapes.
+
+Bridge plans must carry stable semantic labels for structural children. Record
+bridges name fields with `RecordFieldLabelId`; tuple bridges name element
+indexes; tag bridges name `TagLabelId` plus payload indexes. Executable MIR maps
+those labels to the local lowered row ids and discriminants after lowering the
+endpoint payloads. If a published label or payload index is absent, duplicated,
+out of order for the canonical endpoint payload, or has a child endpoint that
+does not match the enclosing source/target child types, that is a compiler
+invariant violation: debug builds assert at the bridge-publication or
+bridge-lowering boundary and release builds use `unreachable`.
+
+Checking finalization and lambda-solved representation solving are responsible
+for publishing promoted-wrapper bridge plans. They must publish a bridge
+whenever an erased promoted wrapper ordinary argument or erased promoted wrapper
+result crosses different executable representations. Finite promoted wrappers
+do not publish or consume these bridge plans because they are mono-MIR bodies,
+not executable-MIR bodies. If an erased endpoint's keys are equal, the bridge may
+be `direct` or the wrapper may omit the optional bridge only when the
+surrounding signature already proves the value is consumed at exactly the same
+executable type. If the endpoint keys differ and no bridge plan exists, the
+erased promoted wrapper is invalid; later stages must not repair that by
+re-running representation solving, comparing compatible shapes, reading the
+source expression, or synthesizing an adapter from the erased code ref.
+
 `ErasedCaptureReificationPlan`, source-level private capture graphs, and
 `ErasedCaptureExecutableMaterializationPlan` are different type states.
 `ErasedCallableResultPlan` may contain a reification plan while checking
@@ -885,9 +974,10 @@ payload shape that Cor/LSS preserves when it builds callable-set tags.
 
 A finite promoted wrapper plan is consumed by mono MIR. It is intentionally
 source-level: it names the selected finite callable-set member, ordinary Roc
-parameters, ordinary private captures, and optional source-level bridge ids.
-Because it contains no erased ABI, mono can lower it to ordinary `proc_value`
-and `call_value` MIR. If a finite promoted wrapper needs to cross a later
+parameters, and ordinary private captures. It must not carry bridge ids. Because
+it contains no erased ABI and no executable representation, mono can lower it to
+ordinary `proc_value` and `call_value` MIR. If a finite promoted wrapper needs
+to cross a later
 explicit `Box(T)` erased boundary, lambda-solved/executable MIR handle that as
 the normal finite-callable-to-erased adapter case at the boundary; mono must not
 pre-package it as erased.

@@ -435,7 +435,6 @@ fn promoteFiniteCallableResult(
         .captures = captures,
         .params = params,
         .call_args = call_args,
-        .result_bridge = null,
     } });
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
 

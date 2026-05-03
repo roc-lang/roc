@@ -235,6 +235,7 @@ const CheckedTemplateLookup = struct {
     promoted_callable_wrappers: *const checked_artifact.PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const checked_artifact.PromotedCallableBodyPlanTable,
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    promoted_wrapper_bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,
     entry_wrappers: ?*const checked_artifact.EntryWrapperTable,
     template: checked_artifact.CheckedProcedureTemplate,
@@ -255,6 +256,7 @@ fn checkedTemplateForKey(
             .promoted_callable_wrappers = &input.root.artifact.promoted_callable_wrappers,
             .promoted_callable_body_plans = &input.root.artifact.promoted_callable_body_plans,
             .executable_type_payloads = &input.root.artifact.executable_type_payloads,
+            .promoted_wrapper_bridges = &input.root.artifact.promoted_wrapper_bridges,
             .comptime_plans = &input.root.artifact.comptime_plans,
             .entry_wrappers = &input.root.artifact.entry_wrappers,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
@@ -277,6 +279,7 @@ fn checkedTemplateForKey(
                     .promoted_callable_wrappers = imported.promoted_callable_wrappers,
                     .promoted_callable_body_plans = imported.promoted_callable_body_plans,
                     .executable_type_payloads = imported.executable_type_payloads,
+                    .promoted_wrapper_bridges = imported.promoted_wrapper_bridges,
                     .comptime_plans = imported.comptime_plans,
                     .entry_wrappers = null,
                     .template = exported.template_data,
@@ -303,6 +306,7 @@ fn checkedTemplateForKey(
                     .promoted_callable_wrappers = related.promoted_callable_wrappers,
                     .promoted_callable_body_plans = related.promoted_callable_body_plans,
                     .executable_type_payloads = related.executable_type_payloads,
+                    .promoted_wrapper_bridges = related.promoted_wrapper_bridges,
                     .comptime_plans = related.comptime_plans,
                     .entry_wrappers = null,
                     .template = exported.template_data,
@@ -335,6 +339,7 @@ fn executableSyntheticProcForReserved(
                         .source_proc = canonical.mirProcedureRefFromMono(reserved.proc),
                         .template = key.template,
                         .executable_type_payloads = template_lookup.executable_type_payloads,
+                        .promoted_wrapper_bridges = template_lookup.promoted_wrapper_bridges,
                         .comptime_plans = template_lookup.comptime_plans,
                         .body = .{ .erased_promoted_wrapper = erased },
                     };
@@ -1649,9 +1654,6 @@ const BodyLowerer = struct {
         }
         if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
             invariantViolation("promoted callable wrapper member source function type disagrees with wrapper source function type");
-        }
-        if (finite.result_bridge != null) {
-            invariantViolation("mono body lowering reached promoted callable wrapper result bridge before bridge lowering was implemented");
         }
         if (finite.member_capture_slots.len != finite.captures.len) {
             invariantViolation("promoted callable wrapper capture refs disagree with member capture slots");
