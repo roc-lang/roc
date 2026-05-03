@@ -4492,6 +4492,12 @@ const SourceMatchAlternative = struct {
     source_branch_pattern: CheckedMatchBranchPatternId,
     root_pattern: PatId,
     degenerate: bool,
+    binder_remaps: Span(AlternativeBinderRemap),
+};
+
+const AlternativeBinderRemap = struct {
+    candidate_binder: PatternBinderId,
+    representative_binder: PatternBinderId,
 };
 
 const PatternPathValuePlanId = distinct u32;
@@ -4653,6 +4659,28 @@ Decision construction follows these rules:
   syntax adds true multi-scrutinee `match`, checked artifact publication must
   expose explicit `MatchScrutinee` rows separately; it must not overload branch
   alternatives as scrutinees.
+- A non-degenerate alternative whose binders have the same source names as the
+  representative alternative still has distinct pattern binder ids in checked
+  CIR. The branch guard and branch body refer to the representative binders that
+  canonicalization introduced into the branch scope. Therefore checked artifact
+  publication must store an explicit `AlternativeBinderRemap` for every
+  candidate binder in every non-degenerate alternative. The remap says:
+
+  ```text
+  when this candidate alternative matches, bind this candidate pattern path to
+  this representative branch binder
+  ```
+
+  The first representative alternative stores identity remaps. Later
+  non-degenerate alternatives store candidate-to-representative remaps. A
+  degenerate alternative stores no usable remaps because reaching it lowers to
+  runtime error before guard/body evaluation.
+
+  This remap must be produced while checked artifact publication still has the
+  canonical pattern graph and source-name equality result from canonicalization
+  or checking. Mono MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR,
+  executable MIR, IR, and LIR must not compare identifier text, inspect pattern
+  names, or try to match binders by arity to recover this mapping.
 - Flatten nested patterns into `(PatternPath, PatternTest)` pairs. A path starts
   at a scrutinee and then steps through finalized payload, field, tuple,
   list-probe, opaque, or newtype ids.
@@ -4703,6 +4731,16 @@ binders are then projected from that payload record through `tag_payload_field`
 path plans keyed by `TagPayloadId.payload_index`. It must not emit a separate
 union-payload extraction for every binder. A zero-payload tag has no
 payload-record path plan.
+
+Branch binder extraction uses `AlternativeBinderRemap`. When an alternative is
+selected, executable MIR walks the selected alternative's pattern paths and
+creates `PatternBinding` records for representative binders only. The source path
+for each binding is the path of the candidate binder inside the selected
+alternative's root pattern; the target binder is
+`AlternativeBinderRemap.representative_binder`. Candidate binder ids are never
+visible to the branch guard or body after this remapping step. A missing remap
+for a candidate binder in a non-degenerate alternative is a compiler invariant
+violation.
 
 This path-indexed model is required for nested patterns and multi-scrutinee
 matches. One reached source branch can require several payload records at
