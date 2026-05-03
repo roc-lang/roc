@@ -234,8 +234,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
         for (artifact.provides_requires.provides) |provides_entry| {
             try provides_entries.append(gpa, .{
-                .name = try gpa.dupe(u8, env.getIdent(provides_entry.ident)),
-                .ffi_symbol = try gpa.dupe(u8, env.getString(provides_entry.ffi_symbol)),
+                .name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(provides_entry.source_name)),
+                .ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol)),
             });
         }
 
@@ -466,18 +466,14 @@ fn findTopLevelDefByName(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     local_name: []const u8,
 ) ?can.CIR.Def.Idx {
-    const env = artifact.moduleEnvConst();
-    const module_prefix = std.fmt.allocPrint(env.gpa, "{s}.", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)}) catch return null;
-    defer env.gpa.free(module_prefix);
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
 
     for (artifact.top_level_values.entries) |entry| {
-        const def = env.store.getDef(entry.def);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const def_name = env.getIdent(pattern.assign.ident);
-        const candidate = if (std.mem.startsWith(u8, def_name, module_prefix))
-            def_name[module_prefix.len..]
+        const def_name = artifact.canonical_names.exportNameText(entry.source_name);
+        const candidate = if (std.mem.startsWith(u8, def_name, module_name) and
+            def_name.len > module_name.len and
+            def_name[module_name.len] == '.')
+            def_name[module_name.len + 1 ..]
         else
             def_name;
         if (std.mem.eql(u8, candidate, local_name)) return entry.def;
@@ -526,21 +522,17 @@ fn providedRootFfiSymbol(
             unreachable;
         },
     };
-    const env = root_artifact.moduleEnvConst();
-    const def = env.store.getDef(def_idx);
-    const pattern = env.store.getPattern(def.pattern);
-    const ident = switch (pattern) {
-        .assign => |assign| assign.ident,
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("glue invariant violated: provided export root definition is not an assignment", .{});
-            }
-            unreachable;
-        },
+    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("glue invariant violated: provided export root has no published top-level value", .{});
+        }
+        unreachable;
     };
 
     for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.ident == ident) return env.getString(entry.ffi_symbol);
+        if (entry.source_name == top_level.source_name) {
+            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+        }
     }
 
     if (builtin.mode == .Debug) {
@@ -2104,12 +2096,8 @@ fn collectModuleTypeInfo(
 
     for (artifact.top_level_values.entries) |entry| {
         const def_idx = entry.def;
-        const def = env.store.getDef(def_idx);
 
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const def_name = env.getIdent(pattern.assign.ident);
+        const def_name = artifact.canonical_names.exportNameText(entry.source_name);
 
         if (std.mem.eql(u8, def_name, module_name)) continue;
 

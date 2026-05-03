@@ -303,8 +303,13 @@ pub const ExportTableView = struct {
     defs: []const CIR.Def.Idx = &.{},
 };
 
+pub const ProvidesEntry = struct {
+    source_name: canonical.ExportNameId,
+    ffi_symbol: canonical.ExternalSymbolNameId,
+};
+
 pub const ProvidesRequiresMetadata = struct {
-    provides: []ModuleEnv.ProvidesEntry = &.{},
+    provides: []ProvidesEntry = &.{},
     requires: []ModuleEnv.RequiredType = &.{},
 
     pub fn deinit(self: *ProvidesRequiresMetadata, allocator: Allocator) void {
@@ -5520,17 +5525,47 @@ fn appTopLevelValueByName(
     app_artifact: *const CheckedModuleArtifact,
     required_name: []const u8,
 ) ?TopLevelValueEntry {
-    const app_env = app_artifact.moduleEnv();
     for (app_artifact.top_level_values.entries) |entry| {
-        const pattern = app_env.store.getPattern(entry.pattern);
-        switch (pattern) {
-            .assign => |assign| {
-                if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) return entry;
-            },
-            else => {},
-        }
+        const app_name = app_artifact.canonical_names.exportNameText(entry.source_name);
+        if (std.mem.eql(u8, app_name, required_name)) return entry;
     }
     return null;
+}
+
+fn topLevelDefSourceName(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    def: CIR.Def,
+) Allocator.Error!canonical.ExportNameId {
+    const pattern = module.moduleEnvConst().store.getPattern(def.pattern);
+    switch (pattern) {
+        .assign => |assign| return try names.internExportIdent(module.identStoreConst(), assign.ident),
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("checked artifact invariant violated: top-level value has non-assign pattern", .{});
+            }
+            unreachable;
+        },
+    }
+}
+
+fn publishProvidesMetadata(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    names: *canonical.CanonicalNameStore,
+) Allocator.Error![]ProvidesEntry {
+    const source = module_env.provides_entries.items.items;
+    const provides = try allocator.alloc(ProvidesEntry, source.len);
+    errdefer allocator.free(provides);
+
+    for (source, 0..) |entry, i| {
+        provides[i] = .{
+            .source_name = try names.internExportIdent(module_env.getIdentStoreConst(), entry.ident),
+            .ffi_symbol = try names.internExternalSymbolName(module_env.getString(entry.ffi_symbol)),
+        };
+    }
+
+    return provides;
 }
 
 pub const ModuleInterfaceCapabilities = struct {
@@ -7048,6 +7083,7 @@ pub const TopLevelValueEntry = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
     pattern: CIR.Pattern.Idx,
+    source_name: canonical.ExportNameId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     value: TopLevelValueKind,
 };
@@ -7058,6 +7094,7 @@ pub const TopLevelValueTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
@@ -7070,6 +7107,7 @@ pub const TopLevelValueTable = struct {
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
+            const source_name = try topLevelDefSourceName(module, names, def);
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,
@@ -7133,6 +7171,7 @@ pub const TopLevelValueTable = struct {
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
                 .pattern = def.pattern.idx,
+                .source_name = source_name,
                 .source_scheme = source_scheme,
                 .value = value,
             });
@@ -9512,6 +9551,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.top_level_values.entries) |entry| {
+            _ = self.canonical_names.exportNameText(entry.source_name);
             switch (entry.value) {
                 .const_ref => |const_ref| {
                     const owner = constRefTopLevelOwner(const_ref) orelse {
@@ -9988,7 +10028,7 @@ pub fn publishFromTypedModule(
     const exports = try allocator.dupe(CIR.Def.Idx, module_env.store.sliceDefs(module_env.exports));
     errdefer allocator.free(exports);
 
-    const provides = try allocator.dupe(ModuleEnv.ProvidesEntry, module_env.provides_entries.items.items);
+    const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
     errdefer allocator.free(provides);
 
     const requires = try allocator.dupe(ModuleEnv.RequiredType, module_env.requires_types.items.items);
@@ -10083,6 +10123,7 @@ pub fn publishFromTypedModule(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
+        &canonical_names,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,

@@ -3770,7 +3770,6 @@ fn snapshotProvidedEntrypointName(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
 ) []const u8 {
-    const module_env = root_artifact.moduleEnvConst();
     const def_idx = switch (root.source) {
         .def => |def| def,
         else => {
@@ -3780,28 +3779,23 @@ fn snapshotProvidedEntrypointName(
             unreachable;
         },
     };
-    const def = module_env.store.getDef(def_idx);
-    const pattern = module_env.store.getPattern(def.pattern);
-    const ident = switch (pattern) {
-        .assign => |assign| assign.ident,
-        else => {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic("snapshot invariant violated: exported platform root definition is not an assignment", .{});
-            }
-            unreachable;
-        },
+    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
+        }
+        unreachable;
     };
 
-    for (module_env.provides_entries.items.items) |entry| {
-        if (entry.ident == ident) {
-            return module_env.getString(entry.ffi_symbol);
+    for (root_artifact.provides_requires.provides) |entry| {
+        if (entry.source_name == top_level.source_name) {
+            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
         }
     }
 
     if (@import("builtin").mode == .Debug) {
         std.debug.panic(
-            "snapshot invariant violated: exported platform root {s} has no published FFI symbol",
-            .{module_env.getIdent(ident)},
+            "snapshot invariant violated: exported platform root has no published FFI symbol",
+            .{},
         );
     }
     unreachable;
