@@ -3493,7 +3493,11 @@ const CallSiteInfo = struct {
     callee: ?ValueInfoId,
     args: Span(ValueInfoId),
     requested_fn_root: RepVarId,
+    requested_source_fn_ty: CanonicalTypeKey,
     dispatch: CallDispatchInfo,
+    arg_transforms: Span(ValueTransformBoundaryId),
+    branch_result_transforms: Span(ValueTransformBoundaryId),
+    result_transform: ?ValueTransformBoundaryId,
 };
 
 const CallDispatchInfo = union(enum) {
@@ -3505,11 +3509,22 @@ const CallDispatchInfo = union(enum) {
 
 For `call_proc`, `callee` is null because the callee is a procedure target in
 the MIR node, not a first-class value. For `call_value`, `callee` names the
-function value occurrence. `dispatch` is computed from the solved whole-function
-representation root and the solved callable child; executable MIR consumes it
-directly. A singleton finite callable set still produces
-`call_value_finite`/`callable_match`. The only source-level direct-call case is
-`call_proc`.
+function value occurrence. `requested_source_fn_ty` is the exact canonical
+fixed-arity Roc function type requested by this call expression. `dispatch` is
+computed from the solved whole-function representation root and the solved
+callable child; executable MIR consumes it directly. A singleton finite callable
+set still produces `call_value_finite`/`callable_match`. The only source-level
+direct-call case is `call_proc`.
+
+`arg_transforms` is populated for call forms whose evaluated arguments must be
+converted before the executable call instruction, such as `call_proc` and
+`call_value_erased`. `branch_result_transforms` is populated for finite
+`call_value_finite` dispatch and contains exactly one
+`callable_match_branch_result` boundary per callable-set member, in descriptor
+member order. `result_transform` is populated for call forms with one raw result
+endpoint, such as `call_proc` and `call_value_erased`. Absence of a transform is
+allowed only for a call form that does not semantically have that boundary kind;
+missing a required transform after lambda-solved finalization is a compiler bug.
 
 Representation boundaries also have explicit value-transform metadata:
 
@@ -5086,6 +5101,16 @@ Every returning branch must assign exactly one value to the shared
 explicitly; absence of a transform is allowed only for `no_return` branches.
 Branch lowering may not add, remove, duplicate, or reorder direct-call
 arguments.
+
+Executable MIR owns the branch body. The branch body must already contain the
+branch-local `call_direct`, the raw direct-call result binding, the explicit
+result transform application, and the final value assigned to the shared
+`callable_match` result. IR lowering may lower that executable branch body, bind
+the callable capture payload for the selected member, and construct the IR
+switch, but it must not reconstruct the branch `call_direct` from callable-set
+metadata. Callable-set metadata is retained in the executable branch only for
+verification and downstream identity; it is not an authorization for IR to make
+semantic lowering decisions.
 
 `callable_match` is not a curried-call loop. It dispatches one fixed-arity Roc
 call. Every branch must call a member specialization whose source-argument arity

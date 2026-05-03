@@ -875,6 +875,15 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
         if (capture_payload) |payload| {
             direct_args[explicit_args.len] = .{ .value = payload };
         }
+        const direct_args_span = try program.ast.addDirectCallArgSpan(direct_args);
+        const branch_body = try builder.lowerCallableMatchBranchBody(
+            member.source_proc,
+            target_instance,
+            executable_proc,
+            direct_args_span,
+            result_ty,
+            null,
+        );
 
         branches[i] = .{
             .member = .{
@@ -886,7 +895,8 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
             .capture_payload_ty = capture_payload_ty,
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
             .executable_proc = executable_proc,
-            .direct_args = try program.ast.addDirectCallArgSpan(direct_args),
+            .direct_args = direct_args_span,
+            .body = branch_body,
         };
     }
 
@@ -6240,6 +6250,11 @@ const BodyBuilder = struct {
         }
 
         const requested_source_fn_ty = call_site.requested_source_fn_ty;
+        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
+        const branch_result_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.branch_result_transforms);
+        if (branch_result_ids.len != descriptor.members.len) {
+            executableInvariant("executable call_value finite branch result transform count differs from callable-set member count");
+        }
         const branches = try self.allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
         defer self.allocator.free(branches);
         for (descriptor.members, 0..) |member, i| {
@@ -6264,21 +6279,40 @@ const BodyBuilder = struct {
             if (capture_payload) |payload_value| {
                 direct_args[arg_values.len] = .{ .value = payload_value };
             }
+            const direct_args_span = try self.output.addDirectCallArgSpan(direct_args);
+            const member_ref: repr.CallableSetMemberRef = .{
+                .callable_set_key = callable_set_key,
+                .member_index = member.member,
+            };
+            const result_boundary = self.representation_store.valueTransformBoundary(branch_result_ids[i]);
+            self.verifyCallableMatchBranchResultBoundary(
+                result_boundary,
+                call.call_site,
+                member_ref,
+                target_instance_id,
+                target_instance,
+                call_site.result,
+            );
+            const branch_body = try self.lowerCallableMatchBranchBody(
+                target,
+                target_instance,
+                executable_proc,
+                direct_args_span,
+                result_ty,
+                result_boundary,
+            );
             branches[i] = .{
-                .member = .{
-                    .callable_set_key = callable_set_key,
-                    .member_index = member.member,
-                },
+                .member = member_ref,
                 .source_fn_ty = member.proc_value.source_fn_ty,
                 .capture_payload = capture_payload,
                 .capture_payload_ty = capture_payload_ty,
                 .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
                 .executable_proc = executable_proc,
-                .direct_args = try self.output.addDirectCallArgSpan(direct_args),
+                .direct_args = direct_args_span,
+                .body = branch_body,
             };
         }
 
-        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
         const result_value = self.output.freshValueRef();
         const final_call = try self.output.addExpr(result_ty, result_value, .{ .callable_match = .{
             .callable_set_key = callable_set_key,
@@ -6381,6 +6415,84 @@ const BodyBuilder = struct {
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_expr,
         } });
+    }
+
+    fn lowerCallableMatchBranchBody(
+        self: *BodyBuilder,
+        source_proc: canonical.MirProcedureRef,
+        target_instance: repr.ProcRepresentationInstance,
+        executable_proc: Ast.ExecutableProcId,
+        direct_args: Ast.Span(Ast.DirectCallArg),
+        result_ty: Ast.TypeId,
+        result_boundary: ?repr.ValueTransformBoundary,
+    ) Allocator.Error!Ast.ExprId {
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+
+        const raw_result_ty = if (result_boundary) |boundary|
+            try self.lowerSessionExecutableEndpointType(boundary.from_endpoint)
+        else
+            result_ty;
+        const raw_result_value = self.output.freshValueRef();
+        const direct_call = try self.output.addExpr(raw_result_ty, raw_result_value, .{ .call_direct = .{
+            .source = source_proc.proc,
+            .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
+            .executable_proc = executable_proc,
+            .direct_args = direct_args,
+        } });
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = raw_result_value,
+            .body = direct_call,
+        } }));
+
+        const result_value = if (result_boundary) |boundary|
+            try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_result_value)
+        else
+            raw_result_value;
+        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
+        } });
+    }
+
+    fn verifyCallableMatchBranchResultBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        member_ref: repr.CallableSetMemberRef,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+        result: repr.ValueInfoId,
+    ) void {
+        const branch = switch (boundary.kind) {
+            .callable_match_branch_result => |branch| branch,
+            else => executableInvariant("executable callable_match result boundary has non-branch kind"),
+        };
+        if (branch.call != call_site_id or
+            !repr.callableSetKeyEql(branch.member.callable_set_key, member_ref.callable_set_key) or
+            branch.member.member_index != member_ref.member_index)
+        {
+            executableInvariant("executable callable_match result boundary points at a different branch");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .procedure_return => |proc| proc,
+            else => executableInvariant("executable callable_match result boundary source is not procedure_return"),
+        };
+        if (from != target_instance_id) {
+            executableInvariant("executable callable_match result boundary source differs from branch target");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable callable_match result boundary target is not local_value"),
+        };
+        if (to != result) {
+            executableInvariant("executable callable_match result boundary target differs from call result");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.from_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+            executableInvariant("executable callable_match result boundary source key differs from branch specialization");
+        }
+        _ = self;
     }
 
     fn verifyErasedCallRawArgBoundary(

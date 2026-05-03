@@ -202,9 +202,8 @@ const ValueTransformFinalizer = struct {
             const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
             switch (call_site.dispatch) {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
+                .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
-                .call_value_finite,
-                => {},
             }
         }
     }
@@ -215,6 +214,7 @@ const ValueTransformFinalizer = struct {
         call_site: *repr.CallSiteInfo,
         target_id: repr.ProcRepresentationInstanceId,
     ) Allocator.Error!void {
+        self.verifyCallSiteUnfinalized(call_site);
         const args = self.valueStore().sliceValueSpan(call_site.args);
         const target_instance = self.procInstance(target_id);
         const target_params = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.params);
@@ -258,12 +258,55 @@ const ValueTransformFinalizer = struct {
         call_site.result_transform = result_boundary;
     }
 
+    fn finalizeCallValueFinite(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        call_site: *repr.CallSiteInfo,
+        callable_set_key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!void {
+        self.verifyCallSiteUnfinalized(call_site);
+        const descriptor = self.representationStore().callableSetDescriptor(callable_set_key) orelse {
+            lambdaInvariant("lambda-solved finite call boundary finalization referenced a missing callable-set descriptor");
+        };
+        if (descriptor.members.len == 0) {
+            lambdaInvariant("lambda-solved finite call boundary finalization saw empty callable-set descriptor");
+        }
+
+        const branch_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, descriptor.members.len);
+        defer self.allocator.free(branch_boundaries);
+
+        const result_to = try self.localEndpoint(call_site.result);
+        for (descriptor.members, 0..) |member, i| {
+            const target_id = self.procInstanceForSource(member.source_proc);
+            const target_instance = self.procInstance(target_id);
+            const result_from = try self.targetReturnEndpoint(target_id, target_instance);
+            const result_transform = try self.appendIdentityTransform(result_from, result_to);
+            branch_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = .{ .callable_match_branch_result = .{
+                    .call = call_site_id,
+                    .member = .{
+                        .callable_set_key = callable_set_key,
+                        .member_index = member.member,
+                    },
+                } },
+                .from_value = target_instance.public_roots.ret,
+                .to_value = call_site.result,
+                .from_endpoint = result_from,
+                .to_endpoint = result_to,
+                .transform = result_transform,
+            });
+        }
+
+        call_site.branch_result_transforms = try self.valueStore().addValueTransformBoundarySpan(branch_boundaries);
+    }
+
     fn finalizeCallValueErased(
         self: *ValueTransformFinalizer,
         call_site_id: repr.CallSiteInfoId,
         call_site: *repr.CallSiteInfo,
         sig_key: repr.ErasedFnSigKey,
     ) Allocator.Error!void {
+        self.verifyCallSiteUnfinalized(call_site);
         const abi = self.representationStore().erased_fn_abis.abiFor(sig_key.abi) orelse {
             lambdaInvariant("lambda-solved erased call boundary finalization referenced an unpublished ABI");
         };
@@ -306,6 +349,19 @@ const ValueTransformFinalizer = struct {
 
         call_site.arg_transforms = try self.valueStore().addValueTransformBoundarySpan(arg_boundaries);
         call_site.result_transform = result_boundary;
+    }
+
+    fn verifyCallSiteUnfinalized(
+        self: *ValueTransformFinalizer,
+        call_site: *const repr.CallSiteInfo,
+    ) void {
+        _ = self;
+        if (!call_site.arg_transforms.isEmpty() or
+            !call_site.branch_result_transforms.isEmpty() or
+            call_site.result_transform != null)
+        {
+            lambdaInvariant("lambda-solved value transform finalization reached an already-finalized call site");
+        }
     }
 
     fn appendIdentityTransform(
@@ -447,6 +503,18 @@ const ValueTransformFinalizer = struct {
             .ty = payload,
             .key = key,
         };
+    }
+
+    fn procInstanceForSource(
+        self: *ValueTransformFinalizer,
+        proc: canonical.MirProcedureRef,
+    ) repr.ProcRepresentationInstanceId {
+        for (self.program.proc_instances.items, 0..) |instance, raw| {
+            if (canonical.mirProcedureRefEql(instance.proc, proc)) {
+                return @enumFromInt(@as(u32, @intCast(raw)));
+            }
+        }
+        lambdaInvariant("lambda-solved finite call boundary finalization referenced missing member procedure");
     }
 
     fn procInstance(

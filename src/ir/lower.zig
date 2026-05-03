@@ -491,7 +491,7 @@ const IrBuilder = struct {
             }
             branches[i] = .{
                 .value = @intCast(@intFromEnum(branch.member.member_index)),
-                .block = try self.lowerCallableMatchBranchBlock(branch, callee, callable_match.result_ty),
+                .block = try self.lowerCallableMatchBranchBlock(branch, callee),
             };
         }
 
@@ -512,7 +512,6 @@ const IrBuilder = struct {
         self: *IrBuilder,
         branch: Exec.Ast.CallableMatchBranch,
         callee: Ast.Var,
-        result_ty: Exec.Type.TypeId,
     ) LowerResourceError!Ast.BlockId {
         var saved = std.ArrayList(SavedValueBinding).empty;
         defer {
@@ -538,17 +537,14 @@ const IrBuilder = struct {
             irInvariant("IR lowering callable_match branch has payload type without payload value");
         }
 
-        const args = try self.lowerDirectCallArgSpan(branch.direct_args);
-        defer if (args.len > 0) self.allocator.free(args);
-        const direct_call: Ast.Expr = .{ .call_direct = .{
-            .proc = branch.executable_proc,
-            .args = try self.output.store.addVarSpan(args),
-        } };
-        const result = try self.bindAnonymous(try self.layoutForType(result_ty), direct_call, &stmts);
+        const body = try self.lowerExprToBlock(branch.body);
+        if (stmts.items.len == 0) return body;
 
+        const nested = self.output.store.getBlock(body);
+        try stmts.appendSlice(self.allocator, self.output.store.stmt_ids.items[nested.stmts.start..][0..nested.stmts.len]);
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(stmts.items),
-            .term = .{ .value = result },
+            .term = nested.term,
         });
     }
 

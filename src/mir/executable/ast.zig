@@ -172,6 +172,7 @@ pub const CallableMatchBranch = struct {
     executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
+    body: ExprId,
 };
 
 pub const SourceMatch = struct {

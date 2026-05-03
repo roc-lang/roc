@@ -843,6 +843,7 @@ pub const CallSiteInfo = struct {
     requested_source_fn_ty: canonical.CanonicalTypeKey,
     dispatch: CallSiteDispatch,
     arg_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
+    branch_result_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
     result_transform: ?ValueTransformBoundaryId = null,
 };
 
