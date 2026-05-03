@@ -687,7 +687,7 @@ const TypeInstantiator = struct {
 
         const placeholder = try self.program.types.addType(.placeholder);
         try self.lowered_template.put(id, placeholder);
-        const lowered = try self.lowerTemplatePayload(self.templatePayload(id));
+        const lowered = try self.lowerTemplatePayload(id, self.templatePayload(id));
         self.program.types.setType(placeholder, lowered);
         self.program.types.debugValidateTypeGraph(placeholder);
         return try self.program.types.internTypeId(placeholder);
@@ -822,6 +822,7 @@ const TypeInstantiator = struct {
 
     fn lowerTemplatePayload(
         self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
         payload: checked_artifact.CheckedTypePayload,
     ) Allocator.Error!Type.Content {
         return switch (payload) {
@@ -831,7 +832,7 @@ const TypeInstantiator = struct {
             .record_unbound => |fields| .{ .record = .{ .fields = try self.lowerTemplateRecordFieldsOnly(fields) } },
             .record => |record| .{ .record = .{ .fields = try self.lowerTemplateRecord(record) } },
             .tuple => |elems| .{ .tuple = try self.lowerTemplateTypeIds(elems) },
-            .nominal => |nominal| try self.lowerTemplateNominal(nominal),
+            .nominal => |nominal| try self.lowerTemplateNominal(id, nominal),
             .function => |func| .{ .func = .{
                 .args = try self.lowerTemplateTypeIds(func.args),
                 .lambdas = &.{},
@@ -1032,6 +1033,7 @@ const TypeInstantiator = struct {
 
     fn lowerTemplateNominal(
         self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
         nominal: checked_artifact.CheckedNominalType,
     ) Allocator.Error!Type.Content {
         if (nominal.builtin) |builtin_nominal| {
@@ -1067,6 +1069,7 @@ const TypeInstantiator = struct {
                 .module_name = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
                 .type_name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
             },
+            .source_ty = self.template_types.roots[@intFromEnum(id)].key,
             .is_opaque = nominal.is_opaque,
             .args = try self.lowerTemplateTypeIds(nominal.args),
             .backing = try self.lowerTemplateType(nominal.backing),

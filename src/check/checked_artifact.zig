@@ -2704,6 +2704,7 @@ pub const ExecutableValueTransformOp = union(enum) {
     tag_union: []const ValueTransformTagCase,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
         backing: ExecutableValueTransformPlanId,
     },
     list: struct {
@@ -2878,6 +2879,7 @@ pub const ExecutableTagVariantPayload = struct {
 
 pub const ExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
     backing: ExecutableTypePayloadRef,
     backing_key: canonical.CanonicalExecValueTypeKey,
 };

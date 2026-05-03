@@ -59,6 +59,7 @@ pub const Content = union(enum) {
     primitive: Prim,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
         backing: TypeId,
     },
     list: TypeId,

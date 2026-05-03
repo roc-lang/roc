@@ -1508,6 +1508,9 @@ fn applyNominalValueTransform(
     if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
         executableInvariant("nominal value transform target nominal differs from plan");
     }
+    if (!repr.canonicalTypeKeyEql(target.source_ty, nominal.source_ty)) {
+        executableInvariant("nominal value transform target source type differs from plan");
+    }
 
     const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
     const backing_value = program.ast.freshValueRef();
@@ -3569,6 +3572,7 @@ const PublishedTypeLowerer = struct {
             .box => |child| .{ .box = try self.lower(child.ty, child.key) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
                 .backing = try self.lower(nominal.backing, nominal.backing_key),
             } },
             .callable_set => |callable_set| try self.lowerCallableSetPayload(callable_set),
@@ -3779,6 +3783,7 @@ const SessionTypeLowerer = struct {
             .box => |child| .{ .box = try self.lower(child.ty, child.key) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
                 .backing = try self.lower(nominal.backing, nominal.backing_key),
             } },
             .callable_set => |callable_set| try self.lowerCallableSetPayload(callable_set),
@@ -3970,6 +3975,7 @@ const TypeLowerer = struct {
             => executableInvariant("executable type lowering received unresolved lambda-solved type"),
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
                 .backing = try self.lowerType(nominal.backing),
             } },
             .content => |content| switch (content) {
@@ -7331,6 +7337,9 @@ const BodyBuilder = struct {
         };
         if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
             executableInvariant("session nominal value transform target nominal differs from plan");
+        }
+        if (!repr.canonicalTypeKeyEql(target.source_ty, nominal.source_ty)) {
+            executableInvariant("session nominal value transform target source type differs from plan");
         }
 
         const source_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });

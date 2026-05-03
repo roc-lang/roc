@@ -624,6 +624,7 @@ const ExecutableTypePayloadBuilder = struct {
                 const backing = try self.payloadForType(nominal.backing);
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
                     .backing = backing.ref,
                     .backing_key = backing.key,
                 } };

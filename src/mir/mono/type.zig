@@ -56,6 +56,7 @@ pub const Fields = []const Field;
 /// Public struct `Nominal`.
 pub const Nominal = struct {
     nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
     is_opaque: bool,
     args: TypeIds,
     backing: TypeId,
@@ -577,6 +578,7 @@ pub const Store = struct {
                 }
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
                     .is_opaque = nominal.is_opaque,
                     .args = lowered_args,
                     .backing = try self.internTypeIdInner(nominal.backing, active),
@@ -661,6 +663,10 @@ pub const Store = struct {
         try self.scratch_intern_key.appendSlice(self.allocator, std.mem.asBytes(&copy));
     }
 
+    fn appendInternKeySlice(self: *Store, bytes: []const u8) std.mem.Allocator.Error!void {
+        try self.scratch_intern_key.appendSlice(self.allocator, bytes);
+    }
+
     fn lookupInternedScratchKey(self: *Store) ?TypeId {
         return self.interned_types.get(self.scratch_intern_key.items);
     }
@@ -738,6 +744,7 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 12));
                         try self_builder.store.appendInternKeyValue(@intFromEnum(nominal.nominal.module_name));
                         try self_builder.store.appendInternKeyValue(@intFromEnum(nominal.nominal.type_name));
+                        try self_builder.store.appendInternKeySlice(&nominal.source_ty.bytes);
                         try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(nominal.args.len)));
                         for (nominal.args) |arg| {
@@ -848,6 +855,7 @@ pub const Store = struct {
                 const right_nominal = right.nominal;
                 if (nominal.nominal.module_name != right_nominal.nominal.module_name) break :blk false;
                 if (nominal.nominal.type_name != right_nominal.nominal.type_name) break :blk false;
+                if (!std.mem.eql(u8, &nominal.source_ty.bytes, &right_nominal.source_ty.bytes)) break :blk false;
                 if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
                 if (nominal.args.len != right_nominal.args.len) break :blk false;
                 for (nominal.args, right_nominal.args) |left_arg, right_arg| {
@@ -921,18 +929,21 @@ test "nominal identity preserves generic arguments" {
 
     const foo_u8 = try store.internResolved(.{ .nominal = .{
         .nominal = foo_nominal,
+        .source_ty = .{ .bytes = [_]u8{1} ** 32 },
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,
     } });
     const foo_i64 = try store.internResolved(.{ .nominal = .{
         .nominal = foo_nominal,
+        .source_ty = .{ .bytes = [_]u8{2} ** 32 },
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{i64_ty}),
         .backing = bool_ty,
     } });
     const foo_u8_again = try store.internResolved(.{ .nominal = .{
         .nominal = foo_nominal,
+        .source_ty = .{ .bytes = [_]u8{1} ** 32 },
         .is_opaque = true,
         .args = try store.dupeTypeIds(&.{u8_ty}),
         .backing = bool_ty,

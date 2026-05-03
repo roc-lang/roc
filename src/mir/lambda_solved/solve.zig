@@ -2288,6 +2288,7 @@ const ValueTransformFinalizer = struct {
         );
         return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{ .nominal = .{
             .nominal = target.nominal,
+            .source_ty = target.source_ty,
             .backing = try self.planValueTransform(scope, from_child, to_child, provenance),
         } });
     }
@@ -2925,6 +2926,7 @@ const TypeImporter = struct {
                 }
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
                     .is_opaque = nominal.is_opaque,
                     .args = try self.output.addTypeVarSpan(args),
                     .backing = try self.importType(nominal.backing),

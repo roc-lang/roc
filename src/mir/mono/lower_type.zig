@@ -65,7 +65,7 @@ pub const Lowerer = struct {
 
         const placeholder = try self.dest.addType(.placeholder);
         try self.lowered.put(id, placeholder);
-        const lowered = try self.lowerPayload(self.payload(id));
+        const lowered = try self.lowerPayload(id, self.payload(id));
         self.dest.setType(placeholder, lowered);
         self.dest.debugValidateTypeGraph(placeholder);
         return try self.dest.internTypeId(placeholder);
@@ -79,7 +79,11 @@ pub const Lowerer = struct {
         return self.source.payloads[raw];
     }
 
-    fn lowerPayload(self: *Lowerer, payload: checked_artifact.CheckedTypePayload) Allocator.Error!Type.Content {
+    fn lowerPayload(
+        self: *Lowerer,
+        id: CheckedTypeId,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => invariantViolation("mono type lowering received an unpublished checked type payload"),
             .flex => invariantViolation("mono type lowering received an unsolved flex type variable"),
@@ -88,7 +92,7 @@ pub const Lowerer = struct {
             .record_unbound => invariantViolation("mono type lowering received an unfinalized open record row"),
             .record => |record| try self.lowerRecord(record),
             .tuple => |elems| .{ .tuple = try self.lowerTypeIds(elems) },
-            .nominal => |nominal| try self.lowerNominal(nominal),
+            .nominal => |nominal| try self.lowerNominal(id, nominal),
             .function => |func| try self.lowerFunc(func),
             .empty_record => .{ .record = .{ .fields = &.{} } },
             .tag_union => |tag_union| try self.lowerTagUnion(tag_union),
@@ -212,7 +216,11 @@ pub const Lowerer = struct {
         }
     }
 
-    fn lowerNominal(self: *Lowerer, nominal: checked_artifact.CheckedNominalType) Allocator.Error!Type.Content {
+    fn lowerNominal(
+        self: *Lowerer,
+        id: CheckedTypeId,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!Type.Content {
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
                 .bool => return .{ .primitive = .bool },
@@ -246,10 +254,19 @@ pub const Lowerer = struct {
                 .module_name = try self.moduleName(nominal.origin_module),
                 .type_name = try self.typeName(nominal.name),
             },
+            .source_ty = self.sourceTypeKey(id),
             .is_opaque = nominal.is_opaque,
             .args = try self.lowerTypeIds(nominal.args),
             .backing = try self.lowerChecked(nominal.backing),
         } };
+    }
+
+    fn sourceTypeKey(self: *const Lowerer, id: CheckedTypeId) canonical.CanonicalTypeKey {
+        const raw = @intFromEnum(id);
+        if (raw >= self.source.roots.len) {
+            invariantViolation("mono type lowering received a checked type id outside the published artifact root graph");
+        }
+        return self.source.roots[raw].key;
     }
 
     fn lowerTypeIds(self: *Lowerer, ids: []const CheckedTypeId) Allocator.Error![]const Type.TypeId {

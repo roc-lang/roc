@@ -214,6 +214,7 @@ pub const SessionExecutableTagUnionPayload = struct {
 
 pub const SessionExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
     backing: SessionExecutableTypePayloadRef,
     backing_key: CanonicalExecValueTypeKey,
 };
@@ -2396,6 +2397,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 const backing = try self.endpointForType(nominal.backing);
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
                     .backing = backing.ty,
                     .backing_key = backing.key,
                 } };
@@ -3166,6 +3168,7 @@ const ExecValueTypeKeyBuilder = struct {
                 self.writeTag("nominal");
                 self.writeBytes(self.names.moduleNameText(nominal.nominal.module_name));
                 self.writeBytes(self.names.typeNameText(nominal.nominal.type_name));
+                self.hasher.update(&nominal.source_ty.bytes);
                 self.writeBool(nominal.is_opaque);
                 try self.writeTypeSpan(nominal.args);
                 try self.writeType(nominal.backing);

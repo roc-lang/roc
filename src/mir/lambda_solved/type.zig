@@ -33,6 +33,7 @@ pub fn Span(comptime _: type) type {
 
 pub const Nominal = struct {
     nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
     is_opaque: bool,
     args: Span(TypeVarId),
     backing: TypeVarId,
