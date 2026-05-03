@@ -4645,6 +4645,46 @@ must not ask whether the current syntax is inside `Box.box(...)`, compare source
 and target executable shapes, recover erasedness from a physical layout, or
 re-run representation solving.
 
+Emission-plan assignment is a mandatory lambda-solved phase between
+representation solving and value-transform finalization:
+
+```text
+build representation graph
+-> solve representation classes and Box-only erasure requirements
+-> assign CallableValueEmissionPlan to every callable value occurrence
+-> build executable endpoint payloads from the assigned plans
+-> finalize value transforms, capture transforms, call boundaries, joins, and returns
+```
+
+The value-transform finalizer is forbidden from deciding that a finite callable
+should become erased. By the time a transform boundary is finalized, the source
+and target executable endpoints already reflect solved representation. If a
+`proc_value` occurrence has been solved to erased representation, its
+`ValueInfo.callable.emission_plan` is already `proc_value_to_erased`; executable
+MIR lowers that occurrence directly with `ProcValueErasePlan`. The transform
+boundary around that value is then either identity between matching erased
+endpoints or a structural transform for surrounding records, tuples, tags,
+lists, boxes, or nominals. It is not a late finite-to-erased callable repair.
+
+Conversely, if a callable value occurrence is still finite after emission-plan
+assignment, a later value transform may only pack it through the explicit
+`finite_set_to_erased_adapter` plan that was assigned to that same occurrence by
+the solved representation pass. The finalizer may record the already-selected
+plan in the transform boundary, but it must not synthesize a new erased plan,
+pick a procedure member, inspect the value's syntax, or reinterpret a
+`CallableSetConstructionPlan` as permission to bypass `callable_match`.
+
+This ordering is critical for direct erased `proc_value` captures. A
+`ProcValueErasePlan` transforms capture values from the occurrence site's local
+capture endpoints to the selected target procedure capture endpoints before the
+hidden capture tuple is assembled. If the finalizer tried to select direct
+erasure while it was already holding a finite source endpoint and an erased
+target endpoint, the resulting boundary would be neither a valid identity
+transform nor a valid generic callable transform. That situation is a compiler
+bug. The only correct state is that endpoint construction sees the solved
+`proc_value_to_erased` emission plan first, so the source endpoint is erased from
+the beginning.
+
 `ErasedFnSigKey` equality includes the canonical source function type, hidden
 capture type, and `ErasedFnAbiKey`. The erased argument and return
 representations live in the `ErasedFnAbi` payload named by that ABI key. Two

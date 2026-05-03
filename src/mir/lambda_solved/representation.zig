@@ -1448,6 +1448,61 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn appendFiniteSetEraseEmissionPlan(
+        self: *RepresentationStore,
+        erase: FiniteSetErasePlan,
+    ) std.mem.Allocator.Error!CallableValueEmissionPlanId {
+        const provenance = if (erase.provenance.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(BoxBoundaryId, erase.provenance);
+        errdefer if (provenance.len > 0) self.allocator.free(provenance);
+
+        return try self.appendCallableEmissionPlan(.{ .erase_finite_set = .{
+            .adapter = erase.adapter,
+            .result_ty = erase.result_ty,
+            .provenance = provenance,
+        } });
+    }
+
+    pub fn appendProcValueEraseEmissionPlan(
+        self: *RepresentationStore,
+        erase: ProcValueErasePlan,
+    ) std.mem.Allocator.Error!CallableValueEmissionPlanId {
+        var key = try cloneExecutableSpecializationKey(self.allocator, erase.executable_specialization_key);
+        errdefer deinitExecutableSpecializationKey(self.allocator, &key);
+
+        const capture_slots = if (erase.capture_slots.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(CallableSetCaptureSlot, erase.capture_slots);
+        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
+
+        const capture_transforms = if (erase.capture_transforms.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(ValueTransformBoundaryId, erase.capture_transforms);
+        errdefer if (capture_transforms.len > 0) self.allocator.free(capture_transforms);
+
+        const provenance = if (erase.provenance.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(BoxBoundaryId, erase.provenance);
+        errdefer if (provenance.len > 0) self.allocator.free(provenance);
+
+        return try self.appendCallableEmissionPlan(.{ .erase_proc_value = .{
+            .source_value = erase.source_value,
+            .proc_value = erase.proc_value,
+            .target_instance = erase.target_instance,
+            .erased_fn_sig_key = erase.erased_fn_sig_key,
+            .executable_specialization_key = key,
+            .capture_shape_key = erase.capture_shape_key,
+            .capture_slots = capture_slots,
+            .capture_transforms = capture_transforms,
+            .provenance = provenance,
+        } });
+    }
+
     fn appendCallableConstructionPlan(
         self: *RepresentationStore,
         plan: CallableSetConstructionPlan,
@@ -1530,8 +1585,9 @@ pub const RepresentationStore = struct {
         const emission_plan = self.callableEmissionPlan(callable.emission_plan);
         const emission_key = switch (emission_plan) {
             .finite => |key| key,
+            .erase_finite_set => |erase| erase.adapter.callable_set_key,
             else => {
-                debug.invariant(false, "lambda-solved invariant violated: callable construction does not have finite emission");
+                debug.invariant(false, "lambda-solved invariant violated: callable construction does not have finite callable-set emission");
                 return;
             },
         };

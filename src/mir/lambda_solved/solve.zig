@@ -1018,23 +1018,48 @@ const ValueTransformFinalizer = struct {
         target: repr.SessionExecutableErasedFnPayload,
         provenance: []const repr.BoxBoundaryId,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        if (provenance.len == 0) {
-            lambdaInvariant("lambda-solved finite callable erasure has no Box boundary provenance");
-        }
-        const source_fn_ty = self.callableSetSourceFnTy(source.key);
-        const plan = repr.FiniteSetErasePlan{
-            .adapter = .{
-                .source_fn_ty = source_fn_ty,
-                .callable_set_key = source.key,
-                .erased_fn_sig_key = target.sig_key,
-                .capture_shape_key = target.capture_shape_key,
-            },
-            .result_ty = to.exec_ty.key,
-            .provenance = provenance,
-        };
+        const plan = try self.selectedFiniteCallableErasurePlan(from, to, source, target, provenance);
         return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
             .callable_to_erased = .{ .finite_value = plan },
         });
+    }
+
+    fn selectedFiniteCallableErasurePlan(
+        self: *ValueTransformFinalizer,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableCallableSetPayload,
+        target: repr.SessionExecutableErasedFnPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!repr.FiniteSetErasePlan {
+        _ = to;
+        _ = provenance;
+
+        const value_id = switch (from.owner) {
+            .local_value => |value| value,
+            else => lambdaInvariant("lambda-solved finite callable erasure reached a non-local source without an assigned emission plan"),
+        };
+        const value_info = self.valueStore().values.items[@intFromEnum(value_id)];
+        const callable = value_info.callable orelse {
+            lambdaInvariant("lambda-solved finite callable erasure source value has no callable metadata");
+        };
+        const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
+        const erase = switch (emission) {
+            .erase_finite_set => |erase| erase,
+            .finite => lambdaInvariant("lambda-solved finite callable erasure reached a callable occurrence before erased emission plans were assigned"),
+            .erase_proc_value => lambdaInvariant("lambda-solved finite callable erasure reached a direct proc-value erase occurrence; its source endpoint should already be erased"),
+            .already_erased => lambdaInvariant("lambda-solved finite callable erasure reached an already-erased callable occurrence"),
+        };
+        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, source.key)) {
+            lambdaInvariant("lambda-solved finite callable erasure selected adapter for a different callable-set key");
+        }
+        if (!repr.erasedFnSigKeyEql(erase.adapter.erased_fn_sig_key, target.sig_key)) {
+            lambdaInvariant("lambda-solved finite callable erasure selected adapter with a different erased signature");
+        }
+        if (!repr.captureShapeKeyEql(erase.adapter.capture_shape_key, target.capture_shape_key)) {
+            lambdaInvariant("lambda-solved finite callable erasure selected adapter with a different capture shape");
+        }
+        return erase;
     }
 
     fn planAlreadyErasedCallableTransform(
@@ -1260,25 +1285,6 @@ const ValueTransformFinalizer = struct {
             .box => |payload| payload,
             else => lambdaInvariant("lambda-solved box transform endpoint has non-box content"),
         };
-    }
-
-    fn callableSetSourceFnTy(
-        self: *ValueTransformFinalizer,
-        key: repr.CanonicalCallableSetKey,
-    ) canonical.CanonicalTypeKey {
-        const descriptor = self.representationStore().callableSetDescriptor(key) orelse {
-            lambdaInvariant("lambda-solved callable transform has no callable-set descriptor");
-        };
-        if (descriptor.members.len == 0) {
-            lambdaInvariant("lambda-solved callable transform reached empty callable-set descriptor");
-        }
-        const source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
-        for (descriptor.members[1..]) |member| {
-            if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, source_fn_ty)) {
-                lambdaInvariant("lambda-solved callable transform descriptor has mixed source function types");
-            }
-        }
-        return source_fn_ty;
     }
 
     fn boxBoundaryForEndpoints(
