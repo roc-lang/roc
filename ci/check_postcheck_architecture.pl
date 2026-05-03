@@ -85,6 +85,11 @@ my @RULES = (
     { category => 'source-exec-retired-carrier', regex => camel(qw(current Required Return Exec Ty)), allowed => {} },
     { category => 'source-type-reconstruction', regex => qr/\bexactTagSourceTypeForExpr\b/, allowed => {} },
     { category => 'source-type-reconstruction', regex => camel(qw(exact Tag Source Type For Expr)), allowed => {} },
+    { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\bPromotedWrapperBridge[A-Za-z0-9_]*\b/, allowed => {} },
+    { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\bpromoted_wrapper_bridges\b/, allowed => {} },
+    { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\barg_bridges\b/, allowed => {} },
+    { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPublishedPromotedWrapperBridge\b/, allowed => {} },
+    { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPromotedWrapperBridge[A-Za-z0-9_]*\b/, allowed => {} },
 );
 
 sub iter_zig_files {

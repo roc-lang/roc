@@ -742,6 +742,7 @@ fn lowerErasedPromotedWrapperBody(
         _ = erased_arg_key;
         call_args[i] = try applyPublishedExecutablePayloadTransform(
             program,
+            plans,
             published_types,
             transforms,
             &stmts,
@@ -768,6 +769,7 @@ fn lowerErasedPromotedWrapperBody(
             } }));
             const result_value = try applyPublishedExecutablePayloadTransform(
                 program,
+                plans,
                 published_types,
                 transforms,
                 &stmts,
@@ -786,6 +788,7 @@ fn lowerErasedPromotedWrapperBody(
 
 fn applyPublishedExecutablePayloadTransform(
     program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -820,16 +823,355 @@ fn applyPublishedExecutablePayloadTransform(
             } }));
             return bridged_value;
         },
-        .record,
-        .tuple,
+        .record => |fields| try applyRecordPayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            plan,
+            fields,
+            value,
+        ),
+        .tuple => |items| try applyTuplePayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            plan,
+            items,
+            value,
+        ),
+        .nominal => |nominal| try applyNominalPayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            plan,
+            nominal,
+            value,
+        ),
         .tag_union,
-        .nominal,
         .list,
         .box_payload,
-        .callable_to_erased,
-        .already_erased_callable,
-        => executableInvariant("executable payload transform lowering for this operation has not been implemented"),
+        => executableInvariant("executable aggregate payload transform lowering has not been implemented"),
+        .callable_to_erased => |callable| try applyCallableToErasedPayloadTransform(
+            program,
+            plans,
+            published_types,
+            stmts,
+            plan,
+            callable,
+            value,
+        ),
+        .already_erased_callable => |already_erased| {
+            const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+            const erased_ty = erasedFnType(program, to_ty);
+            if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, already_erased.sig_key)) {
+                executableInvariant("already-erased payload transform signature differs from target endpoint");
+            }
+            return value;
+        },
     }
+}
+
+fn applyRecordPayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    fields: []const checked_artifact.PayloadTransformRecordField,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const source = switch (program.types.getType(from_ty)) {
+        .record => |record| record,
+        else => executableInvariant("record payload transform source endpoint is not a record"),
+    };
+    const target = switch (program.types.getType(to_ty)) {
+        .record => |record| record,
+        else => executableInvariant("record payload transform target endpoint is not a record"),
+    };
+    if (fields.len != target.fields.len) {
+        executableInvariant("record payload transform field count differs from target record");
+    }
+
+    const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const seen = try program.allocator.alloc(bool, fields.len);
+    defer program.allocator.free(seen);
+    @memset(seen, false);
+
+    const output_fields = try program.allocator.alloc(Ast.RecordFieldExpr, target.fields.len);
+    defer program.allocator.free(output_fields);
+    for (target.fields, 0..) |target_field, target_i| {
+        const label = program.row_shapes.recordField(target_field.field).label;
+        const field_plan = findPayloadTransformRecordField(fields, label, seen) orelse {
+            executableInvariant("record payload transform omitted a target field");
+        };
+        const source_field = recordFieldForLabel(program, source, label);
+        const access_value = program.ast.freshValueRef();
+        const access_expr = try program.ast.addExpr(source_field.ty, access_value, .{ .access = .{
+            .record = source_expr,
+            .field = source_field.field,
+        } });
+        try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+            .value = access_value,
+            .body = access_expr,
+        } }));
+        const transformed = try applyPublishedExecutablePayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            field_plan.transform,
+            access_value,
+        );
+        output_fields[target_i] = .{
+            .field = target_field.field,
+            .expr = try program.ast.addExpr(target_field.ty, transformed, .{ .value_ref = transformed }),
+            .ty = target_field.ty,
+            .value = transformed,
+        };
+    }
+    verifyAllSeen(seen, "record payload transform had an extra source field transform");
+
+    const record_value = program.ast.freshValueRef();
+    const record_expr = try program.ast.addExpr(to_ty, record_value, .{ .record = .{
+        .shape = target.shape,
+        .fields = try program.ast.addRecordFieldExprSpan(output_fields),
+    } });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = record_value,
+        .body = record_expr,
+    } }));
+    return record_value;
+}
+
+fn findPayloadTransformRecordField(
+    fields: []const checked_artifact.PayloadTransformRecordField,
+    label: canonical.RecordFieldLabelId,
+    seen: []bool,
+) ?checked_artifact.PayloadTransformRecordField {
+    for (fields, 0..) |field, i| {
+        if (field.field != label) continue;
+        if (seen[i]) executableInvariant("record payload transform duplicated a field");
+        seen[i] = true;
+        return field;
+    }
+    return null;
+}
+
+fn applyNominalPayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    nominal: anytype,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const source = switch (program.types.getType(from_ty)) {
+        .nominal => |source| source,
+        else => executableInvariant("nominal payload transform source endpoint is not nominal"),
+    };
+    const target = switch (program.types.getType(to_ty)) {
+        .nominal => |target| target,
+        else => executableInvariant("nominal payload transform target endpoint is not nominal"),
+    };
+    if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
+        executableInvariant("nominal payload transform target nominal differs from plan");
+    }
+
+    const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const backing_value = program.ast.freshValueRef();
+    const backing_expr = try program.ast.addExpr(source.backing, backing_value, .{ .nominal_reinterpret = source_expr });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = backing_value,
+        .body = backing_expr,
+    } }));
+
+    const transformed_backing = try applyPublishedExecutablePayloadTransform(
+        program,
+        plans,
+        published_types,
+        transforms,
+        stmts,
+        nominal.backing,
+        backing_value,
+    );
+    const transformed_expr = try program.ast.addExpr(target.backing, transformed_backing, .{ .value_ref = transformed_backing });
+    const nominal_value = program.ast.freshValueRef();
+    const nominal_expr = try program.ast.addExpr(to_ty, nominal_value, .{ .nominal_reinterpret = transformed_expr });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = nominal_value,
+        .body = nominal_expr,
+    } }));
+    return nominal_value;
+}
+
+fn applyTuplePayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    items: []const checked_artifact.PayloadTransformTupleElem,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const source = switch (program.types.getType(from_ty)) {
+        .tuple => |tuple| tuple,
+        else => executableInvariant("tuple payload transform source endpoint is not a tuple"),
+    };
+    const target = switch (program.types.getType(to_ty)) {
+        .tuple => |tuple| tuple,
+        else => executableInvariant("tuple payload transform target endpoint is not a tuple"),
+    };
+    if (items.len != target.len or source.len != target.len) {
+        executableInvariant("tuple payload transform arity differs from endpoint tuple");
+    }
+
+    const tuple_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const seen = try program.allocator.alloc(bool, items.len);
+    defer program.allocator.free(seen);
+    @memset(seen, false);
+
+    const output_items = try program.allocator.alloc(Ast.ExprId, target.len);
+    defer program.allocator.free(output_items);
+    for (target, 0..) |target_item_ty, i| {
+        const item_plan = findPayloadTransformTupleElem(items, @intCast(i), seen) orelse {
+            executableInvariant("tuple payload transform omitted a target element");
+        };
+        const access_value = program.ast.freshValueRef();
+        const access_expr = try program.ast.addExpr(source[i], access_value, .{ .tuple_access = .{
+            .tuple = tuple_expr,
+            .elem_index = @intCast(i),
+        } });
+        try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+            .value = access_value,
+            .body = access_expr,
+        } }));
+        const transformed = try applyPublishedExecutablePayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            item_plan.transform,
+            access_value,
+        );
+        output_items[i] = try program.ast.addExpr(target_item_ty, transformed, .{ .value_ref = transformed });
+    }
+    verifyAllSeen(seen, "tuple payload transform had an extra element transform");
+
+    const tuple_value = program.ast.freshValueRef();
+    const result_expr = try program.ast.addExpr(to_ty, tuple_value, .{ .tuple = try program.ast.addExprSpan(output_items) });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = tuple_value,
+        .body = result_expr,
+    } }));
+    return tuple_value;
+}
+
+fn findPayloadTransformTupleElem(
+    items: []const checked_artifact.PayloadTransformTupleElem,
+    index: u32,
+    seen: []bool,
+) ?checked_artifact.PayloadTransformTupleElem {
+    for (items, 0..) |item, i| {
+        if (item.index != index) continue;
+        if (seen[i]) executableInvariant("tuple payload transform duplicated an element");
+        seen[i] = true;
+        return item;
+    }
+    return null;
+}
+
+fn applyCallableToErasedPayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    callable: checked_artifact.CallableToErasedTransformPlan,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const result_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const erased_ty = erasedFnType(program, result_ty);
+    switch (callable) {
+        .finite_value => |finite| {
+            if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, finite.adapter_key.erased_fn_sig_key)) {
+                executableInvariant("finite callable erasure transform target signature differs from adapter key");
+            }
+            if (!repr.callableSetKeyEql(finite.callable_set_key, finite.adapter_key.callable_set_key)) {
+                executableInvariant("finite callable erasure transform callable-set key differs from adapter key");
+            }
+            if (!repr.canonicalTypeKeyEql(finite.source_fn_ty, finite.adapter_key.source_fn_ty)) {
+                executableInvariant("finite callable erasure transform source function type differs from adapter key");
+            }
+
+            const hidden_capture = if (erased_ty.capture_ty == null) null else value;
+            const packed_value = program.ast.freshValueRef();
+            const packed_expr = try program.ast.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
+                .sig_key = finite.adapter_key.erased_fn_sig_key,
+                .code = executableProcForErasedAdapter(program, finite.adapter_key),
+                .capture = hidden_capture,
+                .capture_ty = erased_ty.capture_ty,
+                .capture_shape = finite.adapter_key.capture_shape_key,
+            } });
+            try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                .value = packed_value,
+                .body = packed_expr,
+            } }));
+            return packed_value;
+        },
+        .proc_value => |proc| {
+            if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, proc.erased_fn_sig_key)) {
+                executableInvariant("proc-value erasure transform target signature differs from plan");
+            }
+            _ = executableProcForSpecializationKey(program, proc.executable_specialization_key);
+            const erased_expr = try lowerMaterializedErasedCallableValue(
+                program.allocator,
+                program,
+                plans,
+                result_ty,
+                .{
+                    .source_fn_ty = proc.proc_value.source_fn_ty,
+                    .sig_key = proc.erased_fn_sig_key,
+                    .code = .{ .direct_proc_value = .{
+                        .proc_value = proc.proc_value,
+                        .capture_shape_key = proc.capture_shape_key,
+                    } },
+                    .capture = proc.capture,
+                    .provenance = &.{},
+                },
+            );
+            const erased_value = program.ast.getExpr(erased_expr).value;
+            try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                .value = erased_value,
+                .body = erased_expr,
+            } }));
+            return erased_value;
+        },
+    }
+}
+
+fn erasedFnType(program: *const Program, ty: Type.TypeId) Type.ErasedFnType {
+    return switch (program.types.getType(ty)) {
+        .erased_fn => |erased_fn| erased_fn,
+        else => executableInvariant("executable payload transform expected erased function target"),
+    };
 }
 
 fn lowerPublishedExecutablePayloadTransformAsBridge(
@@ -892,6 +1234,17 @@ fn lowerExecutableStructuralBridgePlan(
         } },
     };
     return try program.ast.addBridgePlan(plan);
+}
+
+fn recordFieldForLabel(
+    program: *const Program,
+    record: Type.RecordType,
+    label: canonical.RecordFieldLabelId,
+) Type.RecordFieldType {
+    for (record.fields) |field| {
+        if (program.row_shapes.recordField(field.field).label == label) return field;
+    }
+    executableInvariant("record payload transform source field label is absent from source type");
 }
 
 fn tagDiscriminantForLabel(
@@ -1428,6 +1781,17 @@ fn executableProcForCallable(
         if (canonical.procedureCallableRefEql(source.callable, callable)) return proc.executable_proc;
     }
     executableInvariant("executable erased promoted wrapper referenced an unreserved callable procedure");
+}
+
+fn executableProcForSpecializationKey(
+    program: *const Program,
+    key: repr.ExecutableSpecializationKey,
+) Ast.ExecutableProcId {
+    for (program.procs.items) |proc| {
+        const def = program.ast.defs.items[@intFromEnum(proc.body)];
+        if (repr.executableSpecializationKeyEql(def.specialization_key, key)) return proc.executable_proc;
+    }
+    executableInvariant("executable payload transform referenced an unreserved executable specialization");
 }
 
 fn executableProcForErasedAdapter(
