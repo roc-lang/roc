@@ -1087,6 +1087,13 @@ fn constValueContextForRoot(
     root_proc: canonical.MirProcedureRef,
 ) ConstValueContext {
     const instance = procRepresentationInstanceForRoot(solved, root_proc);
+    return constValueContextForInstance(solved, instance);
+}
+
+fn constValueContextForInstance(
+    solved: *const mir.LambdaSolved.Solve.Program,
+    instance: repr.ProcRepresentationInstance,
+) ConstValueContext {
     return .{
         .solved = solved,
         .canonical_names = &solved.canonical_names,
@@ -1420,7 +1427,7 @@ fn erasedProcValueResultPlan(
             .proc_value = erase.proc_value,
             .capture_shape_key = erase.capture_shape_key,
         } },
-        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, source, erase),
+        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, erase),
         .result_ty = erase.executable_specialization_key.exec_ret_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForProcValue(
             allocator,
@@ -1536,7 +1543,6 @@ fn erasedCapturePlanForProcValue(
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
-    source: anytype,
     erase: repr.ProcValueErasePlan,
 ) Allocator.Error!checked_artifact.ErasedCaptureReificationPlan {
     if (erase.erased_fn_sig_key.capture_ty == null) {
@@ -1555,26 +1561,46 @@ fn erasedCapturePlanForProcValue(
     defer allocator.free(seen);
     @memset(seen, false);
 
+    const target_instance = value_context.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
+    const target_context = constValueContextForInstance(value_context.solved, target_instance);
+    const target_captures = target_context.value_store.sliceValueSpan(target_instance.public_roots.captures);
+    if (target_captures.len != erase.capture_slots.len) {
+        checkedPipelineInvariant("erased proc-value result capture slot count differs from target capture arity");
+    }
+
     var capture_builder = CaptureSlotPlanBuilder{
         .allocator = allocator,
         .artifact = artifact_sink,
         .plans = plans,
-        .value_context = value_context,
+        .value_context = target_context,
         .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
     };
     defer capture_builder.deinit();
 
     for (erase.capture_slots) |slot| {
         const slot_index: usize = @intCast(slot.slot);
-        if (slot_index >= source.captures.len) {
-            checkedPipelineInvariant("erased proc-value result capture slot exceeded source capture arity");
+        if (slot_index >= target_captures.len) {
+            checkedPipelineInvariant("erased proc-value result capture slot exceeded target capture arity");
         }
         if (seen[slot_index]) {
             checkedPipelineInvariant("erased proc-value result capture slot was duplicated");
         }
+        const target_capture = target_captures[slot_index];
+        const target_capture_info = target_context.value_store.values.items[@intFromEnum(target_capture)];
+        const target_key = try repr.execValueTypeKeyForValue(
+            allocator,
+            target_context.canonical_names,
+            target_context.types,
+            target_context.representation_store,
+            target_context.value_store,
+            target_capture,
+        );
+        if (!repr.canonicalExecValueTypeKeyEql(target_key, slot.exec_value_ty)) {
+            checkedPipelineInvariant("erased proc-value result target capture executable key differs from capture slot key");
+        }
         slot_plans[slot_index] = .{
-            .source_ty = slot.source_ty,
-            .plan = try capture_builder.planFor(slot.source_ty, source.captures[slot_index]),
+            .source_ty = target_capture_info.source_ty,
+            .plan = try capture_builder.planFor(target_capture_info.source_ty, target_capture),
         };
         seen[slot_index] = true;
     }
