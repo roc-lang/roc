@@ -2617,6 +2617,7 @@ const BodySolver = struct {
                 self.value_store.values.items[@intFromEnum(result_value)].boxed = .{
                     .box_root = result_root,
                     .payload_root = payload_root,
+                    .payload_value = payload_value,
                     .boundary = boundary,
                 };
             },

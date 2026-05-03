@@ -524,6 +524,7 @@ pub const CallableValueInfo = struct {
 pub const BoxedValueInfo = struct {
     box_root: RepRootId,
     payload_root: RepRootId,
+    payload_value: ?ValueInfoId = null,
     boundary: ?BoxBoundaryId = null,
 };
 
@@ -2224,6 +2225,8 @@ const SessionExecutableTypePayloadBuilder = struct {
         const info = values.values.items[@intFromEnum(value)];
         const payload = if (info.callable) |callable|
             try self.callablePayload(callable)
+        else if (info.boxed) |boxed|
+            try self.boxedPayload(info.logical_ty, boxed)
         else if (info.aggregate) |aggregate|
             try self.aggregatePayload(info.logical_ty, aggregate)
         else
@@ -2417,6 +2420,25 @@ const SessionExecutableTypePayloadBuilder = struct {
             .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(erase) },
             .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
         };
+    }
+
+    fn boxedPayload(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+        boxed: BoxedValueInfo,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        const payload_value = boxed.payload_value orelse representationInvariant("session executable boxed value payload has no published payload value");
+        const child = try self.childForValue(payload_value);
+        const root = self.types.unlinkConst(logical_ty);
+        const content = switch (self.types.getNode(root)) {
+            .content => |content| content,
+            else => representationInvariant("session executable boxed value has non-box logical type"),
+        };
+        switch (content) {
+            .box => {},
+            else => representationInvariant("session executable boxed value has non-box content"),
+        }
+        return .{ .box = child };
     }
 
     fn callableSetPayload(self: *SessionExecutableTypePayloadBuilder, key: CanonicalCallableSetKey) std.mem.Allocator.Error!SessionExecutableCallableSetPayload {
