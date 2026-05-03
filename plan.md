@@ -4478,11 +4478,20 @@ const MatchScrutinee = struct {
 
 const SourceMatchBranch = struct {
     source_branch: CheckedBranchId,
+    alternatives: Span(SourceMatchAlternative),
     materialized_paths: Span(MaterializedPatternPathValue),
     bindings: Span(PatternBinding),
+    guard: ?GuardPlanId,
     body: ExprId,
     branch_result: TempId,
     bridge_to_result: ?BridgeId,
+};
+
+const SourceMatchAlternative = struct {
+    source_branch: CheckedBranchId,
+    source_branch_pattern: CheckedMatchBranchPatternId,
+    root_pattern: PatId,
+    degenerate: bool,
 };
 
 const PatternPathValuePlanId = distinct u32;
@@ -4609,6 +4618,8 @@ const PatternTest = union(enum) {
 
 const DecisionLeaf = struct {
     source_branch: CheckedBranchId,
+    source_branch_pattern: CheckedMatchBranchPatternId,
+    degenerate: bool,
     body: ExprId,
 };
 ```
@@ -4633,6 +4644,15 @@ Decision construction follows these rules:
   pattern types, and guard plans. User-facing exhaustiveness, redundancy, and
   invalid-pattern diagnostics have already happened before checked artifact
   publication.
+- Current checked Roc `CheckedMatchBranch.patterns` are branch alternatives
+  produced by source `|` patterns. They are not multiple scrutinees. Each
+  alternative is an independent row in the pattern matrix with the same source
+  branch body and guard. The decision plan must carry the selected
+  `CheckedMatchBranchPatternId` all the way to the leaf so later stages know
+  which alternative matched without inspecting source syntax. If future Roc
+  syntax adds true multi-scrutinee `match`, checked artifact publication must
+  expose explicit `MatchScrutinee` rows separately; it must not overload branch
+  alternatives as scrutinees.
 - Flatten nested patterns into `(PatternPath, PatternTest)` pairs. A path starts
   at a scrutinee and then steps through finalized payload, field, tuple,
   list-probe, opaque, or newtype ids.
@@ -4644,6 +4664,25 @@ Decision construction follows these rules:
   whose guard fails must continue to the next source-compatible branch. This is
   the same semantic requirement that old Rust handled with
   `PlaceholderWithGuard`, `GuardedNoTest`, and `break_out_guard`.
+- A degenerate branch alternative is explicit runtime semantics, not a compiler
+  invariant and not a post-check user-facing error. Canonicalization marks an
+  alternative as degenerate when that alternative does not bind every symbol the
+  source branch guard or body may use. For example:
+
+  ```roc
+  value =
+      match input {
+          A(x) | B(_) => x
+      }
+  ```
+
+  Reaching `A(x)` evaluates the branch normally. Reaching `B(_)` must lower to
+  the checked degenerate-alternative runtime error before evaluating the guard
+  or branch body, because the branch lexical environment cannot be completed.
+  The decision leaf therefore carries `degenerate = true` for that alternative
+  and IR/LIR lower it to the explicit runtime-error path selected by checking.
+  Later stages must not infer degeneracy by comparing binder names or scanning
+  the body.
 - List-length tests must preserve specificity ordering. More specific
   `list_len_at_least` tests run before less-specific ones, and exact length
   tests at the same length run before the at-least test for that length. This
@@ -4749,6 +4788,12 @@ result variable exactly once. A leaf that is reachable from several decision
 paths must receive all needed materialized path values through explicit
 control-flow-local temporaries or an explicit join block; it must not recompute
 path extractions from the original scrutinees.
+
+If the reached `DecisionLeaf.degenerate` flag is true, IR lowering must emit the
+checked degenerate-alternative runtime-error path immediately. It must not
+materialize branch binders, evaluate the branch guard, lower the branch body, or
+try to synthesize missing binder values. This runtime-error path is part of the
+checked artifact's published semantics.
 
 The temporary cache used while lowering one decision path is control-flow-local.
 It may be threaded through recursive IR emission as implementation state, but it
