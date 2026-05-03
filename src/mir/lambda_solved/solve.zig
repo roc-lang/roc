@@ -66,7 +66,7 @@ pub const Program = struct {
         }
         self.proc_instances.deinit(self.allocator);
         for (self.solve_sessions.items) |*session| {
-            session.deinit();
+            session.deinit(self.allocator);
         }
         self.solve_sessions.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
@@ -82,6 +82,323 @@ pub const Program = struct {
         self.* = Program.init(self.allocator);
     }
 };
+
+const ProcedureDependencyGraph = struct {
+    allocator: Allocator,
+    input: *const Lifted.Lift.Program,
+    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    edges: []std.ArrayList(u32),
+
+    fn init(
+        allocator: Allocator,
+        input: *const Lifted.Lift.Program,
+        proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    ) Allocator.Error!ProcedureDependencyGraph {
+        const edges = try allocator.alloc(std.ArrayList(u32), input.procs.items.len);
+        errdefer allocator.free(edges);
+        for (edges) |*edge_list| {
+            edge_list.* = .empty;
+        }
+        errdefer {
+            for (edges) |*edge_list| {
+                edge_list.deinit(allocator);
+            }
+        }
+
+        var graph = ProcedureDependencyGraph{
+            .allocator = allocator,
+            .input = input,
+            .proc_instance_map = proc_instance_map,
+            .edges = edges,
+        };
+        for (input.procs.items, 0..) |proc, i| {
+            _ = proc;
+            try graph.collectDefDependencies(@intCast(i), input.procs.items[i].body);
+        }
+        return graph;
+    }
+
+    fn deinit(self: *ProcedureDependencyGraph) void {
+        for (self.edges) |*edge_list| {
+            edge_list.deinit(self.allocator);
+        }
+        self.allocator.free(self.edges);
+    }
+
+    fn collectDefDependencies(self: *ProcedureDependencyGraph, source_index: u32, def_id: Lifted.Ast.DefId) Allocator.Error!void {
+        const def = self.input.ast.getDef(def_id);
+        switch (def.value) {
+            .fn_ => |fn_| try self.collectExprDependencies(source_index, fn_.body),
+            .hosted_fn => {},
+            .val => |expr| try self.collectExprDependencies(source_index, expr),
+            .run => |run| try self.collectExprDependencies(source_index, run.body),
+        }
+    }
+
+    fn collectExprDependencies(self: *ProcedureDependencyGraph, source_index: u32, expr_id: Lifted.Ast.ExprId) Allocator.Error!void {
+        const expr = self.input.ast.getExpr(expr_id);
+        switch (expr.data) {
+            .var_,
+            .capture_ref,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .bool_lit,
+            .str_lit,
+            .const_instance,
+            .unit,
+            .crash,
+            .runtime_error,
+            => {},
+            .tag => |tag| {
+                try self.collectTagPayloadEvalDependencies(source_index, tag.eval_order);
+                try self.collectTagPayloadAssemblyDependencies(source_index, tag.assembly_order);
+            },
+            .record => |record| {
+                try self.collectRecordFieldEvalDependencies(source_index, record.eval_order);
+                try self.collectRecordFieldAssemblyDependencies(source_index, record.assembly_order);
+            },
+            .nominal_reinterpret => |backing| try self.collectExprDependencies(source_index, backing),
+            .access => |access| try self.collectExprDependencies(source_index, access.record),
+            .structural_eq => |eq| {
+                try self.collectExprDependencies(source_index, eq.lhs);
+                try self.collectExprDependencies(source_index, eq.rhs);
+            },
+            .bool_not => |child| try self.collectExprDependencies(source_index, child),
+            .let_ => |let_| {
+                try self.collectExprDependencies(source_index, let_.body);
+                try self.collectExprDependencies(source_index, let_.rest);
+            },
+            .call_value => |call| {
+                try self.collectExprDependencies(source_index, call.func);
+                try self.collectExprSpanDependencies(source_index, call.args);
+            },
+            .call_proc => |call| {
+                try self.appendProcedureDependency(source_index, call.proc);
+                try self.collectExprSpanDependencies(source_index, call.args);
+            },
+            .proc_value => |proc_value| {
+                try self.appendProcedureDependency(source_index, proc_value.proc);
+                try self.collectCaptureArgDependencies(source_index, proc_value.captures);
+            },
+            .inspect => |child| try self.collectExprDependencies(source_index, child),
+            .low_level => |low_level| try self.collectExprSpanDependencies(source_index, low_level.args),
+            .match_ => |match_| {
+                try self.collectExprDependencies(source_index, match_.cond);
+                for (self.input.ast.sliceBranchSpan(match_.branches)) |branch_id| {
+                    const branch = self.input.ast.getBranch(branch_id);
+                    if (branch.guard) |guard| try self.collectExprDependencies(source_index, guard);
+                    try self.collectExprDependencies(source_index, branch.body);
+                }
+            },
+            .if_ => |if_| {
+                try self.collectExprDependencies(source_index, if_.cond);
+                try self.collectExprDependencies(source_index, if_.then_body);
+                try self.collectExprDependencies(source_index, if_.else_body);
+            },
+            .block => |block| {
+                for (self.input.ast.sliceStmtSpan(block.stmts)) |stmt_id| {
+                    try self.collectStmtDependencies(source_index, self.input.ast.getStmt(stmt_id));
+                }
+                try self.collectExprDependencies(source_index, block.final_expr);
+            },
+            .tuple => |items| try self.collectExprSpanDependencies(source_index, items),
+            .tag_payload => |payload| try self.collectExprDependencies(source_index, payload.tag_union),
+            .tuple_access => |access| try self.collectExprDependencies(source_index, access.tuple),
+            .list => |items| try self.collectExprSpanDependencies(source_index, items),
+            .return_ => |child| try self.collectExprDependencies(source_index, child),
+            .for_ => |for_| {
+                try self.collectExprDependencies(source_index, for_.iterable);
+                try self.collectExprDependencies(source_index, for_.body);
+            },
+        }
+    }
+
+    fn collectStmtDependencies(self: *ProcedureDependencyGraph, source_index: u32, stmt: Lifted.Ast.Stmt) Allocator.Error!void {
+        switch (stmt) {
+            .decl => |decl| try self.collectExprDependencies(source_index, decl.body),
+            .var_decl => |decl| try self.collectExprDependencies(source_index, decl.body),
+            .reassign => |reassign| try self.collectExprDependencies(source_index, reassign.body),
+            .expr => |expr| try self.collectExprDependencies(source_index, expr),
+            .debug => |expr| try self.collectExprDependencies(source_index, expr),
+            .expect => |expr| try self.collectExprDependencies(source_index, expr),
+            .crash,
+            .break_,
+            => {},
+            .return_ => |expr| try self.collectExprDependencies(source_index, expr),
+            .for_ => |for_| {
+                try self.collectExprDependencies(source_index, for_.iterable);
+                try self.collectExprDependencies(source_index, for_.body);
+            },
+            .while_ => |while_| {
+                try self.collectExprDependencies(source_index, while_.cond);
+                try self.collectExprDependencies(source_index, while_.body);
+            },
+        }
+    }
+
+    fn collectExprSpanDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!void {
+        for (self.input.ast.sliceExprSpan(span)) |expr_id| {
+            try self.collectExprDependencies(source_index, expr_id);
+        }
+    }
+
+    fn collectCaptureArgDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!void {
+        for (self.input.ast.sliceCaptureArgSpan(span)) |capture| {
+            try self.collectExprDependencies(source_index, capture.expr);
+        }
+    }
+
+    fn collectRecordFieldEvalDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldEval)) Allocator.Error!void {
+        for (self.input.ast.sliceRecordFieldEvalSpan(span)) |field| {
+            try self.collectExprDependencies(source_index, field.value);
+        }
+    }
+
+    fn collectRecordFieldAssemblyDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldAssembly)) Allocator.Error!void {
+        for (self.input.ast.sliceRecordFieldAssemblySpan(span)) |field| {
+            try self.collectExprDependencies(source_index, field.value);
+        }
+    }
+
+    fn collectTagPayloadEvalDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadEval)) Allocator.Error!void {
+        for (self.input.ast.sliceTagPayloadEvalSpan(span)) |payload| {
+            try self.collectExprDependencies(source_index, payload.value);
+        }
+    }
+
+    fn collectTagPayloadAssemblyDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadAssembly)) Allocator.Error!void {
+        for (self.input.ast.sliceTagPayloadAssemblySpan(span)) |payload| {
+            try self.collectExprDependencies(source_index, payload.value);
+        }
+    }
+
+    fn appendProcedureDependency(self: *ProcedureDependencyGraph, source_index: u32, proc: canonical.MirProcedureRef) Allocator.Error!void {
+        const target_instance = self.proc_instance_map.get(proc) orelse {
+            lambdaInvariant("lambda-solved procedure dependency referenced an unreserved procedure");
+        };
+        try self.edges[source_index].append(self.allocator, @intFromEnum(target_instance));
+    }
+};
+
+const ProcedureSccBuilder = struct {
+    allocator: Allocator,
+    graph: *const ProcedureDependencyGraph,
+    next_index: i32 = 0,
+    indices: []i32,
+    lowlinks: []i32,
+    on_stack: []bool,
+    stack: std.ArrayList(u32),
+    proc_session_ids: []repr.RepresentationSolveSessionId,
+
+    fn init(allocator: Allocator, graph: *const ProcedureDependencyGraph) Allocator.Error!ProcedureSccBuilder {
+        const len = graph.edges.len;
+        const indices = try allocator.alloc(i32, len);
+        errdefer allocator.free(indices);
+        const lowlinks = try allocator.alloc(i32, len);
+        errdefer allocator.free(lowlinks);
+        const on_stack = try allocator.alloc(bool, len);
+        errdefer allocator.free(on_stack);
+        const proc_session_ids = try allocator.alloc(repr.RepresentationSolveSessionId, len);
+        errdefer allocator.free(proc_session_ids);
+
+        @memset(indices, -1);
+        @memset(lowlinks, -1);
+        @memset(on_stack, false);
+
+        return .{
+            .allocator = allocator,
+            .graph = graph,
+            .indices = indices,
+            .lowlinks = lowlinks,
+            .on_stack = on_stack,
+            .stack = .empty,
+            .proc_session_ids = proc_session_ids,
+        };
+    }
+
+    fn deinit(self: *ProcedureSccBuilder) void {
+        self.stack.deinit(self.allocator);
+        self.allocator.free(self.proc_session_ids);
+        self.allocator.free(self.on_stack);
+        self.allocator.free(self.lowlinks);
+        self.allocator.free(self.indices);
+    }
+
+    fn build(self: *ProcedureSccBuilder, program: *Program) Allocator.Error![]repr.RepresentationSolveSessionId {
+        for (self.graph.edges, 0..) |_, i| {
+            if (self.indices[i] == -1) {
+                try self.strongConnect(@intCast(i), program);
+            }
+        }
+        const result = try self.allocator.dupe(repr.RepresentationSolveSessionId, self.proc_session_ids);
+        return result;
+    }
+
+    fn strongConnect(self: *ProcedureSccBuilder, v: u32, program: *Program) Allocator.Error!void {
+        self.indices[v] = self.next_index;
+        self.lowlinks[v] = self.next_index;
+        self.next_index += 1;
+        try self.stack.append(self.allocator, v);
+        self.on_stack[v] = true;
+
+        for (self.graph.edges[v].items) |w| {
+            if (self.indices[w] == -1) {
+                try self.strongConnect(w, program);
+                self.lowlinks[v] = @min(self.lowlinks[v], self.lowlinks[w]);
+            } else if (self.on_stack[w]) {
+                self.lowlinks[v] = @min(self.lowlinks[v], self.indices[w]);
+            }
+        }
+
+        if (self.lowlinks[v] == self.indices[v]) {
+            var members = std.ArrayList(repr.ProcRepresentationInstanceId){};
+            errdefer members.deinit(self.allocator);
+
+            while (true) {
+                const w = self.stack.pop() orelse lambdaInvariant("lambda-solved SCC stack unexpectedly emptied");
+                self.on_stack[w] = false;
+                try members.append(self.allocator, @enumFromInt(w));
+                if (w == v) break;
+            }
+
+            std.mem.sort(repr.ProcRepresentationInstanceId, members.items, {}, struct {
+                fn lessThan(_: void, lhs: repr.ProcRepresentationInstanceId, rhs: repr.ProcRepresentationInstanceId) bool {
+                    return @intFromEnum(lhs) < @intFromEnum(rhs);
+                }
+            }.lessThan);
+
+            const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(program.solve_sessions.items.len)));
+            for (members.items) |member| {
+                self.proc_session_ids[@intFromEnum(member)] = session_id;
+            }
+
+            const owned_members = try members.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(owned_members);
+            try program.solve_sessions.append(self.allocator, .{
+                .members = owned_members,
+                .representation_store = repr.RepresentationStore.init(self.allocator),
+                .state = .building,
+            });
+        }
+    }
+};
+
+fn createRepresentationSolveSessions(
+    allocator: Allocator,
+    input: *const Lifted.Lift.Program,
+    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    program: *Program,
+) Allocator.Error![]repr.RepresentationSolveSessionId {
+    var graph = try ProcedureDependencyGraph.init(allocator, input, proc_instance_map);
+    defer graph.deinit();
+
+    var builder = try ProcedureSccBuilder.init(allocator, &graph);
+    defer builder.deinit();
+
+    return try builder.build(program);
+}
 
 pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Program {
     var input = lifted;
@@ -112,18 +429,17 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
 
     for (input.procs.items, 0..) |proc, i| {
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
-        program.solve_sessions.appendAssumeCapacity(.{
-            .members = &.{},
-            .representation_store = repr.RepresentationStore.init(allocator),
-            .state = .building,
-        });
         program.value_stores.appendAssumeCapacity(repr.ValueInfoStore.init(allocator));
         proc_instance_map.putAssumeCapacity(proc.proc, instance);
     }
 
+    const proc_session_ids = try createRepresentationSolveSessions(allocator, &input, &proc_instance_map, &program);
+    defer allocator.free(proc_session_ids);
+
     for (input.procs.items, 0..) |proc, i| {
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
-        const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(i)));
+        const session_id = proc_session_ids[i];
+        const session_index = @intFromEnum(session_id);
         const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(i)));
 
         var solver = BodySolver{
@@ -132,7 +448,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
             .type_importer = &type_importer,
-            .representation_store = &program.solve_sessions.items[i].representation_store,
+            .representation_store = &program.solve_sessions.items[session_index].representation_store,
             .value_store = &program.value_stores.items[i],
             .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(allocator),
             .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(allocator),
@@ -147,7 +463,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             allocator,
             &program.canonical_names,
             &program.types,
-            &program.solve_sessions.items[i].representation_store,
+            &program.solve_sessions.items[session_index].representation_store,
             &program.value_stores.items[i],
             proc.proc,
             roots,

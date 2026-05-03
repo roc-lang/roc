@@ -1943,7 +1943,8 @@ pub const RepresentationSolveSession = struct {
     representation_store: RepresentationStore,
     state: RepresentationSolveState,
 
-    pub fn deinit(self: *RepresentationSolveSession) void {
+    pub fn deinit(self: *RepresentationSolveSession, allocator: std.mem.Allocator) void {
+        if (self.members.len > 0) allocator.free(self.members);
         self.representation_store.deinit();
     }
 };
