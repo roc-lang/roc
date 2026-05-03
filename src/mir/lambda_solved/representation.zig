@@ -1038,6 +1038,7 @@ pub const ValueInfo = struct {
     source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
+    value_alias_source: ?ValueInfoId = null,
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
     aggregate: ?AggregateValueInfo = null,
@@ -2452,11 +2453,21 @@ const SessionExecutableTypePayloadBuilder = struct {
             return .{ .ty = existing, .key = key };
         }
 
+        const info = values.values.items[@intFromEnum(value)];
+        if (info.callable == null and info.boxed == null and info.aggregate == null) {
+            if (info.value_alias_source) |source| {
+                const source_endpoint = try self.endpointForValue(source);
+                if (!canonicalExecValueTypeKeyEql(source_endpoint.key, key)) {
+                    representationInvariant("session executable type payload alias source key disagrees with alias value key");
+                }
+                return source_endpoint;
+            }
+        }
+
         const id = try self.payload_store.reserve(self.allocator, key);
         try self.active_values.put(value, id);
         errdefer _ = self.active_values.remove(value);
 
-        const info = values.values.items[@intFromEnum(value)];
         const payload = if (info.callable) |callable|
             try self.callablePayload(callable)
         else if (info.boxed) |boxed|
@@ -3164,12 +3175,29 @@ const ExecValueTypeKeyBuilder = struct {
         const info = values.values.items[@intFromEnum(value)];
         if (info.callable) |callable| {
             try self.writeCallableValue(callable);
+        } else if (info.boxed) |boxed| {
+            try self.writeBoxedValue(info.logical_ty, boxed);
         } else if (info.aggregate) |aggregate| {
             try self.writeAggregateValue(info.logical_ty, aggregate);
+        } else if (info.value_alias_source) |source| {
+            try self.writeValue(source);
         } else {
             try self.writeType(info.logical_ty);
         }
         _ = self.active_values.remove(value);
+    }
+
+    fn writeBoxedValue(
+        self: *ExecValueTypeKeyBuilder,
+        logical_ty: TypeVarId,
+        boxed: BoxedValueInfo,
+    ) std.mem.Allocator.Error!void {
+        self.writeTag("box_value");
+        if (boxed.payload_value) |payload| {
+            try self.writeValue(payload);
+            return;
+        }
+        try self.writeType(logical_ty);
     }
 
     fn writeCallableValue(self: *ExecValueTypeKeyBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!void {

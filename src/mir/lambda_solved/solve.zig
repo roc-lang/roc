@@ -520,6 +520,11 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
     for (program.value_stores.items) |value_store| {
         for (value_store.values.items) |value| {
             verifyConcreteSourcePayload(program, value.source_ty, value.source_ty_payload, "lambda-solved value");
+            if (value.value_alias_source) |source| {
+                if (@intFromEnum(source) >= value_store.values.items.len) {
+                    lambdaInvariant("lambda-solved value alias source points outside the value store");
+                }
+            }
             if (value.solved_class == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
             }
@@ -4648,6 +4653,12 @@ const BodySolver = struct {
         source: repr.ValueInfoId,
         result: repr.ValueInfoId,
     ) Allocator.Error!void {
+        const result_info = &self.value_store.values.items[@intFromEnum(result)];
+        if (result_info.value_alias_source) |existing| {
+            if (existing != source) lambdaInvariant("lambda-solved value alias result already points at a different source value");
+        } else {
+            result_info.value_alias_source = source;
+        }
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(source) },
             .to = .{ .local = self.valueRoot(result) },
