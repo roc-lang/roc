@@ -622,6 +622,87 @@ const ExecutableValueTransformRef = union(enum) {
     published: PublishedExecutableValueTransformRef,
 };
 
+const SessionExecutableTypePayloadId = enum(u32) { _ };
+
+const SessionExecutableTypePayloadRef = struct {
+    payload: SessionExecutableTypePayloadId,
+};
+
+const SessionExecutableTypeEndpoint = struct {
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableTypePayloadChild = struct {
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableRecordFieldPayload = struct {
+    field: RecordFieldId,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableTupleElemPayload = struct {
+    index: u32,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableTagPayload = struct {
+    payload: TagPayloadId,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableTagVariantPayload = struct {
+    tag: TagId,
+    payloads: Span(SessionExecutableTagPayload),
+};
+
+const SessionExecutableNominalPayload = struct {
+    nominal: NominalTypeKey,
+    backing: SessionExecutableTypePayloadRef,
+    backing_key: CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableCallableSetMemberPayload = struct {
+    member: CallableSetMemberId,
+    payload_ty: ?SessionExecutableTypePayloadRef,
+    payload_ty_key: ?CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableCallableSetPayload = struct {
+    key: CanonicalCallableSetKey,
+    members: Span(SessionExecutableCallableSetMemberPayload),
+};
+
+const SessionExecutableErasedFnPayload = struct {
+    sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    capture_ty: ?SessionExecutableTypePayloadRef,
+    capture_ty_key: ?CanonicalExecValueTypeKey,
+};
+
+const SessionExecutableTypePayload = union(enum) {
+    pending,
+    primitive: ExecutablePrimitive,
+    record: Span(SessionExecutableRecordFieldPayload),
+    tuple: Span(SessionExecutableTupleElemPayload),
+    tag_union: Span(SessionExecutableTagVariantPayload),
+    list: SessionExecutableTypePayloadChild,
+    box: SessionExecutableTypePayloadChild,
+    nominal: SessionExecutableNominalPayload,
+    callable_set: SessionExecutableCallableSetPayload,
+    erased_fn: SessionExecutableErasedFnPayload,
+    recursive_ref: SessionExecutableTypePayloadId,
+};
+
+const SessionExecutableTypePayloadStore = struct {
+    payloads: Store(SessionExecutableTypePayload),
+};
+
 const SessionExecutableValueEndpointOwner = union(enum) {
     local_value: ValueInfoId,
     procedure_param: struct {
@@ -643,7 +724,7 @@ const SessionExecutableValueEndpointOwner = union(enum) {
 const SessionExecutableValueEndpoint = struct {
     owner: SessionExecutableValueEndpointOwner,
     logical_ty: LambdaSolvedTypeId,
-    key: CanonicalExecValueTypeKey,
+    exec_ty: SessionExecutableTypeEndpoint,
 };
 
 const SessionValueTransformRecordField = struct {
@@ -1056,10 +1137,40 @@ This store is a linear arena for explicit transform plans selected during
 representation solving; it is not a memoizing cache and it must not be consulted
 by other specializations. Session transform endpoints are
 `SessionExecutableValueEndpoint` values: an explicit endpoint owner, the
-lambda-solved logical type id for that endpoint, and the canonical executable
-type key selected for that endpoint. They do not contain
-`ExecutableTypePayloadRef`, because ordinary run-local values do not have
-artifact-published executable type payloads.
+lambda-solved logical type id for that endpoint, and a
+`SessionExecutableTypeEndpoint` containing both a session-local structural
+payload ref and the canonical executable type key selected for that endpoint.
+They do not contain `ExecutableTypePayloadRef`, because ordinary run-local
+values do not have artifact-published executable type payloads. They also must
+not contain only `CanonicalExecValueTypeKey`, because a key is identity, not a
+lowerable structural payload. The owning lambda-solved solve session must own a
+`SessionExecutableTypePayloadStore` that maps every session endpoint payload ref
+to the structural executable type selected by representation solving.
+
+`SessionExecutableTypePayloadStore` is semantic stage data, not a cache. It is
+the session-local counterpart of the artifact-owned
+`ExecutableTypePayloadStore`. The two stores are intentionally separate because
+session payloads can describe ordinary values inside one executable
+specialization, while artifact payloads can be imported by other modules and
+must be addressed through `ExecutableTypePayloadRef { artifact, payload }`.
+Their payload cases are isomorphic: primitive, record, tuple, tag union, list,
+box, nominal, callable-set, erased-fn, and recursive-ref. Session child payloads
+use session-local refs plus canonical keys; published child payloads use
+artifact refs plus canonical keys. Recursive session payloads use store-local
+placeholders/backrefs, never raw Zig pointers, raw type ids, layout ids,
+expression ids, source names, generated symbols, or allocation-order-dependent
+handles.
+
+Whenever lambda-solved MIR previously would have computed only a
+`CanonicalExecValueTypeKey` for a session value or boundary, it must instead
+construct the canonical executable payload, intern it in the session
+`SessionExecutableTypePayloadStore`, and return the pair
+`SessionExecutableTypeEndpoint { ty, key }`. The key is the content identity of
+that payload. A later stage may use the key only for debug-only verification
+that the payload it lowered is the one representation solving selected; it must
+not use the key as a lookup into a global semantic cache or as permission to
+reconstruct the payload from source type, layout, callee body, runtime bytes, or
+syntax.
 
 The endpoint owner is mandatory because not every session transform endpoint is
 a local expression value in the current procedure. Call transforms cross a real
@@ -1067,14 +1178,19 @@ procedure boundary. A `call_proc` argument transforms from the caller's local
 argument value to a target `procedure_param`; a `call_proc` result transforms
 from the target `procedure_return` endpoint to the call expression's local
 result value. A `call_value_erased` argument transforms from the caller's local
-argument value to a `call_raw_arg` endpoint whose key comes from the explicit
-erased ABI payload `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`; its raw
-result transforms from `call_raw_result`, whose key is
+argument value to a `call_raw_arg` endpoint whose key equals the explicit erased
+ABI payload `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`; its raw result
+transforms from `call_raw_result`, whose key equals
 `erased_fn_abi(sig_key.abi).ret_exec_key`, to the call expression's local result
-value. The ABI payload must be read from the checked artifact or lambda-solved
-solve session that owns the erased-call site. It must not be reconstructed from
-the source function type, physical layout, callee body, runtime packed value, or
-backend calling convention.
+value. The `call_raw_arg` and `call_raw_result` endpoints must also carry
+session executable payload refs in the owning `SessionExecutableTypePayloadStore`.
+Those payload refs describe the raw ABI argument/result values that executable
+MIR must materialize before and after `call_erased`. An erased ABI key without a
+resolving payload in the owning session or artifact is not lowerable. The ABI
+payload must be read from the checked artifact or lambda-solved solve session
+that owns the erased-call site. It must not be reconstructed from the source
+function type, physical layout, callee body, runtime packed value, backend
+calling convention, or by comparing compatible shapes.
 A finite callable-set `callable_match` branch transforms from its
 `callable_match_branch_raw_result` endpoint to the shared call result endpoint.
 Branch joins, captures, mutable joins, loop phis, aggregate existing-value
@@ -1087,12 +1203,17 @@ endpoint from a direct-call layout.
 Executable MIR lowers a published transform by first lowering the published
 endpoint `ExecutableTypePayloadRef`s into the current executable type store,
 then lowering the explicit transform operation. Executable MIR lowers a session
-transform by lowering the endpoint `ValueInfoId` through the current
-lambda-solved `ValueInfoStore` and `RepresentationStore`, then lowering the
-explicit transform operation. In both modes, executable MIR may use endpoint
-`key` fields only for debug-only verification that the lowered endpoint payloads
-match the expected canonical executable types. It must not derive a transform by
-comparing source and target shapes.
+transform by lowering the endpoint `SessionExecutableTypeEndpoint.ty` through
+the current session `SessionExecutableTypePayloadStore`, then lowering the
+explicit transform operation. For endpoints whose owner is `local_value`,
+executable MIR also verifies that the local value metadata lowers to the same
+canonical key as the endpoint payload. For endpoints whose owner is
+`procedure_param`, `procedure_return`, `call_raw_arg`, `call_raw_result`, or
+`callable_match_branch_raw_result`, the session executable payload ref is the
+only legal structural type source. In both modes, executable MIR may use
+endpoint `key` fields only for debug-only verification that the lowered endpoint
+payloads match the expected canonical executable types. It must not derive a
+transform by comparing source and target shapes.
 
 Published transform children are `ExecutableValueTransformPlanId` values local
 to the same published artifact store. Session transform children are
@@ -1276,6 +1397,18 @@ expression ids, or allocation-order-dependent handles. The store is not a cache;
 it is published semantic data produced by lambda-solved MIR while checking
 finalization is still evaluating/promoting compile-time callable roots.
 
+Artifact-owned `ExecutableTypePayloadStore` and session-owned
+`SessionExecutableTypePayloadStore` are the only two legal owners of structural
+executable type payloads after lambda-solved representation solving. A
+`CanonicalExecValueTypeKey` by itself never lowers to an executable `TypeId`.
+The key must always be paired with either an artifact-owned
+`ExecutableTypePayloadRef` or a session-owned `SessionExecutableTypePayloadRef`.
+Executable MIR may maintain a local mechanical memo from payload ids to lowered
+`TypeId`s to avoid duplicate work, but that memo is not semantic input and must
+not be queried by key alone. If executable MIR observes a key without a payload
+ref at a boundary that requires a type, the compiler is malformed: debug builds
+assert immediately and release builds use `unreachable`.
+
 For an erased promoted procedure:
 
 - `specialization_key` is the exact executable specialization key for the
@@ -1293,12 +1426,18 @@ For an erased promoted procedure:
   copied from the same `ErasedFnAbi` payload named by `sig_key.abi`, not computed
   independently. Their arity must exactly match
   `erased_fn_abi(sig_key.abi).fixed_arity`, and each key must exactly equal the
-  corresponding `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`.
+  corresponding `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`. Each
+  `erased_call_args[index]` payload ref must be the published artifact payload
+  for that exact key; the publisher must obtain it from the same canonical
+  executable payload used to publish the ABI key, not by copying the wrapper
+  parameter payload when the key happens to match and not by recomputing shape
+  from the source function type.
 - `erased_call_ret` and `erased_call_ret_key` describe the raw erased-call result
   before applying `result_transform`. They are copied from the same
   `ErasedFnAbi` payload named by `sig_key.abi`, not computed independently.
   `erased_call_ret_key` must exactly equal
-  `erased_fn_abi(sig_key.abi).ret_exec_key`.
+  `erased_fn_abi(sig_key.abi).ret_exec_key`. `erased_call_ret` must be the
+  published artifact payload for that exact key.
 - `hidden_capture` is present exactly when `sig_key.capture_ty` is non-null. Its
   `exec_ty_key` must equal `sig_key.capture_ty`. If `sig_key.capture_ty` is null,
   `hidden_capture` must be null. Runtime pointer nullness, runtime capture byte
@@ -2644,9 +2783,11 @@ The lambda-solved construction algorithm is:
     endpoints are constructed from the sealed target
     `ProcRepresentationInstance.public_roots.ret` and
     `executable_specialization_key.exec_ret_ty`. Local endpoints are constructed
-    from the local dense `ValueInfoStore` and solved session representation.
-    Raw call-result and callable-match branch-result endpoints are explicit
-    endpoint owners, not dummy `ValueInfoId`s.
+    from the local dense `ValueInfoStore`, solved session representation, and
+    the session executable type payload store. Raw erased-call endpoints and
+    callable-match branch-result endpoints are explicit endpoint owners with
+    session executable type payload refs, not dummy `ValueInfoId`s and not bare
+    canonical keys.
 
     Body lowering must therefore store enough explicit data to finalize these
     boundaries later: `call_proc` target procedure instance id or target
@@ -3263,9 +3404,9 @@ transform store. It may point at a published transform only when the boundary is
 explicitly between a run-local endpoint and an endpoint whose representation was
 published by a checked artifact, such as a promoted constant/private capture
 boundary. The endpoint pair still remains session-local: executable lowering
-checks that applying the published operation to the session endpoint keys is
-valid, but it does not pretend the run-local endpoint has an artifact-owned type
-payload ref.
+checks that applying the published operation to the session endpoint payloads
+and keys is valid, but it does not pretend the run-local endpoint has an
+artifact-owned type payload ref.
 
 `from_value` and `to_value` remain on `ValueTransformBoundary` only for the
 value-flow graph edge that representation solving connected. They are not the
@@ -4340,6 +4481,16 @@ read-only access to their published ABI stores. A later stage that has an
 by the owning artifact or solve session. It must not ask a global cache, rebuild
 the payload from the source function type, inspect layouts, inspect the callee
 body, or derive ABI behavior from backend lowering.
+
+Every `arg_exec_keys` entry and the `ret_exec_key` in an `ErasedFnAbi` payload
+must resolve through the executable type payload store owned by the same
+semantic boundary as the ABI store. In a lambda-solved solve session, that means
+the key must have a corresponding `SessionExecutableTypePayloadRef` in the
+session `SessionExecutableTypePayloadStore`. In a checked artifact, that means
+the key must have a corresponding published `ExecutableTypePayloadRef` in the
+artifact `ExecutableTypePayloadStore`. The ABI store names erased-call endpoint
+identity and ABI policy; the executable type payload store owns the structural
+type data needed to lower those endpoints. Neither store replaces the other.
 
 The ABI payload describes the erased boundary's required calling convention. It
 says the fixed Roc arity, the canonical executable-value key of every erased
@@ -10264,6 +10415,15 @@ mode if the implementation keeps such a field, but nested callable
 representations in arguments, returns, captures, records, tags, lists, boxes, and
 nominals must be encoded inside `CanonicalExecValueTypeKey`.
 
+`CanonicalExecValueTypeKey` is an identity key, not a serialized executable type
+payload. It is valid only when paired with an explicit structural payload owned
+by the relevant boundary: `SessionExecutableTypePayloadRef` inside one
+lambda-solved solve session, or `ExecutableTypePayloadRef` inside one checked
+artifact. Later stages must never translate a bare key to an executable
+`TypeId`. The key's purpose after solving is equality, deduplication, cache
+identity, and debug-only verification that the explicit payload being lowered is
+the payload whose content produced that key.
+
 `ProcOrderKey` is for deterministic ordering and reproducibility only. A
 base-only `ProcOrderKey` may exist before executable specialization so lifted
 recursive groups can order members deterministically. When an executable
@@ -13691,6 +13851,15 @@ Lambda-solved MIR:
 - boxed payload representation plans, callable-set keys, capture-shape keys,
   erased signature keys, and erased adapter keys are computed from the
   specialization-local lambda-solved type store
+- every session endpoint that names a `CanonicalExecValueTypeKey` also names a
+  `SessionExecutableTypePayloadRef` whose payload content hashes to that key
+- the session `SessionExecutableTypePayloadStore` contains structural payloads
+  for every local value endpoint, procedure parameter endpoint, procedure return
+  endpoint, erased `call_raw_arg`, erased `call_raw_result`, and
+  `callable_match_branch_raw_result`
+- `execValueTypeKeyForValue`-style logic interns canonical executable payloads
+  and returns payload refs plus keys; hash-only executable value type publication
+  is forbidden
 - every erased callable representation carries non-empty `BoxBoundaryId`
   provenance
 - every erased `CallableValueEmissionPlan` names either an already-erased value,
@@ -13830,6 +13999,14 @@ Executable MIR:
 - every erased call has an explicit erased function type
 - every erased call has an explicit `ErasedFnSigKey` whose `abi` resolves through
   the owning `ErasedFnAbiStore`
+- every erased call argument/result endpoint has a structural executable type
+  payload ref in the owning session or artifact payload store; executable MIR
+  must not lower raw erased endpoint types from a bare
+  `CanonicalExecValueTypeKey`
+- every erased `call_raw_arg` endpoint key exactly matches
+  `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`, and every
+  `call_raw_result` endpoint key exactly matches
+  `erased_fn_abi(sig_key.abi).ret_exec_key`
 - every runtime mutation site has an explicit runtime uniqueness check
 - executable MIR contains no semantic parameter-mode solver output
 - first-class intrinsic references use explicit wrapper procedures
