@@ -495,25 +495,30 @@ fn publishErasedCallableResult(
         ret_layout,
         ret_value,
     );
+    const executable_signature = try buildErasedPromotedProcedureExecutableSignature(
+        allocator,
+        reserved,
+        erased,
+        params,
+    );
+    const transforms = try publishErasedPromotedWrapperPayloadTransforms(
+        allocator,
+        artifact,
+        executable_signature,
+    );
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
         .source_fn_ty = erased.source_fn_ty,
         .params = params,
-        .executable_signature = try buildErasedPromotedProcedureExecutableSignature(
-            allocator,
-            reserved,
-            erased,
-            params,
-        ),
+        .executable_signature = executable_signature,
         .sig_key = erased.sig_key,
         .code = erased.code,
         .capture = capture,
-        .arg_bridges = &.{},
+        .arg_transforms = transforms.args,
         .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
             .none
         else
             .{ .materialized_capture = capture },
-        .result_bridge = null,
-        .result_ty = erased.result_ty,
+        .result_transform = transforms.result,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
     } });
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
@@ -699,6 +704,67 @@ fn erasedClosureHiddenCapturePhysical(
         },
         else => compileTimeFinalizationInvariant("erased callable result hidden capture field was not a Box(T) layout"),
     };
+}
+
+const ErasedPromotedWrapperPayloadTransforms = struct {
+    args: []const checked_artifact.ExecutablePayloadTransformPlanId,
+    result: checked_artifact.ExecutablePayloadTransformPlanId,
+};
+
+fn publishErasedPromotedWrapperPayloadTransforms(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
+) Allocator.Error!ErasedPromotedWrapperPayloadTransforms {
+    if (signature.wrapper_params.len != signature.erased_call_args.len or
+        signature.wrapper_params.len != signature.erased_call_arg_keys.len)
+    {
+        compileTimeFinalizationInvariant("erased promoted wrapper transform arity differs from signature");
+    }
+
+    const arg_transforms = if (signature.wrapper_params.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutablePayloadTransformPlanId, signature.wrapper_params.len);
+    errdefer if (arg_transforms.len > 0) allocator.free(arg_transforms);
+
+    for (signature.wrapper_params, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |param, erased_arg, erased_arg_key, i| {
+        arg_transforms[i] = try publishIdentityPayloadTransform(
+            allocator,
+            artifact,
+            .{ .ty = param.exec_ty, .key = param.exec_ty_key },
+            .{ .ty = erased_arg, .key = erased_arg_key },
+        );
+    }
+
+    const result_transform = try publishIdentityPayloadTransform(
+        allocator,
+        artifact,
+        .{ .ty = signature.erased_call_ret, .key = signature.erased_call_ret_key },
+        .{ .ty = signature.wrapper_ret, .key = signature.wrapper_ret_key },
+    );
+
+    return .{
+        .args = arg_transforms,
+        .result = result_transform,
+    };
+}
+
+fn publishIdentityPayloadTransform(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    from: checked_artifact.ExecutableValueEndpoint,
+    to: checked_artifact.ExecutableValueEndpoint,
+) Allocator.Error!checked_artifact.ExecutablePayloadTransformPlanId {
+    if (!std.mem.eql(u8, &from.key.bytes, &to.key.bytes)) {
+        compileTimeFinalizationInvariant("erased promoted wrapper requires non-identity payload transform publication");
+    }
+    return try artifact.executable_payload_transforms.append(allocator, .{
+        .from = from,
+        .to = to,
+        .provenance = .none,
+        .op = .identity,
+    });
 }
 
 fn buildErasedPromotedProcedureExecutableSignature(

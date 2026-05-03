@@ -48,7 +48,7 @@ pub const ExecutableSyntheticProc = struct {
     source_proc: canonical.MirProcedureRef,
     template: canonical.ProcedureTemplateRef,
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
-    promoted_wrapper_bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
+    executable_payload_transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,
     body: ExecutableSyntheticProcBody,
 };

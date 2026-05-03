@@ -2495,72 +2495,119 @@ pub const PromotedWrapperArg = union(enum) {
     private_capture: PrivateCaptureRef,
 };
 
-pub const PromotedWrapperBridgeId = enum(u32) { _ };
+pub const ExecutablePayloadTransformPlanId = enum(u32) { _ };
 
-pub const PromotedWrapperBridgeEndpoint = struct {
+pub const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
-pub const PromotedWrapperRecordFieldBridge = struct {
+pub const PayloadTransformRecordField = struct {
     field: canonical.RecordFieldLabelId,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-pub const PromotedWrapperTupleElemBridge = struct {
+pub const PayloadTransformTupleElem = struct {
     index: u32,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-pub const PromotedWrapperTagPayloadBridge = struct {
+pub const PayloadTransformTagPayload = struct {
     index: u32,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-pub const PromotedWrapperTagBridge = struct {
+pub const PayloadTransformTag = struct {
     tag: canonical.TagLabelId,
-    payloads: []const PromotedWrapperTagPayloadBridge = &.{},
+    payloads: []const PayloadTransformTagPayload = &.{},
 };
 
-pub const PromotedWrapperBridgeOp = union(enum) {
+pub const ExecutablePayloadTransformOp = union(enum) {
+    identity,
+    structural_bridge: ExecutableStructuralBridgePlan,
+    record: []const PayloadTransformRecordField,
+    tuple: []const PayloadTransformTupleElem,
+    tag_union: []const PayloadTransformTag,
+    nominal: struct {
+        nominal: canonical.NominalTypeKey,
+        backing: ExecutablePayloadTransformPlanId,
+    },
+    list: struct {
+        elem: ExecutablePayloadTransformPlanId,
+    },
+    box_payload: struct {
+        boundary: canonical.BoxBoundaryId,
+        payload: ExecutablePayloadTransformPlanId,
+    },
+    callable_to_erased: CallableToErasedTransformPlan,
+    already_erased_callable: AlreadyErasedCallableTransformPlan,
+};
+
+pub const ExecutableStructuralBridgePlan = union(enum) {
     direct,
     zst,
     list_reinterpret,
     nominal_reinterpret,
-    box_unbox: PromotedWrapperBridgeId,
-    box_box: PromotedWrapperBridgeId,
-    record: []const PromotedWrapperRecordFieldBridge,
-    tuple: []const PromotedWrapperTupleElemBridge,
-    tag_union: []const PromotedWrapperTagBridge,
+    box_unbox: ExecutablePayloadTransformPlanId,
+    box_box: ExecutablePayloadTransformPlanId,
     singleton_to_tag_union: struct {
         source_tag: canonical.TagLabelId,
         target_tag: canonical.TagLabelId,
-        payload_bridge: ?PromotedWrapperBridgeId = null,
+        payload_transform: ?ExecutablePayloadTransformPlanId = null,
     },
     tag_union_to_singleton: struct {
         source_tag: canonical.TagLabelId,
         target_tag: canonical.TagLabelId,
-        payload_bridge: ?PromotedWrapperBridgeId = null,
+        payload_transform: ?ExecutablePayloadTransformPlanId = null,
     },
 };
 
-pub const PromotedWrapperBridgePlan = struct {
-    from: PromotedWrapperBridgeEndpoint,
-    to: PromotedWrapperBridgeEndpoint,
-    op: PromotedWrapperBridgeOp,
+pub const CallableToErasedTransformPlan = union(enum) {
+    finite_value: FiniteCallableValueToErasedPlan,
+    proc_value: ProcValueToErasedPlan,
 };
 
-pub const PromotedWrapperBridgePlanStore = struct {
-    plans: []PromotedWrapperBridgePlan = &.{},
+pub const FiniteCallableValueToErasedPlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    callable_set_key: canonical.CanonicalCallableSetKey,
+    adapter_key: canonical.ErasedAdapterKey,
+};
+
+pub const ProcValueToErasedPlan = struct {
+    proc_value: canonical.ProcedureCallableRef,
+    erased_fn_sig_key: canonical.ErasedFnSigKey,
+    capture_shape_key: canonical.CaptureShapeKey,
+    executable_specialization_key: canonical.ExecutableSpecializationKey,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+};
+
+pub const AlreadyErasedCallableTransformPlan = struct {
+    sig_key: canonical.ErasedFnSigKey,
+};
+
+pub const PayloadTransformProvenance = union(enum) {
+    none,
+    box_erasure: []const canonical.BoxBoundaryId,
+};
+
+pub const ExecutablePayloadTransformPlan = struct {
+    from: ExecutableValueEndpoint,
+    to: ExecutableValueEndpoint,
+    provenance: PayloadTransformProvenance = .none,
+    op: ExecutablePayloadTransformOp,
+};
+
+pub const ExecutablePayloadTransformPlanStore = struct {
+    plans: []ExecutablePayloadTransformPlan = &.{},
 
     pub fn append(
-        self: *PromotedWrapperBridgePlanStore,
+        self: *ExecutablePayloadTransformPlanStore,
         allocator: Allocator,
-        plan: PromotedWrapperBridgePlan,
-    ) Allocator.Error!PromotedWrapperBridgeId {
-        const id: PromotedWrapperBridgeId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
+        plan: ExecutablePayloadTransformPlan,
+    ) Allocator.Error!ExecutablePayloadTransformPlanId {
+        const id: ExecutablePayloadTransformPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
         const old = self.plans;
-        const next = try allocator.alloc(PromotedWrapperBridgePlan, old.len + 1);
+        const next = try allocator.alloc(ExecutablePayloadTransformPlan, old.len + 1);
         @memcpy(next[0..old.len], old);
         next[old.len] = plan;
         allocator.free(old);
@@ -2568,16 +2615,16 @@ pub const PromotedWrapperBridgePlanStore = struct {
         return id;
     }
 
-    pub fn get(self: *const PromotedWrapperBridgePlanStore, id: PromotedWrapperBridgeId) PromotedWrapperBridgePlan {
+    pub fn get(self: *const ExecutablePayloadTransformPlanStore, id: ExecutablePayloadTransformPlanId) ExecutablePayloadTransformPlan {
         const index = @intFromEnum(id);
         if (index >= self.plans.len) {
-            checkedArtifactInvariant("promoted wrapper bridge id is out of range", .{});
+            checkedArtifactInvariant("executable payload transform id is out of range", .{});
         }
         return self.plans[index];
     }
 
     pub fn verifyPublished(
-        self: *const PromotedWrapperBridgePlanStore,
+        self: *const ExecutablePayloadTransformPlanStore,
         payloads: *const ExecutableTypePayloadStore,
         artifact_key: CheckedModuleArtifactKey,
     ) void {
@@ -2585,12 +2632,20 @@ pub const PromotedWrapperBridgePlanStore = struct {
         for (self.plans) |plan| {
             verifyExecutableTypePayloadRef(payloads, artifact_key, plan.from.ty);
             verifyExecutableTypePayloadRef(payloads, artifact_key, plan.to.ty);
-            verifyPromotedWrapperBridgeOp(self, plan.op);
+            verifyPayloadTransformProvenance(plan.provenance);
+            switch (plan.op) {
+                .callable_to_erased => switch (plan.provenance) {
+                    .box_erasure => {},
+                    .none => std.debug.panic("checked artifact invariant violated: callable-to-erased transform has no Box(T) provenance", .{}),
+                },
+                else => {},
+            }
+            verifyExecutablePayloadTransformOp(self, plan.op);
         }
     }
 
-    pub fn deinit(self: *PromotedWrapperBridgePlanStore, allocator: Allocator) void {
-        for (self.plans) |*plan| deinitPromotedWrapperBridgePlan(allocator, plan);
+    pub fn deinit(self: *ExecutablePayloadTransformPlanStore, allocator: Allocator) void {
+        for (self.plans) |*plan| deinitExecutablePayloadTransformPlan(allocator, plan);
         allocator.free(self.plans);
         self.* = .{};
     }
@@ -2995,10 +3050,9 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    arg_bridges: []const PromotedWrapperBridgeId = &.{},
+    arg_transforms: []const ExecutablePayloadTransformPlanId = &.{},
     hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
-    result_bridge: ?PromotedWrapperBridgeId = null,
-    result_ty: canonical.CanonicalExecValueTypeKey,
+    result_transform: ExecutablePayloadTransformPlanId,
     provenance: []const canonical.BoxBoundaryId,
 };
 
@@ -6014,16 +6068,29 @@ fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePay
     payload.* = .pending;
 }
 
-fn deinitPromotedWrapperBridgePlan(allocator: Allocator, plan: *PromotedWrapperBridgePlan) void {
+fn deinitPayloadTransformProvenance(allocator: Allocator, provenance: PayloadTransformProvenance) void {
+    switch (provenance) {
+        .none => {},
+        .box_erasure => |boundaries| allocator.free(boundaries),
+    }
+}
+
+fn deinitCallableToErasedTransformPlan(allocator: Allocator, plan: CallableToErasedTransformPlan) void {
+    switch (plan) {
+        .finite_value => {},
+        .proc_value => |proc| deinitErasedCaptureExecutableMaterializationPlan(allocator, proc.capture),
+    }
+}
+
+fn deinitExecutablePayloadTransformPlan(allocator: Allocator, plan: *ExecutablePayloadTransformPlan) void {
+    deinitPayloadTransformProvenance(allocator, plan.provenance);
     switch (plan.op) {
-        .direct,
-        .zst,
-        .list_reinterpret,
-        .nominal_reinterpret,
-        .box_unbox,
-        .box_box,
-        .singleton_to_tag_union,
-        .tag_union_to_singleton,
+        .identity,
+        .structural_bridge,
+        .nominal,
+        .list,
+        .box_payload,
+        .already_erased_callable,
         => {},
         .record => |fields| allocator.free(fields),
         .tuple => |items| allocator.free(items),
@@ -6031,6 +6098,7 @@ fn deinitPromotedWrapperBridgePlan(allocator: Allocator, plan: *PromotedWrapperB
             for (tags) |tag| allocator.free(tag.payloads);
             allocator.free(tags);
         },
+        .callable_to_erased => |callable| deinitCallableToErasedTransformPlan(allocator, callable),
     }
 }
 
@@ -6079,7 +6147,7 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
             var signature = erased.executable_signature;
             deinitErasedPromotedProcedureExecutableSignature(allocator, &signature);
             allocator.free(erased.params);
-            allocator.free(erased.arg_bridges);
+            allocator.free(erased.arg_transforms);
             allocator.free(erased.provenance);
             deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
             deinitErasedHiddenCaptureArgPlan(allocator, erased.hidden_capture_arg);
@@ -6481,9 +6549,6 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     if (!std.mem.eql(u8, &signature.wrapper_ret_key.bytes, &signature.specialization_key.exec_ret_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
     }
-    if (!std.mem.eql(u8, &signature.erased_call_ret_key.bytes, &erased.result_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from body result type", .{});
-    }
     if (signature.erased_call_args.len != signature.erased_call_arg_keys.len) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg refs/keys differ in length", .{});
     }
@@ -6499,28 +6564,52 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     }
 }
 
-fn verifyPromotedWrapperBridgeRef(store: *const PromotedWrapperBridgePlanStore, bridge: PromotedWrapperBridgeId) void {
-    if (@intFromEnum(bridge) >= store.plans.len) {
-        std.debug.panic("checked artifact invariant violated: promoted wrapper bridge id is out of range", .{});
+fn verifyExecutablePayloadTransformRef(store: *const ExecutablePayloadTransformPlanStore, transform: ExecutablePayloadTransformPlanId) void {
+    if (@intFromEnum(transform) >= store.plans.len) {
+        std.debug.panic("checked artifact invariant violated: executable payload transform id is out of range", .{});
     }
 }
 
-fn verifyPromotedWrapperBridgeOp(store: *const PromotedWrapperBridgePlanStore, op: PromotedWrapperBridgeOp) void {
-    switch (op) {
+fn verifyPayloadTransformProvenance(provenance: PayloadTransformProvenance) void {
+    switch (provenance) {
+        .none => {},
+        .box_erasure => |boundaries| {
+            if (boundaries.len == 0) {
+                std.debug.panic("checked artifact invariant violated: executable payload transform has empty Box(T) erasure provenance", .{});
+            }
+        },
+    }
+}
+
+fn verifyExecutableStructuralBridgePlan(store: *const ExecutablePayloadTransformPlanStore, plan: ExecutableStructuralBridgePlan) void {
+    switch (plan) {
         .direct,
         .zst,
         .list_reinterpret,
         .nominal_reinterpret,
         => {},
-        .box_unbox => |child| verifyPromotedWrapperBridgeRef(store, child),
-        .box_box => |child| verifyPromotedWrapperBridgeRef(store, child),
-        .record => |fields| for (fields) |field| verifyPromotedWrapperBridgeRef(store, field.bridge),
-        .tuple => |items| for (items) |item| verifyPromotedWrapperBridgeRef(store, item.bridge),
+        .box_unbox => |child| verifyExecutablePayloadTransformRef(store, child),
+        .box_box => |child| verifyExecutablePayloadTransformRef(store, child),
+        .singleton_to_tag_union => |singleton| if (singleton.payload_transform) |payload| verifyExecutablePayloadTransformRef(store, payload),
+        .tag_union_to_singleton => |singleton| if (singleton.payload_transform) |payload| verifyExecutablePayloadTransformRef(store, payload),
+    }
+}
+
+fn verifyExecutablePayloadTransformOp(store: *const ExecutablePayloadTransformPlanStore, op: ExecutablePayloadTransformOp) void {
+    switch (op) {
+        .identity,
+        .already_erased_callable,
+        => {},
+        .structural_bridge => |bridge| verifyExecutableStructuralBridgePlan(store, bridge),
+        .record => |fields| for (fields) |field| verifyExecutablePayloadTransformRef(store, field.transform),
+        .tuple => |items| for (items) |item| verifyExecutablePayloadTransformRef(store, item.transform),
         .tag_union => |tags| for (tags) |tag| {
-            for (tag.payloads) |payload| verifyPromotedWrapperBridgeRef(store, payload.bridge);
+            for (tag.payloads) |payload| verifyExecutablePayloadTransformRef(store, payload.transform);
         },
-        .singleton_to_tag_union => |singleton| if (singleton.payload_bridge) |payload| verifyPromotedWrapperBridgeRef(store, payload),
-        .tag_union_to_singleton => |singleton| if (singleton.payload_bridge) |payload| verifyPromotedWrapperBridgeRef(store, payload),
+        .nominal => |nominal| verifyExecutablePayloadTransformRef(store, nominal.backing),
+        .list => |list| verifyExecutablePayloadTransformRef(store, list.elem),
+        .box_payload => |box| verifyExecutablePayloadTransformRef(store, box.payload),
+        .callable_to_erased => {},
     }
 }
 
@@ -6528,7 +6617,7 @@ fn verifyPromotedCallableBodyPlan(
     store: *const CompileTimePlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
-    promoted_wrapper_bridges: *const PromotedWrapperBridgePlanStore,
+    executable_payload_transforms: *const ExecutablePayloadTransformPlanStore,
     artifact_key: CheckedModuleArtifactKey,
     plan: PromotedCallableBodyPlan,
 ) void {
@@ -6553,11 +6642,11 @@ fn verifyPromotedCallableBodyPlan(
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
             }
-            if (erased.arg_bridges.len != 0 and erased.arg_bridges.len != erased.params.len) {
-                std.debug.panic("checked artifact invariant violated: erased promoted callable arg bridge count differs from wrapper params", .{});
+            if (erased.arg_transforms.len != erased.params.len) {
+                std.debug.panic("checked artifact invariant violated: erased promoted callable arg transform count differs from wrapper params", .{});
             }
-            for (erased.arg_bridges) |bridge| verifyPromotedWrapperBridgeRef(promoted_wrapper_bridges, bridge);
-            if (erased.result_bridge) |bridge| verifyPromotedWrapperBridgeRef(promoted_wrapper_bridges, bridge);
+            for (erased.arg_transforms) |transform| verifyExecutablePayloadTransformRef(executable_payload_transforms, transform);
+            verifyExecutablePayloadTransformRef(executable_payload_transforms, erased.result_transform);
             verifyErasedPromotedProcedureExecutableSignature(
                 executable_type_payloads,
                 artifact_key,
@@ -8622,7 +8711,7 @@ pub const CheckedModuleArtifact = struct {
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     executable_type_payloads: ExecutableTypePayloadStore = .{},
-    promoted_wrapper_bridges: PromotedWrapperBridgePlanStore = .{},
+    executable_payload_transforms: ExecutablePayloadTransformPlanStore = .{},
     callable_set_descriptors: CallableSetDescriptorStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
@@ -8793,7 +8882,7 @@ pub const CheckedModuleArtifact = struct {
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
         self.callable_set_descriptors.deinit(allocator);
-        self.promoted_wrapper_bridges.deinit(allocator);
+        self.executable_payload_transforms.deinit(allocator);
         self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
@@ -9106,13 +9195,13 @@ pub const CheckedModuleArtifact = struct {
 
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key);
-        self.promoted_wrapper_bridges.verifyPublished(&self.executable_type_payloads, self.key);
+        self.executable_payload_transforms.verifyPublished(&self.executable_type_payloads, self.key);
         self.callable_set_descriptors.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
             &self.callable_set_descriptors,
             &self.executable_type_payloads,
-            &self.promoted_wrapper_bridges,
+            &self.executable_payload_transforms,
             self.key,
         );
         self.promoted_callable_wrappers.verifyPublished(
@@ -9198,7 +9287,7 @@ pub const ImportedModuleView = struct {
     promoted_callable_wrappers: *const PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
     executable_type_payloads: *const ExecutableTypePayloadStore,
-    promoted_wrapper_bridges: *const PromotedWrapperBridgePlanStore,
+    executable_payload_transforms: *const ExecutablePayloadTransformPlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
@@ -9237,7 +9326,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
         .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
         .executable_type_payloads = &artifact.executable_type_payloads,
-        .promoted_wrapper_bridges = &artifact.promoted_wrapper_bridges,
+        .executable_payload_transforms = &artifact.executable_payload_transforms,
         .callable_set_descriptors = &artifact.callable_set_descriptors,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),

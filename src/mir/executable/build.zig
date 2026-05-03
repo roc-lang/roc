@@ -635,7 +635,7 @@ fn lowerErasedPromotedWrapperProc(
         allocator,
         program,
         synthetic.comptime_plans,
-        synthetic.promoted_wrapper_bridges,
+        synthetic.executable_payload_transforms,
         &published_types,
         args,
         signature,
@@ -675,7 +675,7 @@ fn lowerErasedPromotedWrapperBody(
     allocator: Allocator,
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     published_types: *PublishedTypeLowerer,
     args: Ast.Span(Ast.TypedValue),
     signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
@@ -684,8 +684,8 @@ fn lowerErasedPromotedWrapperBody(
     if (signature.erased_call_args.len != signature.wrapper_params.len) {
         executableInvariant("executable erased promoted wrapper erased-call arity differs from wrapper params");
     }
-    if (erased.arg_bridges.len != 0 and erased.arg_bridges.len != signature.wrapper_params.len) {
-        executableInvariant("executable erased promoted wrapper arg bridge count differs from wrapper params");
+    if (erased.arg_transforms.len != signature.wrapper_params.len) {
+        executableInvariant("executable erased promoted wrapper arg transform count differs from wrapper params");
     }
 
     const wrapper_args = program.ast.typed_values.items[args.start..][0..args.len];
@@ -694,13 +694,7 @@ fn lowerErasedPromotedWrapperBody(
     }
 
     const wrapper_ret_ty = try published_types.lower(signature.wrapper_ret, signature.wrapper_ret_key);
-    const raw_call_ty = if (erased.result_bridge == null)
-        wrapper_ret_ty
-    else
-        try published_types.lower(signature.erased_call_ret, signature.erased_call_ret_key);
-    if (erased.result_bridge == null and !repr.canonicalExecValueTypeKeyEql(signature.wrapper_ret_key, signature.erased_call_ret_key)) {
-        executableInvariant("executable erased promoted wrapper result representation differs without a bridge");
-    }
+    const raw_call_ty = try published_types.lower(signature.erased_call_ret, signature.erased_call_ret_key);
 
     const capture_ty = if (signature.hidden_capture) |hidden|
         try published_types.lower(hidden.exec_ty, hidden.exec_ty_key)
@@ -744,26 +738,16 @@ fn lowerErasedPromotedWrapperBody(
     } }));
 
     for (wrapper_args, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |arg, erased_arg, erased_arg_key, i| {
-        const arg_bridge: ?checked_artifact.PromotedWrapperBridgeId = if (erased.arg_bridges.len == 0) null else erased.arg_bridges[i];
-        if (arg_bridge) |bridge_id| {
-            const erased_arg_ty = try published_types.lower(erased_arg, erased_arg_key);
-            const bridge = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, bridge_id);
-            const bridged_value = program.ast.freshValueRef();
-            const bridged_expr = try program.ast.addExpr(erased_arg_ty, bridged_value, .{ .bridge = .{
-                .bridge = bridge,
-                .value = arg.value,
-            } });
-            try stmts.append(allocator, try program.ast.addStmt(.{ .decl = .{
-                .value = bridged_value,
-                .body = bridged_expr,
-            } }));
-            call_args[i] = bridged_value;
-        } else {
-            if (!repr.canonicalExecValueTypeKeyEql(signature.wrapper_params[i].exec_ty_key, erased_arg_key)) {
-                executableInvariant("executable erased promoted wrapper argument representation differs without a bridge");
-            }
-            call_args[i] = arg.value;
-        }
+        _ = erased_arg;
+        _ = erased_arg_key;
+        call_args[i] = try applyPublishedExecutablePayloadTransform(
+            program,
+            published_types,
+            transforms,
+            &stmts,
+            erased.arg_transforms[i],
+            arg.value,
+        );
     }
 
     const raw_call_value = program.ast.freshValueRef();
@@ -774,18 +758,25 @@ fn lowerErasedPromotedWrapperBody(
         .capture_ty = capture_ty,
     } });
 
-    const final_expr = if (erased.result_bridge) |bridge_id| blk: {
-        try stmts.append(allocator, try program.ast.addStmt(.{ .decl = .{
-            .value = raw_call_value,
-            .body = raw_call_expr,
-        } }));
-        const bridge = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, bridge_id);
-        const result_value = program.ast.freshValueRef();
-        break :blk try program.ast.addExpr(wrapper_ret_ty, result_value, .{ .bridge = .{
-            .bridge = bridge,
-            .value = raw_call_value,
-        } });
-    } else raw_call_expr;
+    const result_plan = transforms.get(erased.result_transform);
+    const final_expr = switch (result_plan.op) {
+        .identity => raw_call_expr,
+        else => blk: {
+            try stmts.append(allocator, try program.ast.addStmt(.{ .decl = .{
+                .value = raw_call_value,
+                .body = raw_call_expr,
+            } }));
+            const result_value = try applyPublishedExecutablePayloadTransform(
+                program,
+                published_types,
+                transforms,
+                &stmts,
+                erased.result_transform,
+                raw_call_value,
+            );
+            break :blk try program.ast.addExpr(wrapper_ret_ty, result_value, .{ .value_ref = result_value });
+        },
+    };
 
     return try program.ast.addExpr(wrapper_ret_ty, program.ast.getExpr(final_expr).value, .{ .block = .{
         .stmts = try program.ast.addStmtSpan(stmts.items),
@@ -793,171 +784,114 @@ fn lowerErasedPromotedWrapperBody(
     } });
 }
 
-fn lowerPublishedPromotedWrapperBridge(
+fn applyPublishedExecutablePayloadTransform(
     program: *Program,
     published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
-    bridge_id: checked_artifact.PromotedWrapperBridgeId,
-) Allocator.Error!Ast.BridgeId {
-    const plan = bridges.get(bridge_id);
-    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
-    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
-    return try lowerPromotedWrapperBridgeOp(program, published_types, bridges, from_ty, to_ty, plan.op);
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    transform_id: checked_artifact.ExecutablePayloadTransformPlanId,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const plan = transforms.get(transform_id);
+    switch (plan.op) {
+        .identity => {
+            if (!repr.canonicalExecValueTypeKeyEql(plan.from.key, plan.to.key)) {
+                executableInvariant("executable identity payload transform changes representation");
+            }
+            return value;
+        },
+        .structural_bridge => |structural| {
+            const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+            const bridge = try lowerPublishedExecutablePayloadTransformAsBridge(
+                program,
+                published_types,
+                transforms,
+                transform_id,
+                structural,
+            );
+            const bridged_value = program.ast.freshValueRef();
+            const bridged_expr = try program.ast.addExpr(to_ty, bridged_value, .{ .bridge = .{
+                .bridge = bridge,
+                .value = value,
+            } });
+            try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                .value = bridged_value,
+                .body = bridged_expr,
+            } }));
+            return bridged_value;
+        },
+        .record,
+        .tuple,
+        .tag_union,
+        .nominal,
+        .list,
+        .box_payload,
+        .callable_to_erased,
+        .already_erased_callable,
+        => executableInvariant("executable payload transform lowering for this operation has not been implemented"),
+    }
 }
 
-fn lowerPromotedWrapperBridgeOp(
+fn lowerPublishedExecutablePayloadTransformAsBridge(
     program: *Program,
     published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transform_id: checked_artifact.ExecutablePayloadTransformPlanId,
+    structural: checked_artifact.ExecutableStructuralBridgePlan,
+) Allocator.Error!Ast.BridgeId {
+    const plan = transforms.get(transform_id);
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    return try lowerExecutableStructuralBridgePlan(program, published_types, transforms, from_ty, to_ty, structural);
+}
+
+fn lowerExecutablePayloadChildBridge(
+    program: *Program,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    child: checked_artifact.ExecutablePayloadTransformPlanId,
+) Allocator.Error!Ast.BridgeId {
+    const plan = transforms.get(child);
+    return switch (plan.op) {
+        .identity => try program.ast.addBridgePlan(.direct),
+        .structural_bridge => |structural| try lowerPublishedExecutablePayloadTransformAsBridge(
+            program,
+            published_types,
+            transforms,
+            child,
+            structural,
+        ),
+        else => executableInvariant("structural bridge child must lower to a bridge plan"),
+    };
+}
+
+fn lowerExecutableStructuralBridgePlan(
+    program: *Program,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     from_ty: Type.TypeId,
     to_ty: Type.TypeId,
-    op: checked_artifact.PromotedWrapperBridgeOp,
+    op: checked_artifact.ExecutableStructuralBridgePlan,
 ) Allocator.Error!Ast.BridgeId {
     const plan: Ast.BridgePlan = switch (op) {
         .direct => .direct,
         .zst => .zst,
         .list_reinterpret => .list_reinterpret,
         .nominal_reinterpret => .nominal_reinterpret,
-        .box_unbox => |child| .{ .box_unbox = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, child) },
-        .box_box => |child| .{ .box_box = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, child) },
-        .record => |fields| .{ .struct_ = try lowerPromotedWrapperRecordBridgeSpan(program, published_types, bridges, to_ty, fields) },
-        .tuple => |items| .{ .struct_ = try lowerPromotedWrapperTupleBridgeSpan(program, published_types, bridges, to_ty, items) },
-        .tag_union => |tags| .{ .tag_union = try lowerPromotedWrapperTagUnionBridgeSpan(program, published_types, bridges, from_ty, to_ty, tags) },
+        .box_unbox => |child| .{ .box_unbox = try lowerExecutablePayloadChildBridge(program, published_types, transforms, child) },
+        .box_box => |child| .{ .box_box = try lowerExecutablePayloadChildBridge(program, published_types, transforms, child) },
         .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
             .source_payload = from_ty,
             .target_discriminant = try tagDiscriminantForLabel(program, to_ty, singleton.target_tag),
-            .payload_plan = if (singleton.payload_bridge) |payload| try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, payload) else null,
+            .payload_plan = if (singleton.payload_transform) |payload| try lowerExecutablePayloadChildBridge(program, published_types, transforms, payload) else null,
         } },
         .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
             .target_payload = to_ty,
             .source_discriminant = try tagDiscriminantForLabel(program, from_ty, singleton.source_tag),
-            .payload_plan = if (singleton.payload_bridge) |payload| try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, payload) else null,
+            .payload_plan = if (singleton.payload_transform) |payload| try lowerExecutablePayloadChildBridge(program, published_types, transforms, payload) else null,
         } },
     };
     return try program.ast.addBridgePlan(plan);
-}
-
-fn lowerPromotedWrapperRecordBridgeSpan(
-    program: *Program,
-    published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
-    to_ty: Type.TypeId,
-    fields: []const checked_artifact.PromotedWrapperRecordFieldBridge,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    const record = switch (program.types.getType(to_ty)) {
-        .record => |record| record,
-        else => executableInvariant("promoted wrapper record bridge target is not a record"),
-    };
-    const out = try program.allocator.alloc(Ast.BridgeId, record.fields.len);
-    defer program.allocator.free(out);
-    const seen = try program.allocator.alloc(bool, record.fields.len);
-    defer program.allocator.free(seen);
-    @memset(seen, false);
-    for (fields) |field| {
-        const index = try recordFieldIndexForLabel(program, record, field.field);
-        if (seen[index]) executableInvariant("promoted wrapper record bridge duplicated a field");
-        seen[index] = true;
-        out[index] = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, field.bridge);
-    }
-    for (seen) |was_seen| {
-        if (!was_seen) executableInvariant("promoted wrapper record bridge omitted a field");
-    }
-    return try program.ast.addBridgePlanSpan(out);
-}
-
-fn lowerPromotedWrapperTupleBridgeSpan(
-    program: *Program,
-    published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
-    to_ty: Type.TypeId,
-    items: []const checked_artifact.PromotedWrapperTupleElemBridge,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    const tuple = switch (program.types.getType(to_ty)) {
-        .tuple => |tuple| tuple,
-        else => executableInvariant("promoted wrapper tuple bridge target is not a tuple"),
-    };
-    const out = try program.allocator.alloc(Ast.BridgeId, tuple.len);
-    defer program.allocator.free(out);
-    const seen = try program.allocator.alloc(bool, tuple.len);
-    defer program.allocator.free(seen);
-    @memset(seen, false);
-    for (items) |item| {
-        const index: usize = @intCast(item.index);
-        if (index >= tuple.len) executableInvariant("promoted wrapper tuple bridge index is out of range");
-        if (seen[index]) executableInvariant("promoted wrapper tuple bridge duplicated an element");
-        seen[index] = true;
-        out[index] = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, item.bridge);
-    }
-    for (seen) |was_seen| {
-        if (!was_seen) executableInvariant("promoted wrapper tuple bridge omitted an element");
-    }
-    return try program.ast.addBridgePlanSpan(out);
-}
-
-fn lowerPromotedWrapperTagUnionBridgeSpan(
-    program: *Program,
-    published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
-    from_ty: Type.TypeId,
-    to_ty: Type.TypeId,
-    tags: []const checked_artifact.PromotedWrapperTagBridge,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    _ = from_ty;
-    const target = switch (program.types.getType(to_ty)) {
-        .tag_union => |tag_union| tag_union,
-        else => executableInvariant("promoted wrapper tag bridge target is not a tag union"),
-    };
-    const out = try program.allocator.alloc(Ast.BridgeId, target.tags.len);
-    defer program.allocator.free(out);
-    const seen = try program.allocator.alloc(bool, target.tags.len);
-    defer program.allocator.free(seen);
-    @memset(seen, false);
-    for (tags) |tag| {
-        const index = try tagVariantIndexForLabel(program, target, tag.tag);
-        if (seen[index]) executableInvariant("promoted wrapper tag bridge duplicated a tag");
-        seen[index] = true;
-        out[index] = try lowerPromotedWrapperTagPayloadBridge(program, published_types, bridges, tag.payloads);
-    }
-    for (seen) |was_seen| {
-        if (!was_seen) executableInvariant("promoted wrapper tag bridge omitted a tag");
-    }
-    return try program.ast.addBridgePlanSpan(out);
-}
-
-fn lowerPromotedWrapperTagPayloadBridge(
-    program: *Program,
-    published_types: *PublishedTypeLowerer,
-    bridges: *const checked_artifact.PromotedWrapperBridgePlanStore,
-    payloads: []const checked_artifact.PromotedWrapperTagPayloadBridge,
-) Allocator.Error!Ast.BridgeId {
-    if (payloads.len == 0) return try program.ast.addBridgePlan(.direct);
-    const out = try program.allocator.alloc(Ast.BridgeId, payloads.len);
-    defer program.allocator.free(out);
-    const seen = try program.allocator.alloc(bool, payloads.len);
-    defer program.allocator.free(seen);
-    @memset(seen, false);
-    for (payloads) |payload| {
-        const index: usize = @intCast(payload.index);
-        if (index >= payloads.len) executableInvariant("promoted wrapper tag payload bridge index is out of range");
-        if (seen[index]) executableInvariant("promoted wrapper tag payload bridge duplicated a payload");
-        seen[index] = true;
-        out[index] = try lowerPublishedPromotedWrapperBridge(program, published_types, bridges, payload.bridge);
-    }
-    for (seen) |was_seen| {
-        if (!was_seen) executableInvariant("promoted wrapper tag payload bridge omitted a payload");
-    }
-    return try program.ast.addBridgePlan(.{ .struct_ = try program.ast.addBridgePlanSpan(out) });
-}
-
-fn recordFieldIndexForLabel(
-    program: *const Program,
-    record: Type.RecordType,
-    label: canonical.RecordFieldLabelId,
-) Allocator.Error!usize {
-    for (record.fields, 0..) |field, i| {
-        if (program.row_shapes.recordField(field.field).label == label) return i;
-    }
-    executableInvariant("promoted wrapper record bridge field label is absent from target type");
 }
 
 fn tagDiscriminantForLabel(
@@ -967,7 +901,7 @@ fn tagDiscriminantForLabel(
 ) Allocator.Error!u16 {
     const tag_union = switch (program.types.getType(ty)) {
         .tag_union => |tag_union| tag_union,
-        else => executableInvariant("promoted wrapper bridge expected a tag union endpoint"),
+        else => executableInvariant("executable structural bridge expected a tag union endpoint"),
     };
     return @intCast(try tagVariantIndexForLabel(program, tag_union, label));
 }
@@ -980,7 +914,7 @@ fn tagVariantIndexForLabel(
     for (tag_union.tags, 0..) |tag, i| {
         if (program.row_shapes.tag(tag.tag).label == label) return i;
     }
-    executableInvariant("promoted wrapper tag bridge label is absent from target type");
+    executableInvariant("executable structural bridge tag label is absent from target type");
 }
 
 const ErasedPromotedCaptureLowering = struct {
