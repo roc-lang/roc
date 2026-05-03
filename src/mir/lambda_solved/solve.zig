@@ -2783,12 +2783,14 @@ const BodySolver = struct {
     ) Allocator.Error!repr.ValueInfoId {
         const root = self.representation_store.reserveRoot();
         const class = self.representation_store.reserveClass();
-        return try self.value_store.addValue(.{
+        const value = try self.value_store.addValue(.{
             .logical_ty = ty,
             .source_ty = source_ty,
             .root = root,
             .solved_class = class,
         });
+        try self.representation_store.publishRootKind(root, .{ .local_value = value });
+        return value;
     }
 
     fn exprValue(self: *const BodySolver, expr: Ast.ExprId) repr.ValueInfoId {

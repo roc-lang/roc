@@ -44,6 +44,30 @@ pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
 
+pub const RepresentationRootKind = union(enum) {
+    unclassified,
+    local_value: ValueInfoId,
+    binding: BindingInfoId,
+    pattern_binder: BindingInfoId,
+    procedure_param: struct {
+        instance: ProcRepresentationInstanceId,
+        index: u32,
+    },
+    procedure_return: ProcRepresentationInstanceId,
+    procedure_capture: struct {
+        instance: ProcRepresentationInstanceId,
+        slot: u32,
+    },
+    call_value_requested_fn: CallSiteInfoId,
+    call_proc_requested_fn: CallSiteInfoId,
+    proc_value_fn: ValueInfoId,
+    mutable_var_version: struct {
+        symbol: Symbol,
+        version: u32,
+    },
+    loop_phi: LoopPhiId,
+};
+
 pub const TransformEndpointSide = enum {
     from,
     to,
@@ -1011,6 +1035,7 @@ pub const RepresentationStore = struct {
     allocator: std.mem.Allocator,
     roots_len: u32 = 0,
     classes_len: u32 = 0,
+    root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
     callable_construction_plans: []CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
@@ -1027,6 +1052,7 @@ pub const RepresentationStore = struct {
     pub fn init(allocator: std.mem.Allocator) RepresentationStore {
         return .{
             .allocator = allocator,
+            .root_kinds = std.AutoHashMap(RepRootId, RepresentationRootKind).init(allocator),
             .session_executable_type_payloads = SessionExecutableTypePayloadStore.init(allocator),
         };
     }
@@ -1072,6 +1098,7 @@ pub const RepresentationStore = struct {
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
+        self.root_kinds.deinit();
         self.* = RepresentationStore.init(self.allocator);
     }
 
@@ -1079,6 +1106,32 @@ pub const RepresentationStore = struct {
         const id: RepRootId = @enumFromInt(self.roots_len);
         self.roots_len += 1;
         return id;
+    }
+
+    pub fn publishRootKind(
+        self: *RepresentationStore,
+        root: RepRootId,
+        kind: RepresentationRootKind,
+    ) std.mem.Allocator.Error!void {
+        const root_index = @intFromEnum(root);
+        if (root_index >= self.roots_len) {
+            debug.invariant(false, "lambda-solved invariant violated: representation root kind published for an unreserved root");
+            unreachable;
+        }
+        if (self.root_kinds.contains(root)) {
+            debug.invariant(false, "lambda-solved invariant violated: representation root kind was published twice");
+            unreachable;
+        }
+        try self.root_kinds.put(root, kind);
+    }
+
+    pub fn rootKind(self: *const RepresentationStore, root: RepRootId) RepresentationRootKind {
+        const root_index = @intFromEnum(root);
+        if (root_index >= self.roots_len) {
+            debug.invariant(false, "lambda-solved invariant violated: representation root lookup referenced an unreserved root");
+            unreachable;
+        }
+        return self.root_kinds.get(root) orelse .unclassified;
     }
 
     pub fn reserveClass(self: *RepresentationStore) RepresentationClassId {
