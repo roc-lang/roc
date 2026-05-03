@@ -165,6 +165,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .representation_instance = instance,
         });
     }
+    try appendCrossProcedureRepresentationEdges(&program);
     try finalizeValueTransformBoundaries(&program);
     for (program.solve_sessions.items) |*session| {
         session.representation_store.verifySealed();
@@ -177,6 +178,153 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     input.deinit();
     return program;
 }
+
+fn appendCrossProcedureRepresentationEdges(program: *Program) Allocator.Error!void {
+    for (program.proc_instances.items, 0..) |*instance, raw_instance| {
+        const instance_id: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(raw_instance)));
+        var linker = CrossProcedureRepresentationLinker{
+            .program = program,
+            .instance_id = instance_id,
+            .instance = instance,
+            .representation_store = &program.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store,
+            .value_store = &program.value_stores.items[@intFromEnum(instance.value_store)],
+        };
+        try linker.appendCallSiteEdges();
+        try linker.appendProcValueEdges();
+    }
+}
+
+const CrossProcedureRepresentationLinker = struct {
+    program: *Program,
+    instance_id: repr.ProcRepresentationInstanceId,
+    instance: *const repr.ProcRepresentationInstance,
+    representation_store: *repr.RepresentationStore,
+    value_store: *const repr.ValueInfoStore,
+
+    fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
+        for (self.value_store.call_sites.items) |call_site| {
+            switch (call_site.dispatch) {
+                .call_proc => |target| try self.appendDirectCallEdges(call_site, target),
+                .call_value_finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
+                .call_value_erased => {},
+            }
+        }
+    }
+
+    fn appendDirectCallEdges(
+        self: *CrossProcedureRepresentationLinker,
+        call_site: repr.CallSiteInfo,
+        target_id: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!void {
+        const target = self.procInstance(target_id);
+        const args = self.value_store.sliceValueSpan(call_site.args);
+        const params = self.valueStoreFor(target).sliceValueSpan(target.public_roots.params);
+        if (args.len != params.len) {
+            lambdaInvariant("lambda-solved call_proc representation edge arity differs from target params");
+        }
+        for (args, params, 0..) |arg, param, i| {
+            _ = try self.representation_store.appendRepresentationEdge(.{
+                .from = .{ .local = self.valueRoot(arg) },
+                .to = .{ .procedure_public = self.publicRootRef(target_id, target, param) },
+                .kind = .{ .function_arg = @intCast(i) },
+            });
+        }
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
+            .to = .{ .local = self.valueRoot(call_site.result) },
+            .kind = .function_return,
+        });
+    }
+
+    fn appendFiniteCallValueEdges(
+        self: *CrossProcedureRepresentationLinker,
+        call_site: repr.CallSiteInfo,
+        key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!void {
+        const descriptor = self.representation_store.callableSetDescriptor(key) orelse {
+            lambdaInvariant("lambda-solved finite call_value representation edge has no callable-set descriptor");
+        };
+        if (descriptor.members.len == 0) {
+            lambdaInvariant("lambda-solved finite call_value representation edge reached empty callable-set descriptor");
+        }
+        for (descriptor.members) |member| {
+            const target_id = self.procInstanceForSource(member.source_proc);
+            try self.appendDirectCallEdges(call_site, target_id);
+        }
+    }
+
+    fn appendProcValueEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
+        for (self.value_store.values.items, 0..) |value_info, raw_value| {
+            const callable = value_info.callable orelse continue;
+            const source = switch (callable.source) {
+                .proc_value => |source| source,
+                else => continue,
+            };
+            const target_id = self.procInstanceForSource(source.proc);
+            const target = self.procInstance(target_id);
+            const source_captures = source.captures;
+            const target_captures = self.valueStoreFor(target).sliceValueSpan(target.public_roots.captures);
+            if (source_captures.len != target_captures.len) {
+                lambdaInvariant("lambda-solved proc_value representation edge capture arity differs from target captures");
+            }
+            _ = raw_value;
+            for (source_captures, target_captures) |source_capture, target_capture| {
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(source_capture) },
+                    .to = .{ .procedure_public = self.publicRootRef(target_id, target, target_capture) },
+                    .kind = .value_move,
+                });
+            }
+        }
+    }
+
+    fn publicRootRef(
+        self: *CrossProcedureRepresentationLinker,
+        target_id: repr.ProcRepresentationInstanceId,
+        target: *const repr.ProcRepresentationInstance,
+        value: repr.ValueInfoId,
+    ) repr.ProcPublicRootRef {
+        return .{
+            .instance = target_id,
+            .value = value,
+            .rep_root = self.valueStoreFor(target).values.items[@intFromEnum(value)].root,
+        };
+    }
+
+    fn procInstanceForSource(
+        self: *CrossProcedureRepresentationLinker,
+        proc: canonical.MirProcedureRef,
+    ) repr.ProcRepresentationInstanceId {
+        for (self.program.proc_instances.items, 0..) |instance, raw| {
+            if (canonical.mirProcedureRefEql(instance.proc, proc)) {
+                return @enumFromInt(@as(u32, @intCast(raw)));
+            }
+        }
+        lambdaInvariant("lambda-solved cross-procedure representation edge referenced missing procedure instance");
+    }
+
+    fn procInstance(
+        self: *CrossProcedureRepresentationLinker,
+        id: repr.ProcRepresentationInstanceId,
+    ) *const repr.ProcRepresentationInstance {
+        const index = @intFromEnum(id);
+        if (index >= self.program.proc_instances.items.len) {
+            lambdaInvariant("lambda-solved cross-procedure representation edge referenced out-of-range procedure instance");
+        }
+        return &self.program.proc_instances.items[index];
+    }
+
+    fn valueStoreFor(
+        self: *CrossProcedureRepresentationLinker,
+        instance: *const repr.ProcRepresentationInstance,
+    ) *const repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
+    }
+
+    fn valueRoot(self: *CrossProcedureRepresentationLinker, value: repr.ValueInfoId) repr.RepRootId {
+        return self.value_store.values.items[@intFromEnum(value)].root;
+    }
+};
 
 fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
     for (program.proc_instances.items, 0..) |*instance, raw_instance| {
@@ -2462,8 +2610,8 @@ const BodySolver = struct {
                 });
                 _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
                 _ = try self.representation_store.appendRepresentationEdge(.{
-                    .from = result_root,
-                    .to = payload_root,
+                    .from = .{ .local = result_root },
+                    .to = .{ .local = payload_root },
                     .kind = .box_payload,
                 });
                 self.value_store.values.items[@intFromEnum(result_value)].boxed = .{
@@ -2488,8 +2636,8 @@ const BodySolver = struct {
                 });
                 _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
                 _ = try self.representation_store.appendRepresentationEdge(.{
-                    .from = self.valueRoot(boxed_value),
-                    .to = self.valueRoot(result_value),
+                    .from = .{ .local = self.valueRoot(boxed_value) },
+                    .to = .{ .local = self.valueRoot(result_value) },
                     .kind = .box_payload,
                 });
             },
@@ -2558,8 +2706,8 @@ const BodySolver = struct {
         const result_root = self.valueRoot(result);
         for (self.value_store.sliceJoinInputSpan(inputs)) |input| {
             _ = try self.representation_store.appendRepresentationEdge(.{
-                .from = self.valueRoot(input.value),
-                .to = result_root,
+                .from = .{ .local = self.valueRoot(input.value) },
+                .to = .{ .local = result_root },
                 .kind = .branch_join,
             });
         }
@@ -2798,8 +2946,8 @@ const BodySolver = struct {
             .record => |record| {
                 for (record.fields) |field| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
-                        .from = root,
-                        .to = self.valueRoot(field.value),
+                        .from = .{ .local = root },
+                        .to = .{ .local = self.valueRoot(field.value) },
                         .kind = .{ .record_field = field.field },
                     });
                 }
@@ -2807,8 +2955,8 @@ const BodySolver = struct {
             .tuple => |tuple| {
                 for (tuple) |elem| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
-                        .from = root,
-                        .to = self.valueRoot(elem.value),
+                        .from = .{ .local = root },
+                        .to = .{ .local = self.valueRoot(elem.value) },
                         .kind = .{ .tuple_elem = elem.index },
                     });
                 }
@@ -2816,8 +2964,8 @@ const BodySolver = struct {
             .tag => |tag| {
                 for (tag.payloads) |payload| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
-                        .from = root,
-                        .to = self.valueRoot(payload.value),
+                        .from = .{ .local = root },
+                        .to = .{ .local = self.valueRoot(payload.value) },
                         .kind = .{ .tag_payload = payload.payload },
                     });
                 }
@@ -2825,8 +2973,8 @@ const BodySolver = struct {
             .list => |list| {
                 for (list.elems) |elem| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
-                        .from = root,
-                        .to = self.valueRoot(elem),
+                        .from = .{ .local = root },
+                        .to = .{ .local = self.valueRoot(elem) },
                         .kind = .list_elem,
                     });
                 }

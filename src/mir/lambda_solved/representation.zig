@@ -87,9 +87,20 @@ pub const RepresentationEdgeKind = union(enum) {
     mutable_version,
 };
 
+pub const ProcPublicRootRef = struct {
+    instance: ProcRepresentationInstanceId,
+    value: ValueInfoId,
+    rep_root: RepRootId,
+};
+
+pub const RepresentationEndpoint = union(enum) {
+    local: RepRootId,
+    procedure_public: ProcPublicRootRef,
+};
+
 pub const RepresentationEdge = struct {
-    from: RepRootId,
-    to: RepRootId,
+    from: RepresentationEndpoint,
+    to: RepresentationEndpoint,
     kind: RepresentationEdgeKind,
 };
 
@@ -1171,8 +1182,8 @@ pub const RepresentationStore = struct {
         self: *RepresentationStore,
         edge: RepresentationEdge,
     ) std.mem.Allocator.Error!RepresentationEdgeId {
-        self.verifyReservedRoot(edge.from, "representation edge source");
-        self.verifyReservedRoot(edge.to, "representation edge target");
+        self.verifyRepresentationEndpoint(edge.from, "representation edge source");
+        self.verifyRepresentationEndpoint(edge.to, "representation edge target");
         const id: RepresentationEdgeId = @enumFromInt(@as(u32, @intCast(self.representation_edges.items.len)));
         try self.representation_edges.append(self.allocator, edge);
         return id;
@@ -1191,6 +1202,17 @@ pub const RepresentationStore = struct {
         if (@intFromEnum(root) >= self.roots_len) {
             debug.invariant(false, "lambda-solved invariant violated: " ++ label ++ " referenced an unreserved root");
             unreachable;
+        }
+    }
+
+    fn verifyRepresentationEndpoint(
+        self: *const RepresentationStore,
+        endpoint: RepresentationEndpoint,
+        comptime label: []const u8,
+    ) void {
+        switch (endpoint) {
+            .local => |root| self.verifyReservedRoot(root, label),
+            .procedure_public => {},
         }
     }
 
