@@ -35,8 +35,7 @@ pub const MonoSpecializationReason = union(enum) {
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     private_capture_callable_leaf: checked_artifact.PrivateCaptureNodeId,
     erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
-    erased_capture_callable_leaf: checked_artifact.ErasedCaptureMaterializationNodeId,
-    erased_finite_capture_member: checked_artifact.ErasedCaptureMaterializationNodeId,
+    erased_finite_capture_member: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 };
 
 pub const Input = struct {
@@ -353,19 +352,19 @@ const PrivateCaptureDependencyKey = struct {
     node: checked_artifact.PrivateCaptureNodeId,
 };
 
-const ErasedCaptureMaterializationDependencyKey = struct {
+const ErasedCaptureExecutableMaterializationDependencyKey = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
-    node: checked_artifact.ErasedCaptureMaterializationNodeId,
+    node: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 };
 
 const ExecutableSyntheticDependencyState = struct {
     private_captures: std.AutoHashMap(PrivateCaptureDependencyKey, void),
-    erased_materializations: std.AutoHashMap(ErasedCaptureMaterializationDependencyKey, void),
+    erased_materializations: std.AutoHashMap(ErasedCaptureExecutableMaterializationDependencyKey, void),
 
     fn init(allocator: Allocator) ExecutableSyntheticDependencyState {
         return .{
             .private_captures = std.AutoHashMap(PrivateCaptureDependencyKey, void).init(allocator),
-            .erased_materializations = std.AutoHashMap(ErasedCaptureMaterializationDependencyKey, void).init(allocator),
+            .erased_materializations = std.AutoHashMap(ErasedCaptureExecutableMaterializationDependencyKey, void).init(allocator),
         };
     }
 
@@ -389,10 +388,10 @@ fn reserveExecutableSyntheticProcDependencies(
     switch (synthetic.body) {
         .erased_promoted_wrapper => |erased| {
             try reserveErasedCodeRefDependency(input, program, queue, erased.code, .{ .erased_promoted_wrapper_code = synthetic.template });
-            try reserveErasedCaptureMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, erased.capture);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, erased.capture);
             switch (erased.hidden_capture_arg) {
                 .none => {},
-                .materialized_capture => |capture| try reserveErasedCaptureMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, capture),
+                .materialized_capture => |capture| try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, capture),
             }
         },
     }
@@ -407,69 +406,99 @@ fn reserveErasedCodeRefDependency(
 ) Allocator.Error!void {
     switch (code) {
         .direct_proc_value => |direct| _ = try reserveProcedureCallableDependency(input, program, queue, direct.proc_value, reason),
-        .finite_set_adapter => {},
+        .finite_set_adapter => |adapter| {
+            const descriptor = callableSetDescriptorForKey(input, adapter.callable_set_key) orelse {
+                invariantViolation("mono dependency reservation reached finite-set adapter with no callable-set descriptor");
+            };
+            for (descriptor.members) |member| {
+                _ = try reserveProcedureCallableDependency(input, program, queue, member.proc_value, reason);
+            }
+        },
     }
 }
 
-fn reserveErasedCaptureMaterializationPlanDependencies(
+fn callableSetDescriptorForKey(
+    input: Input,
+    key: canonical.CanonicalCallableSetKey,
+) ?*const canonical.CanonicalCallableSetDescriptor {
+    if (input.root.artifact.callable_set_descriptors.descriptorFor(key)) |descriptor| return descriptor;
+    for (input.imports) |import| {
+        if (import.callable_set_descriptors.descriptorFor(key)) |descriptor| return descriptor;
+    }
+    return null;
+}
+
+fn reserveErasedCaptureExecutableMaterializationPlanDependencies(
     input: Input,
     program: *Program,
     queue: *Queue,
     state: *ExecutableSyntheticDependencyState,
     owner_artifact: checked_artifact.CheckedModuleArtifactKey,
     plans: *const checked_artifact.CompileTimePlanStore,
-    capture: checked_artifact.ErasedCaptureMaterializationPlan,
+    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!void {
     switch (capture) {
         .none,
         .zero_sized_typed,
         => {},
-        .node => |node| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, node),
+        .node => |node| try reserveErasedCaptureExecutableMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, node),
     }
 }
 
-fn reserveErasedCaptureMaterializationNodeDependencies(
+fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
     input: Input,
     program: *Program,
     queue: *Queue,
     state: *ExecutableSyntheticDependencyState,
     owner_artifact: checked_artifact.CheckedModuleArtifactKey,
     plans: *const checked_artifact.CompileTimePlanStore,
-    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+    node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!void {
-    const visit_key = ErasedCaptureMaterializationDependencyKey{
+    const visit_key = ErasedCaptureExecutableMaterializationDependencyKey{
         .artifact = owner_artifact,
         .node = node_id,
     };
     const visit = try state.erased_materializations.getOrPut(visit_key);
     if (visit.found_existing) return;
 
-    switch (plans.erasedCaptureMaterializationNode(node_id)) {
+    switch (plans.erasedCaptureExecutableMaterializationNode(node_id)) {
         .pending => invariantViolation("mono dependency reservation reached pending erased capture materialization node"),
-        .public_constant => {},
-        .private_capture => |capture| try reservePrivateCaptureRefDependencies(input, program, queue, state, capture),
-        .callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .erased_capture_callable_leaf = node_id }),
+        .pure_const => {},
         .finite_callable_set => |finite| {
-            _ = try reserveProcedureCallableDependency(input, program, queue, finite.member_proc, .{ .erased_finite_capture_member = node_id });
+            const descriptor = callableSetDescriptorForKey(input, finite.callable_set_key) orelse {
+                invariantViolation("mono dependency reservation reached materialized finite callable set with no descriptor");
+            };
+            for (descriptor.members) |member| {
+                if (member.member == finite.selected_member) {
+                    _ = try reserveProcedureCallableDependency(input, program, queue, member.proc_value, .{ .erased_finite_capture_member = node_id });
+                    break;
+                }
+            } else {
+                invariantViolation("mono dependency reservation reached materialized finite callable set with missing selected member");
+            }
             for (finite.captures) |capture| {
-                try reservePrivateCaptureRefDependencies(input, program, queue, state, capture);
+                try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, capture);
             }
         },
+        .erased_callable => |erased| {
+            try reserveErasedCodeRefDependency(input, program, queue, erased.code, .{ .erased_finite_capture_member = node_id });
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, erased.capture);
+        },
         .record => |fields| for (fields) |field| {
-            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, field.value);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, field.value);
         },
         .tuple => |items| for (items) |item| {
-            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, item);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, item);
         },
         .tag_union => |tag| for (tag.payloads) |payload| {
-            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, payload.value);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, payload.value);
         },
         .list => |items| for (items) |item| {
-            try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, item);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, item);
         },
-        .box => |payload| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, payload),
-        .nominal => |nominal| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, nominal.backing),
-        .recursive_ref => |ref| try reserveErasedCaptureMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, ref),
+        .box => |payload| try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, payload),
+        .nominal => |nominal| try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, nominal.backing),
+        .recursive_ref => |ref| try reserveErasedCaptureExecutableMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, ref),
     }
 }
 

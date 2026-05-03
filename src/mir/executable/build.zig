@@ -35,7 +35,7 @@ pub const Program = struct {
     procs: std.ArrayList(Proc),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
-    callable_set_descriptors: []repr.CanonicalCallableSetDescriptor = &.{},
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
     layouts: ?Layouts.Layouts = null,
 
     pub fn init(allocator: Allocator) Program {
@@ -55,7 +55,6 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program) void {
         if (self.layouts) |*layouts| layouts.deinit();
-        deinitCallableSetDescriptors(self.allocator, self.callable_set_descriptors);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
@@ -69,12 +68,17 @@ pub const Program = struct {
     }
 };
 
-pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.Error!Program {
+pub fn run(
+    allocator: Allocator,
+    solved: LambdaSolved.Solve.Program,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
+) Allocator.Error!Program {
     var input = solved;
     errdefer input.deinit();
 
     var program = Program.init(allocator);
     errdefer program.deinit();
+    program.callable_set_descriptors = callable_set_descriptors;
     program.canonical_names = input.canonical_names;
     input.canonical_names = canonical.CanonicalNameStore.init(allocator);
     program.literal_pool = input.literal_pool;
@@ -124,6 +128,7 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
             .type_lowerer = &type_lowerer,
             .value_store = value_store,
             .representation_store = &input.solve_sessions.items[@intFromEnum(proc_instance.solve_session)].representation_store,
+            .callable_set_descriptors = program.callable_set_descriptors,
             .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
             .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
             .executable_proc = executable_proc,
@@ -164,73 +169,37 @@ pub fn run(allocator: Allocator, solved: LambdaSolved.Solve.Program) Allocator.E
         try program.root_metadata.append(allocator, metadata);
     }
 
-    program.callable_set_descriptors = try cloneCallableSetDescriptors(allocator, input.solve_sessions.items);
-
     input.deinit();
     return program;
 }
 
-fn cloneCallableSetDescriptors(
-    allocator: Allocator,
-    solve_sessions: []const repr.RepresentationSolveSession,
-) Allocator.Error![]repr.CanonicalCallableSetDescriptor {
-    var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
-    errdefer {
-        for (descriptors.items) |descriptor| deinitCallableSetDescriptor(allocator, descriptor);
-        descriptors.deinit(allocator);
-    }
-
-    var seen = std.AutoHashMap(repr.CanonicalCallableSetKey, void).init(allocator);
-    defer seen.deinit();
-
-    for (solve_sessions) |*session| {
-        for (session.representation_store.callable_set_descriptors) |descriptor| {
-            const seen_entry = try seen.getOrPut(descriptor.key);
-            if (seen_entry.found_existing) continue;
-
-            const members = try allocator.alloc(repr.CanonicalCallableSetMember, descriptor.members.len);
-            errdefer allocator.free(members);
-            var member_count: usize = 0;
-            errdefer {
-                for (members[0..member_count]) |*member| allocator.free(member.capture_slots);
-            }
-
-            for (descriptor.members, 0..) |member, i| {
-                const capture_slots = try allocator.dupe(repr.CallableSetCaptureSlot, member.capture_slots);
-                members[i] = .{
-                    .member = member.member,
-                    .proc_value = member.proc_value,
-                    .source_proc = member.source_proc,
-                    .capture_slots = capture_slots,
-                    .capture_shape_key = member.capture_shape_key,
-                };
-                member_count += 1;
-            }
-
-            try descriptors.append(allocator, .{
-                .key = descriptor.key,
-                .members = members,
-            });
-        }
-    }
-
-    return try descriptors.toOwnedSlice(allocator);
+fn programCallableSetDescriptor(
+    program: *const Program,
+    key: repr.CanonicalCallableSetKey,
+) ?*const repr.CanonicalCallableSetDescriptor {
+    return callableSetDescriptorFromSlice(program.callable_set_descriptors, key);
 }
 
-pub fn deinitCallableSetDescriptors(
-    allocator: Allocator,
-    descriptors: []repr.CanonicalCallableSetDescriptor,
-) void {
-    for (descriptors) |descriptor| deinitCallableSetDescriptor(allocator, descriptor);
-    allocator.free(descriptors);
+fn callableSetDescriptorFromSlice(
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
+    key: repr.CanonicalCallableSetKey,
+) ?*const repr.CanonicalCallableSetDescriptor {
+    for (descriptors) |*descriptor| {
+        if (repr.callableSetKeyEql(descriptor.key, key)) return descriptor;
+    }
+    return null;
 }
 
-fn deinitCallableSetDescriptor(
-    allocator: Allocator,
-    descriptor: repr.CanonicalCallableSetDescriptor,
-) void {
-    for (descriptor.members) |member| allocator.free(member.capture_slots);
-    allocator.free(descriptor.members);
+fn programCallableSetMember(
+    program: *const Program,
+    key: repr.CanonicalCallableSetKey,
+    member_id: repr.CallableSetMemberId,
+) ?*const repr.CanonicalCallableSetMember {
+    const descriptor = programCallableSetDescriptor(program, key) orelse return null;
+    for (descriptor.members) |*member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
 }
 
 fn lowerExecutableSyntheticProc(
@@ -413,7 +382,7 @@ fn lowerErasedPromotedCapture(
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
     capture_ty: ?Type.TypeId,
-    capture: checked_artifact.ErasedCaptureMaterializationPlan,
+    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
     hidden_arg: checked_artifact.ErasedHiddenCaptureArgPlan,
 ) Allocator.Error!ErasedPromotedCaptureLowering {
     if (capture_ty == null) {
@@ -437,7 +406,7 @@ fn lowerErasedPromotedCapture(
         .zero_sized_typed => |key| {
             _ = key;
         },
-        .node => |node| return try lowerErasedCaptureMaterializationNode(allocator, program, plans, ty, node),
+        .node => |node| return try lowerErasedCaptureExecutableMaterializationNode(allocator, program, plans, ty, node),
     }
     const value = program.ast.freshValueRef();
     const expr = try program.ast.addExpr(ty, value, .unit);
@@ -450,14 +419,14 @@ fn lowerErasedPromotedCapture(
     };
 }
 
-fn lowerErasedCaptureMaterializationNode(
+fn lowerErasedCaptureExecutableMaterializationNode(
     allocator: Allocator,
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
     expected_ty: Type.TypeId,
-    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+    node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!ErasedPromotedCaptureLowering {
-    const expr = try lowerErasedCaptureMaterializationExpr(allocator, program, plans, expected_ty, node_id);
+    const expr = try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, node_id);
     const value = program.ast.getExpr(expr).value;
     return .{
         .value = value,
@@ -468,32 +437,111 @@ fn lowerErasedCaptureMaterializationNode(
     };
 }
 
-fn lowerErasedCaptureMaterializationExpr(
+fn lowerErasedCaptureExecutableMaterializationPlanExpr(
     allocator: Allocator,
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
     expected_ty: Type.TypeId,
-    node_id: checked_artifact.ErasedCaptureMaterializationNodeId,
+    plan: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
-    const node = plans.erasedCaptureMaterializationNode(node_id);
+    return switch (plan) {
+        .none => executableInvariant("executable erased capture materialization required a value but got none"),
+        .zero_sized_typed => |key| blk: {
+            _ = key;
+            const value = program.ast.freshValueRef();
+            break :blk try program.ast.addExpr(expected_ty, value, .unit);
+        },
+        .node => |node| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, node),
+    };
+}
+
+fn lowerErasedCaptureExecutableMaterializationNodeExpr(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+) Allocator.Error!Ast.ExprId {
+    const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
     return switch (node) {
         .pending => executableInvariant("executable erased capture materialization reached pending node"),
-        .public_constant => |const_instance| blk: {
+        .pure_const => |pure_const| blk: {
             const value = program.ast.freshValueRef();
-            break :blk try program.ast.addExpr(expected_ty, value, .{ .const_instance = const_instance });
+            break :blk try program.ast.addExpr(expected_ty, value, .{ .const_instance = pure_const.const_instance });
         },
-        .private_capture => executableInvariant("executable erased capture private capture materialization is not implemented"),
-        .callable_leaf => executableInvariant("executable erased capture callable leaf materialization is not implemented"),
-        .finite_callable_set => |finite| try lowerMaterializedFiniteCallableSetCapture(allocator, program, expected_ty, finite),
+        .finite_callable_set => |finite| try lowerMaterializedFiniteCallableSetValue(allocator, program, plans, expected_ty, finite),
+        .erased_callable => |erased| try lowerMaterializedErasedCallableValue(allocator, program, plans, expected_ty, erased),
         .tuple => |items| try lowerErasedCaptureTupleMaterialization(allocator, program, plans, expected_ty, items),
-        .record,
-        .tag_union,
-        .list,
-        .box,
-        .nominal,
-        .recursive_ref,
-        => executableInvariant("executable erased capture structural materialization node lowering is not implemented"),
+        .record => |fields| try lowerErasedCaptureRecordMaterialization(allocator, program, plans, expected_ty, fields),
+        .tag_union => |tag| try lowerErasedCaptureTagMaterialization(allocator, program, plans, expected_ty, tag),
+        .list => |items| try lowerErasedCaptureListMaterialization(allocator, program, plans, expected_ty, items),
+        .box => |payload| try lowerErasedCaptureBoxMaterialization(allocator, program, plans, expected_ty, payload),
+        .nominal => |nominal| try lowerErasedCaptureNominalMaterialization(allocator, program, plans, expected_ty, nominal),
+        .recursive_ref => |ref| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, ref),
     };
+}
+
+fn lowerErasedCaptureRecordMaterialization(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    fields: []const checked_artifact.ErasedCaptureExecutableMaterializationRecordField,
+) Allocator.Error!Ast.ExprId {
+    const record_ty = switch (program.types.getType(expected_ty)) {
+        .record => |record| record,
+        else => executableInvariant("executable erased capture record materialization expected a record type"),
+    };
+    if (record_ty.fields.len != fields.len) {
+        executableInvariant("executable erased capture record materialization field count differs from expected type");
+    }
+
+    const seen = try allocator.alloc(bool, fields.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    const output_fields = try allocator.alloc(Ast.RecordFieldExpr, record_ty.fields.len);
+    defer allocator.free(output_fields);
+    for (record_ty.fields, 0..) |expected_field, expected_i| {
+        const expected_label = program.row_shapes.recordField(expected_field.field).label;
+        const materialized = findErasedCaptureRecordField(fields, expected_label, seen) orelse {
+            executableInvariant("executable erased capture record materialization missing expected field");
+        };
+        const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
+            allocator,
+            program,
+            plans,
+            expected_field.ty,
+            materialized.value,
+        );
+        output_fields[expected_i] = .{
+            .field = expected_field.field,
+            .expr = lowered,
+            .ty = expected_field.ty,
+            .value = program.ast.getExpr(lowered).value,
+        };
+    }
+    verifyAllSeen(seen, "executable erased capture record materialization had extra field");
+
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .record = .{
+        .shape = record_ty.shape,
+        .fields = try program.ast.addRecordFieldExprSpan(output_fields),
+    } });
+}
+
+fn findErasedCaptureRecordField(
+    fields: []const checked_artifact.ErasedCaptureExecutableMaterializationRecordField,
+    expected_label: canonical.RecordFieldLabelId,
+    seen: []bool,
+) ?checked_artifact.ErasedCaptureExecutableMaterializationRecordField {
+    for (fields, 0..) |field, i| {
+        if (field.field != expected_label) continue;
+        if (seen[i]) executableInvariant("executable erased capture record materialization duplicated field");
+        seen[i] = true;
+        return field;
+    }
+    return null;
 }
 
 fn lowerErasedCaptureTupleMaterialization(
@@ -501,7 +549,7 @@ fn lowerErasedCaptureTupleMaterialization(
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
     expected_ty: Type.TypeId,
-    items: []const checked_artifact.ErasedCaptureMaterializationNodeId,
+    items: []const checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
     const tuple_tys = switch (program.types.getType(expected_ty)) {
         .tuple => |tuple| tuple,
@@ -513,17 +561,171 @@ fn lowerErasedCaptureTupleMaterialization(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, 0..) |item, i| {
-        exprs[i] = try lowerErasedCaptureMaterializationExpr(allocator, program, plans, tuple_tys[i], item);
+        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, tuple_tys[i], item);
     }
     const value = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, value, .{ .tuple = try program.ast.addExprSpan(exprs) });
 }
 
-fn lowerMaterializedFiniteCallableSetCapture(
+fn lowerErasedCaptureTagMaterialization(
     allocator: Allocator,
     program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
     expected_ty: Type.TypeId,
-    finite: checked_artifact.MaterializedFiniteCallableSetCapture,
+    tag: checked_artifact.ErasedCaptureExecutableMaterializationTagNode,
+) Allocator.Error!Ast.ExprId {
+    const tag_union_ty = switch (program.types.getType(expected_ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => executableInvariant("executable erased capture tag materialization expected a tag-union type"),
+    };
+    const selected = findErasedCaptureTagType(program, tag_union_ty, tag.tag) orelse {
+        executableInvariant("executable erased capture tag materialization selected tag missing from expected type");
+    };
+    if (selected.payloads.len != tag.payloads.len) {
+        executableInvariant("executable erased capture tag materialization payload count differs from expected type");
+    }
+
+    const seen = try allocator.alloc(bool, tag.payloads.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    const output_payloads = try allocator.alloc(Ast.TagPayloadExpr, selected.payloads.len);
+    defer allocator.free(output_payloads);
+    for (selected.payloads, 0..) |expected_payload, expected_i| {
+        const payload_info = program.row_shapes.tagPayload(expected_payload.payload);
+        const materialized = findErasedCaptureTagPayload(tag.payloads, payload_info.logical_index, seen) orelse {
+            executableInvariant("executable erased capture tag materialization missing expected payload");
+        };
+        const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
+            allocator,
+            program,
+            plans,
+            expected_payload.ty,
+            materialized.value,
+        );
+        output_payloads[expected_i] = .{
+            .payload = expected_payload.payload,
+            .expr = lowered,
+            .ty = expected_payload.ty,
+            .value = program.ast.getExpr(lowered).value,
+        };
+    }
+    verifyAllSeen(seen, "executable erased capture tag materialization had extra payload");
+
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .tag = .{
+        .union_shape = tag_union_ty.shape,
+        .tag = selected.tag,
+        .payloads = try program.ast.addTagPayloadExprSpan(output_payloads),
+    } });
+}
+
+fn findErasedCaptureTagType(
+    program: *const Program,
+    tag_union_ty: Type.TagUnionType,
+    expected_label: canonical.TagLabelId,
+) ?Type.TagType {
+    for (tag_union_ty.tags) |tag| {
+        if (program.row_shapes.tag(tag.tag).label == expected_label) return tag;
+    }
+    return null;
+}
+
+fn findErasedCaptureTagPayload(
+    payloads: []const checked_artifact.ErasedCaptureExecutableMaterializationTagPayload,
+    expected_index: u32,
+    seen: []bool,
+) ?checked_artifact.ErasedCaptureExecutableMaterializationTagPayload {
+    for (payloads, 0..) |payload, i| {
+        if (payload.index != expected_index) continue;
+        if (seen[i]) executableInvariant("executable erased capture tag materialization duplicated payload");
+        seen[i] = true;
+        return payload;
+    }
+    return null;
+}
+
+fn lowerErasedCaptureListMaterialization(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    items: []const checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+) Allocator.Error!Ast.ExprId {
+    const elem_ty = switch (program.types.getType(expected_ty)) {
+        .list => |elem| elem,
+        else => executableInvariant("executable erased capture list materialization expected a list type"),
+    };
+    const exprs = try allocator.alloc(Ast.ExprId, items.len);
+    defer allocator.free(exprs);
+    for (items, 0..) |item, i| {
+        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, elem_ty, item);
+    }
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .list = try program.ast.addExprSpan(exprs) });
+}
+
+fn lowerErasedCaptureBoxMaterialization(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    payload: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+) Allocator.Error!Ast.ExprId {
+    const payload_ty = switch (program.types.getType(expected_ty)) {
+        .box => |payload_ty| payload_ty,
+        else => executableInvariant("executable erased capture box materialization expected Box(T) type"),
+    };
+    const payload_expr = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, payload_ty, payload);
+    const exprs = [_]Ast.ExprId{payload_expr};
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .low_level = .{
+        .op = .box_box,
+        .args = try program.ast.addExprSpan(&exprs),
+    } });
+}
+
+fn lowerErasedCaptureNominalMaterialization(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    nominal: anytype,
+) Allocator.Error!Ast.ExprId {
+    const expected_nominal = switch (program.types.getType(expected_ty)) {
+        .nominal => |expected_nominal| expected_nominal,
+        else => executableInvariant("executable erased capture nominal materialization expected a nominal type"),
+    };
+    if (!nominalTypeKeyEql(expected_nominal.nominal, nominal.nominal)) {
+        executableInvariant("executable erased capture nominal materialization nominal type differs from expected type");
+    }
+    const backing = try lowerErasedCaptureExecutableMaterializationPlanExpr(
+        allocator,
+        program,
+        plans,
+        expected_nominal.backing,
+        nominal.backing,
+    );
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .nominal_reinterpret = backing });
+}
+
+fn nominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
+    return a.module_name == b.module_name and a.type_name == b.type_name;
+}
+
+fn verifyAllSeen(seen: []const bool, comptime message: []const u8) void {
+    for (seen) |was_seen| {
+        if (!was_seen) executableInvariant(message);
+    }
+}
+
+fn lowerMaterializedFiniteCallableSetValue(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    finite: checked_artifact.MaterializedFiniteCallableSetValue,
 ) Allocator.Error!Ast.ExprId {
     const callable_set = switch (program.types.getType(expected_ty)) {
         .callable_set => |callable_set| callable_set,
@@ -532,19 +734,130 @@ fn lowerMaterializedFiniteCallableSetCapture(
     if (!repr.callableSetKeyEql(callable_set.key, finite.callable_set_key)) {
         executableInvariant("executable erased finite capture materialization callable-set key differs from expected type");
     }
-    if (finite.captures.len != 0 or finite.member_capture_slots.len != 0) {
-        executableInvariant("executable erased finite capture materialization with captures is not implemented");
+    const descriptor_member = programCallableSetMember(program, finite.callable_set_key, finite.selected_member) orelse {
+        executableInvariant("executable erased finite capture materialization selected missing callable-set member");
+    };
+    if (descriptor_member.capture_slots.len != finite.captures.len) {
+        executableInvariant("executable erased finite capture materialization capture count differs from descriptor");
     }
+    var member_type: ?Type.CallableSetMemberType = null;
+    for (callable_set.members) |candidate| {
+        if (candidate.member == finite.selected_member) {
+            member_type = candidate;
+            break;
+        }
+    }
+    const selected_member_type = member_type orelse {
+        executableInvariant("executable erased finite capture materialization selected member missing from expected type");
+    };
+
+    const capture_refs = try allocator.alloc(Ast.CaptureValueRef, finite.captures.len);
+    defer allocator.free(capture_refs);
+    const stmt_ids = try allocator.alloc(Ast.StmtId, finite.captures.len);
+    defer allocator.free(stmt_ids);
+
+    if (finite.captures.len == 0) {
+        if (selected_member_type.payload_ty != null) {
+            executableInvariant("executable erased finite capture materialization has no captures but expected member has payload type");
+        }
+    } else {
+        const payload_ty = selected_member_type.payload_ty orelse {
+            executableInvariant("executable erased finite capture materialization has captures but expected member has no payload type");
+        };
+        const capture_tys = switch (program.types.getType(payload_ty)) {
+            .tuple => |tuple| tuple,
+            else => executableInvariant("executable erased finite capture materialization expected tuple payload type"),
+        };
+        if (capture_tys.len != finite.captures.len) {
+            executableInvariant("executable erased finite capture materialization payload type arity differs from captures");
+        }
+        for (finite.captures, 0..) |capture, i| {
+            const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
+                allocator,
+                program,
+                plans,
+                capture_tys[i],
+                capture,
+            );
+            const value = program.ast.getExpr(lowered).value;
+            capture_refs[i] = .{
+                .slot = @intCast(i),
+                .value = value,
+                .exec_ty = capture_tys[i],
+            };
+            stmt_ids[i] = try program.ast.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+    }
+
     const value = program.ast.freshValueRef();
-    _ = allocator;
-    return try program.ast.addExpr(expected_ty, value, .{ .callable_set_value = .{
+    const final_expr = try program.ast.addExpr(expected_ty, value, .{ .callable_set_value = .{
         .construction_plan = null,
         .callable_set_key = finite.callable_set_key,
         .member = .{
             .callable_set_key = finite.callable_set_key,
             .member_index = finite.selected_member,
         },
-        .capture_record = null,
+        .capture_record = if (capture_refs.len == 0) null else .{
+            .capture_shape_key = descriptor_member.capture_shape_key,
+            .values = try program.ast.addCaptureValueRefSpan(capture_refs),
+            .record_tmp = program.ast.freshValueRef(),
+        },
+    } });
+    if (stmt_ids.len == 0) return final_expr;
+    return try program.ast.addExpr(expected_ty, value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmt_ids),
+        .final_expr = final_expr,
+    } });
+}
+
+fn lowerMaterializedErasedCallableValue(
+    allocator: Allocator,
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    expected_ty: Type.TypeId,
+    erased: checked_artifact.MaterializedErasedCallableValue,
+) Allocator.Error!Ast.ExprId {
+    const erased_ty = switch (program.types.getType(expected_ty)) {
+        .erased_fn => |erased_fn| erased_fn,
+        else => executableInvariant("executable erased callable materialization expected erased-fn type"),
+    };
+    if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sig_key)) {
+        executableInvariant("executable erased callable materialization signature differs from expected type");
+    }
+    const capture_expr: ?Ast.ExprId = if (erased.sig_key.capture_ty) |_| blk: {
+        const capture_ty = erased_ty.capture_ty orelse {
+            executableInvariant("executable erased callable materialization expected type has no capture type");
+        };
+        break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, capture_ty, erased.capture);
+    } else null;
+
+    const stmt_count: usize = if (capture_expr == null) 0 else 1;
+    const stmt_ids = try allocator.alloc(Ast.StmtId, stmt_count);
+    defer allocator.free(stmt_ids);
+    const capture_ref: ?Ast.ExecutableValueRef = if (capture_expr) |expr| blk: {
+        const value = program.ast.getExpr(expr).value;
+        stmt_ids[0] = try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = expr,
+        } });
+        break :blk value;
+    } else null;
+
+    const value = program.ast.freshValueRef();
+    const packed = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = .{
+        .sig_key = erased.sig_key,
+        .code = executableProcForErasedCode(program, erased.code),
+        .capture = capture_ref,
+        .capture_ty = erased_ty.capture_ty,
+        .capture_shape = erased_ty.capture_shape,
+    } });
+    if (stmt_ids.len == 0) return packed;
+    return try program.ast.addExpr(expected_ty, value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmt_ids),
+        .final_expr = packed,
     } });
 }
 
@@ -957,6 +1270,7 @@ const BodyBuilder = struct {
     type_lowerer: *TypeLowerer,
     value_store: *const repr.ValueInfoStore,
     representation_store: *const repr.RepresentationStore,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     env: std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef),
     expr_map: std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId),
     executable_proc: Ast.ExecutableProcId,
@@ -1117,7 +1431,8 @@ const BodyBuilder = struct {
             if (repr.callableSetKeyEql(active.key, key)) return active.ty;
         }
 
-        const descriptor = representation_store.callableSetDescriptor(key) orelse {
+        _ = representation_store;
+        const descriptor = callableSetDescriptorFromSlice(self.callable_set_descriptors, key) orelse {
             executableInvariant("executable callable-set type has no descriptor");
         };
         const ty = try self.type_lowerer.output.addType(.placeholder);
@@ -2624,7 +2939,7 @@ const BodyBuilder = struct {
             .erase_finite_set,
             => executableInvariant("executable call_value finite dispatch reached erased callee emission"),
         }
-        const descriptor = self.representation_store.callableSetDescriptor(callable_set_key) orelse {
+        const descriptor = callableSetDescriptorFromSlice(self.callable_set_descriptors, callable_set_key) orelse {
             executableInvariant("executable call_value finite callable set has no descriptor");
         };
         if (descriptor.members.len == 0) executableInvariant("executable call_value finite callable set has no members");

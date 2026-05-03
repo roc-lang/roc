@@ -168,7 +168,7 @@ fn evaluateConstantRoot(
         .checked_types = &artifact.checked_types,
         .layouts = &lowered.lir_result.layouts,
         .lowered = lowered,
-        .callable_set_descriptors = lowered.callable_set_descriptors,
+        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
         .source_binding = pattern,
     };
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
@@ -222,7 +222,7 @@ fn evaluateCallableBindingRoot(
         .finite => blk: {
             const selected_callable = selectFiniteCallableResult(
                 &artifact.comptime_plans,
-                lowered.callable_set_descriptors,
+                artifact.callable_set_descriptors.descriptors,
                 &lowered.lir_result.layouts,
                 result_plan,
                 ret_layout,
@@ -402,10 +402,11 @@ fn promoteFiniteCallableResult(
         .artifact = artifact,
         .lowered = lowered,
         .layouts = &lowered.lir_result.layouts,
-        .callable_set_descriptors = lowered.callable_set_descriptors,
+        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
         .owner = reserved.promoted_ref,
         .source_binding = source_binding,
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
+        .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
     };
     defer capture_builder.deinit();
 
@@ -479,10 +480,11 @@ fn publishErasedCallableResult(
         .artifact = artifact,
         .lowered = lowered,
         .layouts = &lowered.lir_result.layouts,
-        .callable_set_descriptors = lowered.callable_set_descriptors,
+        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
         .owner = reserved.promoted_ref,
         .source_binding = source_binding,
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
+        .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
     };
     defer capture_builder.deinit();
     const capture = try materializeErasedPromotedCapture(
@@ -540,7 +542,7 @@ fn materializeErasedPromotedCapture(
     erased: checked_artifact.ErasedCallableResultPlan,
     ret_layout: layout_mod.Idx,
     ret_value: Value,
-) Allocator.Error!checked_artifact.ErasedCaptureMaterializationPlan {
+) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
     return switch (erased.capture) {
         .none => blk: {
             if (erased.sig_key.capture_ty != null) {
@@ -561,8 +563,9 @@ fn materializeErasedPromotedCapture(
             const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
                 compileTimeFinalizationInvariant("erased callable whole hidden capture had no returned hidden capture payload");
             };
-            const ref = try capture_builder.captureRef(capture.source_ty, capture.plan, physical, 0);
-            break :blk try erasedCapturePrivateRefPlan(allocator, artifact, ref);
+            _ = capture.source_ty;
+            _ = artifact;
+            break :blk try capture_builder.executablePlan(capture.plan, physical);
         },
         .proc_capture_tuple => |captures| blk: {
             const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
@@ -571,7 +574,7 @@ fn materializeErasedPromotedCapture(
             if (captures.len == 0) {
                 compileTimeFinalizationInvariant("erased proc-value capture tuple materialization had no captures");
             }
-            const tuple_items = try allocator.alloc(checked_artifact.ErasedCaptureMaterializationNodeId, captures.len);
+            const tuple_items = try allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, captures.len);
             errdefer allocator.free(tuple_items);
             const tuple_layout = lowered.lir_result.layouts.getLayout(physical.layout_idx);
             if (tuple_layout.tag != .struct_) {
@@ -579,13 +582,10 @@ fn materializeErasedPromotedCapture(
             }
             for (captures, 0..) |capture, i| {
                 const field = structFieldValue(&lowered.lir_result.layouts, tuple_layout, physical.value, @intCast(i));
-                const ref = try capture_builder.captureRef(capture.source_ty, capture.plan, field, @intCast(i));
-                tuple_items[i] = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
-                    allocator,
-                    .{ .private_capture = ref },
-                );
+                _ = capture.source_ty;
+                tuple_items[i] = try capture_builder.executablePlan(capture.plan, field);
             }
-            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
                 allocator,
                 .{ .tuple = tuple_items },
             ) };
@@ -594,7 +594,7 @@ fn materializeErasedPromotedCapture(
             const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
                 compileTimeFinalizationInvariant("erased finite callable-set adapter capture had no returned hidden capture payload");
             };
-            const finite = try materializedFiniteCallableSetCapture(
+            const finite = try materializedFiniteCallableSetValue(
                 allocator,
                 lowered,
                 capture_builder,
@@ -602,7 +602,7 @@ fn materializeErasedPromotedCapture(
                 physical.layout_idx,
                 physical.value,
             );
-            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
+            break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
                 allocator,
                 .{ .finite_callable_set = finite },
             ) };
@@ -610,28 +610,17 @@ fn materializeErasedPromotedCapture(
     };
 }
 
-fn erasedCapturePrivateRefPlan(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    ref: checked_artifact.PrivateCaptureRef,
-) Allocator.Error!checked_artifact.ErasedCaptureMaterializationPlan {
-    return .{ .node = try artifact.comptime_plans.appendErasedCaptureMaterializationNode(
-        allocator,
-        .{ .private_capture = ref },
-    ) };
-}
-
-fn materializedFiniteCallableSetCapture(
+fn materializedFiniteCallableSetValue(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     capture_builder: *PrivateCaptureBuilder,
     result_plan: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
     value: Value,
-) Allocator.Error!checked_artifact.MaterializedFiniteCallableSetCapture {
+) Allocator.Error!checked_artifact.MaterializedFiniteCallableSetValue {
     const selected = selectFiniteCallableResult(
         &capture_builder.artifact.comptime_plans,
-        lowered.callable_set_descriptors,
+        capture_builder.artifact.callable_set_descriptors.descriptors,
         &lowered.lir_result.layouts,
         result_plan,
         layout_idx,
@@ -640,31 +629,47 @@ fn materializedFiniteCallableSetCapture(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("materialized finite erased capture selected member capture schema disagrees with result plan");
     }
-    const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
+    const captures = try allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, selected.planned_member.capture_slots.len);
     errdefer allocator.free(captures);
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
         if (slot.slot != @as(u32, @intCast(i))) {
             compileTimeFinalizationInvariant("materialized finite erased capture slots are not canonical");
         }
-        captures[i] = try capture_builder.captureRef(
-            slot.source_ty,
+        _ = slot.source_ty;
+        captures[i] = try capture_builder.executablePlan(
             slot_plan,
             captureSlotValue(&lowered.lir_result.layouts, selected, @intCast(i)),
-            @intCast(i),
         );
     }
-
-    const member_capture_slots = try allocator.dupe(canonical.CallableSetCaptureSlot, selected.descriptor_member.capture_slots);
-    errdefer allocator.free(member_capture_slots);
 
     return .{
         .source_fn_ty = selected.result_plan.source_fn_ty,
         .callable_set_key = selected.result_plan.callable_set_key,
         .selected_member = selected.planned_member.member,
-        .member_proc = selected.descriptor_member.proc_value,
-        .member_capture_shape = selected.descriptor_member.capture_shape_key,
-        .member_capture_slots = member_capture_slots,
         .captures = captures,
+    };
+}
+
+fn materializedErasedCallableValue(
+    capture_builder: *PrivateCaptureBuilder,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+) Allocator.Error!checked_artifact.MaterializedErasedCallableValue {
+    return .{
+        .source_fn_ty = erased.source_fn_ty,
+        .sig_key = erased.sig_key,
+        .code = erased.code,
+        .capture = try materializeErasedPromotedCapture(
+            capture_builder.allocator,
+            capture_builder.artifact,
+            capture_builder.lowered,
+            capture_builder,
+            erased,
+            layout_idx,
+            value,
+        ),
+        .provenance = try cloneBoxBoundarySpan(capture_builder.allocator, erased.provenance),
     };
 }
 
@@ -831,8 +836,10 @@ const PrivateCaptureBuilder = struct {
     source_binding: CIR.Pattern.Idx,
     next_private_const: u32 = 0,
     active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
+    erased_active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId),
 
     fn deinit(self: *PrivateCaptureBuilder) void {
+        self.erased_active.deinit();
         self.active.deinit();
     }
 
@@ -900,6 +907,85 @@ const PrivateCaptureBuilder = struct {
         };
     }
 
+    fn executablePlan(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        return .{ .node = try self.executableNode(plan_id, physical) };
+    }
+
+    fn executableNode(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNodeId {
+        if (self.erased_active.get(plan_id)) |active| {
+            return try self.artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(self.allocator, .{ .recursive_ref = active });
+        }
+
+        const node_id = try self.artifact.comptime_plans.reserveErasedCaptureExecutableMaterializationNode(self.allocator);
+        try self.erased_active.put(plan_id, node_id);
+        errdefer _ = self.erased_active.remove(plan_id);
+
+        const node = try self.buildExecutableNode(plan_id, physical);
+        self.artifact.comptime_plans.fillErasedCaptureExecutableMaterializationNode(node_id, node);
+        _ = self.erased_active.remove(plan_id);
+        return node_id;
+    }
+
+    fn buildExecutableNode(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
+        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
+        return switch (plan) {
+            .pending => compileTimeFinalizationInvariant("erased capture executable materialization reached pending capture plan"),
+            .serializable_leaf => |leaf| blk: {
+                const serializable = try self.serializableLeaf(leaf, physical);
+                break :blk .{ .pure_const = .{
+                    .const_instance = serializable.const_instance,
+                    .no_reachable_callable_slots = .checked_artifact_verified,
+                } };
+            },
+            .callable_leaf => |result_plan| try self.executableCallableLeaf(result_plan, physical),
+            .record => |fields| .{ .record = try self.executableRecord(fields, physical) },
+            .tuple => |items| .{ .tuple = try self.executableTuple(items, physical) },
+            .tag_union => |variants| .{ .tag_union = try self.executableTagUnion(variants, physical) },
+            .list => |list| .{ .list = try self.executableList(list.elem, physical) },
+            .box => |payload| .{ .box = try self.executableBox(payload, physical) },
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.executablePlan(nominal.backing, physical),
+            } },
+            .recursive_ref => |target| .{ .recursive_ref = try self.executableNode(target, physical) },
+        };
+    }
+
+    fn executableCallableLeaf(
+        self: *PrivateCaptureBuilder,
+        result_plan: checked_artifact.CallableResultPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
+        return switch (self.artifact.comptime_plans.callableResult(result_plan)) {
+            .finite => .{ .finite_callable_set = try materializedFiniteCallableSetValue(
+                self.allocator,
+                self.lowered,
+                self,
+                result_plan,
+                physical.layout_idx,
+                physical.value,
+            ) },
+            .erased => |erased| .{ .erased_callable = try materializedErasedCallableValue(
+                self,
+                erased,
+                physical.layout_idx,
+                physical.value,
+            ) },
+        };
+    }
+
     fn serializableLeaf(
         self: *PrivateCaptureBuilder,
         leaf: checked_artifact.SerializableCaptureLeafPlan,
@@ -946,6 +1032,7 @@ const PrivateCaptureBuilder = struct {
 
         return .{
             .const_ref = const_ref,
+            .const_instance = instance_ref,
             .requested_source_ty = leaf.requested_source_ty,
             .schema = reified.schema,
         };
@@ -1097,6 +1184,126 @@ const PrivateCaptureBuilder = struct {
             else => compileTimeFinalizationInvariant("private Box(T) capture did not lower to box layout"),
         };
         return try self.captureNode(payload_plan, payload);
+    }
+
+    fn executableRecord(
+        self: *PrivateCaptureBuilder,
+        fields: []const checked_artifact.CaptureRecordFieldPlan,
+        physical: PhysicalValue,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationRecordField {
+        if (fields.len == 0) return &.{};
+        const aggregate = self.logicalAggregateValue(physical, .struct_);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .struct_) compileTimeFinalizationInvariant("erased capture record materialization did not lower to struct layout");
+
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationRecordField, fields.len);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .field = field.field,
+                .value = try self.executablePlan(field.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i))),
+            };
+        }
+        return out;
+    }
+
+    fn executableTuple(
+        self: *PrivateCaptureBuilder,
+        items: []const checked_artifact.CaptureTupleElemPlan,
+        physical: PhysicalValue,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        if (items.len == 0) return &.{};
+        const aggregate = self.logicalAggregateValue(physical, .struct_);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .struct_) compileTimeFinalizationInvariant("erased capture tuple materialization did not lower to struct layout");
+
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, items.len);
+        for (items, 0..) |item, i| {
+            if (item.index != @as(u32, @intCast(i))) {
+                compileTimeFinalizationInvariant("erased capture tuple materialization plan indices are not canonical");
+            }
+            out[i] = try self.executablePlan(item.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)));
+        }
+        return out;
+    }
+
+    fn executableTagUnion(
+        self: *PrivateCaptureBuilder,
+        variants: []const checked_artifact.CaptureTagVariantPlan,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationTagNode {
+        const aggregate = self.logicalAggregateValue(physical, .tag_union);
+        const layout = self.layouts.getLayout(aggregate.layout_idx);
+        if (layout.tag != .tag_union) compileTimeFinalizationInvariant("erased capture tag materialization did not lower to tag-union layout");
+        const info = self.layouts.getTagUnionInfo(layout);
+        const discriminant = info.data.readDiscriminant(aggregate.value.ptr);
+        if (discriminant >= variants.len) {
+            compileTimeFinalizationInvariant("erased capture tag materialization discriminant exceeded capture plan variants");
+        }
+
+        const active = variants[discriminant];
+        const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
+        const payloads = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationTagPayload, active.payloads.len);
+        for (active.payloads, 0..) |payload, i| {
+            payloads[i] = .{
+                .index = payload.index,
+                .value = try self.executablePlan(
+                    payload.value,
+                    tagPayloadValue(self.layouts, active_payload_layout, aggregate.value, active.payloads.len, @intCast(i)),
+                ),
+            };
+        }
+        return .{
+            .tag = active.tag,
+            .payloads = payloads,
+        };
+    }
+
+    fn executableList(
+        self: *PrivateCaptureBuilder,
+        elem_plan: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        const elem_layout_idx = switch (layout.tag) {
+            .list => layout.data.list,
+            .list_of_zst => layout_mod.Idx.zst,
+            else => compileTimeFinalizationInvariant("erased capture List(T) materialization did not lower to list layout"),
+        };
+        const elem_layout = self.layouts.getLayout(elem_layout_idx);
+        const elem_size: usize = @intCast(self.layouts.layoutSize(elem_layout));
+        const roc_list: *const RocList = @ptrCast(@alignCast(physical.value.ptr));
+        if (roc_list.len() == 0) return &.{};
+
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, roc_list.len());
+        var i: usize = 0;
+        while (i < roc_list.len()) : (i += 1) {
+            const elem_value = if (elem_size == 0)
+                Value.zst
+            else
+                Value{ .ptr = (roc_list.bytes orelse compileTimeFinalizationInvariant("non-empty erased capture list had null bytes")) + i * elem_size };
+            out[i] = try self.executablePlan(elem_plan, .{
+                .layout_idx = elem_layout_idx,
+                .value = elem_value,
+            });
+        }
+        return out;
+    }
+
+    fn executableBox(
+        self: *PrivateCaptureBuilder,
+        payload_plan: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        const layout = self.layouts.getLayout(physical.layout_idx);
+        const payload = switch (layout.tag) {
+            .box => PhysicalValue{
+                .layout_idx = layout.data.box,
+                .value = .{ .ptr = physical.value.read(?[*]u8) orelse compileTimeFinalizationInvariant("erased capture Box(T) materialization had null payload") },
+            },
+            .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
+            else => compileTimeFinalizationInvariant("erased capture Box(T) materialization did not lower to box layout"),
+        };
+        return try self.executablePlan(payload_plan, payload);
     }
 
     fn logicalAggregateValue(

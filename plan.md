@@ -981,12 +981,12 @@ const ErasedCaptureExecutableMaterializationNode = union(enum) {
     pure_const: PureConstInstanceRef,
     finite_callable_set: MaterializedFiniteCallableSetValue,
     erased_callable: MaterializedErasedCallableValue,
-    record: ExecutableRecordMaterialization,
-    tuple: Span(ErasedCaptureExecutableMaterializationNodeId),
-    tag_union: ExecutableTagMaterialization,
-    list: ExecutableListMaterialization,
-    box: ExecutableBoxMaterialization,
-    nominal: ExecutableNominalMaterialization,
+    record: StableErasedCaptureRecordMaterialization,
+    tuple: Span(ErasedCaptureExecutableMaterializationPlan),
+    tag_union: StableErasedCaptureTagMaterialization,
+    list: StableErasedCaptureListMaterialization,
+    box: StableErasedCaptureBoxMaterialization,
+    nominal: StableErasedCaptureNominalMaterialization,
     recursive_ref: ErasedCaptureExecutableMaterializationNodeId,
 };
 
@@ -1010,9 +1010,36 @@ const MaterializedErasedCallableValue = struct {
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 
-const ErasedCaptureFieldPlan = struct {
-    field: RecordFieldId,
-    value: ErasedCaptureExecutableMaterializationNodeId,
+const StableErasedCaptureRecordMaterialization = struct {
+    fields: Span(StableErasedCaptureRecordField),
+};
+
+const StableErasedCaptureRecordField = struct {
+    field: RecordFieldLabelId,
+    value: ErasedCaptureExecutableMaterializationPlan,
+};
+
+const StableErasedCaptureTagMaterialization = struct {
+    tag: TagLabelId,
+    payloads: Span(StableErasedCaptureTagPayload),
+};
+
+const StableErasedCaptureTagPayload = struct {
+    payload_index: u32,
+    value: ErasedCaptureExecutableMaterializationPlan,
+};
+
+const StableErasedCaptureListMaterialization = struct {
+    elems: Span(ErasedCaptureExecutableMaterializationPlan),
+};
+
+const StableErasedCaptureBoxMaterialization = struct {
+    payload: ErasedCaptureExecutableMaterializationPlan,
+};
+
+const StableErasedCaptureNominalMaterialization = struct {
+    nominal: NominalTypeKey,
+    backing: ErasedCaptureExecutableMaterializationPlan,
 };
 
 const ErasedHiddenCaptureArgPlan = union(enum) {
@@ -1028,6 +1055,29 @@ records. It must not contain `PrivateCaptureRef`, `CallableLeafInstance`,
 source symbols, interpreter memory addresses, runtime closure objects, backend
 function pointers, raw pointer/nullness tests, runtime byte sizes, layout ids,
 `ExecutableValueRef`, or syntax-derived lookup.
+
+The `StableErasedCapture*Materialization` records are deliberately stable checked
+artifact data. They must not store MIR-run-local `RecordShapeId`,
+`RecordFieldId`, `TagUnionShapeId`, `TagId`, or `TagPayloadId` values. Those ids
+are allocated by a particular row-finalized/executable lowering run and cannot be
+persisted in an imported checked artifact. Instead, sealed erased capture
+materialization stores canonical labels and canonical logical payload indexes
+that are stable across lowerings:
+
+- records store `RecordFieldLabelId` plus a child materialization plan per field
+- tag values store `TagLabelId` plus canonical payload indexes and child plans
+- tuples, lists, boxes, and nominals store child plans in logical order
+
+Executable MIR lowers the expected executable type payload for the hidden capture
+first. That creates the local `RecordShapeId`, `RecordFieldId`,
+`TagUnionShapeId`, `TagId`, and `TagPayloadId` records for this lowering run.
+Then executable MIR maps the stable materialization labels/indexes onto those
+local ids by checking the already-lowered expected type. This is not source
+recovery and not a heuristic: the expected executable type payload and the
+stable materialization node are both explicit checked-artifact data. Debug builds
+must assert immediately if a materialized record field, tag, or payload index is
+not present in the expected executable type, if arities differ, or if canonical
+ordering disagrees. Release builds use `unreachable`.
 
 `PureConstInstanceRef` is allowed only when the referenced constant instance has
 no reachable callable slots. If the exact constant instance contains a function
@@ -3555,8 +3605,14 @@ source syntax, infer row/tag positions from names, or convert a source-level
 
 For sealed erased promoted wrappers, checking finalization must have already
 converted the private capture graph into
-`ErasedCaptureExecutableMaterializationPlan`. Executable MIR consumes that
-executable-ready materialization directly.
+`ErasedCaptureExecutableMaterializationPlan`. Because this plan is stored in a
+checked artifact and can be imported into later lowering runs, its structural
+nodes store stable canonical labels and logical payload indexes, not
+row-finalized ids from the run that produced it. Executable MIR consumes the
+materialization together with the expected executable type payload for the hidden
+capture, lowers that expected type to this run's row-finalized ids, and then
+assembles ordinary executable aggregate nodes with those ids. Any mismatch is a
+compiler bug: debug assertion, release `unreachable`.
 
 Packed erased function values have one ABI shape:
 
@@ -6947,8 +7003,9 @@ names, layout order, or expression shape.
 Sealed erased promoted wrappers are not consumers of `PrivateCaptureRef`.
 Checking finalization must recursively convert any private capture graph needed
 by such a wrapper into `ErasedCaptureExecutableMaterializationPlan` before the
-wrapper is published. After publication, executable MIR consumes only the
-executable-ready materialization records and the callable-set descriptor store.
+wrapper is published. After publication, executable MIR consumes only the stable
+materialization records, the expected executable type payload for the capture,
+and the callable-set descriptor store.
 
 Private captures follow the same template/instance rule as public constants.
 The promoted procedure's `MonoSpecializationKey` supplies the concrete source
@@ -6971,13 +7028,23 @@ reservation, and it cannot contain a bare procedure value without
 callable leaves as ordinary `proc_value` values without consulting the
 compile-time callable graph, interpreter results, or source syntax again.
 
-Private capture structural nodes are owned by the checked artifact, but their
-row and tag identities must become explicit before executable MIR. The
-row-finalized mono MIR pass assigns `RecordShapeId`, `RecordFieldId`,
-`TagUnionShapeId`, `TagId`, and `TagPayloadId` to private capture materializers
-using the same canonical row-finalization tables used for source aggregates.
-After that point, private capture projections and aggregate materializers carry
-finalized ids and no later stage may look up fields or tags by source names.
+Private capture structural nodes for source-level promoted bodies are owned by
+the checked artifact, but their row and tag identities must become explicit
+before those bodies reach executable MIR. The row-finalized mono MIR pass assigns
+`RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`, and `TagPayloadId`
+to those private capture materializers using the same canonical row-finalization
+tables used for source aggregates. After that point, source-level private
+capture projections and aggregate materializers carry finalized ids and no later
+stage may look up fields or tags by source names.
+
+Sealed erased promoted wrapper captures do not pass through that row-finalized
+body pipeline. Their persisted `ErasedCaptureExecutableMaterializationPlan`
+therefore must not contain row-finalized ids. It stores stable canonical
+`RecordFieldLabelId`, `TagLabelId`, and logical payload indexes instead.
+Executable MIR maps those stable structural entries to local row-finalized ids
+from the expected executable capture type payload in the current lowering run,
+with debug-only assertions that the stable entries and expected type are exactly
+consistent.
 
 Mono MIR lookup of a top-level compile-time constant emits a constant reference
 expression:

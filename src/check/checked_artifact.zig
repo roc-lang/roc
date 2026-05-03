@@ -2653,6 +2653,125 @@ pub const ExecutableTypePayloadStore = struct {
     }
 };
 
+pub const CallableSetDescriptorStore = struct {
+    descriptors: []const canonical.CanonicalCallableSetDescriptor = &.{},
+
+    pub fn descriptorFor(
+        self: *const CallableSetDescriptorStore,
+        key: canonical.CanonicalCallableSetKey,
+    ) ?*const canonical.CanonicalCallableSetDescriptor {
+        for (self.descriptors) |*descriptor| {
+            if (canonicalCallableSetKeyEql(descriptor.key, key)) return descriptor;
+        }
+        return null;
+    }
+
+    pub fn publishFromDescriptors(
+        self: *CallableSetDescriptorStore,
+        allocator: Allocator,
+        source_descriptors: []const canonical.CanonicalCallableSetDescriptor,
+    ) Allocator.Error!void {
+        if (self.descriptors.len != 0) {
+            for (source_descriptors) |source| {
+                const existing = self.descriptorFor(source.key) orelse {
+                    checkedArtifactInvariant("callable-set descriptor store was already published with different descriptor keys", .{});
+                };
+                if (!canonicalCallableSetDescriptorEql(existing.*, source)) {
+                    checkedArtifactInvariant("callable-set descriptor store was already published with different descriptor contents", .{});
+                }
+            }
+            return;
+        }
+        if (source_descriptors.len == 0) return;
+
+        var unique = std.ArrayList(canonical.CanonicalCallableSetDescriptor).empty;
+        defer unique.deinit(allocator);
+        for (source_descriptors) |source| {
+            var found = false;
+            for (unique.items) |existing| {
+                if (!canonicalCallableSetKeyEql(existing.key, source.key)) continue;
+                found = true;
+                if (!canonicalCallableSetDescriptorEql(existing, source)) {
+                    checkedArtifactInvariant("duplicate callable-set descriptor key has different descriptor contents", .{});
+                }
+                break;
+            }
+            if (!found) try unique.append(allocator, source);
+        }
+
+        const copied = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, unique.items.len);
+        errdefer allocator.free(copied);
+
+        var descriptor_count: usize = 0;
+        errdefer {
+            for (copied[0..descriptor_count]) |descriptor| {
+                for (descriptor.members) |member| allocator.free(member.capture_slots);
+                allocator.free(descriptor.members);
+            }
+        }
+
+        for (unique.items, 0..) |descriptor, i| {
+            const members = try cloneCallableSetMembers(allocator, descriptor.members);
+            copied[i] = .{
+                .key = descriptor.key,
+                .members = members,
+            };
+            descriptor_count += 1;
+        }
+
+        self.descriptors = copied;
+    }
+
+    pub fn deinit(self: *CallableSetDescriptorStore, allocator: Allocator) void {
+        for (self.descriptors) |descriptor| {
+            for (descriptor.members) |member| allocator.free(member.capture_slots);
+            allocator.free(descriptor.members);
+        }
+        allocator.free(self.descriptors);
+        self.* = .{};
+    }
+
+    pub fn verifyPublished(self: *const CallableSetDescriptorStore) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.descriptors, 0..) |descriptor, i| {
+            verifyCallableSetDescriptor(descriptor);
+            for (self.descriptors[i + 1 ..]) |other| {
+                if (!canonicalCallableSetKeyEql(descriptor.key, other.key)) continue;
+                if (!canonicalCallableSetDescriptorEql(descriptor, other)) {
+                    std.debug.panic("checked artifact invariant violated: duplicate callable-set descriptor key has different descriptor", .{});
+                }
+            }
+        }
+    }
+};
+
+fn cloneCallableSetMembers(
+    allocator: Allocator,
+    source_members: []const canonical.CanonicalCallableSetMember,
+) Allocator.Error![]const canonical.CanonicalCallableSetMember {
+    const members = try allocator.alloc(canonical.CanonicalCallableSetMember, source_members.len);
+    errdefer allocator.free(members);
+    var member_count: usize = 0;
+    errdefer {
+        for (members[0..member_count]) |member| allocator.free(member.capture_slots);
+    }
+
+    for (source_members, 0..) |member, i| {
+        const capture_slots = try allocator.dupe(canonical.CallableSetCaptureSlot, member.capture_slots);
+        members[i] = .{
+            .member = member.member,
+            .proc_value = member.proc_value,
+            .source_proc = member.source_proc,
+            .capture_slots = capture_slots,
+            .capture_shape_key = member.capture_shape_key,
+        };
+        member_count += 1;
+    }
+
+    return members;
+}
+
 pub const ExecutableProcedureParamPayload = struct {
     param: PromotedWrapperParam,
     exec_ty: ExecutableTypePayloadRef,
@@ -2706,56 +2825,69 @@ pub const FinitePromotedWrapperBodyPlan = struct {
 
 pub const ErasedHiddenCaptureArgPlan = union(enum) {
     none,
-    materialized_capture: ErasedCaptureMaterializationPlan,
+    materialized_capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
-pub const ErasedCaptureMaterializationPlan = union(enum) {
+pub const ErasedCaptureExecutableMaterializationPlan = union(enum) {
     none,
     zero_sized_typed: canonical.CanonicalExecValueTypeKey,
-    node: ErasedCaptureMaterializationNodeId,
+    node: ErasedCaptureExecutableMaterializationNodeId,
 };
 
-pub const ErasedCaptureMaterializationRecordField = struct {
+pub const NoReachableCallableSlotsProof = enum {
+    checked_artifact_verified,
+};
+
+pub const PureConstInstanceRef = struct {
+    const_instance: ConstInstanceRef,
+    no_reachable_callable_slots: NoReachableCallableSlotsProof,
+};
+
+pub const ErasedCaptureExecutableMaterializationRecordField = struct {
     field: canonical.RecordFieldLabelId,
-    value: ErasedCaptureMaterializationNodeId,
+    value: ErasedCaptureExecutableMaterializationPlan,
 };
 
-pub const ErasedCaptureMaterializationTagPayload = struct {
+pub const ErasedCaptureExecutableMaterializationTagPayload = struct {
     index: u32,
-    value: ErasedCaptureMaterializationNodeId,
+    value: ErasedCaptureExecutableMaterializationPlan,
 };
 
-pub const ErasedCaptureMaterializationTagNode = struct {
+pub const ErasedCaptureExecutableMaterializationTagNode = struct {
     tag: canonical.TagLabelId,
-    payloads: []const ErasedCaptureMaterializationTagPayload,
+    payloads: []const ErasedCaptureExecutableMaterializationTagPayload,
 };
 
-pub const MaterializedFiniteCallableSetCapture = struct {
+pub const MaterializedFiniteCallableSetValue = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
     selected_member: canonical.CallableSetMemberId,
-    member_proc: canonical.ProcedureCallableRef,
-    member_capture_shape: canonical.CaptureShapeKey,
-    member_capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
-    captures: []const PrivateCaptureRef = &.{},
+    captures: []const ErasedCaptureExecutableMaterializationPlan = &.{},
 };
 
-pub const ErasedCaptureMaterializationNode = union(enum) {
+pub const MaterializedErasedCallableValue = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    sig_key: canonical.ErasedFnSigKey,
+    code: canonical.ErasedCallableCodeRef,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+    provenance: []const canonical.BoxBoundaryId,
+};
+
+pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
     pending,
-    public_constant: ConstInstanceRef,
-    private_capture: PrivateCaptureRef,
-    callable_leaf: CallableLeafInstance,
-    finite_callable_set: MaterializedFiniteCallableSetCapture,
-    record: []const ErasedCaptureMaterializationRecordField,
-    tuple: []const ErasedCaptureMaterializationNodeId,
-    tag_union: ErasedCaptureMaterializationTagNode,
-    list: []const ErasedCaptureMaterializationNodeId,
-    box: ErasedCaptureMaterializationNodeId,
+    pure_const: PureConstInstanceRef,
+    finite_callable_set: MaterializedFiniteCallableSetValue,
+    erased_callable: MaterializedErasedCallableValue,
+    record: []const ErasedCaptureExecutableMaterializationRecordField,
+    tuple: []const ErasedCaptureExecutableMaterializationPlan,
+    tag_union: ErasedCaptureExecutableMaterializationTagNode,
+    list: []const ErasedCaptureExecutableMaterializationPlan,
+    box: ErasedCaptureExecutableMaterializationPlan,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
-        backing: ErasedCaptureMaterializationNodeId,
+        backing: ErasedCaptureExecutableMaterializationPlan,
     },
-    recursive_ref: ErasedCaptureMaterializationNodeId,
+    recursive_ref: ErasedCaptureExecutableMaterializationNodeId,
 };
 
 pub const ErasedPromotedWrapperBodyPlan = struct {
@@ -2764,7 +2896,7 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
     executable_signature: ErasedPromotedProcedureExecutableSignature,
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
-    capture: ErasedCaptureMaterializationPlan,
+    capture: ErasedCaptureExecutableMaterializationPlan,
     arg_bridges: []const PromotedWrapperBridgeId = &.{},
     hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
     result_bridge: ?PromotedWrapperBridgeId = null,
@@ -2833,6 +2965,7 @@ pub const PromotedCallableBodyPlanTable = struct {
     pub fn verifyPublished(
         self: *const PromotedCallableBodyPlanTable,
         plans: *const CompileTimePlanStore,
+        callable_set_descriptors: *const CallableSetDescriptorStore,
         executable_type_payloads: *const ExecutableTypePayloadStore,
         artifact_key: CheckedModuleArtifactKey,
     ) void {
@@ -2840,6 +2973,7 @@ pub const PromotedCallableBodyPlanTable = struct {
 
         for (self.plans) |plan| verifyPromotedCallableBodyPlan(
             plans,
+            callable_set_descriptors,
             executable_type_payloads,
             artifact_key,
             plan,
@@ -5247,6 +5381,7 @@ pub const SerializableCaptureLeafPlan = struct {
 
 pub const PrivateSerializableCaptureLeaf = struct {
     const_ref: ConstRef,
+    const_instance: ConstInstanceRef,
     requested_source_ty: canonical.CanonicalTypeKey,
     schema: ComptimeSchemaId,
 };
@@ -5381,7 +5516,7 @@ pub const CompileTimePlanStore = struct {
     callable_promotions: std.ArrayList(CallablePromotionPlan) = .empty,
     capture_slots: std.ArrayList(CaptureSlotReificationPlan) = .empty,
     private_captures: std.ArrayList(PrivateCaptureNode) = .empty,
-    erased_capture_materialization_nodes: std.ArrayList(ErasedCaptureMaterializationNode) = .empty,
+    erased_capture_executable_materialization_nodes: std.ArrayList(ErasedCaptureExecutableMaterializationNode) = .empty,
 
     pub fn reserveConstGraph(
         self: *CompileTimePlanStore,
@@ -5539,51 +5674,51 @@ pub const CompileTimePlanStore = struct {
         return self.private_captures.items[index];
     }
 
-    pub fn appendErasedCaptureMaterializationNode(
+    pub fn appendErasedCaptureExecutableMaterializationNode(
         self: *CompileTimePlanStore,
         allocator: Allocator,
-        node: ErasedCaptureMaterializationNode,
-    ) Allocator.Error!ErasedCaptureMaterializationNodeId {
-        const id: ErasedCaptureMaterializationNodeId = @enumFromInt(@as(u32, @intCast(self.erased_capture_materialization_nodes.items.len)));
-        try self.erased_capture_materialization_nodes.append(allocator, node);
+        node: ErasedCaptureExecutableMaterializationNode,
+    ) Allocator.Error!ErasedCaptureExecutableMaterializationNodeId {
+        const id: ErasedCaptureExecutableMaterializationNodeId = @enumFromInt(@as(u32, @intCast(self.erased_capture_executable_materialization_nodes.items.len)));
+        try self.erased_capture_executable_materialization_nodes.append(allocator, node);
         return id;
     }
 
-    pub fn reserveErasedCaptureMaterializationNode(
+    pub fn reserveErasedCaptureExecutableMaterializationNode(
         self: *CompileTimePlanStore,
         allocator: Allocator,
-    ) Allocator.Error!ErasedCaptureMaterializationNodeId {
-        return try self.appendErasedCaptureMaterializationNode(allocator, .pending);
+    ) Allocator.Error!ErasedCaptureExecutableMaterializationNodeId {
+        return try self.appendErasedCaptureExecutableMaterializationNode(allocator, .pending);
     }
 
-    pub fn fillErasedCaptureMaterializationNode(
+    pub fn fillErasedCaptureExecutableMaterializationNode(
         self: *CompileTimePlanStore,
-        id: ErasedCaptureMaterializationNodeId,
-        node: ErasedCaptureMaterializationNode,
+        id: ErasedCaptureExecutableMaterializationNodeId,
+        node: ErasedCaptureExecutableMaterializationNode,
     ) void {
         const index = @intFromEnum(id);
-        if (index >= self.erased_capture_materialization_nodes.items.len) {
+        if (index >= self.erased_capture_executable_materialization_nodes.items.len) {
             checkedArtifactInvariant("erased capture materialization node id is out of range", .{});
         }
         switch (node) {
             .pending => checkedArtifactInvariant("cannot fill erased capture materialization node with pending", .{}),
             else => {},
         }
-        switch (self.erased_capture_materialization_nodes.items[index]) {
-            .pending => self.erased_capture_materialization_nodes.items[index] = node,
+        switch (self.erased_capture_executable_materialization_nodes.items[index]) {
+            .pending => self.erased_capture_executable_materialization_nodes.items[index] = node,
             else => checkedArtifactInvariant("erased capture materialization node was filled twice", .{}),
         }
     }
 
-    pub fn erasedCaptureMaterializationNode(
+    pub fn erasedCaptureExecutableMaterializationNode(
         self: *const CompileTimePlanStore,
-        id: ErasedCaptureMaterializationNodeId,
-    ) ErasedCaptureMaterializationNode {
+        id: ErasedCaptureExecutableMaterializationNodeId,
+    ) ErasedCaptureExecutableMaterializationNode {
         const index = @intFromEnum(id);
-        if (index >= self.erased_capture_materialization_nodes.items.len) {
+        if (index >= self.erased_capture_executable_materialization_nodes.items.len) {
             checkedArtifactInvariant("erased capture materialization node id is out of range", .{});
         }
-        return self.erased_capture_materialization_nodes.items[index];
+        return self.erased_capture_executable_materialization_nodes.items[index];
     }
 
     pub fn deinit(self: *CompileTimePlanStore, allocator: Allocator) void {
@@ -5591,8 +5726,8 @@ pub const CompileTimePlanStore = struct {
         for (self.callable_results.items) |*plan| deinitCallableResultPlan(allocator, plan);
         for (self.capture_slots.items) |*plan| deinitCaptureSlotReificationPlan(allocator, plan);
         for (self.private_captures.items) |*node| deinitPrivateCaptureNode(allocator, node);
-        for (self.erased_capture_materialization_nodes.items) |*node| deinitErasedCaptureMaterializationNode(allocator, node);
-        self.erased_capture_materialization_nodes.deinit(allocator);
+        for (self.erased_capture_executable_materialization_nodes.items) |*node| deinitErasedCaptureExecutableMaterializationNode(allocator, node);
+        self.erased_capture_executable_materialization_nodes.deinit(allocator);
         self.private_captures.deinit(allocator);
         self.capture_slots.deinit(allocator);
         self.callable_promotions.deinit(allocator);
@@ -5601,7 +5736,10 @@ pub const CompileTimePlanStore = struct {
         self.* = .{};
     }
 
-    pub fn verifySealed(self: *const CompileTimePlanStore) void {
+    pub fn verifySealed(
+        self: *const CompileTimePlanStore,
+        callable_set_descriptors: *const CallableSetDescriptorStore,
+    ) void {
         if (builtin.mode != .Debug) return;
 
         for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
@@ -5609,7 +5747,7 @@ pub const CompileTimePlanStore = struct {
         for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
         for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, plan);
         for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, node);
-        for (self.erased_capture_materialization_nodes.items) |node| verifyErasedCaptureMaterializationNode(self, node);
+        for (self.erased_capture_executable_materialization_nodes.items) |node| verifyErasedCaptureExecutableMaterializationNode(self, callable_set_descriptors, node);
     }
 };
 
@@ -5715,7 +5853,7 @@ fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptu
     }
 }
 
-fn deinitErasedCaptureMaterializationPlan(_: Allocator, capture: ErasedCaptureMaterializationPlan) void {
+fn deinitErasedCaptureExecutableMaterializationPlan(_: Allocator, capture: ErasedCaptureExecutableMaterializationPlan) void {
     switch (capture) {
         .none,
         .zero_sized_typed,
@@ -5727,26 +5865,29 @@ fn deinitErasedCaptureMaterializationPlan(_: Allocator, capture: ErasedCaptureMa
 fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCaptureArgPlan) void {
     switch (hidden) {
         .none => {},
-        .materialized_capture => |capture| deinitErasedCaptureMaterializationPlan(allocator, capture),
+        .materialized_capture => |capture| deinitErasedCaptureExecutableMaterializationPlan(allocator, capture),
     }
 }
 
-fn deinitMaterializedFiniteCallableSetCapture(allocator: Allocator, finite: *MaterializedFiniteCallableSetCapture) void {
-    allocator.free(finite.member_capture_slots);
+fn deinitMaterializedFiniteCallableSetValue(allocator: Allocator, finite: *MaterializedFiniteCallableSetValue) void {
     allocator.free(finite.captures);
 }
 
-fn deinitErasedCaptureMaterializationNode(allocator: Allocator, node: *ErasedCaptureMaterializationNode) void {
+fn deinitMaterializedErasedCallableValue(allocator: Allocator, erased: *MaterializedErasedCallableValue) void {
+    allocator.free(erased.provenance);
+    deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
+}
+
+fn deinitErasedCaptureExecutableMaterializationNode(allocator: Allocator, node: *ErasedCaptureExecutableMaterializationNode) void {
     switch (node.*) {
         .pending,
-        .public_constant,
-        .private_capture,
+        .pure_const,
         .box,
         .nominal,
         .recursive_ref,
         => {},
-        .callable_leaf => |*leaf| deinitCallableLeafInstance(allocator, leaf),
-        .finite_callable_set => |*finite| deinitMaterializedFiniteCallableSetCapture(allocator, finite),
+        .finite_callable_set => |*finite| deinitMaterializedFiniteCallableSetValue(allocator, finite),
+        .erased_callable => |*erased| deinitMaterializedErasedCallableValue(allocator, erased),
         .record => |fields| allocator.free(fields),
         .tuple => |items| allocator.free(items),
         .tag_union => |tag| allocator.free(tag.payloads),
@@ -5822,7 +5963,7 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
             allocator.free(erased.params);
             allocator.free(erased.arg_bridges);
             allocator.free(erased.provenance);
-            deinitErasedCaptureMaterializationPlan(allocator, erased.capture);
+            deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
             deinitErasedHiddenCaptureArgPlan(allocator, erased.hidden_capture_arg);
         },
     }
@@ -5848,12 +5989,67 @@ fn verifyPrivateCaptureRef(store: *const CompileTimePlanStore, id: PrivateCaptur
     std.debug.assert(@intFromEnum(id) < store.private_captures.items.len);
 }
 
-fn verifyErasedCaptureMaterializationRef(store: *const CompileTimePlanStore, id: ErasedCaptureMaterializationNodeId) void {
-    std.debug.assert(@intFromEnum(id) < store.erased_capture_materialization_nodes.items.len);
+fn verifyErasedCaptureExecutableMaterializationRef(store: *const CompileTimePlanStore, id: ErasedCaptureExecutableMaterializationNodeId) void {
+    std.debug.assert(@intFromEnum(id) < store.erased_capture_executable_materialization_nodes.items.len);
 }
 
 fn verifyPrivateCaptureHandle(store: *const CompileTimePlanStore, ref: PrivateCaptureRef) void {
     verifyPrivateCaptureRef(store, ref.node);
+}
+
+fn canonicalCallableSetKeyEql(a: canonical.CanonicalCallableSetKey, b: canonical.CanonicalCallableSetKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn canonicalExecValueTypeKeyEql(a: canonical.CanonicalExecValueTypeKey, b: canonical.CanonicalExecValueTypeKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn captureShapeKeyEql(a: canonical.CaptureShapeKey, b: canonical.CaptureShapeKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn callableSetCaptureSlotEql(a: canonical.CallableSetCaptureSlot, b: canonical.CallableSetCaptureSlot) bool {
+    return a.slot == b.slot and
+        std.mem.eql(u8, &a.source_ty.bytes, &b.source_ty.bytes) and
+        canonicalExecValueTypeKeyEql(a.exec_value_ty, b.exec_value_ty);
+}
+
+fn callableSetMemberEql(a: canonical.CanonicalCallableSetMember, b: canonical.CanonicalCallableSetMember) bool {
+    if (a.member != b.member) return false;
+    if (!canonical.procedureCallableRefEql(a.proc_value, b.proc_value)) return false;
+    if (!canonical.mirProcedureRefEql(a.source_proc, b.source_proc)) return false;
+    if (!captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return false;
+    if (a.capture_slots.len != b.capture_slots.len) return false;
+    for (a.capture_slots, b.capture_slots) |left, right| {
+        if (!callableSetCaptureSlotEql(left, right)) return false;
+    }
+    return true;
+}
+
+fn canonicalCallableSetDescriptorEql(a: canonical.CanonicalCallableSetDescriptor, b: canonical.CanonicalCallableSetDescriptor) bool {
+    if (!canonicalCallableSetKeyEql(a.key, b.key)) return false;
+    if (a.members.len != b.members.len) return false;
+    for (a.members, b.members) |left, right| {
+        if (!callableSetMemberEql(left, right)) return false;
+    }
+    return true;
+}
+
+fn verifyCallableSetDescriptor(descriptor: canonical.CanonicalCallableSetDescriptor) void {
+    if (descriptor.members.len == 0) {
+        std.debug.panic("checked artifact invariant violated: callable-set descriptor has no members", .{});
+    }
+    for (descriptor.members, 0..) |member, i| {
+        if (@as(usize, @intFromEnum(member.member)) != i) {
+            std.debug.panic("checked artifact invariant violated: callable-set descriptor members are not dense canonical ids", .{});
+        }
+        for (member.capture_slots, 0..) |slot, slot_index| {
+            if (@as(usize, slot.slot) != slot_index) {
+                std.debug.panic("checked artifact invariant violated: callable-set descriptor capture slots are not canonical", .{});
+            }
+        }
+    }
 }
 
 fn verifyErasedCaptureSlotReificationRef(store: *const CompileTimePlanStore, ref: ErasedCaptureSlotReificationRef) void {
@@ -5991,46 +6187,81 @@ fn verifyCallableLeafInstance(store: *const CompileTimePlanStore, leaf: Callable
     }
 }
 
-fn verifyMaterializedFiniteCallableSetCapture(store: *const CompileTimePlanStore, finite: MaterializedFiniteCallableSetCapture) void {
-    if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+fn verifyMaterializedFiniteCallableSetValue(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    finite: MaterializedFiniteCallableSetValue,
+) void {
+    const descriptor = callable_set_descriptors.descriptorFor(finite.callable_set_key) orelse {
+        std.debug.panic("checked artifact invariant violated: materialized finite erased capture references missing callable-set descriptor", .{});
+    };
+    var selected: ?canonical.CanonicalCallableSetMember = null;
+    for (descriptor.members) |member| {
+        if (member.member == finite.selected_member) {
+            selected = member;
+            break;
+        }
+    }
+    const member = selected orelse {
+        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selects missing callable-set member", .{});
+    };
+    if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture member source type differs from capture source type", .{});
     }
-    if (finite.member_capture_slots.len != finite.captures.len) {
+    if (member.capture_slots.len != finite.captures.len) {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture capture count differs from member schema", .{});
     }
-    for (finite.member_capture_slots, 0..) |slot, i| {
+    for (member.capture_slots, 0..) |slot, i| {
         if (slot.slot != i) {
             std.debug.panic("checked artifact invariant violated: materialized finite erased capture slots are not canonical", .{});
         }
     }
-    for (finite.captures) |capture| verifyPrivateCaptureHandle(store, capture);
+    for (finite.captures) |capture| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, capture);
 }
 
-fn verifyErasedCaptureMaterializationPlan(store: *const CompileTimePlanStore, capture: ErasedCaptureMaterializationPlan) void {
+fn verifyMaterializedErasedCallableValue(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    erased: MaterializedErasedCallableValue,
+) void {
+    if (erased.provenance.len == 0) {
+        std.debug.panic("checked artifact invariant violated: materialized erased callable value has no Box(T) provenance", .{});
+    }
+    verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
+}
+
+fn verifyErasedCaptureExecutableMaterializationPlan(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+) void {
     switch (capture) {
         .none,
         .zero_sized_typed,
         => {},
-        .node => |node| verifyErasedCaptureMaterializationRef(store, node),
+        .node => |node| verifyErasedCaptureExecutableMaterializationRef(store, node),
     }
 }
 
-fn verifyErasedCaptureMaterializationNode(store: *const CompileTimePlanStore, node: ErasedCaptureMaterializationNode) void {
+fn verifyErasedCaptureExecutableMaterializationNode(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    node: ErasedCaptureExecutableMaterializationNode,
+) void {
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published erased capture materialization node is pending", .{}),
-        .public_constant => {},
-        .private_capture => |capture| verifyPrivateCaptureHandle(store, capture),
-        .callable_leaf => |leaf| verifyCallableLeafInstance(store, leaf),
-        .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetCapture(store, finite),
-        .record => |fields| for (fields) |field| verifyErasedCaptureMaterializationRef(store, field.value),
-        .tuple => |items| for (items) |item| verifyErasedCaptureMaterializationRef(store, item),
+        .pure_const => {},
+        .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetValue(store, callable_set_descriptors, finite),
+        .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, callable_set_descriptors, erased),
+        .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, field.value),
+        .tuple => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, item),
         .tag_union => |tag| {
-            for (tag.payloads) |payload| verifyErasedCaptureMaterializationRef(store, payload.value);
+            for (tag.payloads) |payload| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, payload.value);
         },
-        .list => |items| for (items) |item| verifyErasedCaptureMaterializationRef(store, item),
-        .box => |payload| verifyErasedCaptureMaterializationRef(store, payload),
-        .nominal => |nominal| verifyErasedCaptureMaterializationRef(store, nominal.backing),
-        .recursive_ref => |ref| verifyErasedCaptureMaterializationRef(store, ref),
+        .list => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, item),
+        .box => |payload| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, payload),
+        .nominal => |nominal| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, nominal.backing),
+        .recursive_ref => |ref| verifyErasedCaptureExecutableMaterializationRef(store, ref),
     }
 }
 
@@ -6152,6 +6383,7 @@ fn verifyErasedPromotedProcedureExecutableSignature(
 
 fn verifyPromotedCallableBodyPlan(
     store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
     artifact_key: CheckedModuleArtifactKey,
     plan: PromotedCallableBodyPlan,
@@ -6183,10 +6415,10 @@ fn verifyPromotedCallableBodyPlan(
                 erased.executable_signature,
                 erased,
             );
-            verifyErasedCaptureMaterializationPlan(store, erased.capture);
+            verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
             switch (erased.hidden_capture_arg) {
                 .none => {},
-                .materialized_capture => |capture| verifyErasedCaptureMaterializationPlan(store, capture),
+                .materialized_capture => |capture| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, capture),
             }
         },
     }
@@ -6668,7 +6900,7 @@ pub const CallableResultPlanId = enum(u32) { _ };
 pub const CallablePromotionPlanId = enum(u32) { _ };
 pub const ConstReificationPlanId = ConstGraphReificationPlanId;
 pub const CaptureSlotReificationPlanId = enum(u32) { _ };
-pub const ErasedCaptureMaterializationNodeId = enum(u32) { _ };
+pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
 pub const ComptimeValuePathKey = struct {
@@ -8241,6 +8473,7 @@ pub const CheckedModuleArtifact = struct {
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     executable_type_payloads: ExecutableTypePayloadStore = .{},
+    callable_set_descriptors: CallableSetDescriptorStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -8409,6 +8642,7 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
+        self.callable_set_descriptors.deinit(allocator);
         self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
@@ -8721,8 +8955,10 @@ pub const CheckedModuleArtifact = struct {
 
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key);
+        self.callable_set_descriptors.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
+            &self.callable_set_descriptors,
             &self.executable_type_payloads,
             self.key,
         );
@@ -8732,7 +8968,7 @@ pub const CheckedModuleArtifact = struct {
             &self.promoted_callable_body_plans,
         );
         self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates);
-        self.comptime_plans.verifySealed();
+        self.comptime_plans.verifySealed(&self.callable_set_descriptors);
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
         self.callable_binding_instances.verifySealed(
@@ -8809,6 +9045,7 @@ pub const ImportedModuleView = struct {
     promoted_callable_wrappers: *const PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
     executable_type_payloads: *const ExecutableTypePayloadStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -8846,6 +9083,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
         .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
         .executable_type_payloads = &artifact.executable_type_payloads,
+        .callable_set_descriptors = &artifact.callable_set_descriptors,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),

@@ -5,6 +5,7 @@
 //! target configuration. It returns lowered LIR or resource failure only.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const check = @import("check");
 const mir = @import("mir");
@@ -52,17 +53,12 @@ pub const LoweredProgram = struct {
     lir_result: LowerIr.Result,
     main_proc: LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
-    callable_set_descriptors: []repr.CanonicalCallableSetDescriptor = &.{},
     compile_time_root_payloads: []checked_artifact.CompileTimeRootPayload = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
         if (self.compile_time_root_payloads.len > 0) {
             self.lir_result.store.allocator.free(self.compile_time_root_payloads);
         }
-        mir.Executable.Build.deinitCallableSetDescriptors(
-            self.lir_result.store.allocator,
-            self.callable_set_descriptors,
-        );
         self.lir_result.deinit();
     }
 };
@@ -96,6 +92,14 @@ pub fn lowerArtifactsToLir(
     var solved = try mir.LambdaSolved.Solve.run(allocator, lifted);
     errdefer solved.deinit();
 
+    try publishCallableSetDescriptorsForLowering(
+        allocator,
+        artifacts.root.artifact,
+        &solved,
+        roots,
+        target.artifact_state,
+    );
+
     const compile_time_root_payloads = try publishCompileTimeRootPayloads(
         allocator,
         artifacts.root.artifact,
@@ -105,12 +109,12 @@ pub fn lowerArtifactsToLir(
     );
     errdefer if (compile_time_root_payloads.len > 0) allocator.free(compile_time_root_payloads);
 
-    var executable = try mir.Executable.Build.run(allocator, solved);
+    var executable = try mir.Executable.Build.run(
+        allocator,
+        solved,
+        artifacts.root.artifact.callable_set_descriptors.descriptors,
+    );
     errdefer executable.deinit();
-
-    const callable_set_descriptors = executable.callable_set_descriptors;
-    executable.callable_set_descriptors = &.{};
-    errdefer mir.Executable.Build.deinitCallableSetDescriptors(allocator, callable_set_descriptors);
 
     var executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
@@ -143,9 +147,63 @@ pub fn lowerArtifactsToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
-        .callable_set_descriptors = callable_set_descriptors,
         .compile_time_root_payloads = compile_time_root_payloads,
     };
+}
+
+fn publishCallableSetDescriptorsForLowering(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    solved: *const mir.LambdaSolved.Solve.Program,
+    roots: RootRequestSet,
+    artifact_state: ArtifactState,
+) Allocator.Error!void {
+    switch (artifact_state) {
+        .published => {
+            if (builtin.mode != .Debug) return;
+            for (solved.solve_sessions.items) |*session| {
+                for (session.representation_store.callable_set_descriptors) |descriptor| {
+                    const published = artifact.callable_set_descriptors.descriptorFor(descriptor.key) orelse {
+                        checkedPipelineInvariant("published checked artifact is missing a callable-set descriptor required by lowering");
+                    };
+                    if (!callableSetDescriptorEql(published.*, descriptor)) {
+                        checkedPipelineInvariant("published checked artifact callable-set descriptor differs from solved descriptor");
+                    }
+                }
+            }
+        },
+        .checking_finalization => {
+            const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization lowering requires mutable checked artifact sink");
+            if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
+                checkedPipelineInvariant("checking-finalization descriptor publication artifact sink does not match root artifact");
+            }
+
+            var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
+            defer descriptors.deinit(allocator);
+            for (solved.solve_sessions.items) |*session| {
+                try descriptors.appendSlice(allocator, session.representation_store.callable_set_descriptors);
+            }
+            try artifact_sink.callable_set_descriptors.publishFromDescriptors(allocator, descriptors.items);
+        },
+    }
+}
+
+fn callableSetDescriptorEql(a: repr.CanonicalCallableSetDescriptor, b: repr.CanonicalCallableSetDescriptor) bool {
+    if (!repr.callableSetKeyEql(a.key, b.key)) return false;
+    if (a.members.len != b.members.len) return false;
+    for (a.members, b.members) |left, right| {
+        if (left.member != right.member) return false;
+        if (!canonical.procedureCallableRefEql(left.proc_value, right.proc_value)) return false;
+        if (!canonical.mirProcedureRefEql(left.source_proc, right.source_proc)) return false;
+        if (!std.mem.eql(u8, &left.capture_shape_key.bytes, &right.capture_shape_key.bytes)) return false;
+        if (left.capture_slots.len != right.capture_slots.len) return false;
+        for (left.capture_slots, right.capture_slots) |left_slot, right_slot| {
+            if (left_slot.slot != right_slot.slot) return false;
+            if (!std.mem.eql(u8, &left_slot.source_ty.bytes, &right_slot.source_ty.bytes)) return false;
+            if (!repr.canonicalExecValueTypeKeyEql(left_slot.exec_value_ty, right_slot.exec_value_ty)) return false;
+        }
+    }
+    return true;
 }
 
 fn publishCompileTimeRootPayloads(
