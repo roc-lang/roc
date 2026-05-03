@@ -759,6 +759,10 @@ const SessionExecutableValueEndpointOwner = union(enum) {
         index: u32,
     },
     procedure_return: ProcRepresentationInstanceId,
+    procedure_capture: struct {
+        instance: ProcRepresentationInstanceId,
+        slot: u32,
+    },
     call_raw_arg: struct {
         call: CallSiteInfoId,
         index: u32,
@@ -1309,14 +1313,27 @@ payload must be read from the checked artifact or lambda-solved solve session
 that owns the erased-call site. It must not be reconstructed from the source
 function type, physical layout, callee body, runtime packed value, backend
 calling convention, or by comparing compatible shapes.
+A finite `proc_value` construction transform crosses a real procedure boundary
+too. Each explicit capture argument transforms from the construction site's
+local capture value to the selected target procedure instance's
+`procedure_capture` endpoint. The target endpoint is built from the selected
+`ProcRepresentationInstanceId`, the sealed target
+`ProcPublicValueRoots.captures[slot]`, and the canonical capture executable key
+stored in the selected callable-set descriptor member. The construction site's
+capture value may have a different executable representation from the target
+capture slot; lambda-solved MIR must publish the explicit `capture_value`
+boundary that converts it. Executable MIR must not assume the capture expression
+already has the target slot representation, and must not recover the target
+capture type from the procedure body, source syntax, capture names, or layout
+compatibility.
 A finite callable-set `callable_match` branch transforms from its
 `callable_match_branch_raw_result` endpoint to the shared call result endpoint.
 Branch joins, captures, mutable joins, loop phis, aggregate existing-value
 edges, and ordinary existing local values use `local_value`. Executable MIR must
 consume these endpoint owners directly. It must not synthesize dummy local
-`ValueInfoId`s for target procedure params/returns or erased-call ABI slots,
-look up a target signature by source procedure name, or infer a branch result
-endpoint from a direct-call layout.
+`ValueInfoId`s for target procedure params, returns, captures, or erased-call
+ABI slots, look up a target signature by source procedure name, or infer a
+branch result endpoint from a direct-call layout.
 
 Recursive existing-value transforms require one more endpoint owner class:
 `transform_child`. A child endpoint is not a source expression, not a binder,
@@ -1372,6 +1389,10 @@ const SessionExecutableValueEndpointOwner = union(enum) {
         index: u32,
     },
     procedure_return: ProcRepresentationInstanceId,
+    procedure_capture: struct {
+        instance: ProcRepresentationInstanceId,
+        slot: u32,
+    },
     call_raw_arg: struct {
         call: CallSiteInfoId,
         index: u32,
@@ -3020,9 +3041,12 @@ The lambda-solved construction algorithm is:
     - one `ValueTransformBoundaryId` per returning `call_result`
     - one `ValueTransformBoundaryId` per returning finite
       `callable_match_branch_result`
+    - one `ValueTransformBoundaryId` per `CallableSetConstructionPlan` capture
+      slot, from the construction site's local captured value to the selected
+      target procedure instance's public capture root
     - one boundary per returning source `match` branch result
     - one boundary per returning `if` branch result
-    - procedure return, capture, mutable join, loop phi, and
+    - procedure return, proc-value capture, mutable join, loop phi, and
       aggregate-existing-value boundaries
 
     Each boundary owns a concrete `SessionExecutableValueEndpoint` pair and a
@@ -3032,12 +3056,16 @@ The lambda-solved construction algorithm is:
     `executable_specialization_key.exec_arg_tys[index]`. Procedure return
     endpoints are constructed from the sealed target
     `ProcRepresentationInstance.public_roots.ret` and
-    `executable_specialization_key.exec_ret_ty`. Local endpoints are constructed
-    from the local dense `ValueInfoStore`, solved session representation, and
-    the session executable type payload store. Raw erased-call endpoints and
-    callable-match branch-result endpoints are explicit endpoint owners with
-    session executable type payload refs, not dummy `ValueInfoId`s and not bare
-    canonical keys.
+    `executable_specialization_key.exec_ret_ty`. Procedure capture endpoints are
+    constructed from the selected target `ProcRepresentationInstanceId`, the
+    sealed target `ProcPublicValueRoots.captures[slot]`, and the selected
+    callable-set descriptor member's `capture_slots[slot].exec_value_ty`.
+    Local endpoints are constructed from the local dense `ValueInfoStore`,
+    solved session representation, and the session executable type payload
+    store. Raw erased-call endpoints, callable-match branch-result endpoints,
+    and procedure capture endpoints are explicit endpoint owners with session
+    executable type payload refs, not dummy `ValueInfoId`s and not bare canonical
+    keys.
 
     A `ValueTransformBoundary` is owned by exactly one final
     `RepresentationSolveSession`. Every `SessionExecutableTypePayloadRef`
@@ -3067,11 +3095,12 @@ The lambda-solved construction algorithm is:
     Body lowering must therefore store enough explicit data to finalize these
     boundaries later: `call_proc` target procedure instance id or target
     reservation key, `call_value` callable-set member refs, argument value ids,
-    result value ids, requested fixed-arity source function type, and branch
-    result relation ids. The finalization pass must not recover target
-    procedures from syntax, look up functions by display name, infer branch
-    result types from executable layouts, or synthesize local values to stand in
-    for target parameters/returns.
+    result value ids, requested fixed-arity source function type, construction
+    site capture value ids, selected callable-set member refs, and branch result
+    relation ids. The finalization pass must not recover target procedures from
+    syntax, look up functions by display name, infer branch or capture result
+    types from executable layouts, or synthesize local values to stand in for
+    target parameters, returns, or captures.
 
     For direct procedure calls, the finalization pass is responsible for
     creating the complete executable value-transform boundary set before the
@@ -3106,6 +3135,38 @@ The lambda-solved construction algorithm is:
     the argument transforms before `call_direct`, emits the raw direct-call
     result at the result boundary's `from_endpoint`, and then applies the result
     transform to produce the caller-local result value.
+
+    For finite procedure-value construction, the finalization pass is
+    responsible for sealing the complete capture transform set before executable
+    MIR can build the callable payload:
+
+    - the `CallableSetConstructionPlan` names the construction site's
+      `capture_values` in canonical `CaptureSlot.index` order
+    - the selected `CanonicalCallableSetMember` names the target procedure and
+      the canonical target capture-slot schema in the same order
+    - the finalizer resolves the selected member to the target
+      `ProcRepresentationInstanceId`
+    - each source capture value gets one `capture_value` boundary from the local
+      source endpoint to a `procedure_capture` endpoint for that target instance
+      and slot
+    - each `CaptureBoundaryInfo` stores the construction id, selected member,
+      target instance, slot, source capture value, target public capture value,
+      and final `ValueTransformBoundaryId`
+    - every target procedure capture endpoint payload is copied or reused by
+      canonical key in the construction site's solve session store; the boundary
+      must never point at a foreign solve session payload id
+    - every capture boundary stores a mandatory `ExecutableValueTransformRef`,
+      including identity; when endpoint keys differ, the transform is selected
+      by representation solving and Box-only erasure rules, never by executable
+      MIR compatible-shape repair
+
+    The construction site's capture executable key does not have to equal the
+    target capture-slot executable key. The explicit `capture_value` transform
+    is the only legal bridge between them. This is required for closures that
+    capture callable values whose representation changes inside the lifted
+    procedure body, for example because the body stores the captured callable in
+    `Box(T)` and therefore needs erased callable representation for that capture
+    slot.
 11. Seal the session and all member procedure representation instances together.
 12. Publish executable specialization keys, callable-set keys, capture-shape
     keys, erased function signature keys, erased adapter keys, and
@@ -3451,6 +3512,7 @@ const AlreadyErasedCallablePlan = struct {
 };
 
 const CallableSetConstructionPlanId = enum(u32) { _ };
+const CaptureBoundaryId = enum(u32) { _ };
 
 const CallableSetConstructionPlan = struct {
     result: ValueInfoId,
@@ -3458,6 +3520,17 @@ const CallableSetConstructionPlan = struct {
     callable_set_key: CanonicalCallableSetKey,
     selected_member: CallableSetMemberId,
     capture_values: Span(ValueInfoId),
+    capture_transforms: Span(ValueTransformBoundaryId),
+};
+
+const CaptureBoundaryInfo = struct {
+    construction: CallableSetConstructionPlanId,
+    selected_member: CallableSetMemberRef,
+    target_instance: ProcRepresentationInstanceId,
+    slot: u32,
+    source_capture_value: ValueInfoId,
+    target_capture_value: ValueInfoId,
+    boundary: ValueTransformBoundaryId,
 };
 
 const BoxedValueInfo = struct {
@@ -3548,9 +3621,13 @@ function type at which the procedure value occurs. `callable_set_key` is the
 canonical finite callable-set representation selected by representation solving.
 `selected_member` is the member inside that set. `capture_values` are the
 already-solved value occurrences captured by that selected member, in canonical
-`CaptureSlot.index` order. The plan must not contain executable procedure ids,
-layout ids, generated symbol text, runtime capture pointers, runtime function
-pointers, or backend ABI handles.
+`CaptureSlot.index` order. `capture_transforms` contains one mandatory
+`capture_value` boundary per capture slot, in the same canonical slot order.
+Each boundary converts the construction site's local captured value into the
+selected target procedure instance's capture-slot representation before the
+callable payload is assembled. The plan must not contain executable procedure
+ids, layout ids, generated symbol text, runtime capture pointers, runtime
+function pointers, or backend ABI handles.
 
 The selected descriptor member and the construction plan must agree exactly:
 
@@ -3564,12 +3641,31 @@ descriptor(construction.callable_set_key)
     .member(construction.selected_member)
     .capture_slots.len
     == construction.capture_values.len
+    == construction.capture_transforms.len
 
 for every i:
     descriptor(...).capture_slots[i].slot.index == i
     canonical(value_info(construction.capture_values[i]).logical_ty)
         == descriptor(...).capture_slots[i].source_ty
-    executable_value_type(construction.capture_values[i])
+    capture_boundary(construction.capture_transforms[i])
+        .kind == capture_value(boundary_info.id)
+    capture_boundary_info(boundary_info.id).construction
+        == this construction id
+    capture_boundary_info(boundary_info.id).selected_member
+        == CallableSetMemberRef { construction.callable_set_key,
+                                  construction.selected_member }
+    capture_boundary_info(boundary_info.id).target_instance
+        == proc_instance_for_member(descriptor(...).member(...))
+    capture_boundary_info(boundary_info.id).slot == i
+    capture_boundary_info(boundary_info.id).source_capture_value
+        == construction.capture_values[i]
+    capture_boundary_info(boundary_info.id).target_capture_value
+        == target_instance.public_roots.captures[i]
+    capture_boundary(construction.capture_transforms[i]).from_endpoint.owner
+        == local_value(construction.capture_values[i])
+    capture_boundary(construction.capture_transforms[i]).to_endpoint.owner
+        == procedure_capture { target_instance, i }
+    capture_boundary(construction.capture_transforms[i]).to_endpoint.exec_ty.key
         == descriptor(...).capture_slots[i].exec_value_ty
 ```
 
@@ -3578,6 +3674,19 @@ not display-name equality, raw type-store-id equality, arity inference from
 syntax, or executable-layout equality. This is what prevents a generic procedure
 template from sharing one callable-set member instance across distinct concrete
 uses such as `I64 -> I64` and `Str -> Str`.
+
+The construction site's capture executable type is not required to equal the
+target capture-slot executable type. Equality is allowed and produces an
+identity transform, but the identity transform is still published. Non-equality
+is common when a closure captures a callable value whose representation is
+different inside the lifted procedure body because a later `Box(T)` boundary,
+return boundary, call boundary, branch join, or aggregate value transform forced
+the captured callable into another executable representation. The plan must
+therefore never derive a callable-set capture slot by inspecting only the source
+capture expression. The target slot representation comes from the selected
+target procedure instance's sealed public capture root, and the construction
+plan connects the source value to that target root through the explicit
+`capture_value` boundary.
 
 Constructing a callable-set value is separate from reserving executable code.
 Executable MIR may lower a `CallableSetConstructionPlan` to a
@@ -3697,10 +3806,20 @@ const ValueTransformBoundaryKind = union(enum) {
         branch: enum { then_, else_ },
     },
     return_value: ProcedureId,
-    capture_value: CaptureSlotId,
+    capture_value: CaptureBoundaryId,
     mutable_join: MutableJoinId,
     loop_phi: LoopPhiId,
     aggregate_existing_value: AggregateBoundaryId,
+};
+
+const CaptureBoundaryInfo = struct {
+    construction: CallableSetConstructionPlanId,
+    selected_member: CallableSetMemberRef,
+    target_instance: ProcRepresentationInstanceId,
+    slot: u32,
+    source_capture_value: ValueInfoId,
+    target_capture_value: ValueInfoId,
+    boundary: ValueTransformBoundaryId,
 };
 
 const TransformEndpointScopeId = enum(u32) { _ };
@@ -3738,6 +3857,10 @@ const SessionExecutableValueEndpointOwner = union(enum) {
         index: u32,
     },
     procedure_return: ProcRepresentationInstanceId,
+    procedure_capture: struct {
+        instance: ProcRepresentationInstanceId,
+        slot: u32,
+    },
     call_raw_arg: struct {
         call: CallSiteInfoId,
         index: u32,
@@ -3786,7 +3909,11 @@ complete executable endpoint identity. The endpoint identity is
 boundary's `from_value` is the caller argument occurrence and `to_value` may be
 the same value-flow relation target used by solving, but `to_endpoint.owner` is
 the target procedure parameter for `call_proc` and `call_raw_arg` for
-`call_value_erased`. A `call_result` boundary's `from_endpoint.owner` is the
+`call_value_erased`. A `capture_value` boundary's `from_value` is the
+construction site's captured value and `to_value` is the selected target
+procedure instance's public capture root, but `to_endpoint.owner` is
+`procedure_capture { instance, slot }`, not a local value. A `call_result`
+boundary's `from_endpoint.owner` is the
 target procedure return, raw erased-call result, or callable-match branch-local
 result, and `to_endpoint.owner` is the caller result `local_value`. Debug
 verification must assert that the `ValueInfoId` edge and endpoint-owner pair
@@ -4608,6 +4735,7 @@ const ProcValueErasePlan = struct {
     capture_shape_key: CaptureShapeKey,
     executable_specialization_key: ExecutableSpecializationKey,
     capture_slots: Span(CaptureSlot.Index),
+    capture_transforms: Span(ValueTransformBoundaryId),
 };
 ```
 
@@ -4619,6 +4747,16 @@ erased adapter. That packing decision is carried by the solved
 `CallableValueEmissionPlan` for the value occurrence being emitted. The plan must
 carry non-empty `BoxBoundaryId` provenance, but the value occurrence itself does
 not have to be syntactically enclosed by a `Box(T)` expression.
+
+`ProcValueErasePlan.capture_transforms` is mandatory when the erased
+procedure-value occurrence has captures. It contains one transform in canonical
+capture-slot order from the construction site's local source capture value to
+the selected erased specialization's hidden capture tuple element. Executable
+MIR lowers each capture expression exactly once, applies the corresponding
+transform, and then assembles the hidden capture tuple from the transformed
+values. It must not place raw source captures directly in the hidden capture
+tuple unless the published transform is identity, and even identity must be
+represented explicitly.
 
 For example:
 
@@ -4661,23 +4799,27 @@ procedure value occurrence.
 `executable_specialization_key` is the erased executable specialization that
 must be reserved before the packed value is emitted. `capture_slots` is the
 logical slot order that executable MIR must use to read the occurrence's
-`proc_value.captures` and build the hidden capture value.
+`proc_value.captures` and build the hidden capture value. `capture_transforms`
+is the mandatory transform list in the same logical slot order. Each transform
+converts the occurrence's local source capture value into the hidden capture
+tuple element representation required by the erased specialization.
 
 `ProcValueErasePlan` must not contain expression ids, generated symbol text,
 layout ids, LIR temporaries, runtime function pointers, runtime capture pointers,
 ARC placement data, backend-specific ABI handles, or a bare `Symbol` standing in
 for the whole procedure value occurrence. The actual capture operands come from
 the `proc_value.captures` of the value occurrence being lowered. The plan names
-the required executable specialization and capture ordering; it does not
-rediscover them from the target body or the surrounding expression.
+the required executable specialization, capture ordering, and capture transforms;
+it does not rediscover them from the target body or the surrounding expression.
 
 For boxing, executable MIR lowers the payload expression under
 `payload_boundary_ty` and consumes callable emission plans as follows:
 
 - `proc_value -> erased` packs the explicit procedure member and explicit
   capture payloads by consuming `ProcValueErasePlan`, reserving its
-  `executable_specialization_key`, and emitting an `ErasedFnValue` whose
-  `sig_key` is exactly `erased_fn_sig_key`.
+  `executable_specialization_key`, applying every `capture_transforms[i]` before
+  hidden capture tuple assembly, and emitting an `ErasedFnValue` whose `sig_key`
+  is exactly `erased_fn_sig_key`.
 - `finite callable-set value -> erased` synthesizes an erased adapter procedure
   by consuming `CallableBoxPlan.finite_set_to_erased_adapter`. That plan names
   the full `ErasedAdapterKey { source_fn_ty, callable_set_key,
@@ -4704,9 +4846,9 @@ present exactly when `erased_fn_sig_key.capture_ty` is non-null. A no-capture
 procedure value has no hidden capture argument and packs `ErasedCapture.none`. A
 zero-sized capture still has a non-null hidden capture type and packs
 `ErasedCapture.zero_sized_typed`. A runtime capture record packs
-`ErasedCapture.boxed` with the exact `capture_shape_key`. Runtime byte size,
-pointer nullness, and backend behavior must not decide whether a hidden capture
-argument exists.
+`ErasedCapture.boxed` with the exact `capture_shape_key` after applying each
+published capture transform. Runtime byte size, pointer nullness, and backend
+behavior must not decide whether a hidden capture argument exists.
 
 For unboxing, executable MIR performs the low-level unbox and gives the payload
 the explicit `payload_boundary_ty` representation. There is no
@@ -14313,8 +14455,8 @@ Lambda-solved MIR:
   `SessionExecutableTypePayloadRef` whose payload content hashes to that key
 - the session `SessionExecutableTypePayloadStore` contains structural payloads
   for every local value endpoint, procedure parameter endpoint, procedure return
-  endpoint, erased `call_raw_arg`, erased `call_raw_result`, and
-  `callable_match_branch_raw_result`
+  endpoint, procedure capture endpoint, erased `call_raw_arg`, erased
+  `call_raw_result`, and `callable_match_branch_raw_result`
 - `execValueTypeKeyForValue`-style logic interns canonical executable payloads
   and returns payload refs plus keys; hash-only executable value type publication
   is forbidden
@@ -14366,6 +14508,16 @@ Executable MIR:
 - every `CallableSetConstructionPlan` points at a valid
   `CanonicalCallableSetDescriptor` member, and its `capture_values` count and
   order match that member's `CaptureSlot.index` ordered capture schema
+- every `CallableSetConstructionPlan` has exactly one `capture_value` transform
+  per capture slot, in `CaptureSlot.index` order, from the construction site's
+  local captured value endpoint to the selected target procedure instance's
+  `procedure_capture` endpoint
+- every `capture_value` boundary stores `CaptureBoundaryInfo` that names the
+  construction plan, selected member, target procedure instance, slot index,
+  source capture value, target public capture value, and boundary id
+- a callable-set construction site's source capture executable key may differ
+  from the selected target procedure capture executable key; executable MIR must
+  apply the published transform and must not require key equality
 - every `CallableSetConstructionPlan.source_fn_ty` exactly equals the selected
   descriptor member's `ProcedureCallableRef.source_fn_ty` after canonical type
   normalization
@@ -14377,8 +14529,8 @@ Executable MIR:
   corruption must panic at the first executable boundary that consumes the
   record
 - executable MIR evaluates callable-set construction captures exactly once and
-  stores them in one member payload before any later `callable_match` can
-  destructure them
+  stores their transformed values in one member payload before any later
+  `callable_match` can destructure them
 - every `callable_match` binds the callable expression and original call
   arguments once, before member branching
 - every `callable_match.requested_source_fn_ty` exactly equals the original
@@ -14821,6 +14973,32 @@ objects.
   an explicit `Box(T)` boundary. The expected executable MIR must contain
   `ProcValueErasePlan`, reserve the erased executable specialization before
   packing, and emit `ErasedFnValue` with the exact `ErasedFnSigKey`.
+- add a proc-value capture transform test where a closure captures a callable
+  value whose representation differs inside the lifted procedure body:
+
+  ```roc
+  make_runner : (I64 -> I64) -> (I64 -> I64)
+  make_runner = |f|
+      |x|
+          boxed = Box.box(f)
+          run = Box.unbox(boxed)
+          run(x)
+
+  main : I64
+  main =
+      runner = make_runner(|n| n + 1)
+      runner(41)
+  ```
+
+  The expected lambda-solved output must publish a
+  `CallableSetConstructionPlan` for the returned closure with a `capture_value`
+  transform from the construction site's local finite callable value `f` to the
+  selected target procedure instance's `procedure_capture` endpoint. The source
+  capture may be finite while the target capture slot is erased because the
+  closure body stores `f` in `Box(I64 -> I64)`. Executable MIR must apply the
+  transform before assembling the callable-set capture payload; it must not put
+  the raw finite capture directly into the payload, recover capture
+  representation from the closure body, or rely on executable key equality.
 - add boxed erased callable tests where a finite callable-set value crosses an
   explicit `Box(T)` boundary. The expected executable MIR must synthesize an
   erased adapter keyed by `ErasedAdapterKey`, and the adapter body must dispatch
