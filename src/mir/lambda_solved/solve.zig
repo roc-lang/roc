@@ -803,13 +803,101 @@ const RepresentationClassSolver = struct {
 
     fn solve(self: *RepresentationClassSolver) Allocator.Error!void {
         try self.initUnionFind();
+        self.unionValueFlowEdges();
+        try self.closeStructuralProjectionClasses();
+        try self.assignValueClasses();
+    }
+
+    fn unionValueFlowEdges(self: *RepresentationClassSolver) void {
         for (self.session.representation_store.representation_edges.items) |edge| {
             if (!self.edgeUnionsValueFlow(edge)) continue;
             const from = self.endpointRootInSession(edge.from) orelse continue;
             const to = self.endpointRootInSession(edge.to) orelse continue;
-            self.unionRoots(from, to);
+            _ = self.unionRoots(from, to);
         }
-        try self.assignValueClasses();
+    }
+
+    const StructuralProjectionKind = struct {
+        tag: enum {
+            record_field,
+            tuple_elem,
+            tag_payload,
+            list_elem,
+            box_payload,
+            nominal_backing,
+        },
+        a: u32 = 0,
+        b: u32 = 0,
+    };
+
+    const StructuralProjectionGroup = struct {
+        parent_representative: u32,
+        kind: StructuralProjectionKind,
+    };
+
+    fn closeStructuralProjectionClasses(self: *RepresentationClassSolver) Allocator.Error!void {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var groups = std.AutoHashMap(StructuralProjectionGroup, repr.RepRootId).init(self.allocator);
+            defer groups.deinit();
+
+            for (self.session.representation_store.representation_edges.items) |edge| {
+                const kind = self.structuralProjectionKind(edge.kind) orelse continue;
+                const parent = self.endpointRootInSession(edge.from) orelse continue;
+                const child = self.endpointRootInSession(edge.to) orelse continue;
+                const parent_index = @intFromEnum(parent);
+                if (parent_index >= self.parents.len) {
+                    lambdaInvariant("lambda-solved representation solver reached an out-of-range structural parent root");
+                }
+                const group: StructuralProjectionGroup = .{
+                    .parent_representative = self.find(parent_index),
+                    .kind = kind,
+                };
+                if (groups.get(group)) |existing| {
+                    if (self.unionRoots(existing, child)) changed = true;
+                } else {
+                    try groups.put(group, child);
+                }
+            }
+        }
+    }
+
+    fn structuralProjectionKind(
+        self: *RepresentationClassSolver,
+        kind: repr.RepresentationEdgeKind,
+    ) ?StructuralProjectionKind {
+        _ = self;
+        return switch (kind) {
+            .record_field => |field| .{
+                .tag = .record_field,
+                .a = @intFromEnum(field),
+            },
+            .tuple_elem => |index| .{
+                .tag = .tuple_elem,
+                .a = index,
+            },
+            .tag_payload => |payload| .{
+                .tag = .tag_payload,
+                .a = @intFromEnum(payload),
+            },
+            .list_elem => .{ .tag = .list_elem },
+            .box_payload => .{ .tag = .box_payload },
+            .nominal_backing => |nominal| .{
+                .tag = .nominal_backing,
+                .a = @intFromEnum(nominal.module_name),
+                .b = @intFromEnum(nominal.type_name),
+            },
+            .value_alias,
+            .value_move,
+            .function_arg,
+            .function_return,
+            .function_callable,
+            .branch_join,
+            .loop_phi,
+            .mutable_version,
+            => null,
+        };
     }
 
     fn initUnionFind(self: *RepresentationClassSolver) Allocator.Error!void {
@@ -883,7 +971,7 @@ const RepresentationClassSolver = struct {
         return &self.records[index];
     }
 
-    fn unionRoots(self: *RepresentationClassSolver, a: repr.RepRootId, b: repr.RepRootId) void {
+    fn unionRoots(self: *RepresentationClassSolver, a: repr.RepRootId, b: repr.RepRootId) bool {
         const a_index = @intFromEnum(a);
         const b_index = @intFromEnum(b);
         if (a_index >= self.parents.len or b_index >= self.parents.len) {
@@ -891,7 +979,7 @@ const RepresentationClassSolver = struct {
         }
         const a_rep = self.find(a_index);
         const b_rep = self.find(b_index);
-        if (a_rep == b_rep) return;
+        if (a_rep == b_rep) return false;
         if (self.ranks[a_rep] < self.ranks[b_rep]) {
             self.parents[a_rep] = b_rep;
         } else if (self.ranks[a_rep] > self.ranks[b_rep]) {
@@ -900,6 +988,7 @@ const RepresentationClassSolver = struct {
             self.parents[b_rep] = a_rep;
             self.ranks[a_rep] += 1;
         }
+        return true;
     }
 
     fn find(self: *RepresentationClassSolver, index: u32) u32 {
