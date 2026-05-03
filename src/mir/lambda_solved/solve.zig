@@ -474,6 +474,7 @@ pub fn run(
             .input = &input.ast,
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
+            .row_shapes = &program.row_shapes,
             .type_importer = &type_importer,
             .concrete_source_types = &program.concrete_source_types,
             .representation_store = &program.solve_sessions.items[session_index].representation_store,
@@ -3638,6 +3639,7 @@ const BodySolver = struct {
     input: *const Lifted.Ast.Store,
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
+    row_shapes: *const MonoRow.Store,
     type_importer: *TypeImporter,
     concrete_source_types: *const ConcreteSourceType.Store,
     representation_store: *repr.RepresentationStore,
@@ -4852,10 +4854,27 @@ const BodySolver = struct {
                 .value = self.exprValue(payload.value),
             };
         }
+        var payload_root_count: usize = 0;
+        for (self.row_shapes.tagUnionTags(union_shape)) |shape_tag| {
+            payload_root_count += self.row_shapes.tagPayloads(shape_tag).len;
+        }
+        const payload_roots = try self.allocator.alloc(repr.TagPayloadRootInfo, payload_root_count);
+        errdefer if (payload_roots.len > 0) self.allocator.free(payload_roots);
+        var next_payload_root: usize = 0;
+        for (self.row_shapes.tagUnionTags(union_shape)) |shape_tag| {
+            for (self.row_shapes.tagPayloads(shape_tag)) |shape_payload| {
+                payload_roots[next_payload_root] = .{
+                    .payload = shape_payload,
+                    .root = self.representation_store.reserveRoot(),
+                };
+                next_payload_root += 1;
+            }
+        }
         try self.publishAggregate(value, .{ .tag = .{
             .union_shape = union_shape,
             .tag = tag_id,
             .payloads = payloads,
+            .payload_roots = payload_roots,
         } });
     }
 
@@ -4911,6 +4930,13 @@ const BodySolver = struct {
                 }
             },
             .tag => |tag| {
+                for (tag.payload_roots) |payload| {
+                    _ = try self.representation_store.appendRepresentationEdge(.{
+                        .from = .{ .local = root },
+                        .to = .{ .local = payload.root },
+                        .kind = .{ .tag_payload = payload.payload },
+                    });
+                }
                 for (tag.payloads) |payload| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },

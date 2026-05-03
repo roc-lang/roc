@@ -636,6 +636,7 @@ pub const AggregateValueInfo = union(enum) {
         union_shape: row.TagUnionShapeId,
         tag: row.TagId,
         payloads: []const TagPayloadValueInfo,
+        payload_roots: []const TagPayloadRootInfo = &.{},
     },
     list: struct {
         elem_root: RepRootId,
@@ -1030,6 +1031,11 @@ pub const ElemValueInfo = struct {
 pub const TagPayloadValueInfo = struct {
     payload: row.TagPayloadId,
     value: ValueInfoId,
+};
+
+pub const TagPayloadRootInfo = struct {
+    payload: row.TagPayloadId,
+    root: RepRootId,
 };
 
 pub const ValueInfo = struct {
@@ -2090,7 +2096,10 @@ pub const ValueInfoStore = struct {
                 switch (aggregate) {
                     .record => |record| if (record.fields.len > 0) self.allocator.free(record.fields),
                     .tuple => |elems| if (elems.len > 0) self.allocator.free(elems),
-                    .tag => |tag| if (tag.payloads.len > 0) self.allocator.free(tag.payloads),
+                    .tag => |tag| {
+                        if (tag.payloads.len > 0) self.allocator.free(tag.payloads);
+                        if (tag.payload_roots.len > 0) self.allocator.free(tag.payload_roots);
+                    },
                     .list => |list| if (list.elems.len > 0) self.allocator.free(list.elems),
                 }
             }
@@ -3179,10 +3188,7 @@ const SessionExecutableTypePayloadBuilder = struct {
             if (seen_tags[tag_index]) representationInvariant("session executable tag payload saw duplicate logical index");
             out[tag_index] = .{
                 .tag = shape_tag,
-                .payloads = if (shape_tag == tag_value.tag)
-                    try self.selectedTagPayloadsForValue(tag_value)
-                else
-                    try self.tagPayloadsForTypeSpan(shape_tag, source_tags[tag_index].args),
+                .payloads = try self.tagPayloadsForValueRoots(tag_value, shape_tag, source_tags[tag_index].args),
             };
             seen_tags[tag_index] = true;
         }
@@ -3192,37 +3198,62 @@ const SessionExecutableTypePayloadBuilder = struct {
         return .{ .shape = tag_value.union_shape, .variants = out };
     }
 
-    fn selectedTagPayloadsForValue(
+    fn tagPayloadsForValueRoots(
         self: *SessionExecutableTypePayloadBuilder,
         tag_value: anytype,
+        tag: row.TagId,
+        span: type_mod.Span(type_mod.TypeVarId),
     ) std.mem.Allocator.Error![]const SessionExecutableTagPayload {
-        const shape_payloads = self.row_shapes.tagPayloads(tag_value.tag);
-        if (shape_payloads.len == 0) return &.{};
-        const out = try self.allocator.alloc(SessionExecutableTagPayload, shape_payloads.len);
-        errdefer self.allocator.free(out);
-        const seen = try self.allocator.alloc(bool, shape_payloads.len);
-        defer self.allocator.free(seen);
-        @memset(seen, false);
+        const args = self.types.sliceTypeVarSpan(span);
+        if (args.len == 0) return &.{};
+        const shape_payloads = self.row_shapes.tagPayloads(tag);
+        if (shape_payloads.len != args.len) representationInvariant("session executable tag root payload arity mismatch");
 
-        for (tag_value.payloads) |payload| {
-            const payload_info = self.row_shapes.tagPayload(payload.payload);
-            if (payload_info.tag != tag_value.tag) representationInvariant("session executable selected payload belongs to another tag");
-            const index: usize = @intCast(payload_info.logical_index);
-            if (index >= shape_payloads.len) representationInvariant("session executable selected payload index exceeded tag arity");
-            if (seen[index]) representationInvariant("session executable selected payload was duplicated");
-            if (payload.payload != shape_payloads[index]) representationInvariant("session executable selected payload id differs from row shape slot");
-            const child = try self.childForValue(payload.value);
-            out[index] = .{
-                .payload = shape_payloads[index],
+        const out = try self.allocator.alloc(SessionExecutableTagPayload, args.len);
+        errdefer self.allocator.free(out);
+        for (shape_payloads, args, 0..) |shape_payload, arg, i| {
+            const payload_root = self.tagPayloadRoot(tag_value, shape_payload);
+            const child = try self.childForRootType(payload_root, arg);
+            if (tag == tag_value.tag) {
+                const selected_value = self.selectedTagPayloadValue(tag_value, shape_payload) orelse {
+                    representationInvariant("session executable selected tag omitted a payload");
+                };
+                const selected_child = try self.childForValue(selected_value);
+                if (!canonicalExecValueTypeKeyEql(child.key, selected_child.key)) {
+                    representationInvariant("session executable selected tag payload key differs from solved payload root");
+                }
+            }
+            out[i] = .{
+                .payload = shape_payload,
                 .ty = child.ty,
                 .key = child.key,
             };
-            seen[index] = true;
-        }
-        for (seen) |was_seen| {
-            if (!was_seen) representationInvariant("session executable selected tag omitted a payload");
         }
         return out;
+    }
+
+    fn tagPayloadRoot(
+        self: *SessionExecutableTypePayloadBuilder,
+        tag_value: anytype,
+        payload: row.TagPayloadId,
+    ) RepRootId {
+        _ = self;
+        for (tag_value.payload_roots) |payload_root| {
+            if (payload_root.payload == payload) return payload_root.root;
+        }
+        representationInvariant("session executable tag payload root metadata omitted a payload");
+    }
+
+    fn selectedTagPayloadValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        tag_value: anytype,
+        payload: row.TagPayloadId,
+    ) ?ValueInfoId {
+        _ = self;
+        for (tag_value.payloads) |selected| {
+            if (selected.payload == payload) return selected.value;
+        }
+        return null;
     }
 
     fn listPayloadForValue(
