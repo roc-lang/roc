@@ -777,7 +777,9 @@ const BodyFinalizer = struct {
         const branch = self.input.getBranch(branch_id);
         return try self.output.addBranch(.{
             .pat = try self.lowerPat(branch.pat),
+            .guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null,
             .body = try self.lowerExpr(branch.body),
+            .degenerate = branch.degenerate,
         });
     }
 

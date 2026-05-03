@@ -118,7 +118,9 @@ pub const LetDef = union(enum) {
 /// Public struct `Branch`.
 pub const Branch = struct {
     pat: PatId,
+    guard: ?ExprId = null,
     body: ExprId,
+    degenerate: bool = false,
 };
 
 /// Public struct `FieldExpr`.

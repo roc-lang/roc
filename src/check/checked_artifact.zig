@@ -1292,6 +1292,12 @@ pub const CheckedIfBranch = struct {
 pub const CheckedMatchBranchPattern = struct {
     pattern: CheckedPatternId,
     degenerate: bool,
+    binder_remaps: []const CheckedAlternativeBinderRemap,
+};
+
+pub const CheckedAlternativeBinderRemap = struct {
+    candidate_binder: PatternBinderId,
+    representative_binder: PatternBinderId,
 };
 
 pub const CheckedMatchBranch = struct {
@@ -2182,18 +2188,148 @@ const CheckedBodyPayloadCopier = struct {
         return out;
     }
 
+    const SourcePatternBinder = struct {
+        ident: Ident.Idx,
+        binder: PatternBinderId,
+    };
+
     fn copyMatchBranchPatterns(self: *@This(), span: CIR.Expr.Match.BranchPattern.Span) Allocator.Error![]const CheckedMatchBranchPattern {
         const source = self.module.sliceMatchBranchPatterns(span);
         if (source.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedMatchBranchPattern, source.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (out[0..initialized]) |pattern| self.allocator.free(pattern.binder_remaps);
+            self.allocator.free(out);
+        }
+
+        var representative_binders = std.ArrayList(SourcePatternBinder).empty;
+        defer representative_binders.deinit(self.allocator);
+        const representative_pattern = self.module.getMatchBranchPattern(source[0]).pattern;
+        try self.collectSourcePatternBinders(representative_pattern, &representative_binders);
+
         for (source, 0..) |branch_pattern_idx, i| {
             const branch_pattern = self.module.getMatchBranchPattern(branch_pattern_idx);
             out[i] = .{
                 .pattern = self.checkedPattern(branch_pattern.pattern),
                 .degenerate = branch_pattern.degenerate,
+                .binder_remaps = if (branch_pattern.degenerate)
+                    &.{}
+                else
+                    try self.copyAlternativeBinderRemaps(branch_pattern.pattern, representative_binders.items),
             };
+            initialized += 1;
         }
         return out;
+    }
+
+    fn copyAlternativeBinderRemaps(
+        self: *@This(),
+        pattern: CIR.Pattern.Idx,
+        representative_binders: []const SourcePatternBinder,
+    ) Allocator.Error![]const CheckedAlternativeBinderRemap {
+        if (representative_binders.len == 0) return &.{};
+
+        var candidate_binders = std.ArrayList(SourcePatternBinder).empty;
+        defer candidate_binders.deinit(self.allocator);
+        try self.collectSourcePatternBinders(pattern, &candidate_binders);
+
+        if (candidate_binders.items.len != representative_binders.len) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("checked artifact invariant violated: non-degenerate alternative binder count differs from representative", .{});
+            }
+            unreachable;
+        }
+
+        const remaps = try self.allocator.alloc(CheckedAlternativeBinderRemap, candidate_binders.items.len);
+        errdefer self.allocator.free(remaps);
+
+        for (candidate_binders.items, 0..) |candidate, i| {
+            const representative = self.representativeBinderForIdent(representative_binders, candidate.ident) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: non-degenerate alternative binder has no representative binder", .{});
+                }
+                unreachable;
+            };
+            remaps[i] = .{
+                .candidate_binder = candidate.binder,
+                .representative_binder = representative,
+            };
+        }
+
+        return remaps;
+    }
+
+    fn representativeBinderForIdent(
+        self: *@This(),
+        representative_binders: []const SourcePatternBinder,
+        ident: Ident.Idx,
+    ) ?PatternBinderId {
+        _ = self;
+        for (representative_binders) |representative| {
+            if (representative.ident.eql(ident)) return representative.binder;
+        }
+        return null;
+    }
+
+    fn collectSourcePatternBinders(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        out: *std.ArrayList(SourcePatternBinder),
+    ) Allocator.Error!void {
+        const pattern = self.module.pattern(pattern_idx).data;
+        switch (pattern) {
+            .assign => |assign| try out.append(self.allocator, .{
+                .ident = assign.ident,
+                .binder = try self.patternBinder(pattern_idx),
+            }),
+            .as => |as| {
+                try self.collectSourcePatternBinders(as.pattern, out);
+                try out.append(self.allocator, .{
+                    .ident = as.ident,
+                    .binder = try self.patternBinder(pattern_idx),
+                });
+            },
+            .applied_tag => |tag| {
+                for (self.module.slicePatterns(tag.args)) |child| {
+                    try self.collectSourcePatternBinders(child, out);
+                }
+            },
+            .nominal => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
+            .nominal_external => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
+            .record_destructure => |record| {
+                for (self.module.sliceRecordDestructs(record.destructs)) |destruct| {
+                    switch (destruct.kind) {
+                        .Required,
+                        .SubPattern,
+                        .Rest,
+                        => |child| try self.collectSourcePatternBinders(child, out),
+                    }
+                }
+            },
+            .list => |list| {
+                for (self.module.slicePatterns(list.patterns)) |child| {
+                    try self.collectSourcePatternBinders(child, out);
+                }
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.collectSourcePatternBinders(rest_pattern, out);
+                }
+            },
+            .tuple => |tuple| {
+                for (self.module.slicePatterns(tuple.patterns)) |child| {
+                    try self.collectSourcePatternBinders(child, out);
+                }
+            },
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
     }
 
     fn copyCaptures(self: *@This(), span: CIR.Expr.Capture.Span) Allocator.Error![]const CheckedCapture {
@@ -2324,7 +2460,10 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .list => |items| allocator.free(items),
         .tuple => |items| allocator.free(items),
         .match_ => |match| {
-            for (match.branches) |branch| allocator.free(branch.patterns);
+            for (match.branches) |branch| {
+                for (branch.patterns) |pattern| allocator.free(pattern.binder_remaps);
+                allocator.free(branch.patterns);
+            }
             allocator.free(match.branches);
         },
         .if_ => |if_| allocator.free(if_.branches),

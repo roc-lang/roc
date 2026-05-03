@@ -99,7 +99,9 @@ pub const Pat = struct {
 
 pub const Branch = struct {
     pat: PatId,
+    guard: ?ExprId = null,
     body: ExprId,
+    degenerate: bool = false,
 };
 
 pub const RecordFieldEval = row.Ast.RecordFieldEval;

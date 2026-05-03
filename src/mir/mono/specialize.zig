@@ -2737,21 +2737,24 @@ const BodyLowerer = struct {
         const cond = try self.lowerExpr(match_.cond);
         if (match_.branches.len == 0) invariantViolation("mono body lowering received a checked match with no branches");
 
-        const branches = try self.allocator.alloc(Ast.Branch, match_.branches.len);
-        defer self.allocator.free(branches);
+        var branches = std.ArrayList(Ast.Branch).empty;
+        defer branches.deinit(self.allocator);
         const cond_ty = self.program.ast.getExpr(cond).ty;
-        for (match_.branches, 0..) |branch, i| {
-            if (branch.guard != null) invariantViolation("mono body lowering reached match guard before guarded pattern decision lowering was implemented");
-            if (branch.patterns.len != 1) invariantViolation("mono body lowering reached multi-scrutinee match before match decision lowering was implemented");
-            branches[i] = .{
-                .pat = try self.lowerPattern(cond_ty, branch.patterns[0].pattern),
-                .body = try self.lowerExpr(branch.value),
-            };
+        for (match_.branches) |branch| {
+            if (branch.patterns.len == 0) invariantViolation("mono body lowering received a checked match branch with no alternatives");
+            for (branch.patterns) |branch_pattern| {
+                try branches.append(self.allocator, .{
+                    .pat = try self.lowerPatternWithRemaps(cond_ty, branch_pattern.pattern, branch_pattern.binder_remaps),
+                    .guard = if (branch_pattern.degenerate or branch.guard == null) null else try self.lowerExpr(branch.guard.?),
+                    .body = if (branch_pattern.degenerate) try self.program.ast.addExpr(ty, .runtime_error) else try self.lowerExpr(branch.value),
+                    .degenerate = branch_pattern.degenerate,
+                });
+            }
         }
 
         return try self.program.ast.addExpr(ty, .{ .match_ = .{
             .cond = cond,
-            .branches = try self.program.ast.addBranchSpan(branches),
+            .branches = try self.program.ast.addBranchSpan(branches.items),
             .is_try_suffix = match_.is_try_suffix,
         } });
     }
@@ -2899,15 +2902,26 @@ const BodyLowerer = struct {
         expected_ty: Type.TypeId,
         pattern_id: checked_artifact.CheckedPatternId,
     ) Allocator.Error!Ast.PatId {
+        return try self.lowerPatternWithRemaps(expected_ty, pattern_id, &.{});
+    }
+
+    fn lowerPatternWithRemaps(
+        self: *BodyLowerer,
+        expected_ty: Type.TypeId,
+        pattern_id: checked_artifact.CheckedPatternId,
+        binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
+    ) Allocator.Error!Ast.PatId {
         const pattern = self.checkedPattern(pattern_id);
         const ty = try self.type_instantiator.lowerTemplateType(pattern.ty);
         const source_ty = try self.sourceTypeKey(pattern.ty);
         if (!self.program.types.equalIds(ty, expected_ty)) invariantViolation("mono body lowering pattern type did not match its scrutinee type");
         const lowered = switch (pattern.data) {
-            .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .var_ = try self.symbolForBinder(binder) } }),
+            .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{
+                .var_ = try self.symbolForBinder(self.representativeBinderForCandidate(binder, binder_remaps)),
+            } }),
             .as => |as| {
-                const symbol = try self.symbolForBinder(as.binder);
-                const nested = try self.lowerPattern(ty, as.pattern);
+                const symbol = try self.symbolForBinder(self.representativeBinderForCandidate(as.binder, binder_remaps));
+                const nested = try self.lowerPatternWithRemaps(ty, as.pattern, binder_remaps);
                 return try self.program.ast.addPat(.{ .ty = ty, .data = .{ .as = .{
                     .pattern = nested,
                     .symbol = symbol,
@@ -2920,7 +2934,7 @@ const BodyLowerer = struct {
                 const args = try self.allocator.alloc(Ast.PatId, tag.args.len);
                 defer self.allocator.free(args);
                 for (tag.args, 0..) |arg, i| {
-                    args[i] = try self.lowerPattern(tag_info.payload_types[i], arg);
+                    args[i] = try self.lowerPatternWithRemaps(tag_info.payload_types[i], arg, binder_remaps);
                 }
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tag = .{
                     .name = tag_name,
@@ -2932,7 +2946,7 @@ const BodyLowerer = struct {
                 const backing = self.nominalBackingType(ty);
                 break :blk try self.program.ast.addPat(.{
                     .ty = ty,
-                    .data = .{ .nominal = try self.lowerPattern(backing, nominal.backing_pattern) },
+                    .data = .{ .nominal = try self.lowerPatternWithRemaps(backing, nominal.backing_pattern, binder_remaps) },
                 });
             },
             .record_destructure => |destructs| blk: {
@@ -2946,7 +2960,7 @@ const BodyLowerer = struct {
                             const label = destruct.label;
                             fields[field_count] = .{
                                 .field = label,
-                                .pattern = try self.lowerPattern(self.recordFieldType(ty, label), field_pattern),
+                                .pattern = try self.lowerPatternWithRemaps(self.recordFieldType(ty, label), field_pattern, binder_remaps),
                             };
                             field_count += 1;
                         },
@@ -2954,7 +2968,7 @@ const BodyLowerer = struct {
                             if (rest != null) invariantViolation("mono body lowering record pattern had duplicate rest binders");
                             const rest_checked = self.checkedPattern(rest_pattern);
                             const rest_ty = try self.type_instantiator.lowerTemplateType(rest_checked.ty);
-                            rest = try self.lowerPattern(rest_ty, rest_pattern);
+                            rest = try self.lowerPatternWithRemaps(rest_ty, rest_pattern, binder_remaps);
                         },
                     }
                 }
@@ -2968,7 +2982,7 @@ const BodyLowerer = struct {
                 const lowered = try self.allocator.alloc(Ast.PatId, items.len);
                 defer self.allocator.free(lowered);
                 for (items, 0..) |item, i| {
-                    lowered[i] = try self.lowerPattern(item_types[i], item);
+                    lowered[i] = try self.lowerPatternWithRemaps(item_types[i], item, binder_remaps);
                 }
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tuple = try self.program.ast.addPatSpan(lowered) } });
             },
@@ -2977,11 +2991,11 @@ const BodyLowerer = struct {
                 const lowered = try self.allocator.alloc(Ast.PatId, list.patterns.len);
                 defer self.allocator.free(lowered);
                 for (list.patterns, 0..) |item, i| {
-                    lowered[i] = try self.lowerPattern(elem_ty, item);
+                    lowered[i] = try self.lowerPatternWithRemaps(elem_ty, item, binder_remaps);
                 }
                 const rest: ?Ast.ListRestPattern = if (list.rest) |rest_info| .{
                     .index = rest_info.index,
-                    .pattern = if (rest_info.pattern) |rest_pattern| try self.lowerPattern(ty, rest_pattern) else null,
+                    .pattern = if (rest_info.pattern) |rest_pattern| try self.lowerPatternWithRemaps(ty, rest_pattern, binder_remaps) else null,
                 } else null;
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .list = .{
                     .items = try self.program.ast.addPatSpan(lowered),
@@ -2999,6 +3013,18 @@ const BodyLowerer = struct {
         };
         self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = source_ty;
         return lowered;
+    }
+
+    fn representativeBinderForCandidate(
+        self: *const BodyLowerer,
+        binder: checked_artifact.PatternBinderId,
+        binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
+    ) checked_artifact.PatternBinderId {
+        _ = self;
+        for (binder_remaps) |remap| {
+            if (remap.candidate_binder == binder) return remap.representative_binder;
+        }
+        return binder;
     }
 
     fn recordFieldType(

@@ -858,17 +858,25 @@ const IrBuilder = struct {
 
         const branch = self.input.ast.branches.items[@intFromEnum(branch_ids[index])];
         const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-        const body = try self.lowerSourceMatchBranchBlock(branch, scrutinee);
+        const fallback = if (branch.guard != null)
+            try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result)
+        else
+            null;
+        const body = try self.lowerSourceMatchBranchBlock(branch, scrutinee, result, fallback);
 
         if (self.sourceMatchPatternSwitchValue(pat)) |value| {
             const branches = [_]Ast.Branch{.{
                 .value = value,
                 .block = body,
             }};
+            const default_block = if (fallback) |block|
+                block
+            else
+                try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result);
             try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
                 .cond = subject,
                 .branches = try self.output.store.addBranchSpan(&branches),
-                .default_block = try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result),
+                .default_block = default_block,
                 .join = result,
             } }));
         } else {
@@ -909,7 +917,11 @@ const IrBuilder = struct {
         self: *IrBuilder,
         branch: Exec.Ast.Branch,
         scrutinee: Ast.Var,
+        result: Ast.Var,
+        fallback: ?Ast.BlockId,
     ) LowerResourceError!Ast.BlockId {
+        if (branch.degenerate) return try self.lowerExprToBlock(branch.body);
+
         var saved = std.ArrayList(SavedValueBinding).empty;
         defer {
             self.restoreValueBindings(saved.items);
@@ -920,10 +932,33 @@ const IrBuilder = struct {
         defer branch_stmts.deinit(self.allocator);
         const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
         try self.bindSourceMatchPatternValues(pat, scrutinee, &branch_stmts, &saved);
-        const result = try self.lowerExpr(branch.body, &branch_stmts);
+
+        if (branch.guard) |guard_expr| {
+            const guard = try self.lowerExpr(guard_expr, &branch_stmts);
+            const true_branches = [_]Ast.Branch{.{
+                .value = 1,
+                .block = try self.lowerExprToBlock(branch.body),
+            }};
+            const default_block = fallback orelse try self.output.store.addBlock(.{
+                .stmts = Ast.Span(Ast.StmtId).empty(),
+                .term = .@"unreachable",
+            });
+            try branch_stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+                .cond = guard,
+                .branches = try self.output.store.addBranchSpan(&true_branches),
+                .default_block = default_block,
+                .join = result,
+            } }));
+            return try self.output.store.addBlock(.{
+                .stmts = try self.output.store.addStmtSpan(branch_stmts.items),
+                .term = .{ .value = result },
+            });
+        }
+
+        const branch_result = try self.lowerExpr(branch.body, &branch_stmts);
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(branch_stmts.items),
-            .term = .{ .value = result },
+            .term = .{ .value = branch_result },
         });
     }
 

@@ -902,10 +902,13 @@ const BodySolver = struct {
         defer saved.deinit(self.allocator);
         const pat = try self.lowerPatScoped(branch.pat, &saved);
         defer self.restoreBindings(&saved, 0);
+        const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
         const body = try self.lowerExpr(branch.body);
         return try self.output.addBranch(.{
             .pat = pat,
+            .guard = guard,
             .body = body,
+            .degenerate = branch.degenerate,
         });
     }
 

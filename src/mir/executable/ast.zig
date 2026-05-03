@@ -102,7 +102,9 @@ pub const ListRestPattern = struct {
 
 pub const Branch = struct {
     pat: PatId,
+    guard: ?ExprId = null,
     body: ExprId,
+    degenerate: bool = false,
 };
 
 pub const DirectCallArg = struct {
