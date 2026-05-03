@@ -481,6 +481,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
         });
     }
     try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
+    try solveRepresentationSessions(&program, proc_build_records.items);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
     try finalizeValueTransformBoundaries(&program);
     for (program.solve_sessions.items) |*session| {
@@ -672,6 +673,188 @@ const CrossProcedureRepresentationLinker = struct {
 
     fn valueRoot(self: *CrossProcedureRepresentationLinker, value: repr.ValueInfoId) repr.RepRootId {
         return self.value_store.values.items[@intFromEnum(value)].root;
+    }
+};
+
+fn solveRepresentationSessions(
+    program: *Program,
+    records: []const ProcBuildRecord,
+) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        session.state = .solving;
+        {
+            var solver = RepresentationClassSolver{
+                .allocator = program.allocator,
+                .program = program,
+                .records = records,
+                .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+                .session = session,
+                .parents = &.{},
+                .ranks = &.{},
+                .classes = std.AutoHashMap(u32, repr.RepresentationClassId).init(program.allocator),
+            };
+            defer solver.deinit();
+            try solver.solve();
+        }
+    }
+}
+
+const RepresentationClassSolver = struct {
+    allocator: Allocator,
+    program: *Program,
+    records: []const ProcBuildRecord,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+    parents: []u32,
+    ranks: []u8,
+    classes: std.AutoHashMap(u32, repr.RepresentationClassId),
+
+    fn deinit(self: *RepresentationClassSolver) void {
+        self.classes.deinit();
+        if (self.ranks.len > 0) self.allocator.free(self.ranks);
+        if (self.parents.len > 0) self.allocator.free(self.parents);
+    }
+
+    fn solve(self: *RepresentationClassSolver) Allocator.Error!void {
+        try self.initUnionFind();
+        for (self.session.representation_store.representation_edges.items) |edge| {
+            if (!self.edgeUnionsValueFlow(edge)) continue;
+            const from = self.endpointRootInSession(edge.from) orelse continue;
+            const to = self.endpointRootInSession(edge.to) orelse continue;
+            self.unionRoots(from, to);
+        }
+        try self.assignValueClasses();
+    }
+
+    fn initUnionFind(self: *RepresentationClassSolver) Allocator.Error!void {
+        const len = self.session.representation_store.roots_len;
+        self.parents = if (len == 0) &.{} else try self.allocator.alloc(u32, len);
+        errdefer if (self.parents.len > 0) self.allocator.free(self.parents);
+        self.ranks = if (len == 0) &.{} else try self.allocator.alloc(u8, len);
+        errdefer if (self.ranks.len > 0) self.allocator.free(self.ranks);
+        for (self.parents, 0..) |*parent, i| {
+            parent.* = @intCast(i);
+        }
+        @memset(self.ranks, 0);
+    }
+
+    fn edgeUnionsValueFlow(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
+        return switch (edge.kind) {
+            .value_alias,
+            .value_move,
+            .branch_join,
+            .loop_phi,
+            .mutable_version,
+            => true,
+            .function_arg,
+            .function_return,
+            => !self.edgeTouchesRequestedFunctionRoot(edge),
+            .function_callable,
+            .record_field,
+            .tuple_elem,
+            .tag_payload,
+            .list_elem,
+            .box_payload,
+            .nominal_backing,
+            => false,
+        };
+    }
+
+    fn edgeTouchesRequestedFunctionRoot(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
+        if (self.endpointIsRequestedFunctionRoot(edge.from)) return true;
+        return self.endpointIsRequestedFunctionRoot(edge.to);
+    }
+
+    fn endpointIsRequestedFunctionRoot(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) bool {
+        const root = self.endpointRootInSession(endpoint) orelse return false;
+        return switch (self.session.representation_store.rootKind(root)) {
+            .call_value_requested_fn,
+            .call_proc_requested_fn,
+            => true,
+            else => false,
+        };
+    }
+
+    fn endpointRootInSession(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) ?repr.RepRootId {
+        return switch (endpoint) {
+            .local => |root| root,
+            .procedure_public => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
+        };
+    }
+
+    fn recordForInstance(
+        self: *RepresentationClassSolver,
+        instance: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(instance);
+        if (index >= self.records.len) {
+            lambdaInvariant("lambda-solved representation solver referenced out-of-range procedure instance");
+        }
+        return &self.records[index];
+    }
+
+    fn unionRoots(self: *RepresentationClassSolver, a: repr.RepRootId, b: repr.RepRootId) void {
+        const a_index = @intFromEnum(a);
+        const b_index = @intFromEnum(b);
+        if (a_index >= self.parents.len or b_index >= self.parents.len) {
+            lambdaInvariant("lambda-solved representation solver reached an out-of-range root");
+        }
+        const a_rep = self.find(a_index);
+        const b_rep = self.find(b_index);
+        if (a_rep == b_rep) return;
+        if (self.ranks[a_rep] < self.ranks[b_rep]) {
+            self.parents[a_rep] = b_rep;
+        } else if (self.ranks[a_rep] > self.ranks[b_rep]) {
+            self.parents[b_rep] = a_rep;
+        } else {
+            self.parents[b_rep] = a_rep;
+            self.ranks[a_rep] += 1;
+        }
+    }
+
+    fn find(self: *RepresentationClassSolver, index: u32) u32 {
+        var current = index;
+        while (self.parents[current] != current) {
+            current = self.parents[current];
+        }
+        const root = current;
+        current = index;
+        while (self.parents[current] != current) {
+            const next = self.parents[current];
+            self.parents[current] = root;
+            current = next;
+        }
+        return root;
+    }
+
+    fn assignValueClasses(self: *RepresentationClassSolver) Allocator.Error!void {
+        self.session.representation_store.classes_len = 0;
+        for (self.session.members) |member| {
+            const record = self.recordForInstance(member);
+            const value_store = &self.program.value_stores.items[@intFromEnum(record.value_store)];
+            for (value_store.values.items) |*value| {
+                value.solved_class = try self.classForRoot(value.root);
+            }
+        }
+    }
+
+    fn classForRoot(
+        self: *RepresentationClassSolver,
+        root: repr.RepRootId,
+    ) Allocator.Error!repr.RepresentationClassId {
+        const root_index = @intFromEnum(root);
+        if (root_index >= self.parents.len) {
+            lambdaInvariant("lambda-solved representation solver assigned class for out-of-range root");
+        }
+        const representative = self.find(root_index);
+        if (self.classes.get(representative)) |existing| return existing;
+        const class = self.session.representation_store.reserveClass();
+        try self.classes.put(representative, class);
+        return class;
     }
 };
 
@@ -3435,12 +3618,10 @@ const BodySolver = struct {
         source_ty: canonical.CanonicalTypeKey,
     ) Allocator.Error!repr.ValueInfoId {
         const root = self.representation_store.reserveRoot();
-        const class = self.representation_store.reserveClass();
         const value = try self.value_store.addValue(.{
             .logical_ty = ty,
             .source_ty = source_ty,
             .root = root,
-            .solved_class = class,
         });
         try self.representation_store.publishRootKind(root, .{ .local_value = .{
             .instance = self.instance,
