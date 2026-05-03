@@ -1180,6 +1180,7 @@ pub const RepresentationStore = struct {
     roots_len: u32 = 0,
     classes_len: u32 = 0,
     root_classes: []RepresentationClassId = &.{},
+    callable_class_emissions: []?CallableValueEmissionPlanId = &.{},
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     representation_edges: std.ArrayList(RepresentationEdge) = .empty,
     representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
@@ -1250,6 +1251,7 @@ pub const RepresentationStore = struct {
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
         if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
+        if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
         self.root_kinds.deinit();
@@ -1336,6 +1338,8 @@ pub const RepresentationStore = struct {
         self.classes_len = 0;
         if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
         self.root_classes = &.{};
+        if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
+        self.callable_class_emissions = &.{};
     }
 
     pub fn publishRootClasses(
@@ -1364,6 +1368,51 @@ pub const RepresentationStore = struct {
             unreachable;
         }
         return self.root_classes[root_index];
+    }
+
+    pub fn publishCallableClassEmission(
+        self: *RepresentationStore,
+        class: RepresentationClassId,
+        emission_plan: CallableValueEmissionPlanId,
+    ) std.mem.Allocator.Error!void {
+        const class_index: usize = @intFromEnum(class);
+        if (class_index >= @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable class emission referenced an unreserved class");
+            unreachable;
+        }
+        if (self.callable_class_emissions.len == 0) {
+            self.callable_class_emissions = try self.allocator.alloc(?CallableValueEmissionPlanId, @intCast(self.classes_len));
+            @memset(self.callable_class_emissions, null);
+        }
+        if (self.callable_class_emissions.len != @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable class emission table length differs from class count");
+            unreachable;
+        }
+        if (self.callable_class_emissions[class_index]) |existing| {
+            if (existing != emission_plan) {
+                debug.invariant(false, "lambda-solved invariant violated: callable class emission was published twice with different plans");
+                unreachable;
+            }
+            return;
+        }
+        self.callable_class_emissions[class_index] = emission_plan;
+    }
+
+    pub fn callableClassEmission(
+        self: *const RepresentationStore,
+        class: RepresentationClassId,
+    ) ?CallableValueEmissionPlanId {
+        const class_index: usize = @intFromEnum(class);
+        if (class_index >= @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable class emission lookup referenced an unreserved class");
+            unreachable;
+        }
+        if (self.callable_class_emissions.len == 0) return null;
+        if (self.callable_class_emissions.len != @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable class emission table length differs from class count");
+            unreachable;
+        }
+        return self.callable_class_emissions[class_index];
     }
 
     pub fn appendBoxBoundary(
@@ -2520,6 +2569,8 @@ const SessionExecutableTypePayloadBuilder = struct {
             try self.boxedPayload(info.logical_ty, boxed)
         else if (info.aggregate) |aggregate|
             try self.aggregatePayload(info.logical_ty, aggregate)
+        else if (self.valueHasFunctionType(info.logical_ty))
+            return try self.endpointForCallableClass(info.solved_class orelse representationInvariant("session executable function value has no solved class"))
         else
             try self.typePayload(info.logical_ty);
 
@@ -2734,11 +2785,60 @@ const SessionExecutableTypePayloadBuilder = struct {
     }
 
     fn callablePayload(self: *SessionExecutableTypePayloadBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!SessionExecutableTypePayload {
-        return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+        return try self.callablePayloadForEmissionPlan(callable.emission_plan);
+    }
+
+    fn endpointForCallableClass(
+        self: *SessionExecutableTypePayloadBuilder,
+        class: RepresentationClassId,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        const emission_plan = self.representation_store.callableClassEmission(class) orelse {
+            representationInvariant("session executable function value class has no callable emission plan");
+        };
+        const key = self.callableEmissionPlanKey(emission_plan);
+        if (self.payload_store.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+        const id = try self.payload_store.append(self.allocator, key, try self.callablePayloadForEmissionPlan(emission_plan));
+        return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn callablePayloadForEmissionPlan(
+        self: *SessionExecutableTypePayloadBuilder,
+        emission_plan: CallableValueEmissionPlanId,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        return switch (self.representation_store.callableEmissionPlan(emission_plan)) {
             .finite => |key| .{ .callable_set = try self.callableSetPayload(key) },
             .already_erased => |erased| .{ .erased_fn = try self.erasedFnPayloadForAlreadyErased(erased) },
             .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(erase) },
             .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
+        };
+    }
+
+    fn callableEmissionPlanKey(
+        self: *SessionExecutableTypePayloadBuilder,
+        emission_plan: CallableValueEmissionPlanId,
+    ) CanonicalExecValueTypeKey {
+        return switch (self.representation_store.callableEmissionPlan(emission_plan)) {
+            .finite => |key| finiteCallableSetExecValueTypeKey(key),
+            .already_erased => |erased| erasedCallableExecValueTypeKey(erased.sig_key),
+            .erase_proc_value => |erase| erasedCallableExecValueTypeKey(erase.erased_fn_sig_key),
+            .erase_finite_set => |erase| erasedCallableExecValueTypeKey(erase.adapter.erased_fn_sig_key),
+        };
+    }
+
+    fn valueHasFunctionType(
+        self: *SessionExecutableTypePayloadBuilder,
+        ty: type_mod.TypeVarId,
+    ) bool {
+        const root = self.types.unlinkConst(ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| self.valueHasFunctionType(nominal.backing),
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            else => false,
         };
     }
 

@@ -1422,6 +1422,8 @@ const CallableEmissionAssigner = struct {
                 };
                 const class_key = class_set.key orelse lambdaInvariant("lambda-solved callable class set was not interned before emission assignment");
                 const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                const provenance = self.erasedProvenance(class);
+                _ = try self.ensureCallableClassEmission(record, class_set, class_key, provenance);
                 var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, class_key);
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
                     .finite => {},
@@ -1432,7 +1434,6 @@ const CallableEmissionAssigner = struct {
                 }
                 try self.rewriteCallableConstructionPlan(&callable, value_id, class_set, class_key);
 
-                const provenance = self.erasedProvenance(class);
                 if (provenance == null) {
                     self.representationStore().callableEmissionPlanPtr(callable.emission_plan).* = .{ .finite = class_key };
                     value_info.callable = callable;
@@ -1460,6 +1461,22 @@ const CallableEmissionAssigner = struct {
             .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(class_key),
             .construction_plan = null,
         };
+    }
+
+    fn ensureCallableClassEmission(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+        class_set: *const CallableClassSet,
+        class_key: repr.CanonicalCallableSetKey,
+        provenance: ?[]const repr.BoxBoundaryId,
+    ) Allocator.Error!repr.CallableValueEmissionPlanId {
+        if (self.representationStore().callableClassEmission(class_set.class)) |existing| return existing;
+        const emission = if (provenance) |boundaries|
+            try self.appendFiniteSetErasePlan(record, class_set, class_key, boundaries)
+        else
+            try self.representationStore().appendFiniteCallableEmissionPlan(class_key);
+        try self.representationStore().publishCallableClassEmission(class_set.class, emission);
+        return emission;
     }
 
     fn valueHasFunctionType(
