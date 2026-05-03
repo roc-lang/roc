@@ -2602,8 +2602,45 @@ The lambda-solved construction algorithm is:
    `ValueInfo.solved_class`, `CallableValueInfo.emission_plan`,
    `CallSiteInfo.dispatch`, boxed-boundary plan, projection result, capture-slot
    root, parameter root, and return root must be solved.
-10. Seal the session and all member procedure representation instances together.
-11. Publish executable specialization keys, callable-set keys, capture-shape
+10. Finalize session value-transform boundaries for every real existing-value
+    representation boundary in the SCC. This happens after step 9, not during
+    initial body lowering, because call boundaries may reference target
+    procedures whose public roots and executable keys were not sealed when the
+    caller body was first visited. The finalization pass consumes only sealed
+    value-flow records and explicit call/procedure identities recorded during
+    body lowering. It must fill:
+
+    - one `ValueTransformBoundaryId` per `call_arg`
+    - one `ValueTransformBoundaryId` per returning `call_result`
+    - one `ValueTransformBoundaryId` per returning finite
+      `callable_match_branch_result`
+    - one boundary per returning source `match` branch result
+    - one boundary per returning `if` branch result
+    - procedure return, capture, mutable join, loop phi, and
+      aggregate-existing-value boundaries
+
+    Each boundary owns a concrete `SessionExecutableValueEndpoint` pair and a
+    mandatory `ExecutableValueTransformRef`, including identity. Procedure
+    parameter endpoints are constructed from the sealed target
+    `ProcRepresentationInstance.public_roots.params` and
+    `executable_specialization_key.exec_arg_tys[index]`. Procedure return
+    endpoints are constructed from the sealed target
+    `ProcRepresentationInstance.public_roots.ret` and
+    `executable_specialization_key.exec_ret_ty`. Local endpoints are constructed
+    from the local dense `ValueInfoStore` and solved session representation.
+    Raw call-result and callable-match branch-result endpoints are explicit
+    endpoint owners, not dummy `ValueInfoId`s.
+
+    Body lowering must therefore store enough explicit data to finalize these
+    boundaries later: `call_proc` target procedure instance id or target
+    reservation key, `call_value` callable-set member refs, argument value ids,
+    result value ids, requested fixed-arity source function type, and branch
+    result relation ids. The finalization pass must not recover target
+    procedures from syntax, look up functions by display name, infer branch
+    result types from executable layouts, or synthesize local values to stand in
+    for target parameters/returns.
+11. Seal the session and all member procedure representation instances together.
+12. Publish executable specialization keys, callable-set keys, capture-shape
     keys, erased function signature keys, erased adapter keys, and
     layout-publication keys only from sealed data.
 
