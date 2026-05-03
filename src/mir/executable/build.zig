@@ -6851,6 +6851,7 @@ const BodyBuilder = struct {
         plan: repr.SessionExecutableValueTransformPlan,
         value: Ast.ExecutableValueRef,
     ) Allocator.Error!Ast.ExecutableValueRef {
+        self.verifySessionExecutableValueTransformScope(plan);
         return switch (plan.op) {
             .identity => blk: {
                 if (!repr.canonicalExecValueTypeKeyEql(plan.from.exec_ty.key, plan.to.exec_ty.key)) {
@@ -6893,6 +6894,32 @@ const BodyBuilder = struct {
                 break :blk value;
             },
         };
+    }
+
+    fn verifySessionExecutableValueTransformScope(
+        self: *BodyBuilder,
+        plan: repr.SessionExecutableValueTransformPlan,
+    ) void {
+        if (plan.scope) |scope_id| {
+            const scope = self.representation_store.transformEndpointScope(scope_id);
+            if (!sessionExecutableValueEndpointEql(scope.root_from, plan.from) and
+                !sessionEndpointIsTransformChildForScope(plan.from, scope_id, .from))
+            {
+                executableInvariant("executable session transform source endpoint does not belong to its transform scope");
+            }
+            if (!sessionExecutableValueEndpointEql(scope.root_to, plan.to) and
+                !sessionEndpointIsTransformChildForScope(plan.to, scope_id, .to))
+            {
+                executableInvariant("executable session transform target endpoint does not belong to its transform scope");
+            }
+            return;
+        }
+
+        if (sessionEndpointOwnerIsTransformChild(plan.from.owner) or
+            sessionEndpointOwnerIsTransformChild(plan.to.owner))
+        {
+            executableInvariant("executable session transform child endpoint has no transform scope");
+        }
     }
 
     fn applySessionRecordValueTransform(
@@ -7446,6 +7473,76 @@ pub fn verifyCallableMatchBranch(
         repr.canonicalTypeKeyEql(branch.executable_specialization_key.requested_fn_ty, requested_source_fn_ty),
         "executable invariant violated: callable_match executable specialization requested type differs from call site",
     );
+}
+
+fn sessionExecutableValueEndpointEql(
+    a: repr.SessionExecutableValueEndpoint,
+    b: repr.SessionExecutableValueEndpoint,
+) bool {
+    return sessionExecutableValueEndpointOwnerEql(a.owner, b.owner) and
+        a.logical_ty == b.logical_ty and
+        a.exec_ty.ty.payload == b.exec_ty.ty.payload and
+        repr.canonicalExecValueTypeKeyEql(a.exec_ty.key, b.exec_ty.key);
+}
+
+fn sessionExecutableValueEndpointOwnerEql(
+    a: repr.SessionExecutableValueEndpointOwner,
+    b: repr.SessionExecutableValueEndpointOwner,
+) bool {
+    return switch (a) {
+        .local_value => |value| switch (b) {
+            .local_value => |other| value == other,
+            else => false,
+        },
+        .procedure_param => |param| switch (b) {
+            .procedure_param => |other| param.instance == other.instance and param.index == other.index,
+            else => false,
+        },
+        .procedure_return => |proc| switch (b) {
+            .procedure_return => |other| proc == other,
+            else => false,
+        },
+        .call_raw_arg => |arg| switch (b) {
+            .call_raw_arg => |other| arg.call == other.call and arg.index == other.index,
+            else => false,
+        },
+        .call_raw_result => |call| switch (b) {
+            .call_raw_result => |other| call == other,
+            else => false,
+        },
+        .callable_match_branch_raw_result => |branch| switch (b) {
+            .callable_match_branch_raw_result => |other|
+                branch.call == other.call and
+                branch.member.member_index == other.member.member_index and
+                repr.callableSetKeyEql(branch.member.callable_set_key, other.member.callable_set_key),
+            else => false,
+        },
+        .transform_child => |child| switch (b) {
+            .transform_child => |other|
+                child.scope == other.scope and
+                child.side == other.side and
+                child.path == other.path,
+            else => false,
+        },
+    };
+}
+
+fn sessionEndpointIsTransformChildForScope(
+    endpoint: repr.SessionExecutableValueEndpoint,
+    scope: repr.TransformEndpointScopeId,
+    side: repr.TransformEndpointSide,
+) bool {
+    return switch (endpoint.owner) {
+        .transform_child => |child| child.scope == scope and child.side == side,
+        else => false,
+    };
+}
+
+fn sessionEndpointOwnerIsTransformChild(owner: repr.SessionExecutableValueEndpointOwner) bool {
+    return switch (owner) {
+        .transform_child => true,
+        else => false,
+    };
 }
 
 test "executable build owns final program state" {
