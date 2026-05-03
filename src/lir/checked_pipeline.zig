@@ -1217,13 +1217,19 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
     instance: *const repr.ProcRepresentationInstance,
     sig_key: canonical.ErasedFnSigKey,
     source_fn_ty: canonical.CanonicalTypeKey,
-    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
+    expected_wrapper_ret_key: canonical.CanonicalExecValueTypeKey,
     capture_shape_key: canonical.CaptureShapeKey,
     hidden_capture: ?ExecutablePayloadWithKey,
 ) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
     const value_store = &builder.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
     const representation_store = &builder.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+    const abi = representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
+        checkedPipelineInvariant("erased promoted executable signature references missing erased ABI payload");
+    };
     const params = value_store.sliceValueSpan(instance.public_roots.params);
+    if (abi.fixed_arity != @as(u32, @intCast(params.len)) or abi.arg_exec_keys.len != params.len) {
+        checkedPipelineInvariant("erased promoted executable signature ABI arity differs from wrapper parameter arity");
+    }
     const param_exec_tys = if (params.len == 0)
         &.{}
     else
@@ -1246,15 +1252,34 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         param_exec_ty_keys[i] = payload.key;
     }
 
+    const erased_call_args = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
+    errdefer if (erased_call_args.len > 0) allocator.free(erased_call_args);
+    const erased_call_arg_keys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
+    errdefer if (erased_call_arg_keys.len > 0) allocator.free(erased_call_arg_keys);
+    for (abi.arg_exec_keys, 0..) |arg_key, i| {
+        erased_call_args[i] = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), arg_key) orelse {
+            checkedPipelineInvariant("erased promoted executable signature ABI argument key has no published executable payload");
+        };
+    }
+
     const wrapper_ret = try builder.payloadForValueInStore(
         instance.value_store,
         value_store,
         representation_store,
         instance.public_roots.ret,
     );
-    if (!repr.canonicalExecValueTypeKeyEql(wrapper_ret.key, erased_call_ret_key)) {
-        checkedPipelineInvariant("erased promoted executable signature return key differs from target proc return key");
+    if (!repr.canonicalExecValueTypeKeyEql(wrapper_ret.key, expected_wrapper_ret_key)) {
+        checkedPipelineInvariant("erased promoted executable signature wrapper return key differs from target proc return key");
     }
+    const erased_call_ret = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), abi.ret_exec_key) orelse {
+        checkedPipelineInvariant("erased promoted executable signature ABI result key has no published executable payload");
+    };
 
     if ((sig_key.capture_ty == null) != (hidden_capture == null)) {
         checkedPipelineInvariant("erased promoted executable signature hidden capture presence differs from erased signature key");
@@ -1272,10 +1297,10 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         .param_exec_ty_keys = param_exec_ty_keys,
         .wrapper_ret = wrapper_ret.ref,
         .wrapper_ret_key = wrapper_ret.key,
-        .erased_call_args = try allocator.dupe(checked_artifact.ExecutableTypePayloadRef, param_exec_tys),
-        .erased_call_arg_keys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, param_exec_ty_keys),
-        .erased_call_ret = wrapper_ret.ref,
-        .erased_call_ret_key = erased_call_ret_key,
+        .erased_call_args = erased_call_args,
+        .erased_call_arg_keys = erased_call_arg_keys,
+        .erased_call_ret = erased_call_ret,
+        .erased_call_ret_key = abi.ret_exec_key,
         .hidden_capture = if (hidden_capture) |capture| .{
             .exec_ty = capture.ref,
             .exec_ty_key = capture.key,
