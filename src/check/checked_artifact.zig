@@ -5597,22 +5597,501 @@ fn publishRequiresMetadata(
     return requires;
 }
 
-pub const ModuleInterfaceCapabilities = struct {
-    exported_def_count: u32,
-    method_count: u32,
-    provides_count: u32,
-    requires_count: u32,
+pub const BoxPayloadCapabilityId = enum(u32) { _ };
+pub const OpaqueAtomicProofId = enum(u32) { _ };
+pub const HostedRepresentationCapabilityId = enum(u32) { _ };
+pub const PlatformRepresentationCapabilityId = enum(u32) { _ };
+pub const ExportedNominalRepresentationId = enum(u32) { _ };
 
-    pub fn fromModule(module: TypedCIR.Module) ModuleInterfaceCapabilities {
-        const module_env = module.moduleEnvConst();
+pub const BoxPayloadCapabilityEntry = struct {
+    id: BoxPayloadCapabilityId,
+    nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
+    backing_ty: CheckedTypeId,
+    backing_ty_key: canonical.CanonicalTypeKey,
+    instantiated_args: []const canonical.CanonicalTypeKey = &.{},
+    is_opaque: bool,
+};
+
+pub const OpaqueAtomicProofEntry = struct {
+    id: OpaqueAtomicProofId,
+    nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
+    instantiated_args: []const canonical.CanonicalTypeKey = &.{},
+    proof: NoReachableCallableSlotsProof,
+};
+
+pub const HostedRepresentationCapability = struct {
+    id: HostedRepresentationCapabilityId,
+    external_symbol_name: canonical.ExternalSymbolNameId,
+    proc: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
+};
+
+pub const PlatformRepresentationCapability = struct {
+    id: PlatformRepresentationCapabilityId,
+    requirement: PlatformRequiredDeclarationId,
+    platform_name: canonical.ExportNameId,
+    declared_source_ty: canonical.CanonicalTypeSchemeKey,
+};
+
+pub const ExportedNominalRepresentation = struct {
+    id: ExportedNominalRepresentationId,
+    nominal: canonical.NominalTypeKey,
+    source_ty: canonical.CanonicalTypeKey,
+    box_payload_capability: BoxPayloadCapabilityId,
+    opaque_atomic_proof: ?OpaqueAtomicProofId = null,
+};
+
+pub const ModuleInterfaceCapabilities = struct {
+    boxed_payload_templates: []const BoxPayloadCapabilityEntry = &.{},
+    opaque_atomic_proofs: []const OpaqueAtomicProofEntry = &.{},
+    hosted_representations: []const HostedRepresentationCapability = &.{},
+    platform_representations: []const PlatformRepresentationCapability = &.{},
+    exported_nominal_representations: []const ExportedNominalRepresentation = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypeStore,
+        hosted_procs: *const HostedProcTable,
+        platform_required_declarations: *const PlatformRequiredDeclarationTable,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!ModuleInterfaceCapabilities {
+        const current_module = names.lookupModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent()) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("checked artifact invariant violated: module identity was not interned before interface capability publication", .{});
+            }
+            unreachable;
+        };
+
+        var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
+        errdefer {
+            for (boxed_payload_templates.items) |entry| allocator.free(entry.instantiated_args);
+            boxed_payload_templates.deinit(allocator);
+        }
+        var opaque_atomic_proofs = std.ArrayList(OpaqueAtomicProofEntry).empty;
+        errdefer {
+            for (opaque_atomic_proofs.items) |entry| allocator.free(entry.instantiated_args);
+            opaque_atomic_proofs.deinit(allocator);
+        }
+        var exported_nominal_representations = std.ArrayList(ExportedNominalRepresentation).empty;
+        errdefer exported_nominal_representations.deinit(allocator);
+
+        var seen_nominals = std.AutoHashMap(NominalCapabilitySeenKey, void).init(allocator);
+        defer seen_nominals.deinit();
+
+        for (checked_types.payloads, 0..) |payload, i| {
+            const nominal = switch (payload) {
+                .nominal => |nominal| nominal,
+                else => continue,
+            };
+            if (nominal.builtin != null) continue;
+            if (nominal.origin_module != current_module) continue;
+
+            const source_key = checked_types.roots[i].key;
+            const nominal_key = canonical.NominalTypeKey{
+                .module_name = nominal.origin_module,
+                .type_name = nominal.name,
+            };
+            const seen_key = NominalCapabilitySeenKey{
+                .source_ty = source_key,
+                .nominal = nominal_key,
+            };
+            if (seen_nominals.contains(seen_key)) continue;
+            try seen_nominals.put(seen_key, {});
+
+            var args = try checkedTypeKeysForIds(allocator, checked_types, nominal.args);
+            errdefer allocator.free(args);
+
+            const capability_id: BoxPayloadCapabilityId = @enumFromInt(@as(u32, @intCast(boxed_payload_templates.items.len)));
+            try boxed_payload_templates.append(allocator, .{
+                .id = capability_id,
+                .nominal = nominal_key,
+                .source_ty = source_key,
+                .backing_ty = nominal.backing,
+                .backing_ty_key = checkedTypeKeyForId(checked_types, nominal.backing),
+                .instantiated_args = args,
+                .is_opaque = nominal.is_opaque,
+            });
+            const capability_args = boxed_payload_templates.items[@intFromEnum(capability_id)].instantiated_args;
+            args = &.{};
+
+            const proof_id: ?OpaqueAtomicProofId = blk: {
+                if (!nominal.is_opaque) break :blk null;
+                if (!try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, nominal.backing)) break :blk null;
+
+                var owned_args = try allocator.dupe(canonical.CanonicalTypeKey, capability_args);
+                errdefer allocator.free(owned_args);
+                const id: OpaqueAtomicProofId = @enumFromInt(@as(u32, @intCast(opaque_atomic_proofs.items.len)));
+                try opaque_atomic_proofs.append(allocator, .{
+                    .id = id,
+                    .nominal = nominal_key,
+                    .source_ty = source_key,
+                    .instantiated_args = owned_args,
+                    .proof = .checked_artifact_verified,
+                });
+                owned_args = &.{};
+                break :blk id;
+            };
+
+            const exported_id: ExportedNominalRepresentationId = @enumFromInt(@as(u32, @intCast(exported_nominal_representations.items.len)));
+            try exported_nominal_representations.append(allocator, .{
+                .id = exported_id,
+                .nominal = nominal_key,
+                .source_ty = source_key,
+                .box_payload_capability = capability_id,
+                .opaque_atomic_proof = proof_id,
+            });
+        }
+
+        const hosted_representations = try allocator.alloc(HostedRepresentationCapability, hosted_procs.procs.len);
+        errdefer allocator.free(hosted_representations);
+        for (hosted_procs.procs, 0..) |hosted, i| {
+            hosted_representations[i] = .{
+                .id = @enumFromInt(@as(u32, @intCast(i))),
+                .external_symbol_name = hosted.external_symbol_name,
+                .proc = hosted.proc,
+                .template = hosted.template,
+            };
+        }
+
+        const platform_representations = try allocator.alloc(PlatformRepresentationCapability, platform_required_declarations.declarations.len);
+        errdefer allocator.free(platform_representations);
+        for (platform_required_declarations.declarations, 0..) |declaration, i| {
+            platform_representations[i] = .{
+                .id = @enumFromInt(@as(u32, @intCast(i))),
+                .requirement = declaration.id,
+                .platform_name = declaration.platform_name,
+                .declared_source_ty = declaration.declared_source_ty,
+            };
+        }
+
         return .{
-            .exported_def_count = @intCast(module_env.store.sliceDefs(module_env.exports).len),
-            .method_count = @intCast(module.methodIdentEntries().len),
-            .provides_count = @intCast(module_env.provides_entries.items.items.len),
-            .requires_count = @intCast(module_env.requires_types.items.items.len),
+            .boxed_payload_templates = try boxed_payload_templates.toOwnedSlice(allocator),
+            .opaque_atomic_proofs = try opaque_atomic_proofs.toOwnedSlice(allocator),
+            .hosted_representations = hosted_representations,
+            .platform_representations = platform_representations,
+            .exported_nominal_representations = try exported_nominal_representations.toOwnedSlice(allocator),
         };
     }
+
+    pub fn deinit(self: *ModuleInterfaceCapabilities, allocator: Allocator) void {
+        for (self.boxed_payload_templates) |entry| allocator.free(entry.instantiated_args);
+        for (self.opaque_atomic_proofs) |entry| allocator.free(entry.instantiated_args);
+        allocator.free(self.boxed_payload_templates);
+        allocator.free(self.opaque_atomic_proofs);
+        allocator.free(self.hosted_representations);
+        allocator.free(self.platform_representations);
+        allocator.free(self.exported_nominal_representations);
+        self.* = .{};
+    }
+
+    pub fn boxPayloadCapabilityForSource(
+        self: *const ModuleInterfaceCapabilities,
+        source_ty: canonical.CanonicalTypeKey,
+    ) ?BoxPayloadCapabilityEntry {
+        for (self.boxed_payload_templates) |entry| {
+            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
+        }
+        return null;
+    }
+
+    pub fn boxPayloadCapabilityForNominal(
+        self: *const ModuleInterfaceCapabilities,
+        nominal: canonical.NominalTypeKey,
+        instantiated_args: []const canonical.CanonicalTypeKey,
+    ) ?BoxPayloadCapabilityEntry {
+        for (self.boxed_payload_templates) |entry| {
+            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
+                canonicalTypeKeySliceEql(entry.instantiated_args, instantiated_args))
+            {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    pub fn boxPayloadCapability(
+        self: *const ModuleInterfaceCapabilities,
+        id: BoxPayloadCapabilityId,
+    ) BoxPayloadCapabilityEntry {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.boxed_payload_templates.len) {
+            checkedArtifactInvariant("interface capability lookup referenced missing boxed payload capability", .{});
+        }
+        return self.boxed_payload_templates[index];
+    }
+
+    pub fn opaqueAtomicProofForSource(
+        self: *const ModuleInterfaceCapabilities,
+        source_ty: canonical.CanonicalTypeKey,
+    ) ?OpaqueAtomicProofEntry {
+        for (self.opaque_atomic_proofs) |entry| {
+            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
+        }
+        return null;
+    }
+
+    pub fn opaqueAtomicProofForNominal(
+        self: *const ModuleInterfaceCapabilities,
+        nominal: canonical.NominalTypeKey,
+        instantiated_args: []const canonical.CanonicalTypeKey,
+    ) ?OpaqueAtomicProofEntry {
+        for (self.opaque_atomic_proofs) |entry| {
+            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
+                canonicalTypeKeySliceEql(entry.instantiated_args, instantiated_args))
+            {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    pub fn opaqueAtomicProof(
+        self: *const ModuleInterfaceCapabilities,
+        id: OpaqueAtomicProofId,
+    ) OpaqueAtomicProofEntry {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.opaque_atomic_proofs.len) {
+            checkedArtifactInvariant("interface capability lookup referenced missing opaque atomic proof", .{});
+        }
+        return self.opaque_atomic_proofs[index];
+    }
+
+    pub fn nominalRepresentationForSource(
+        self: *const ModuleInterfaceCapabilities,
+        source_ty: canonical.CanonicalTypeKey,
+    ) ?ExportedNominalRepresentation {
+        for (self.exported_nominal_representations) |entry| {
+            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
+        }
+        return null;
+    }
+
+    pub fn nominalRepresentationForNominal(
+        self: *const ModuleInterfaceCapabilities,
+        nominal: canonical.NominalTypeKey,
+        instantiated_args: []const canonical.CanonicalTypeKey,
+    ) ?ExportedNominalRepresentation {
+        for (self.exported_nominal_representations) |entry| {
+            const capability = self.boxPayloadCapability(entry.box_payload_capability);
+            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
+                canonicalTypeKeySliceEql(capability.instantiated_args, instantiated_args))
+            {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    pub fn verifyPublished(self: *const ModuleInterfaceCapabilities) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.boxed_payload_templates, 0..) |entry, i| {
+            std.debug.assert(@intFromEnum(entry.id) == i);
+            if (entry.is_opaque) {
+                for (self.exported_nominal_representations) |representation| {
+                    if (representation.box_payload_capability == entry.id) break;
+                } else {
+                    std.debug.panic("checked artifact invariant violated: opaque boxed-payload capability has no nominal representation row", .{});
+                }
+            }
+        }
+        for (self.opaque_atomic_proofs, 0..) |entry, i| {
+            std.debug.assert(@intFromEnum(entry.id) == i);
+            _ = entry.proof;
+        }
+        for (self.hosted_representations, 0..) |entry, i| {
+            std.debug.assert(@intFromEnum(entry.id) == i);
+        }
+        for (self.platform_representations, 0..) |entry, i| {
+            std.debug.assert(@intFromEnum(entry.id) == i);
+        }
+        for (self.exported_nominal_representations, 0..) |entry, i| {
+            std.debug.assert(@intFromEnum(entry.id) == i);
+            const capability_index: usize = @intFromEnum(entry.box_payload_capability);
+            if (capability_index >= self.boxed_payload_templates.len) {
+                std.debug.panic("checked artifact invariant violated: nominal representation references missing boxed-payload capability", .{});
+            }
+            const capability = self.boxed_payload_templates[capability_index];
+            if (!canonicalNominalTypeKeyEql(entry.nominal, capability.nominal) or
+                !canonicalTypeKeyEql(entry.source_ty, capability.source_ty))
+            {
+                std.debug.panic("checked artifact invariant violated: nominal representation disagrees with boxed-payload capability identity", .{});
+            }
+            if (entry.opaque_atomic_proof) |proof| {
+                const proof_index: usize = @intFromEnum(proof);
+                if (proof_index >= self.opaque_atomic_proofs.len) {
+                    std.debug.panic("checked artifact invariant violated: nominal representation references missing opaque atomic proof", .{});
+                }
+                const proof_entry = self.opaque_atomic_proofs[proof_index];
+                if (!canonicalNominalTypeKeyEql(entry.nominal, proof_entry.nominal) or
+                    !canonicalTypeKeyEql(entry.source_ty, proof_entry.source_ty))
+                {
+                    std.debug.panic("checked artifact invariant violated: nominal representation disagrees with opaque atomic proof identity", .{});
+                }
+            }
+        }
+    }
 };
+
+const NominalCapabilitySeenKey = struct {
+    source_ty: canonical.CanonicalTypeKey,
+    nominal: canonical.NominalTypeKey,
+};
+
+fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
+    return a.module_name == b.module_name and a.type_name == b.type_name;
+}
+
+fn canonicalTypeKeySliceEql(
+    a: []const canonical.CanonicalTypeKey,
+    b: []const canonical.CanonicalTypeKey,
+) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (!canonicalTypeKeyEql(left, right)) return false;
+    }
+    return true;
+}
+
+fn checkedTypeKeyForId(
+    checked_types: *const CheckedTypeStore,
+    id: CheckedTypeId,
+) canonical.CanonicalTypeKey {
+    const index: usize = @intFromEnum(id);
+    if (index >= checked_types.roots.len) {
+        checkedArtifactInvariant("checked type key lookup referenced a missing root", .{});
+    }
+    return checked_types.roots[index].key;
+}
+
+fn checkedTypeKeysForIds(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    ids: []const CheckedTypeId,
+) Allocator.Error![]const canonical.CanonicalTypeKey {
+    if (ids.len == 0) return &.{};
+    const out = try allocator.alloc(canonical.CanonicalTypeKey, ids.len);
+    errdefer allocator.free(out);
+    for (ids, 0..) |id, i| {
+        out[i] = checkedTypeKeyForId(checked_types, id);
+    }
+    return out;
+}
+
+fn checkedTypeHasNoReachableCallableSlots(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeHasNoReachableCallableSlotsInner(checked_types, root, &active);
+}
+
+fn checkedTypeHasNoReachableCallableSlotsInner(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    const index: usize = @intFromEnum(root);
+    if (index >= checked_types.payloads.len) {
+        checkedArtifactInvariant("callable-slot proof referenced a missing checked type", .{});
+    }
+    if (active.contains(root)) return true;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    return switch (checked_types.payloads[index]) {
+        .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
+        .flex,
+        .rigid,
+        .function,
+        => false,
+        .empty_record,
+        .empty_tag_union,
+        => true,
+        .alias => |alias| try checkedTypeHasNoReachableCallableSlotsInner(checked_types, alias.backing, active),
+        .nominal => |nominal| blk: {
+            if (nominal.builtin) |builtin_nominal| {
+                switch (builtin_nominal) {
+                    .str,
+                    .u8,
+                    .i8,
+                    .u16,
+                    .i16,
+                    .u32,
+                    .i32,
+                    .u64,
+                    .i64,
+                    .u128,
+                    .i128,
+                    .f32,
+                    .f64,
+                    .dec,
+                    .bool,
+                    => break :blk true,
+                    .list,
+                    .box,
+                    => {
+                        if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
+                    },
+                }
+            }
+            break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.backing, active);
+        },
+        .record => |record| blk: {
+            if (!try checkedRecordHasNoReachableCallableSlots(checked_types, record.fields, active)) break :blk false;
+            break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, record.ext, active);
+        },
+        .record_unbound => |fields| try checkedRecordHasNoReachableCallableSlots(checked_types, fields, active),
+        .tuple => |items| try checkedTypeSpanHasNoReachableCallableSlots(checked_types, items, active),
+        .tag_union => |tag_union| blk: {
+            if (!try checkedTagsHaveNoReachableCallableSlots(checked_types, tag_union.tags, active)) break :blk false;
+            break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, tag_union.ext, active);
+        },
+    };
+}
+
+fn checkedRecordHasNoReachableCallableSlots(
+    checked_types: *const CheckedTypeStore,
+    fields: []const CheckedRecordField,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, field.ty, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTypeSpanHasNoReachableCallableSlots(
+    checked_types: *const CheckedTypeStore,
+    items: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, item, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTagsHaveNoReachableCallableSlots(
+    checked_types: *const CheckedTypeStore,
+    tags: []const CheckedTag,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (!try checkedTypeSpanHasNoReachableCallableSlots(checked_types, tag.args, active)) return false;
+    }
+    return true;
+}
 
 pub const ComptimeSchemaId = enum(u32) { _ };
 pub const ComptimeValueId = enum(u32) { _ };
@@ -7624,6 +8103,10 @@ pub const ArtifactNestedProcSiteTableRef = struct {
     table: NestedProcSiteTableRef,
 };
 
+pub const ArtifactModuleInterfaceCapabilitiesRef = struct {
+    artifact: CheckedModuleArtifactKey,
+};
+
 pub const ArtifactCallableResultPlanRef = struct {
     artifact: CheckedModuleArtifactKey,
     plan: CallableResultPlanId,
@@ -7683,12 +8166,7 @@ pub const ImportedTemplateClosureView = struct {
     resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
     static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
     method_registry_entries: []const MethodRegistryEntryRef = &.{},
-    interface_capabilities: ModuleInterfaceCapabilities = .{
-        .exported_def_count = 0,
-        .method_count = 0,
-        .provides_count = 0,
-        .requires_count = 0,
-    },
+    interface_capabilities: []const ArtifactModuleInterfaceCapabilitiesRef = &.{},
 };
 
 pub const ExportedProcedureTemplate = struct {
@@ -7838,6 +8316,11 @@ fn buildImportedTemplateClosure(
         });
     errdefer freeConstSlice(allocator, static_dispatch_plans);
 
+    const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
+        .artifact = artifact_key,
+    });
+    errdefer freeConstSlice(allocator, interface_capabilities);
+
     return .{
         .checked_bodies = checked_bodies,
         .checked_type_roots = checked_type_roots,
@@ -7846,6 +8329,7 @@ fn buildImportedTemplateClosure(
         .nested_proc_sites = nested_proc_sites,
         .resolved_value_refs = resolved_value_refs,
         .static_dispatch_plans = static_dispatch_plans,
+        .interface_capabilities = interface_capabilities,
     };
 }
 
@@ -7890,6 +8374,7 @@ fn deinitImportedTemplateClosure(
     freeConstSlice(allocator, closure.resolved_value_refs);
     freeConstSlice(allocator, closure.static_dispatch_plans);
     freeConstSlice(allocator, closure.method_registry_entries);
+    freeConstSlice(allocator, closure.interface_capabilities);
     closure.* = .{};
 }
 
@@ -8036,10 +8521,16 @@ fn buildProcedureBindingClosure(
             });
             errdefer freeConstSlice(allocator, checked_type_schemes);
 
+            const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
+                .artifact = artifact_key,
+            });
+            errdefer freeConstSlice(allocator, interface_capabilities);
+
             break :blk .{
                 .checked_type_roots = checked_type_roots,
                 .checked_type_schemes = checked_type_schemes,
                 .callable_eval_templates = callable_eval_template,
+                .interface_capabilities = interface_capabilities,
             };
         },
     };
@@ -9299,6 +9790,7 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_plans.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
+        self.interface_capabilities.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
         self.platform_required_declarations.deinit(allocator);
         self.hosted_procs.deinit(allocator);
@@ -9519,6 +10011,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
             std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
             std.debug.assert(exported.template_closure.checked_type_schemes.len > 0);
+            std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
             for (exported.template_closure.checked_bodies) |body_ref| {
                 std.debug.assert(std.mem.eql(u8, &body_ref.artifact.bytes, &self.key.bytes));
                 std.debug.assert(@intFromEnum(body_ref.body) < self.checked_bodies.bodies.len);
@@ -9531,6 +10024,9 @@ pub const CheckedModuleArtifact = struct {
                 std.debug.assert(std.mem.eql(u8, &scheme_ref.artifact.bytes, &self.key.bytes));
                 std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
             }
+            for (exported.template_closure.interface_capabilities) |capability_ref| {
+                std.debug.assert(std.mem.eql(u8, &capability_ref.artifact.bytes, &self.key.bytes));
+            }
         }
 
         for (self.exported_procedure_bindings.bindings) |exported| {
@@ -9539,12 +10035,17 @@ pub const CheckedModuleArtifact = struct {
                 .direct_template => {
                     std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
                     std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+                    std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
                 .callable_eval_template => |template_id| {
                     std.debug.assert(@intFromEnum(template_id) < self.callable_eval_templates.templates.len);
                     std.debug.assert(exported.template_closure.callable_eval_templates.len > 0);
                     std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+                    std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
+            }
+            for (exported.template_closure.interface_capabilities) |capability_ref| {
+                std.debug.assert(std.mem.eql(u8, &capability_ref.artifact.bytes, &self.key.bytes));
             }
         }
 
@@ -9631,6 +10132,7 @@ pub const CheckedModuleArtifact = struct {
         self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
         self.callable_set_descriptors.verifyPublished();
         self.erased_fn_abis.verifyPublished();
+        self.interface_capabilities.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
             &self.callable_set_descriptors,
@@ -10228,6 +10730,16 @@ pub fn publishFromTypedModule(
     );
     errdefer exported_const_templates.deinit(allocator);
 
+    var interface_capabilities = try ModuleInterfaceCapabilities.fromModule(
+        allocator,
+        module,
+        &checked_types,
+        &hosted_procs,
+        &platform_required_declarations,
+        &canonical_names,
+    );
+    errdefer interface_capabilities.deinit(allocator);
+
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
         .canonical_names = canonical_names,
@@ -10260,7 +10772,7 @@ pub fn publishFromTypedModule(
         .hosted_procs = hosted_procs,
         .platform_required_declarations = platform_required_declarations,
         .platform_required_bindings = platform_required_bindings,
-        .interface_capabilities = ModuleInterfaceCapabilities.fromModule(module),
+        .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
         .promoted_procedures = .{},
@@ -10305,12 +10817,7 @@ test "artifact views are read-only projections" {
         .hosted_procs = .{},
         .platform_required_declarations = .{},
         .platform_required_bindings = .{},
-        .interface_capabilities = .{
-            .exported_def_count = 0,
-            .method_count = 0,
-            .provides_count = 0,
-            .requires_count = 0,
-        },
+        .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
         .promoted_procedures = .{},
