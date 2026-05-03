@@ -475,6 +475,7 @@ pub fn run(
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
             .type_importer = &type_importer,
+            .concrete_source_types = &program.concrete_source_types,
             .representation_store = &program.solve_sessions.items[session_index].representation_store,
             .value_store = &program.value_stores.items[i],
             .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(allocator),
@@ -518,6 +519,7 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
     if (@import("builtin").mode != .Debug) return;
     for (program.value_stores.items) |value_store| {
         for (value_store.values.items) |value| {
+            verifyConcreteSourcePayload(program, value.source_ty, value.source_ty_payload, "lambda-solved value");
             if (value.solved_class == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
             }
@@ -527,6 +529,30 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
                 lambdaInvariant("lambda-solved sealed program contains an unresolved call-site dispatch");
             }
         }
+    }
+    for (program.solve_sessions.items) |session| {
+        for (session.representation_store.box_boundaries) |boundary| {
+            verifyConcreteSourcePayload(program, boundary.box_ty, boundary.box_ty_payload, "lambda-solved BoxBoundary box type");
+            verifyConcreteSourcePayload(program, boundary.payload_source_ty, boundary.payload_source_ty_payload, "lambda-solved BoxBoundary payload source type");
+            verifyConcreteSourcePayload(program, boundary.payload_boundary_ty, boundary.payload_boundary_ty_payload, "lambda-solved BoxBoundary payload boundary type");
+        }
+    }
+}
+
+fn verifyConcreteSourcePayload(
+    program: *const Program,
+    key: canonical.CanonicalTypeKey,
+    payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
+    comptime context: []const u8,
+) void {
+    if (isEmptyCanonicalTypeKey(key)) {
+        if (payload != null) lambdaInvariant(context ++ " had a concrete source type payload for an empty key");
+        return;
+    }
+    const ref = payload orelse lambdaInvariant(context ++ " had a source type key without a concrete source type payload");
+    const payload_key = program.concrete_source_types.key(ref);
+    if (!repr.canonicalTypeKeyEql(payload_key, key)) {
+        lambdaInvariant(context ++ " concrete source type payload key disagrees with source type key");
     }
 }
 
@@ -3322,6 +3348,7 @@ const BodySolver = struct {
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
     type_importer: *TypeImporter,
+    concrete_source_types: *const ConcreteSourceType.Store,
     representation_store: *repr.RepresentationStore,
     value_store: *repr.ValueInfoStore,
     env: std.AutoHashMap(Ast.Symbol, repr.BindingInfoId),
@@ -4227,8 +4254,11 @@ const BodySolver = struct {
                 const payload_root = self.valueRoot(payload_value);
                 const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
                     .box_ty = result_source_ty,
+                    .box_ty_payload = self.sourcePayloadForKey(result_source_ty),
                     .payload_source_ty = payload_info.source_ty,
+                    .payload_source_ty_payload = payload_info.source_ty_payload,
                     .payload_boundary_ty = payload_info.source_ty,
+                    .payload_boundary_ty_payload = payload_info.source_ty_payload,
                     .direction = .box,
                     .source_root = payload_root,
                     .boundary_root = result_root,
@@ -4251,11 +4281,15 @@ const BodySolver = struct {
                 const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
                 if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.unbox reached non-unary low-level expression");
                 const boxed_value = arg_values[0];
-                const boxed_source_ty = self.value_store.values.items[@intFromEnum(boxed_value)].source_ty;
+                const boxed_info = self.value_store.values.items[@intFromEnum(boxed_value)];
+                const boxed_source_ty = boxed_info.source_ty;
                 const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
                     .box_ty = boxed_source_ty,
+                    .box_ty_payload = boxed_info.source_ty_payload,
                     .payload_source_ty = result_source_ty,
+                    .payload_source_ty_payload = self.sourcePayloadForKey(result_source_ty),
                     .payload_boundary_ty = result_source_ty,
+                    .payload_boundary_ty_payload = self.sourcePayloadForKey(result_source_ty),
                     .direction = .unbox,
                     .source_root = self.valueRoot(boxed_value),
                     .boundary_root = self.valueRoot(result_value),
@@ -4666,6 +4700,7 @@ const BodySolver = struct {
         const value = try self.value_store.addValue(.{
             .logical_ty = ty,
             .source_ty = source_ty,
+            .source_ty_payload = self.sourcePayloadForKey(source_ty),
             .root = root,
         });
         try self.representation_store.publishRootKind(root, .{ .local_value = .{
@@ -4673,6 +4708,16 @@ const BodySolver = struct {
             .value = value,
         } });
         return value;
+    }
+
+    fn sourcePayloadForKey(
+        self: *const BodySolver,
+        source_ty: canonical.CanonicalTypeKey,
+    ) ?ConcreteSourceType.ConcreteSourceTypeRef {
+        if (isEmptyCanonicalTypeKey(source_ty)) return null;
+        return self.concrete_source_types.refForKey(source_ty) orelse {
+            lambdaInvariant("lambda-solved value source type key has no concrete source type payload");
+        };
     }
 
     fn exprValue(self: *const BodySolver, expr: Ast.ExprId) repr.ValueInfoId {
@@ -4683,6 +4728,10 @@ const BodySolver = struct {
         return self.value_store.values.items[@intFromEnum(value)].root;
     }
 };
+
+fn isEmptyCanonicalTypeKey(key: canonical.CanonicalTypeKey) bool {
+    return std.mem.allEqual(u8, key.bytes[0..], 0);
+}
 
 fn lambdaInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});

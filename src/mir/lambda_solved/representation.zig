@@ -3,6 +3,7 @@
 const std = @import("std");
 const check = @import("check");
 const symbol_mod = @import("symbol");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 const row = @import("../mono_row/mod.zig");
 const debug = @import("../debug_verify.zig");
 const type_mod = @import("type.zig");
@@ -516,8 +517,11 @@ fn deinitBoxPayloadRepresentationPlan(
 
 pub const BoxBoundary = struct {
     box_ty: canonical.CanonicalTypeKey,
+    box_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     payload_source_ty: canonical.CanonicalTypeKey,
+    payload_source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     payload_boundary_ty: canonical.CanonicalTypeKey,
+    payload_boundary_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     direction: BoxBoundaryDirection,
     source_root: RepRootId,
     boundary_root: RepRootId,
@@ -1031,6 +1035,7 @@ pub const TagPayloadValueInfo = struct {
 pub const ValueInfo = struct {
     logical_ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
     callable: ?CallableValueInfo = null,

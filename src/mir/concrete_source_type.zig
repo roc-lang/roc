@@ -149,6 +149,10 @@ pub const Store = struct {
         return self.root(ref).key;
     }
 
+    pub fn refForKey(self: *const Store, key: canonical.CanonicalTypeKey) ?ConcreteSourceTypeRef {
+        return self.by_key.get(key.bytes[0..]);
+    }
+
     fn registerRoot(
         self: *Store,
         root: ConcreteSourceTypeRoot,
