@@ -4711,6 +4711,59 @@ is already `result_ty`, or the result of `bridge_to_result`. Branch-local
 layouts and branch-local return types must not escape the `SourceMatch` node.
 `no_return` branches do not constrain returning branch result representation.
 
+IR lowering of source `match` is mechanical lowering of `PatternDecisionPlan`.
+The IR builder must consume `PatternDecisionPlan.root`, `DecisionNode`,
+`DecisionEdge`, `DecisionLeaf`, `PatternPathValuePlan`,
+`MaterializedPatternPathValue`, and `PatternBinding` records directly. It must
+not inspect `Branch.pat`, recurse over executable pattern syntax, infer a switch
+subject from branch patterns, rebuild tag or literal tests, or special-case the
+single-scrutinee case. Executable MIR may keep lowered `Pat` values only for
+debug printing, verifier diagnostics, or pre-IR structural tests; those pattern
+syntax nodes are not semantic input to IR lowering.
+
+IR emission must evaluate every `SourceMatch.scrutinees[i].expr` once in source
+order, bind the corresponding `MatchScrutinee.tmp`, and then emit the decision
+tree from `PatternDecisionPlan.root`. A `DecisionTestNode` first materializes
+its named `PatternPathValuePlan` in the current control-flow block if that path
+value has not already been materialized on that path. It then emits the concrete
+test named by each `DecisionEdge.test`:
+
+- tag and byte-union tests read the finalized union id for the already
+  materialized path value
+- bool and integer tests switch on the already materialized scalar value
+- decimal and float literal tests call the checked, explicit equality operation
+  selected for that literal kind before the branch test
+- string literal tests compare the already interned `ProgramLiteralId` payload
+  through the explicit string-equality low-level operation selected before IR
+- list-length tests read the list length once for the named list path/probe and
+  branch on the exact or at-least relation named by the plan
+- guard tests lower the published guard expression in the guard's lexical
+  environment after all structural path values it can reference have been
+  materialized
+
+When a decision leaf is reached, IR lowering must materialize exactly the
+`SourceMatchBranch.materialized_paths` required by that branch, bind every
+`PatternBinding.temp` from its source path value, lower the branch body, bridge
+the branch result if `bridge_to_result` is present, and assign the shared match
+result variable exactly once. A leaf that is reachable from several decision
+paths must receive all needed materialized path values through explicit
+control-flow-local temporaries or an explicit join block; it must not recompute
+path extractions from the original scrutinees.
+
+The temporary cache used while lowering one decision path is control-flow-local.
+It may be threaded through recursive IR emission as implementation state, but it
+is not a side channel and is not observable after the `SourceMatch` has been
+lowered. It stores only already materialized `PatternPathValuePlanId -> IR Var`
+bindings for the current path. It must not store source pattern ids, source
+names, row labels, branch indexes as semantic targets, or any recovered type
+information.
+
+The old one-scrutinee ordered-cascade lowering is forbidden in the final
+architecture. Any helper that decides whether a pattern "needs a discriminant",
+whether patterns can share a tag subject, or what switch value a source pattern
+has is a temporary deletion target. Final IR lowering reads only the decision
+plan and finalized row/literal ids produced earlier.
+
 The old Rust compiler's generated mono tests are useful regression inspiration
 for this area, especially nested patterns, guards that appear more than once in
 the compiled decision tree, matches over multiple values, record and tuple
