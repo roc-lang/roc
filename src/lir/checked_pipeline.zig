@@ -460,17 +460,16 @@ const ExecutablePayloadWithKey = struct {
     key: canonical.CanonicalExecValueTypeKey,
 };
 
-const ExecutablePayloadValueKey = struct {
-    value_store: repr.ValueInfoStoreId,
-    value: repr.ValueInfoId,
+const ExecutablePayloadSessionKey = struct {
+    solve_session: repr.RepresentationSolveSessionId,
+    payload: repr.SessionExecutableTypePayloadId,
 };
 
 const ExecutableTypePayloadBuilder = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     context: ConstValueContext,
-    active_types: std.AutoHashMap(mir.LambdaSolved.Type.TypeVarId, checked_artifact.ExecutableTypePayloadId),
-    active_values: std.AutoHashMap(ExecutablePayloadValueKey, checked_artifact.ExecutableTypePayloadId),
+    active_session_payloads: std.AutoHashMap(ExecutablePayloadSessionKey, checked_artifact.ExecutableTypePayloadId),
 
     fn init(
         allocator: Allocator,
@@ -481,14 +480,12 @@ const ExecutableTypePayloadBuilder = struct {
             .allocator = allocator,
             .artifact = artifact,
             .context = context,
-            .active_types = std.AutoHashMap(mir.LambdaSolved.Type.TypeVarId, checked_artifact.ExecutableTypePayloadId).init(allocator),
-            .active_values = std.AutoHashMap(ExecutablePayloadValueKey, checked_artifact.ExecutableTypePayloadId).init(allocator),
+            .active_session_payloads = std.AutoHashMap(ExecutablePayloadSessionKey, checked_artifact.ExecutableTypePayloadId).init(allocator),
         };
     }
 
     fn deinit(self: *ExecutableTypePayloadBuilder) void {
-        self.active_values.deinit();
-        self.active_types.deinit();
+        self.active_session_payloads.deinit();
     }
 
     fn artifactRef(self: *const ExecutableTypePayloadBuilder) canonical.ArtifactRef {
@@ -530,112 +527,57 @@ const ExecutableTypePayloadBuilder = struct {
         representation_store: *const repr.RepresentationStore,
         value: repr.ValueInfoId,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        const key = try repr.execValueTypeKeyForValue(
-            self.allocator,
-            self.context.canonical_names,
-            self.context.types,
-            representation_store,
-            value_store,
-            value,
-        );
-        const active_key = ExecutablePayloadValueKey{
-            .value_store = value_store_id,
-            .value = value,
-        };
-        if (self.active_values.get(active_key)) |active| {
-            return .{
-                .ref = self.refFor(active),
-                .key = key,
-            };
-        }
-        if (self.artifact.executable_type_payloads.refForKey(self.artifactRef(), key)) |existing| {
-            return .{
-                .ref = existing,
-                .key = key,
-            };
-        }
-
+        _ = value_store_id;
         const info = value_store.values.items[@intFromEnum(value)];
-        if (info.callable == null and info.boxed == null and info.aggregate == null) {
-            if (info.value_alias_source) |source| {
-                const source_payload = try self.payloadForValueInStore(value_store_id, value_store, representation_store, source);
-                if (!repr.canonicalExecValueTypeKeyEql(source_payload.key, key)) {
-                    checkedPipelineInvariant("artifact executable payload alias source key disagrees with alias value key");
-                }
-                return source_payload;
-            }
-            if (info.join_info) |join_id| {
-                const join_payload = try self.payloadForJoinInStore(value_store_id, value_store, representation_store, value, join_id);
-                if (!repr.canonicalExecValueTypeKeyEql(join_payload.key, key)) {
-                    checkedPipelineInvariant("artifact executable payload join input key disagrees with join value key");
-                }
-                return join_payload;
-            }
-        }
-
-        const id = try self.artifact.executable_type_payloads.reserve(self.allocator, key);
-        try self.active_values.put(active_key, id);
-        errdefer _ = self.active_values.remove(active_key);
-
-        const payload = if (info.callable) |callable|
-            try self.callablePayload(value_store_id, value_store, representation_store, callable)
-        else if (info.boxed) |boxed|
-            try self.boxedPayload(value_store_id, value_store, representation_store, info.logical_ty, boxed)
-        else if (info.aggregate) |aggregate|
-            try self.aggregatePayload(value_store_id, value_store, representation_store, info.logical_ty, aggregate)
-        else
-            try self.typePayload(info.logical_ty);
-
-        self.artifact.executable_type_payloads.fill(id, payload);
-        _ = self.active_values.remove(active_key);
-        return .{
-            .ref = self.refFor(id),
-            .key = key,
+        const endpoint = info.exec_ty orelse {
+            checkedPipelineInvariant("artifact executable payload value has no published session endpoint");
         };
-    }
-
-    fn payloadForJoinInStore(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        value: repr.ValueInfoId,
-        join_id: repr.JoinInfoId,
-    ) Allocator.Error!ExecutablePayloadWithKey {
-        const index = @intFromEnum(join_id);
-        if (index >= value_store.joins.items.len) {
-            checkedPipelineInvariant("artifact executable payload join id is out of range");
-        }
-        const join = value_store.joins.items[index];
-        if (join.result != value) {
-            checkedPipelineInvariant("artifact executable payload join is attached to a different result value");
-        }
-        const inputs = value_store.sliceJoinInputSpan(join.inputs);
-        if (inputs.len == 0) {
-            checkedPipelineInvariant("artifact executable payload join has no returning inputs");
-        }
-        const first = try self.payloadForValueInStore(value_store_id, value_store, representation_store, inputs[0].value);
-        for (inputs[1..]) |input| {
-            const payload = try self.payloadForValueInStore(value_store_id, value_store, representation_store, input.value);
-            if (!repr.canonicalExecValueTypeKeyEql(first.key, payload.key)) {
-                checkedPipelineInvariant("artifact executable payload join inputs have different executable representations");
-            }
-        }
-        return first;
-    }
-
-    fn payloadForType(
-        self: *ExecutableTypePayloadBuilder,
-        ty: mir.LambdaSolved.Type.TypeVarId,
-    ) Allocator.Error!ExecutablePayloadWithKey {
-        const key = try repr.execValueTypeKey(
-            self.allocator,
-            self.context.canonical_names,
-            self.context.types,
-            ty,
+        return try self.payloadForSessionEndpoint(
+            self.solveSessionIdForRepresentationStore(representation_store),
+            endpoint,
         );
-        const root = self.context.types.unlinkConst(ty);
-        if (self.active_types.get(root)) |active| {
+    }
+
+    fn payloadForSessionEndpoint(
+        self: *ExecutableTypePayloadBuilder,
+        solve_session: repr.RepresentationSolveSessionId,
+        endpoint: repr.SessionExecutableTypeEndpoint,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const store = self.sessionPayloadStore(solve_session);
+        const actual_key = store.keyFor(endpoint.ty.payload);
+        if (!repr.canonicalExecValueTypeKeyEql(actual_key, endpoint.key)) {
+            checkedPipelineInvariant("artifact executable payload session endpoint key differs from payload store key");
+        }
+        return try self.payloadForSessionPayload(solve_session, endpoint.ty.payload, endpoint.key);
+    }
+
+    fn payloadForCurrentSessionKey(
+        self: *ExecutableTypePayloadBuilder,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const solve_session = self.solveSessionIdForRepresentationStore(self.context.representation_store);
+        const ref = self.context.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+            checkedPipelineInvariant("artifact executable payload key has no current-session payload ref");
+        };
+        return try self.payloadForSessionPayload(solve_session, ref.payload, key);
+    }
+
+    fn payloadForSessionPayload(
+        self: *ExecutableTypePayloadBuilder,
+        solve_session: repr.RepresentationSolveSessionId,
+        payload_id: repr.SessionExecutableTypePayloadId,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const store = self.sessionPayloadStore(solve_session);
+        const actual_key = store.keyFor(payload_id);
+        if (!repr.canonicalExecValueTypeKeyEql(actual_key, key)) {
+            checkedPipelineInvariant("artifact executable payload session payload key differs from requested key");
+        }
+        const active_key = ExecutablePayloadSessionKey{
+            .solve_session = solve_session,
+            .payload = payload_id,
+        };
+        if (self.active_session_payloads.get(active_key)) |active| {
             return .{
                 .ref = self.refFor(active),
                 .key = key,
@@ -649,31 +591,34 @@ const ExecutableTypePayloadBuilder = struct {
         }
 
         const id = try self.artifact.executable_type_payloads.reserve(self.allocator, key);
-        try self.active_types.put(root, id);
-        errdefer _ = self.active_types.remove(root);
+        try self.active_session_payloads.put(active_key, id);
+        errdefer _ = self.active_session_payloads.remove(active_key);
 
-        const payload = try self.typePayload(root);
+        const payload = try self.sessionPayload(solve_session, payload_id);
         self.artifact.executable_type_payloads.fill(id, payload);
-        _ = self.active_types.remove(root);
+        _ = self.active_session_payloads.remove(active_key);
         return .{
             .ref = self.refFor(id),
             .key = key,
         };
     }
 
-    fn typePayload(
+    fn sessionPayload(
         self: *ExecutableTypePayloadBuilder,
-        ty: mir.LambdaSolved.Type.TypeVarId,
+        solve_session: repr.RepresentationSolveSessionId,
+        payload_id: repr.SessionExecutableTypePayloadId,
     ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        const root = self.context.types.unlinkConst(ty);
-        return switch (self.context.types.getNode(root)) {
-            .link => unreachable,
-            .unbd,
-            .for_a,
-            .flex_for_a,
-            => checkedPipelineInvariant("executable type payload reached unresolved lambda-solved type"),
+        const payload = self.sessionPayloadStore(solve_session).get(payload_id);
+        return switch (payload) {
+            .pending => checkedPipelineInvariant("artifact executable payload reached pending session payload"),
+            .primitive => |prim| .{ .primitive = prim },
+            .record => |record| .{ .record = try self.sessionRecordPayload(solve_session, record) },
+            .tuple => |items| .{ .tuple = try self.sessionTuplePayload(solve_session, items) },
+            .tag_union => |tag_union| .{ .tag_union = try self.sessionTagUnionPayload(solve_session, tag_union) },
+            .list => |child| .{ .list = try self.sessionChildPayload(solve_session, child) },
+            .box => |child| .{ .box = try self.sessionChildPayload(solve_session, child) },
             .nominal => |nominal| blk: {
-                const backing = try self.payloadForType(nominal.backing);
+                const backing = try self.payloadForSessionPayload(solve_session, nominal.backing.payload, nominal.backing_key);
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
@@ -681,171 +626,34 @@ const ExecutableTypePayloadBuilder = struct {
                     .backing_key = backing.key,
                 } };
             },
-            .content => |content| try self.contentPayload(content),
+            .callable_set => |callable_set| .{ .callable_set = try self.sessionCallableSetPayload(solve_session, callable_set) },
+            .erased_fn => |erased| .{ .erased_fn = try self.sessionErasedFnPayload(solve_session, erased) },
+            .recursive_ref => |ref| .{ .recursive_ref = self.active_session_payloads.get(.{
+                .solve_session = solve_session,
+                .payload = ref,
+            }) orelse checkedPipelineInvariant("artifact executable payload recursive ref has no active artifact payload") },
         };
     }
 
-    fn contentPayload(
+    fn sessionChildPayload(
         self: *ExecutableTypePayloadBuilder,
-        content: mir.LambdaSolved.Type.Content,
-    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        return switch (content) {
-            .primitive => |prim| .{ .primitive = executablePrimitive(prim) },
-            .list => |elem| .{ .list = try self.childPayloadForType(elem) },
-            .box => |elem| .{ .box = try self.childPayloadForType(elem) },
-            .tuple => |span| .{ .tuple = try self.tuplePayloadForTypeSpan(span) },
-            .record => |record| .{ .record = try self.recordPayloadForTypeSpan(record.fields) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagUnionPayloadForTypeSpan(tag_union.tags) },
-            .func => checkedPipelineInvariant("executable type payload requires callable value metadata for function type"),
-        };
-    }
-
-    fn childPayloadForType(
-        self: *ExecutableTypePayloadBuilder,
-        ty: mir.LambdaSolved.Type.TypeVarId,
+        solve_session: repr.RepresentationSolveSessionId,
+        child: repr.SessionExecutableTypePayloadChild,
     ) Allocator.Error!checked_artifact.ExecutableTypePayloadChild {
-        const child = try self.payloadForType(ty);
-        return .{ .ty = child.ref, .key = child.key };
+        const payload = try self.payloadForSessionPayload(solve_session, child.ty.payload, child.key);
+        return .{ .ty = payload.ref, .key = payload.key };
     }
 
-    fn tuplePayloadForTypeSpan(
+    fn sessionRecordPayload(
         self: *ExecutableTypePayloadBuilder,
-        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.TypeVarId),
-    ) Allocator.Error![]const checked_artifact.ExecutableTupleElemPayload {
-        const items = self.context.types.sliceTypeVarSpan(span);
-        if (items.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, items.len);
-        errdefer self.allocator.free(out);
-        for (items, 0..) |item, i| {
-            const child = try self.payloadForType(item);
-            out[i] = .{
-                .index = @intCast(i),
-                .ty = child.ref,
-                .key = child.key,
-            };
-        }
-        return out;
-    }
-
-    fn recordPayloadForTypeSpan(
-        self: *ExecutableTypePayloadBuilder,
-        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Field),
-    ) Allocator.Error![]const checked_artifact.ExecutableRecordFieldPayload {
-        const fields = self.context.types.sliceFields(span);
-        if (fields.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableRecordFieldPayload, fields.len);
-        errdefer self.allocator.free(out);
-        for (fields, 0..) |field, i| {
-            const child = try self.payloadForType(field.ty);
-            out[i] = .{
-                .field = field.name,
-                .ty = child.ref,
-                .key = child.key,
-            };
-        }
-        return out;
-    }
-
-    fn tagUnionPayloadForTypeSpan(
-        self: *ExecutableTypePayloadBuilder,
-        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Tag),
-    ) Allocator.Error![]const checked_artifact.ExecutableTagVariantPayload {
-        const tags = self.context.types.sliceTags(span);
-        if (tags.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, tags.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
-        errdefer {
-            for (out) |variant| self.allocator.free(variant.payloads);
-            self.allocator.free(out);
-        }
-        for (tags, 0..) |tag, i| {
-            out[i] = .{
-                .tag = tag.name,
-                .payloads = try self.tagPayloadsForTypeSpan(tag.args),
-            };
-        }
-        return out;
-    }
-
-    fn tagPayloadsForTypeSpan(
-        self: *ExecutableTypePayloadBuilder,
-        span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.TypeVarId),
-    ) Allocator.Error![]const checked_artifact.ExecutableTagPayload {
-        const args = self.context.types.sliceTypeVarSpan(span);
-        if (args.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTagPayload, args.len);
-        errdefer self.allocator.free(out);
-        for (args, 0..) |arg, i| {
-            const child = try self.payloadForType(arg);
-            out[i] = .{
-                .index = @intCast(i),
-                .ty = child.ref,
-                .key = child.key,
-            };
-        }
-        return out;
-    }
-
-    fn callablePayload(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        callable: repr.CallableValueInfo,
-    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        _ = value_store_id;
-        _ = value_store;
-        return switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| .{ .callable_set = try self.callableSetPayload(key, representation_store) },
-            .already_erased => |erased| .{ .erased_fn = try self.erasedFnPayloadForAlreadyErased(erased) },
-            .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(erase) },
-            .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
-        };
-    }
-
-    fn aggregatePayload(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-        aggregate: repr.AggregateValueInfo,
-    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        return switch (aggregate) {
-            .record => |record| .{ .record = try self.recordPayloadForValue(value_store_id, value_store, representation_store, record) },
-            .tuple => |tuple| .{ .tuple = try self.tuplePayloadForValue(value_store_id, value_store, representation_store, tuple) },
-            .tag => |tag| .{ .tag_union = try self.tagUnionPayloadForValue(value_store_id, value_store, representation_store, logical_ty, tag) },
-            .list => |list| .{ .list = try self.listPayloadForValue(value_store_id, value_store, representation_store, logical_ty, list) },
-        };
-    }
-
-    fn boxedPayload(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-        boxed: repr.BoxedValueInfo,
-    ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        const child = if (boxed.payload_value) |payload_value|
-            try self.payloadForValueInStore(value_store_id, value_store, representation_store, payload_value)
-        else
-            try self.childPayloadForType(try self.logicalBoxPayloadType(logical_ty));
-        return .{ .box = .{ .ty = child.ref, .key = child.key } };
-    }
-
-    fn recordPayloadForValue(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        record: anytype,
+        solve_session: repr.RepresentationSolveSessionId,
+        record: repr.SessionExecutableRecordPayload,
     ) Allocator.Error![]const checked_artifact.ExecutableRecordFieldPayload {
         if (record.fields.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.ExecutableRecordFieldPayload, record.fields.len);
         errdefer self.allocator.free(out);
         for (record.fields, 0..) |field, i| {
-            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, field.value);
+            const child = try self.payloadForSessionPayload(solve_session, field.ty.payload, field.key);
             out[i] = .{
                 .field = self.context.row_shapes.recordField(field.field).label,
                 .ty = child.ref,
@@ -855,22 +663,18 @@ const ExecutableTypePayloadBuilder = struct {
         return out;
     }
 
-    fn tuplePayloadForValue(
+    fn sessionTuplePayload(
         self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        tuple: []const repr.ElemValueInfo,
+        solve_session: repr.RepresentationSolveSessionId,
+        items: []const repr.SessionExecutableTupleElemPayload,
     ) Allocator.Error![]const checked_artifact.ExecutableTupleElemPayload {
-        if (tuple.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, tuple.len);
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, items.len);
         errdefer self.allocator.free(out);
-        for (tuple) |elem| {
-            const index: usize = @intCast(elem.index);
-            if (index >= tuple.len) checkedPipelineInvariant("executable payload tuple element index exceeded tuple arity");
-            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, elem.value);
-            out[index] = .{
-                .index = elem.index,
+        for (items, 0..) |item, i| {
+            const child = try self.payloadForSessionPayload(solve_session, item.ty.payload, item.key);
+            out[i] = .{
+                .index = item.index,
                 .ty = child.ref,
                 .key = child.key,
             };
@@ -878,72 +682,39 @@ const ExecutableTypePayloadBuilder = struct {
         return out;
     }
 
-    fn tagUnionPayloadForValue(
+    fn sessionTagUnionPayload(
         self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-        tag_value: anytype,
+        solve_session: repr.RepresentationSolveSessionId,
+        tag_union: repr.SessionExecutableTagUnionPayload,
     ) Allocator.Error![]const checked_artifact.ExecutableTagVariantPayload {
-        const root = self.context.types.unlinkConst(logical_ty);
-        const logical_tags = switch (self.context.types.getNode(root)) {
-            .nominal => |nominal| self.context.types.sliceTags(switch (self.context.types.getNode(self.context.types.unlinkConst(nominal.backing))) {
-                .content => |content| switch (content) {
-                    .tag_union => |tag_union| tag_union.tags,
-                    else => checkedPipelineInvariant("tag aggregate executable payload nominal backing is not a tag union"),
-                },
-                else => checkedPipelineInvariant("tag aggregate executable payload nominal backing is unresolved"),
-            }),
-            .content => |content| switch (content) {
-                .tag_union => |tag_union| self.context.types.sliceTags(tag_union.tags),
-                else => checkedPipelineInvariant("tag aggregate executable payload logical type is not a tag union"),
-            },
-            else => checkedPipelineInvariant("tag aggregate executable payload logical type is unresolved"),
-        };
-        const shape_tags = self.context.row_shapes.tagUnionTags(tag_value.union_shape);
-        if (shape_tags.len != logical_tags.len) {
-            checkedPipelineInvariant("tag aggregate executable payload shape/logical tag count mismatch");
-        }
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, shape_tags.len);
+        if (tag_union.variants.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, tag_union.variants.len);
         for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
         errdefer {
             for (out) |variant| self.allocator.free(variant.payloads);
             self.allocator.free(out);
         }
-        for (shape_tags) |shape_tag| {
-            const tag_info = self.context.row_shapes.tag(shape_tag);
-            const index: usize = @intCast(tag_info.logical_index);
-            if (index >= out.len) checkedPipelineInvariant("tag aggregate executable payload logical index exceeded arity");
-            out[index] = .{
-                .tag = tag_info.label,
-                .payloads = if (shape_tag == tag_value.tag)
-                    try self.selectedTagPayloadsForValue(value_store_id, value_store, representation_store, tag_value)
-                else
-                    try self.tagPayloadsForTypeSpan(logical_tags[index].args),
+        for (tag_union.variants, 0..) |variant, i| {
+            out[i] = .{
+                .tag = self.context.row_shapes.tag(variant.tag).label,
+                .payloads = try self.sessionTagPayloads(solve_session, variant.payloads),
             };
         }
         return out;
     }
 
-    fn selectedTagPayloadsForValue(
+    fn sessionTagPayloads(
         self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        tag_value: anytype,
+        solve_session: repr.RepresentationSolveSessionId,
+        payloads: []const repr.SessionExecutableTagPayload,
     ) Allocator.Error![]const checked_artifact.ExecutableTagPayload {
-        const shape_payloads = self.context.row_shapes.tagPayloads(tag_value.tag);
-        if (shape_payloads.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.ExecutableTagPayload, shape_payloads.len);
+        if (payloads.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ExecutableTagPayload, payloads.len);
         errdefer self.allocator.free(out);
-        for (tag_value.payloads) |payload| {
-            const info = self.context.row_shapes.tagPayload(payload.payload);
-            const index: usize = @intCast(info.logical_index);
-            if (index >= out.len) checkedPipelineInvariant("selected tag payload executable payload index exceeded arity");
-            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, payload.value);
-            out[index] = .{
-                .index = @intCast(index),
+        for (payloads, 0..) |payload, i| {
+            const child = try self.payloadForSessionPayload(solve_session, payload.ty.payload, payload.key);
+            out[i] = .{
+                .index = self.context.row_shapes.tagPayload(payload.payload).logical_index,
                 .ty = child.ref,
                 .key = child.key,
             };
@@ -951,107 +722,45 @@ const ExecutableTypePayloadBuilder = struct {
         return out;
     }
 
-    fn listPayloadForValue(
+    fn sessionCallableSetPayload(
         self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-        list: anytype,
-    ) Allocator.Error!checked_artifact.ExecutableTypePayloadChild {
-        if (list.elems.len == 0) {
-            const elem_ty = try self.logicalListElemType(logical_ty);
-            return try self.childPayloadForType(elem_ty);
-        }
-        const first = try self.payloadForValueInStore(value_store_id, value_store, representation_store, list.elems[0]);
-        for (list.elems[1..]) |elem| {
-            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, elem);
-            if (!repr.canonicalExecValueTypeKeyEql(first.key, child.key)) {
-                checkedPipelineInvariant("list executable payload elements have different executable representations");
+        solve_session: repr.RepresentationSolveSessionId,
+        callable_set: repr.SessionExecutableCallableSetPayload,
+    ) Allocator.Error!checked_artifact.ExecutableCallableSetPayload {
+        if (callable_set.members.len == 0) return .{
+            .key = callable_set.key,
+            .members = &.{},
+        };
+        const members = try self.allocator.alloc(checked_artifact.ExecutableCallableSetMemberPayload, callable_set.members.len);
+        errdefer self.allocator.free(members);
+        for (callable_set.members, 0..) |member, i| {
+            members[i] = .{ .member = member.member };
+            if (member.payload_ty) |payload_ty| {
+                const payload_key = member.payload_ty_key orelse {
+                    checkedPipelineInvariant("artifact executable callable-set member payload ref has no key");
+                };
+                const payload = try self.payloadForSessionPayload(solve_session, payload_ty.payload, payload_key);
+                members[i].payload_ty = payload.ref;
+                members[i].payload_ty_key = payload.key;
             }
         }
-        return .{ .ty = first.ref, .key = first.key };
-    }
-
-    fn logicalListElemType(
-        self: *ExecutableTypePayloadBuilder,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-    ) Allocator.Error!mir.LambdaSolved.Type.TypeVarId {
-        const root = self.context.types.unlinkConst(logical_ty);
-        return switch (self.context.types.getNode(root)) {
-            .nominal => |nominal| try self.logicalListElemType(nominal.backing),
-            .content => |content| switch (content) {
-                .list => |elem| elem,
-                else => checkedPipelineInvariant("list executable payload metadata attached to non-list type"),
-            },
-            else => checkedPipelineInvariant("list executable payload metadata attached to unresolved type"),
-        };
-    }
-
-    fn logicalBoxPayloadType(
-        self: *ExecutableTypePayloadBuilder,
-        logical_ty: mir.LambdaSolved.Type.TypeVarId,
-    ) Allocator.Error!mir.LambdaSolved.Type.TypeVarId {
-        const root = self.context.types.unlinkConst(logical_ty);
-        return switch (self.context.types.getNode(root)) {
-            .nominal => |nominal| try self.logicalBoxPayloadType(nominal.backing),
-            .content => |content| switch (content) {
-                .box => |payload| payload,
-                else => checkedPipelineInvariant("box executable payload metadata attached to non-box type"),
-            },
-            else => checkedPipelineInvariant("box executable payload metadata attached to unresolved type"),
-        };
-    }
-
-    fn callableSetPayload(
-        self: *ExecutableTypePayloadBuilder,
-        key: repr.CanonicalCallableSetKey,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!checked_artifact.ExecutableCallableSetPayload {
-        const descriptor = representation_store.callableSetDescriptor(key) orelse {
-            checkedPipelineInvariant("callable-set executable payload has no descriptor");
-        };
-        if (descriptor.members.len == 0) checkedPipelineInvariant("callable-set executable payload descriptor is empty");
-        const members = try self.allocator.alloc(checked_artifact.ExecutableCallableSetMemberPayload, descriptor.members.len);
-        errdefer self.allocator.free(members);
-        for (descriptor.members, 0..) |member, i| {
-            members[i] = .{
-                .member = member.member,
-            };
-            if (member.capture_slots.len == 0) continue;
-            const payload = try self.capturePayloadForCallableSetMember(member);
-            members[i].payload_ty = payload.ref;
-            members[i].payload_ty_key = payload.key;
-        }
         return .{
-            .key = key,
+            .key = callable_set.key,
             .members = members,
         };
     }
 
-    fn capturePayloadForCallableSetMember(
+    fn sessionErasedFnPayload(
         self: *ExecutableTypePayloadBuilder,
-        member: repr.CanonicalCallableSetMember,
-    ) Allocator.Error!ExecutablePayloadWithKey {
-        const instance = self.procInstanceForMir(member.source_proc);
-        const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
-        const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
-        const captures = value_store.sliceValueSpan(instance.public_roots.captures);
-        return try self.tuplePayloadForTargetCaptureSlots(
-            instance.value_store,
-            value_store,
-            representation_store,
-            captures,
-            member.capture_slots,
-            repr.captureTupleExecKeyForSlots(member.capture_slots),
-        );
-    }
-
-    fn erasedFnPayloadForAlreadyErased(
-        self: *ExecutableTypePayloadBuilder,
-        erased: repr.AlreadyErasedCallablePlan,
+        solve_session: repr.RepresentationSolveSessionId,
+        erased: repr.SessionExecutableErasedFnPayload,
     ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
-        const capture = try self.hiddenCapturePayloadForAlreadyErased(erased);
+        const capture = if (erased.capture_ty) |capture_ty| blk: {
+            const capture_key = erased.capture_ty_key orelse {
+                checkedPipelineInvariant("artifact executable erased payload capture ref has no key");
+            };
+            break :blk try self.payloadForSessionPayload(solve_session, capture_ty.payload, capture_key);
+        } else null;
         return .{
             .sig_key = erased.sig_key,
             .capture_shape_key = erased.capture_shape_key,
@@ -1060,33 +769,27 @@ const ExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn erasedFnPayloadForProcValue(
+    fn sessionPayloadStore(
         self: *ExecutableTypePayloadBuilder,
-        erase: repr.ProcValueErasePlan,
-    ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
-        const capture = try self.hiddenCapturePayloadForProcValue(erase);
-        return .{
-            .sig_key = erase.erased_fn_sig_key,
-            .capture_shape_key = erase.capture_shape_key,
-            .capture_ty = if (capture) |item| item.ref else null,
-            .capture_ty_key = if (capture) |item| item.key else null,
-        };
+        solve_session: repr.RepresentationSolveSessionId,
+    ) *const repr.SessionExecutableTypePayloadStore {
+        const index = @intFromEnum(solve_session);
+        if (index >= self.context.solved.solve_sessions.items.len) {
+            checkedPipelineInvariant("artifact executable payload referenced out-of-range solve session");
+        }
+        return &self.context.solved.solve_sessions.items[index].representation_store.session_executable_type_payloads;
     }
 
-    fn erasedFnPayloadForFiniteSetAdapter(
+    fn solveSessionIdForRepresentationStore(
         self: *ExecutableTypePayloadBuilder,
-        erase: repr.FiniteSetErasePlan,
-    ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
-        const capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
-            null
-        else
-            try self.payloadForCallableSetType(erase.adapter.callable_set_key, erase.adapter.erased_fn_sig_key.capture_ty.?);
-        return .{
-            .sig_key = erase.adapter.erased_fn_sig_key,
-            .capture_shape_key = erase.adapter.capture_shape_key,
-            .capture_ty = if (capture) |item| item.ref else null,
-            .capture_ty_key = if (capture) |item| item.key else null,
-        };
+        representation_store: *const repr.RepresentationStore,
+    ) repr.RepresentationSolveSessionId {
+        for (self.context.solved.solve_sessions.items, 0..) |*session, raw| {
+            if (&session.representation_store == representation_store) {
+                return @enumFromInt(@as(u32, @intCast(raw)));
+            }
+        }
+        checkedPipelineInvariant("artifact executable payload could not identify solve session for representation store");
     }
 
     fn hiddenCapturePayloadForAlreadyErased(
@@ -1099,15 +802,16 @@ const ExecutableTypePayloadBuilder = struct {
                 break :blk null;
             },
             .zero_sized_ty => |ty| blk: {
-                const capture = try self.payloadForType(ty);
                 if (erased.sig_key.capture_ty) |expected| {
+                    const capture = try self.payloadForCurrentSessionKey(expected);
                     if (!repr.canonicalExecValueTypeKeyEql(capture.key, expected)) {
                         checkedPipelineInvariant("already-erased executable payload zero-sized capture key differs from signature");
                     }
+                    _ = ty;
+                    break :blk capture;
                 } else {
                     checkedPipelineInvariant("already-erased executable payload zero-sized capture has no signature capture type");
                 }
-                break :blk capture;
             },
             .value => |value| blk: {
                 const capture = try self.payloadForCurrentValue(value);
@@ -1143,87 +847,22 @@ const ExecutableTypePayloadBuilder = struct {
         key: repr.CanonicalCallableSetKey,
         expected_key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        const payload_ref = try self.appendPayload(expected_key, .{ .callable_set = try self.callableSetPayload(key, self.context.representation_store) });
-        return .{
-            .ref = payload_ref,
-            .key = expected_key,
+        const ref = self.context.representation_store.session_executable_type_payloads.refForKey(expected_key) orelse {
+            checkedPipelineInvariant("callable-set executable payload key had no session payload");
         };
-    }
-
-    fn tuplePayloadForCaptureValues(
-        self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-        captures: []const repr.ValueInfoId,
-        expected_key: ?canonical.CanonicalExecValueTypeKey,
-    ) Allocator.Error!ExecutablePayloadWithKey {
-        if (captures.len == 0) {
-            const key = expected_key orelse blk: {
-                var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                key_hasher.update("capture_tuple");
-                break :blk canonical.CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
-            };
-            const ref = try self.appendPayload(key, .{ .tuple = &.{} });
-            return .{
-                .ref = ref,
-                .key = key,
-            };
-        }
-        const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, captures.len);
-        errdefer self.allocator.free(items);
-        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        key_hasher.update("capture_tuple");
-        for (captures, 0..) |capture, i| {
-            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, capture);
-            key_hasher.update(&child.key.bytes);
-            items[i] = .{
-                .index = @intCast(i),
-                .ty = child.ref,
-                .key = child.key,
-            };
-        }
-        const key = expected_key orelse canonical.CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
-        const ref = try self.appendPayload(key, .{ .tuple = items });
-        return .{
-            .ref = ref,
-            .key = key,
+        const source_payload = self.context.representation_store.session_executable_type_payloads.get(ref.payload);
+        const callable_set = switch (source_payload) {
+            .callable_set => |callable_set| callable_set,
+            else => checkedPipelineInvariant("callable-set executable payload key did not name a callable set"),
         };
-    }
-
-    fn tuplePayloadForCaptureSlots(
-        self: *ExecutableTypePayloadBuilder,
-        slots: []const repr.CallableSetCaptureSlot,
-        expected_key: canonical.CanonicalExecValueTypeKey,
-    ) Allocator.Error!ExecutablePayloadWithKey {
-        if (slots.len == 0) {
-            const ref = try self.appendPayload(expected_key, .{ .tuple = &.{} });
-            return .{
-                .ref = ref,
-                .key = expected_key,
-            };
+        if (!repr.callableSetKeyEql(callable_set.key, key)) {
+            checkedPipelineInvariant("callable-set executable payload key disagrees with requested callable-set key");
         }
-
-        const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, slots.len);
-        errdefer self.allocator.free(items);
-        for (slots, 0..) |slot, i| {
-            if (slot.slot != @as(u32, @intCast(i))) {
-                checkedPipelineInvariant("erased proc-value executable payload capture slots are not canonical");
-            }
-            const child = self.artifact.executable_type_payloads.refForKey(self.artifactRef(), slot.exec_value_ty) orelse {
-                checkedPipelineInvariant("erased proc-value executable payload capture slot has no published executable payload");
-            };
-            items[i] = .{
-                .index = @intCast(i),
-                .ty = child,
-                .key = slot.exec_value_ty,
-            };
-        }
-        const ref = try self.appendPayload(expected_key, .{ .tuple = items });
-        return .{
-            .ref = ref,
-            .key = expected_key,
-        };
+        return try self.payloadForSessionPayload(
+            self.solveSessionIdForRepresentationStore(self.context.representation_store),
+            ref.payload,
+            expected_key,
+        );
     }
 
     fn tuplePayloadForTargetCaptureSlots(
@@ -1269,16 +908,6 @@ const ExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn procInstanceForCallable(
-        self: *ExecutableTypePayloadBuilder,
-        proc: canonical.ProcedureCallableRef,
-    ) *const repr.ProcRepresentationInstance {
-        for (self.context.solved.proc_instances.items) |*instance| {
-            if (canonical.procedureCallableRefEql(instance.proc.callable, proc)) return instance;
-        }
-        checkedPipelineInvariant("executable payload could not find procedure instance for callable");
-    }
-
     fn procInstanceForMir(
         self: *ExecutableTypePayloadBuilder,
         proc: canonical.MirProcedureRef,
@@ -1289,27 +918,6 @@ const ExecutableTypePayloadBuilder = struct {
         checkedPipelineInvariant("executable payload could not find procedure instance for MIR procedure");
     }
 };
-
-fn executablePrimitive(prim: mir.LambdaSolved.Type.Prim) checked_artifact.ExecutablePrimitive {
-    return switch (prim) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .erased => .erased,
-    };
-}
 
 fn constValueContextForRoot(
     solved: *const mir.LambdaSolved.Solve.Program,
@@ -1854,15 +1462,10 @@ fn erasedCapturePlanForProcValue(
         }
         const target_capture = target_captures[slot_index];
         const target_capture_info = target_context.value_store.values.items[@intFromEnum(target_capture)];
-        const target_key = try repr.execValueTypeKeyForValue(
-            allocator,
-            target_context.canonical_names,
-            target_context.types,
-            target_context.representation_store,
-            target_context.value_store,
-            target_capture,
-        );
-        if (!repr.canonicalExecValueTypeKeyEql(target_key, slot.exec_value_ty)) {
+        const target_endpoint = target_capture_info.exec_ty orelse {
+            checkedPipelineInvariant("erased proc-value result target capture has no published executable endpoint");
+        };
+        if (!repr.canonicalExecValueTypeKeyEql(target_endpoint.key, slot.exec_value_ty)) {
             checkedPipelineInvariant("erased proc-value result target capture executable key differs from capture slot key");
         }
         slot_plans[slot_index] = .{
@@ -2822,24 +2425,16 @@ const ConstGraphPlanBuilder = struct {
             else => checkedPipelineInvariant("List(T) constant value had non-list aggregate metadata"),
         };
         if (list.elems.len == 0) return null;
-        const first_key = try repr.execValueTypeKeyForValue(
-            self.allocator,
-            context.canonical_names,
-            context.types,
-            context.representation_store,
-            context.value_store,
-            list.elems[0],
-        );
+        const first_info = context.value_store.values.items[@intFromEnum(list.elems[0])];
+        const first_endpoint = first_info.exec_ty orelse {
+            checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
+        };
         for (list.elems[1..]) |elem| {
-            const elem_key = try repr.execValueTypeKeyForValue(
-                self.allocator,
-                context.canonical_names,
-                context.types,
-                context.representation_store,
-                context.value_store,
-                elem,
-            );
-            if (!repr.canonicalExecValueTypeKeyEql(first_key, elem_key)) {
+            const elem_info = context.value_store.values.items[@intFromEnum(elem)];
+            const elem_endpoint = elem_info.exec_ty orelse {
+                checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
+            };
+            if (!repr.canonicalExecValueTypeKeyEql(first_endpoint.key, elem_endpoint.key)) {
                 checkedPipelineInvariant("List(T) constant elements have different executable representations");
             }
         }
