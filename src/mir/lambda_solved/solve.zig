@@ -224,9 +224,10 @@ const ValueTransformFinalizer = struct {
             const result_to = try self.localEndpoint(join.result);
             for (inputs, 0..) |input, i| {
                 const from = try self.localEndpoint(input.value);
-                const transform = try self.appendIdentityTransform(from, result_to);
+                const kind = self.joinBoundaryKind(join_id, input.source);
+                const transform = try self.appendIdentityTransform(kind, from, result_to);
                 boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
-                    .kind = self.joinBoundaryKind(join_id, input.source),
+                    .kind = kind,
                     .from_value = input.value,
                     .to_value = join.result,
                     .from_endpoint = from,
@@ -248,9 +249,10 @@ const ValueTransformFinalizer = struct {
 
             const from = try self.localEndpoint(ret.value);
             const to = try self.targetReturnEndpoint(self.instance_id, self.instance);
-            const transform = try self.appendIdentityTransform(from, to);
+            const kind: repr.ValueTransformBoundaryKind = .{ .return_value = @enumFromInt(@as(u32, @intCast(raw_return))) };
+            const transform = try self.appendIdentityTransform(kind, from, to);
             ret.transform = try self.representationStore().appendValueTransformBoundary(.{
-                .kind = .{ .return_value = @enumFromInt(@as(u32, @intCast(raw_return))) },
+                .kind = kind,
                 .from_value = ret.value,
                 .to_value = self.instance.public_roots.ret,
                 .from_endpoint = from,
@@ -301,12 +303,13 @@ const ValueTransformFinalizer = struct {
         for (args, target_params, 0..) |arg, target_param, i| {
             const from = try self.localEndpoint(arg);
             const to = try self.targetParamEndpoint(target_id, target_instance, target_param, @intCast(i));
-            const transform = try self.appendIdentityTransform(from, to);
+            const kind: repr.ValueTransformBoundaryKind = .{ .call_arg = .{
+                .call = call_site_id,
+                .arg_index = @intCast(i),
+            } };
+            const transform = try self.appendIdentityTransform(kind, from, to);
             arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
-                .kind = .{ .call_arg = .{
-                    .call = call_site_id,
-                    .arg_index = @intCast(i),
-                } },
+                .kind = kind,
                 .from_value = arg,
                 .to_value = target_param,
                 .from_endpoint = from,
@@ -317,9 +320,10 @@ const ValueTransformFinalizer = struct {
 
         const result_from = try self.targetReturnEndpoint(target_id, target_instance);
         const result_to = try self.localEndpoint(call_site.result);
-        const result_transform = try self.appendIdentityTransform(result_from, result_to);
+        const result_kind: repr.ValueTransformBoundaryKind = .{ .call_result = call_site_id };
+        const result_transform = try self.appendIdentityTransform(result_kind, result_from, result_to);
         const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
-            .kind = .{ .call_result = call_site_id },
+            .kind = result_kind,
             .from_value = target_instance.public_roots.ret,
             .to_value = call_site.result,
             .from_endpoint = result_from,
@@ -353,15 +357,16 @@ const ValueTransformFinalizer = struct {
             const target_id = self.procInstanceForSource(member.source_proc);
             const target_instance = self.procInstance(target_id);
             const result_from = try self.targetReturnEndpoint(target_id, target_instance);
-            const result_transform = try self.appendIdentityTransform(result_from, result_to);
+            const kind: repr.ValueTransformBoundaryKind = .{ .callable_match_branch_result = .{
+                .call = call_site_id,
+                .member = .{
+                    .callable_set_key = callable_set_key,
+                    .member_index = member.member,
+                },
+            } };
+            const result_transform = try self.appendIdentityTransform(kind, result_from, result_to);
             branch_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
-                .kind = .{ .callable_match_branch_result = .{
-                    .call = call_site_id,
-                    .member = .{
-                        .callable_set_key = callable_set_key,
-                        .member_index = member.member,
-                    },
-                } },
+                .kind = kind,
                 .from_value = target_instance.public_roots.ret,
                 .to_value = call_site.result,
                 .from_endpoint = result_from,
@@ -394,12 +399,13 @@ const ValueTransformFinalizer = struct {
         for (args, 0..) |arg, i| {
             const from = try self.localEndpoint(arg);
             const to = self.rawArgEndpoint(call_site_id, @intCast(i), from.logical_ty, abi.arg_exec_keys[i]);
-            const transform = try self.appendIdentityTransform(from, to);
+            const kind: repr.ValueTransformBoundaryKind = .{ .call_arg = .{
+                .call = call_site_id,
+                .arg_index = @intCast(i),
+            } };
+            const transform = try self.appendIdentityTransform(kind, from, to);
             arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
-                .kind = .{ .call_arg = .{
-                    .call = call_site_id,
-                    .arg_index = @intCast(i),
-                } },
+                .kind = kind,
                 .from_value = arg,
                 .to_value = arg,
                 .from_endpoint = from,
@@ -410,9 +416,10 @@ const ValueTransformFinalizer = struct {
 
         const result_to = try self.localEndpoint(call_site.result);
         const result_from = self.rawResultEndpoint(call_site_id, result_to.logical_ty, abi.ret_exec_key);
-        const result_transform = try self.appendIdentityTransform(result_from, result_to);
+        const result_kind: repr.ValueTransformBoundaryKind = .{ .call_result = call_site_id };
+        const result_transform = try self.appendIdentityTransform(result_kind, result_from, result_to);
         const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
-            .kind = .{ .call_result = call_site_id },
+            .kind = result_kind,
             .from_value = call_site.result,
             .to_value = call_site.result,
             .from_endpoint = result_from,
@@ -439,13 +446,20 @@ const ValueTransformFinalizer = struct {
 
     fn appendIdentityTransform(
         self: *ValueTransformFinalizer,
+        kind: repr.ValueTransformBoundaryKind,
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, to.exec_ty.key)) {
             lambdaInvariant("lambda-solved value transform finalization reached mismatched executable endpoint keys without an explicit transform plan");
         }
+        const scope = try self.representationStore().appendTransformEndpointScope(.{
+            .root_kind = kind,
+            .root_from = from,
+            .root_to = to,
+        });
         const id = try self.representationStore().appendSessionExecutableValueTransform(.{
+            .scope = scope,
             .from = from,
             .to = to,
             .provenance = .none,

@@ -719,6 +719,39 @@ const SessionExecutableTypePayloadStore = struct {
     by_key: Map(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId),
 };
 
+const TransformEndpointScopeId = enum(u32) { _ };
+const TransformEndpointPathId = enum(u32) { _ };
+
+const TransformEndpointSide = enum {
+    from,
+    to,
+};
+
+const TransformEndpointScope = struct {
+    root_kind: ValueTransformBoundaryKind,
+    root_from: SessionExecutableValueEndpoint,
+    root_to: SessionExecutableValueEndpoint,
+};
+
+const TransformEndpointPathStep = union(enum) {
+    record_field: RecordFieldLabelId,
+    tuple_elem: u32,
+    tag_payload: struct {
+        tag: TagLabelId,
+        payload_index: u32,
+    },
+    list_elem,
+    box_payload,
+    nominal_backing: NominalTypeKey,
+    callable_leaf,
+};
+
+const TransformChildEndpoint = struct {
+    scope: TransformEndpointScopeId,
+    side: TransformEndpointSide,
+    path: TransformEndpointPathId,
+};
+
 const SessionExecutableValueEndpointOwner = union(enum) {
     local_value: ValueInfoId,
     procedure_param: struct {
@@ -735,6 +768,7 @@ const SessionExecutableValueEndpointOwner = union(enum) {
         call: CallSiteInfoId,
         member: CallableSetMemberRef,
     },
+    transform_child: TransformChildEndpoint,
 };
 
 const SessionExecutableValueEndpoint = struct {
@@ -809,6 +843,7 @@ const SessionExecutableValueTransformOp = union(enum) {
 };
 
 const SessionExecutableValueTransformPlan = struct {
+    scope: ?TransformEndpointScopeId,
     from: SessionExecutableValueEndpoint,
     to: SessionExecutableValueEndpoint,
     provenance: ValueTransformProvenance,
@@ -1283,6 +1318,118 @@ consume these endpoint owners directly. It must not synthesize dummy local
 look up a target signature by source procedure name, or infer a branch result
 endpoint from a direct-call layout.
 
+Recursive existing-value transforms require one more endpoint owner class:
+`transform_child`. A child endpoint is not a source expression, not a binder,
+not a procedure parameter, and not a real local value in the current body. It is
+the projected source or target child reached while executing an already-owned
+value transform. For example, a record transform that converts
+`{ f: I64 -> I64 }` to `{ f: ErasedFn(...) }` evaluates the source record once,
+projects field `f`, applies the child callable transform, and constructs the
+target record. The projected field value is a runtime value handled by
+executable MIR, but it must not be assigned a fake `ValueInfoId`. Its endpoint
+owner is the transform root plus the stable child path.
+
+Conceptually:
+
+```zig
+const TransformEndpointSide = enum {
+    from,
+    to,
+};
+
+const TransformEndpointScopeId = enum(u32) { _ };
+const TransformEndpointPathId = enum(u32) { _ };
+
+const TransformEndpointScope = struct {
+    root_kind: ValueTransformBoundaryKind,
+    root_from: SessionExecutableValueEndpoint,
+    root_to: SessionExecutableValueEndpoint,
+};
+
+const TransformEndpointPathStep = union(enum) {
+    record_field: RecordFieldLabelId,
+    tuple_elem: u32,
+    tag_payload: struct {
+        tag: TagLabelId,
+        payload_index: u32,
+    },
+    list_elem,
+    box_payload,
+    nominal_backing: NominalTypeKey,
+    callable_leaf,
+};
+
+const TransformChildEndpoint = struct {
+    scope: TransformEndpointScopeId,
+    side: TransformEndpointSide,
+    path: TransformEndpointPathId,
+};
+
+const SessionExecutableValueEndpointOwner = union(enum) {
+    local_value: ValueInfoId,
+    procedure_param: struct {
+        instance: ProcRepresentationInstanceId,
+        index: u32,
+    },
+    procedure_return: ProcRepresentationInstanceId,
+    call_raw_arg: struct {
+        call: CallSiteInfoId,
+        index: u32,
+    },
+    call_raw_result: CallSiteInfoId,
+    callable_match_branch_raw_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+    transform_child: TransformChildEndpoint,
+};
+```
+
+`TransformEndpointScope` is allocated before planning the root boundary
+transform. It names the semantic boundary whose existing runtime value is being
+converted: call argument, call result, callable-match branch result, source
+`match` branch result, `if` branch result, return value, capture value, mutable
+join, loop phi, or aggregate existing-value boundary. Recursive child
+transforms inside that root reuse the same scope and extend the explicit path.
+The child endpoint payload and canonical executable key are computed by
+projecting the already-published source or target endpoint payload along that
+path; they are not recovered from source syntax, logical type shape, row names,
+physical layout, or runtime values.
+
+The root `SessionExecutableValueTransformPlan` stores the scope id. Child plans
+created while planning that root also store the same scope id. A session
+transform whose endpoints do not contain `transform_child` may still have a
+scope because it is the root transform for a real boundary; a transform whose
+endpoints do contain `transform_child` must have the exact scope named by those
+child endpoints. A missing or mismatched scope is a compiler invariant
+violation.
+
+`TransformEndpointPathStep` uses stable semantic labels. Records use
+`RecordFieldLabelId`, not the source or target shape's local field index. Tags
+use `TagLabelId` plus the logical payload index for that tag, not a source
+singleton shape, physical discriminant, or display name. Executable MIR maps
+these labels to finalized row ids only after lowering the source and target
+endpoint payloads. If the label is absent, duplicated, or maps to a child whose
+payload/key differs from the child endpoint, that is a compiler invariant
+violation: debug builds assert at transform publication or transform lowering,
+and release builds use `unreachable`.
+
+The value-transform planner owns these scopes and paths. Every root call such
+as `planExistingValueTransform(from, to, kind)` must allocate one scope, then
+recursively plan children by calling `childEndpoint(scope, side, path,
+child_payload, child_key)`. This is the only legal way to create non-local
+child endpoints. The planner must not create synthetic `ValueInfoId`s for record
+fields, tuple elements, tag payloads, list elements, box payloads, nominal
+backings, or callable leaves merely so that existing endpoint machinery can be
+reused.
+
+Child endpoint ownership is required even when the child transform is identity.
+Identity is still a transform selected for a specific child endpoint pair; it is
+not permission for executable MIR to skip endpoint verification or reinterpret a
+child value by compatible shape. This matters for boxed callable leaves, nested
+aggregates, finite callable-set values flowing through joins, and imported
+published constants whose child executable payloads are owned by artifact data.
+
 Executable MIR lowers a published transform by first lowering the published
 endpoint `ExecutableTypePayloadRef`s into the current executable type store,
 then lowering the explicit transform operation. Executable MIR lowers a session
@@ -1293,7 +1440,11 @@ executable MIR also verifies that the local value metadata lowers to the same
 canonical key as the endpoint payload. For endpoints whose owner is
 `procedure_param`, `procedure_return`, `call_raw_arg`, `call_raw_result`, or
 `callable_match_branch_raw_result`, the session executable payload ref is the
-only legal structural type source. In both modes, executable MIR may use
+only legal structural type source. For endpoints whose owner is
+`transform_child`, executable MIR verifies that the child endpoint path projects
+from the root scope endpoint to the same payload/key pair, then lowers the
+session executable payload ref named by the child endpoint. In both modes,
+executable MIR may use
 endpoint `key` fields only for debug-only verification that the lowered endpoint
 payloads match the expected canonical executable types. It must not derive a
 transform by comparing source and target shapes.
@@ -3550,6 +3701,53 @@ const ValueTransformBoundaryKind = union(enum) {
     mutable_join: MutableJoinId,
     loop_phi: LoopPhiId,
     aggregate_existing_value: AggregateBoundaryId,
+};
+
+const TransformEndpointScopeId = enum(u32) { _ };
+const TransformEndpointPathId = enum(u32) { _ };
+
+const TransformEndpointScope = struct {
+    root_kind: ValueTransformBoundaryKind,
+    root_from: SessionExecutableValueEndpoint,
+    root_to: SessionExecutableValueEndpoint,
+};
+
+const TransformEndpointPathStep = union(enum) {
+    record_field: RecordFieldLabelId,
+    tuple_elem: u32,
+    tag_payload: struct {
+        tag: TagLabelId,
+        payload_index: u32,
+    },
+    list_elem,
+    box_payload,
+    nominal_backing: NominalTypeKey,
+    callable_leaf,
+};
+
+const TransformChildEndpoint = struct {
+    scope: TransformEndpointScopeId,
+    side: enum { from, to },
+    path: TransformEndpointPathId,
+};
+
+const SessionExecutableValueEndpointOwner = union(enum) {
+    local_value: ValueInfoId,
+    procedure_param: struct {
+        instance: ProcRepresentationInstanceId,
+        index: u32,
+    },
+    procedure_return: ProcRepresentationInstanceId,
+    call_raw_arg: struct {
+        call: CallSiteInfoId,
+        index: u32,
+    },
+    call_raw_result: CallSiteInfoId,
+    callable_match_branch_raw_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+    transform_child: TransformChildEndpoint,
 };
 
 const ValueTransformBoundary = struct {

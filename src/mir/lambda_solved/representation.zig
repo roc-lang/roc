@@ -33,6 +33,8 @@ pub const CaptureBoundaryId = enum(u32) { _ };
 pub const MutableJoinId = enum(u32) { _ };
 pub const LoopPhiId = enum(u32) { _ };
 pub const AggregateBoundaryId = enum(u32) { _ };
+pub const TransformEndpointScopeId = enum(u32) { _ };
+pub const TransformEndpointPathId = enum(u32) { _ };
 pub const RepresentationClassId = enum(u32) { _ };
 pub const ProcRepresentationInstanceId = enum(u32) { _ };
 pub const RepresentationSolveSessionId = enum(u32) { _ };
@@ -41,6 +43,11 @@ pub const CallableSetMemberId = canonical.CallableSetMemberId;
 pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
+
+pub const TransformEndpointSide = enum {
+    from,
+    to,
+};
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -448,6 +455,25 @@ pub const AggregateValueInfo = union(enum) {
     },
 };
 
+pub const TransformEndpointPathStep = union(enum) {
+    record_field: row.RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: struct {
+        tag: row.TagId,
+        payload_index: u32,
+    },
+    list_elem,
+    box_payload,
+    nominal_backing: canonical.NominalTypeKey,
+    callable_leaf,
+};
+
+pub const TransformChildEndpoint = struct {
+    scope: TransformEndpointScopeId,
+    side: TransformEndpointSide,
+    path: TransformEndpointPathId,
+};
+
 pub const SessionExecutableValueEndpointOwner = union(enum) {
     local_value: ValueInfoId,
     procedure_param: struct {
@@ -464,12 +490,19 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
         call: CallSiteInfoId,
         member: CallableSetMemberRef,
     },
+    transform_child: TransformChildEndpoint,
 };
 
 pub const SessionExecutableValueEndpoint = struct {
     owner: SessionExecutableValueEndpointOwner,
     logical_ty: TypeVarId,
     exec_ty: SessionExecutableTypeEndpoint,
+};
+
+pub const TransformEndpointScope = struct {
+    root_kind: ValueTransformBoundaryKind,
+    root_from: SessionExecutableValueEndpoint,
+    root_to: SessionExecutableValueEndpoint,
 };
 
 pub const SessionValueTransformRecordField = struct {
@@ -543,6 +576,7 @@ pub const SessionExecutableValueTransformOp = union(enum) {
 };
 
 pub const SessionExecutableValueTransformPlan = struct {
+    scope: ?TransformEndpointScopeId = null,
     from: SessionExecutableValueEndpoint,
     to: SessionExecutableValueEndpoint,
     provenance: checked_artifact.ValueTransformProvenance = .none,
@@ -585,6 +619,7 @@ fn cloneSessionExecutableValueTransformPlan(
     plan: SessionExecutableValueTransformPlan,
 ) std.mem.Allocator.Error!SessionExecutableValueTransformPlan {
     var cloned: SessionExecutableValueTransformPlan = .{
+        .scope = plan.scope,
         .from = plan.from,
         .to = plan.to,
         .provenance = try cloneValueTransformProvenance(allocator, plan.provenance),
@@ -950,6 +985,9 @@ pub const RepresentationStore = struct {
     erased_fn_abis: ErasedFnAbiStore = .{},
     box_boundaries: []const BoxBoundary = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
+    transform_endpoint_scopes: std.ArrayList(TransformEndpointScope) = .empty,
+    transform_endpoint_paths: std.ArrayList(Span(TransformEndpointPathStep)) = .empty,
+    transform_endpoint_path_steps: std.ArrayList(TransformEndpointPathStep) = .empty,
     session_value_transforms: SessionExecutableValueTransformStore = .{},
 
     pub fn init(allocator: std.mem.Allocator) RepresentationStore {
@@ -961,6 +999,9 @@ pub const RepresentationStore = struct {
 
     pub fn deinit(self: *RepresentationStore) void {
         self.session_value_transforms.deinit(self.allocator);
+        self.transform_endpoint_path_steps.deinit(self.allocator);
+        self.transform_endpoint_paths.deinit(self.allocator);
+        self.transform_endpoint_scopes.deinit(self.allocator);
         self.session_executable_type_payloads.deinit(self.allocator);
         self.erased_fn_abis.deinit(self.allocator);
         for (self.callable_emission_plans) |plan| {
@@ -1024,6 +1065,37 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn appendTransformEndpointScope(
+        self: *RepresentationStore,
+        scope: TransformEndpointScope,
+    ) std.mem.Allocator.Error!TransformEndpointScopeId {
+        const id: TransformEndpointScopeId = @enumFromInt(@as(u32, @intCast(self.transform_endpoint_scopes.items.len)));
+        try self.transform_endpoint_scopes.append(self.allocator, scope);
+        return id;
+    }
+
+    pub fn appendTransformEndpointPath(
+        self: *RepresentationStore,
+        steps: []const TransformEndpointPathStep,
+    ) std.mem.Allocator.Error!TransformEndpointPathId {
+        if (steps.len == 0) {
+            debug.invariant(false, "lambda-solved invariant violated: transform child endpoint path cannot be empty");
+            unreachable;
+        }
+
+        const id: TransformEndpointPathId = @enumFromInt(@as(u32, @intCast(self.transform_endpoint_paths.items.len)));
+        try self.transform_endpoint_paths.ensureUnusedCapacity(self.allocator, 1);
+        try self.transform_endpoint_path_steps.ensureUnusedCapacity(self.allocator, steps.len);
+
+        const start: u32 = @intCast(self.transform_endpoint_path_steps.items.len);
+        self.transform_endpoint_path_steps.appendSliceAssumeCapacity(steps);
+        self.transform_endpoint_paths.appendAssumeCapacity(.{
+            .start = start,
+            .len = @intCast(steps.len),
+        });
+        return id;
+    }
+
     pub fn appendValueTransformBoundary(
         self: *RepresentationStore,
         boundary: ValueTransformBoundary,
@@ -1050,6 +1122,31 @@ pub const RepresentationStore = struct {
         id: SessionExecutableValueTransformId,
     ) SessionExecutableValueTransformPlan {
         return self.session_value_transforms.get(id);
+    }
+
+    pub fn transformEndpointScope(
+        self: *const RepresentationStore,
+        id: TransformEndpointScopeId,
+    ) TransformEndpointScope {
+        const index = @intFromEnum(id);
+        if (index >= self.transform_endpoint_scopes.items.len) {
+            debug.invariant(false, "lambda-solved invariant violated: transform endpoint scope id out of range");
+            unreachable;
+        }
+        return self.transform_endpoint_scopes.items[index];
+    }
+
+    pub fn transformEndpointPath(
+        self: *const RepresentationStore,
+        id: TransformEndpointPathId,
+    ) []const TransformEndpointPathStep {
+        const index = @intFromEnum(id);
+        if (index >= self.transform_endpoint_paths.items.len) {
+            debug.invariant(false, "lambda-solved invariant violated: transform endpoint path id out of range");
+            unreachable;
+        }
+        const span = self.transform_endpoint_paths.items[index];
+        return self.transform_endpoint_path_steps.items[span.start..][0..span.len];
     }
 
     pub fn callableEmissionPlan(
