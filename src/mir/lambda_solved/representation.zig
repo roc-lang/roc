@@ -416,6 +416,47 @@ pub const BoxBoundaryDirection = enum {
     unbox,
 };
 
+pub const BoxPayloadCapabilityRef = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    capability: checked_artifact.BoxPayloadCapabilityId,
+};
+
+pub const OpaqueAtomicProofRef = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    proof: checked_artifact.OpaqueAtomicProofId,
+};
+
+pub const HostedRepresentationCapabilityRef = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    capability: checked_artifact.HostedRepresentationCapabilityId,
+};
+
+pub const PlatformRepresentationCapabilityRef = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    capability: checked_artifact.PlatformRepresentationCapabilityId,
+};
+
+pub const NominalPayloadRepresentation = union(enum) {
+    transparent_backing: struct {
+        nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
+        child: BoxBoundaryId,
+    },
+    imported_capability: struct {
+        nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
+        capability: BoxPayloadCapabilityRef,
+        child: BoxBoundaryId,
+    },
+    opaque_atomic: struct {
+        nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
+        proof: OpaqueAtomicProofRef,
+    },
+    hosted_abi: HostedRepresentationCapabilityRef,
+    platform_abi: PlatformRepresentationCapabilityRef,
+};
+
 pub const BoxPayloadRepresentationPlan = union(enum) {
     unchanged,
     function_erased: struct {
@@ -426,10 +467,7 @@ pub const BoxPayloadRepresentationPlan = union(enum) {
     tag_union: []const BoxPayloadTagPlan,
     tuple: []const BoxBoundaryId,
     list: BoxBoundaryId,
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        child: BoxBoundaryId,
-    },
+    nominal: NominalPayloadRepresentation,
 };
 
 pub const BoxPayloadFieldPlan = struct {
