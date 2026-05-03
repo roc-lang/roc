@@ -626,14 +626,28 @@ const PayloadTransformTupleElem = struct {
     transform: ExecutablePayloadTransformPlanId,
 };
 
-const PayloadTransformTagPayload = struct {
-    index: u32,
+const PayloadTransformTagPayloadEdge = struct {
+    source_payload_index: u32,
+    target_payload_index: u32,
     transform: ExecutablePayloadTransformPlanId,
 };
 
-const PayloadTransformTag = struct {
-    tag: TagLabelId,
-    payloads: Span(PayloadTransformTagPayload),
+const PayloadTransformTagCase = struct {
+    source_tag: TagLabelId,
+    target_tag: TagLabelId,
+    payloads: Span(PayloadTransformTagPayloadEdge),
+};
+
+const BoxPayloadTransformKind = enum {
+    payload_to_box,
+    box_to_payload,
+    box_to_box,
+};
+
+const BoxPayloadTransformPlan = struct {
+    boundary: BoxBoundaryId,
+    kind: BoxPayloadTransformKind,
+    payload: ExecutablePayloadTransformPlanId,
 };
 
 const ExecutablePayloadTransformOp = union(enum) {
@@ -641,7 +655,7 @@ const ExecutablePayloadTransformOp = union(enum) {
     structural_bridge: ExecutableStructuralBridgePlan,
     record: Span(PayloadTransformRecordField),
     tuple: Span(PayloadTransformTupleElem),
-    tag_union: Span(PayloadTransformTag),
+    tag_union: Span(PayloadTransformTagCase),
     nominal: struct {
         nominal: NominalTypeKey,
         backing: ExecutablePayloadTransformPlanId,
@@ -649,10 +663,7 @@ const ExecutablePayloadTransformOp = union(enum) {
     list: struct {
         elem: ExecutablePayloadTransformPlanId,
     },
-    box_payload: struct {
-        boundary: BoxBoundaryId,
-        payload: ExecutablePayloadTransformPlanId,
-    },
+    box_payload: BoxPayloadTransformPlan,
     callable_to_erased: CallableToErasedTransformPlan,
     already_erased_callable: AlreadyErasedCallableTransformPlan,
 };
@@ -943,9 +954,36 @@ so that callable leaves are transformed by explicit callable operations.
 identical; if a list element transform changes callable representation, the plan
 must be a recursive list transform that rebuilds or maps the list explicitly.
 
+Executable payload transforms have two lowering modes, and the distinction is
+mandatory:
+
+- **construction lowering**: the value is being built by the current executable
+  MIR node. The node must lower each child directly in the target executable
+  representation chosen by lambda-solved MIR. It must not first construct the
+  aggregate in a source representation and then repair it with an existing-value
+  transform. This is the production Roc version of Cor/LSS's correct behavior:
+  erasedness is solved before lowering, so constructors build the selected
+  representation directly.
+- **existing-value lowering**: the input value already exists at runtime or in a
+  compile-time materialization store. Executable MIR must evaluate or read that
+  input exactly once, then apply the published recursive transform by projection,
+  switching, iteration, unboxing, recursive child transforms, and target
+  construction. Existing-value transforms are required at real representation
+  boundaries such as erased promoted wrapper arguments, erased promoted wrapper
+  results, imported constants, private promoted captures, branch joins that have
+  already produced a value, and explicit `Box(T)` boundary crossings.
+
+An executable lowering implementation must never use an existing-value transform
+as a workaround for missing construction lowering. If a constructor's target
+representation is known, constructing directly in that representation is the
+only correct implementation. If the target representation is not known by that
+point, the previous stage failed to publish required data; debug builds assert
+and release builds use `unreachable`.
+
 Transform plans must carry stable semantic labels for structural children.
 Record transforms name fields with `RecordFieldLabelId`; tuple transforms name
-element indexes; tag transforms name `TagLabelId` plus payload indexes.
+element indexes; tag-union transforms name source and target `TagLabelId`
+pairs plus source and target payload indexes.
 Executable MIR maps those labels to local lowered row ids and discriminants
 after lowering the endpoint payloads. If a published label or payload index is
 absent, duplicated, out of order for the canonical endpoint payload, or has a
@@ -953,6 +991,46 @@ child endpoint that does not match the enclosing source/target child types, that
 is a compiler invariant violation: debug builds assert at the transform
 publication or transform-lowering boundary and release builds use
 `unreachable`.
+
+A `tag_union` executable payload transform is an existing-value switch plan, not
+a source `match` and not a compatible-shape repair. Each `PayloadTransformTagCase`
+maps one source tag label to one target tag label. For ordinary full-union to
+full-union transforms the labels are usually identical; singleton/full reshaping
+with recursive non-bridge payload transforms must use explicit cases instead of
+pretending to be a structural bridge. Each reachable source tag has exactly one
+case. Inside a case, payload edges map source payload indexes to target payload
+indexes and name the child transform for that payload. Executable MIR lowers
+this by evaluating the source union once, switching on the finalized source
+discriminant, extracting payloads by finalized source `TagPayloadId`, applying
+child transforms in target logical payload order, and constructing the target
+tag with the finalized target `TagId`. The generated default branch is compiler
+`unreachable`; it is not a user-facing runtime error.
+
+A `list` executable payload transform is an existing-value compiler-owned list
+loop. It must not call Roc `List.map`, create a callable value, or depend on a
+user-visible module import. If the element transform is identity and the list
+endpoint representation is identical, the transform is identity or
+`list_reinterpret` as appropriate. Otherwise executable MIR must lower the list
+transform by evaluating the source list once, reading its length, allocating a
+fresh target list with that length/capacity policy, iterating by index in source
+order, reading each element with the checked low-level list access operation,
+applying the child payload transform to the element, and writing/appending the
+transformed element to the target list. The low-level operations used for the
+loop must have explicit value-flow, ABI, and reference-counting metadata. ARC
+insertion emits the required `incref`, `decref`, and `free`; backends still only
+follow explicit LIR statements.
+
+A `box_payload` executable payload transform is directional. `payload_to_box`
+transforms an unboxed payload value and allocates a fresh `Box(T)` containing
+the transformed payload. `box_to_payload` unboxes the source box exactly once,
+applies the child payload transform, and returns the transformed payload.
+`box_to_box` unboxes the source box exactly once, applies the child payload
+transform, and allocates a fresh target box. Reusing or mutating an existing box
+is only a future optimization through an explicit runtime uniqueness mutation
+site where `refcount == 1`; the required baseline is fresh allocation. The
+presence of a box transform does not itself authorize callable erasure. Callable
+erasure is authorized only when the callable leaf transform has non-empty
+`box_erasure` provenance naming the explicit `BoxBoundaryId`.
 
 Checking finalization and lambda-solved representation solving are responsible
 for publishing executable payload transform plans. They must publish a transform
@@ -11610,6 +11688,42 @@ value handles. Executable MIR may remain expression-based where no semantic
 boundary is crossed. LIR must be in administrative normal form before reference
 counting and backend consumption.
 
+Executable MIR must own explicit existing-value payload-transform nodes for
+aggregate conversions that cannot be represented as ordinary structural bridges:
+
+```zig
+payload_transform_tag_union
+payload_transform_list
+payload_transform_box
+```
+
+The exact Zig names may differ, but the semantics must not. These nodes consume
+an already-bound `ExecutableValueRef`, a lowered executable source type, a
+lowered executable target type, and a checked-artifact or run-local
+`ExecutablePayloadTransformPlanId`. They are executable-MIR operations, not
+source syntax and not IR side tables. IR lowering consumes executable MIR only;
+it must not reopen checked artifacts to discover transform semantics. Record,
+tuple, nominal, identity, structural-bridge, callable-to-erased, and
+already-erased callable transforms may still expand directly to ordinary
+executable MIR nodes when doing so preserves single evaluation.
+
+`payload_transform_tag_union` lowers to an executable discriminant switch over
+the already-bound source union value. Each branch extracts the selected source
+payloads, applies child transforms, constructs the target tag, and assigns the
+shared result value. This is not source `match`, does not consume
+`PatternDecisionPlan`, and does not run source pattern exhaustiveness logic.
+
+`payload_transform_list` lowers to a compiler-owned list loop. The loop may be
+lowered directly to IR/LIR loop primitives, but it must keep the child transform
+as an explicit compiler-owned operation and must not introduce a Roc callable or
+call `List.map`.
+
+`payload_transform_box` lowers to explicit unbox/box low-level operations plus
+the child transform according to `BoxPayloadTransformKind`. It must allocate a
+fresh target box for `payload_to_box` and `box_to_box` in the required baseline.
+Any future reuse optimization must be represented by an explicit runtime
+uniqueness mutation site and must still preserve ordinary ARC semantics.
+
 Delete executable semantic parameter-mode solving entirely. Executable MIR must
 not compute per-procedure parameter modes, escape relations, result
 alias contracts, callable-call mode keys, or source-match mode joins. It must
@@ -13274,6 +13388,63 @@ objects.
   element value are packed through explicit callable transforms with
   `BoxBoundaryId` provenance. `list_reinterpret` is forbidden when the element
   representation changes.
+- add explicit tag-union payload-transform tests where callable leaves are
+  stored in tag payloads and cross an erased boxed boundary:
+
+  ```roc
+  make_boxed : {} -> Box([Apply(I64 -> I64), Keep(I64)] -> I64)
+  make_boxed = |_| Box.box(|value|
+      match value {
+          Apply(f) => f(1)
+          Keep(n) => n
+      }
+  )
+
+  apply_tag : [Apply(I64 -> I64), Keep(I64)] -> I64
+  apply_tag = Box.unbox(make_boxed({}))
+
+  main : I64
+  main = apply_tag(Apply(|x| x + 1))
+  ```
+
+  The expected checked artifact publishes a `tag_union` payload transform with
+  one explicit `PayloadTransformTagCase` for `Apply` and one for `Keep`. The
+  `Apply` case maps source payload index `0` to target payload index `0` through
+  a callable-to-erased child transform with `BoxBoundaryId` provenance. The
+  `Keep` case uses identity. Executable MIR must lower this as a
+  compiler-owned tag transform switch, not as source `match` and not as a
+  structural bridge.
+- add singleton/full tag reshaping tests where the singleton payload contains a
+  callable child whose representation changes. The expected transform must use
+  explicit tag cases and payload edges; `singleton_to_tag_union` and
+  `tag_union_to_singleton` structural bridges are valid only when the payload
+  transform is identity or another true structural bridge.
+- add nested `Box(T)` payload-transform tests where an existing boxed aggregate
+  contains callable leaves:
+
+  ```roc
+  make_boxed : {} -> Box({ inner : Box(I64 -> I64) } -> I64)
+  make_boxed = |_| Box.box(|record| Box.unbox(record.inner)(1))
+
+  apply_record : { inner : Box(I64 -> I64) } -> I64
+  apply_record = Box.unbox(make_boxed({}))
+
+  main : I64
+  main = apply_record({ inner: Box.box(|x| x + 1) })
+  ```
+
+  The expected transform uses `box_to_box` or `box_to_payload` only where the
+  explicit boundary requires it. The nested box transform does not itself
+  authorize callable erasure; only the callable leaf transform with non-empty
+  `box_erasure` provenance may change finite callable representation to erased
+  callable representation.
+- add construction-mode aggregate tests proving that values built under a known
+  erased representation are constructed directly in that representation. For a
+  record, tag, or list literal whose target representation is already the boxed
+  erased payload representation, executable MIR must lower child callable leaves
+  directly to erased values while constructing the aggregate. It must not first
+  construct a finite aggregate and then emit a record, tag, or list
+  existing-value transform.
 - add a Box-adapted `test/erased/erased-function-call.roc`: a closure capturing
   another callable plus ordinary data must cross an explicit
   `Box(I64 -> I64)` boundary, be unboxed, and later join with the original
