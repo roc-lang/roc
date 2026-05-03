@@ -1047,6 +1047,21 @@ pub const RepresentationStore = struct {
         return self.value_transform_boundaries[@intFromEnum(id)];
     }
 
+    pub fn verifySealed(self: *const RepresentationStore) void {
+        if (@import("builtin").mode != .Debug) return;
+        self.erased_fn_abis.verifyPublished();
+        for (self.erased_fn_abis.abis) |abi| {
+            if (self.session_executable_type_payloads.refForKey(abi.ret_exec_key) == null) {
+                debug.invariant(false, "lambda-solved invariant violated: erased ABI result key has no session executable type payload");
+            }
+            for (abi.arg_exec_keys) |arg_key| {
+                if (self.session_executable_type_payloads.refForKey(arg_key) == null) {
+                    debug.invariant(false, "lambda-solved invariant violated: erased ABI argument key has no session executable type payload");
+                }
+            }
+        }
+    }
+
     pub fn callableSetDescriptor(
         self: *const RepresentationStore,
         key: CanonicalCallableSetKey,

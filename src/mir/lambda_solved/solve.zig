@@ -151,6 +151,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             proc.proc,
             roots,
         );
+        program.solve_sessions.items[i].representation_store.verifySealed();
 
         program.solve_sessions.items[i].state = .sealed;
         program.proc_instances.appendAssumeCapacity(.{
