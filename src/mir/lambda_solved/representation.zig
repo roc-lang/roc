@@ -2632,9 +2632,29 @@ const SessionExecutableTypePayloadBuilder = struct {
         return .{ .ty = child.ty, .key = child.key };
     }
 
+    fn childForRootType(
+        self: *SessionExecutableTypePayloadBuilder,
+        root: RepRootId,
+        ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
+        const child = try self.endpointForRootType(root, ty);
+        return .{ .ty = child.ty, .key = child.key };
+    }
+
     fn childForValue(self: *SessionExecutableTypePayloadBuilder, value: ValueInfoId) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
         const child = try self.endpointForValue(value);
         return .{ .ty = child.ty, .key = child.key };
+    }
+
+    fn endpointForRootType(
+        self: *SessionExecutableTypePayloadBuilder,
+        root: RepRootId,
+        ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        if (self.valueHasFunctionType(ty)) {
+            return try self.endpointForCallableClass(self.representation_store.classForRoot(root));
+        }
+        return try self.endpointForType(ty);
     }
 
     fn typePayload(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayload {
@@ -3210,18 +3230,15 @@ const SessionExecutableTypePayloadBuilder = struct {
         logical_ty: type_mod.TypeVarId,
         list: anytype,
     ) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
-        if (list.elems.len == 0) {
-            const elem_ty = try self.logicalListElemType(logical_ty);
-            return try self.childForType(elem_ty);
-        }
-        const first = try self.childForValue(list.elems[0]);
-        for (list.elems[1..]) |elem| {
+        const elem_ty = try self.logicalListElemType(logical_ty);
+        const elem_endpoint = try self.childForRootType(list.elem_root, elem_ty);
+        for (list.elems) |elem| {
             const child = try self.childForValue(elem);
-            if (!canonicalExecValueTypeKeyEql(first.key, child.key)) {
+            if (!canonicalExecValueTypeKeyEql(elem_endpoint.key, child.key)) {
                 representationInvariant("session executable list payload elements have different executable representations");
             }
         }
-        return first;
+        return elem_endpoint;
     }
 
     fn logicalListElemType(self: *SessionExecutableTypePayloadBuilder, logical_ty: type_mod.TypeVarId) std.mem.Allocator.Error!type_mod.TypeVarId {

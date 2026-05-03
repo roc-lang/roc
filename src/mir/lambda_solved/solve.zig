@@ -4920,6 +4920,11 @@ const BodySolver = struct {
                 }
             },
             .list => |list| {
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = root },
+                    .to = .{ .local = list.elem_root },
+                    .kind = .list_elem,
+                });
                 for (list.elems) |elem| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
