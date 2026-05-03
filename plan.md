@@ -7465,6 +7465,37 @@ ARC, backends, and interpreters only see ordinary literal, aggregate, callable,
 box, list, tag, and RC statements. A `const_instance` reaching LIR is a compiler
 bug: debug assertion in debug builds and `unreachable` in release builds.
 
+The executable builder may accept `const_instance` only as an input handle from
+lambda-solved MIR. It must resolve that handle immediately while building the
+executable program, using the read-only artifact view for the owning checked
+artifact. Resolution returns both the sealed `ConstInstance` row and the owning
+materialization stores: `CompileTimeValueStore` for logical values and
+`CompileTimePlanStore` for callable/erased-capture materialization nodes. This
+pair is required because constants imported through zero-copy artifact views can
+contain callable leaves whose erased captures point at plan-store nodes owned by
+the exporting artifact. Executable MIR must not copy the imported artifact into a
+private runtime payload, deserialize a second constant representation, or ask the
+exporting module to run again.
+
+Materialization has two modes. Pure materialization is used for serializable
+constant leaves and must reject callable schemas. General constant materialization
+is used only for concrete `ConstInstanceRef` occurrences and recursively permits
+callable leaves. In the general mode, a finite callable leaf materializes to a
+finite `callable_set_value` only when the expected executable type is the matching
+callable-set type and the selected member has an empty capture schema. If the
+callable value has captured data, checking finalization or constant
+instantiation must already have promoted it to a closed procedure value or
+recorded the exact erased callable materialization required by a `Box(T)`
+boundary. Executable materialization must not invent captures, allocate a runtime
+closure object, or treat a captured finite callable as a no-capture leaf.
+
+This boundary is intentionally before IR lowering. IR lowering may keep a loud
+debug-only guard for `const_instance` as a deletion audit, but it must not contain
+the implementation of constant materialization. The complete materialization has
+to happen while executable MIR still has access to executable type metadata,
+callable-set descriptors, erased callable plans, and the checked-artifact
+zero-copy views needed to interpret `ConstInstanceRef` correctly.
+
 Every materialization node is built from three inputs: the logical constant
 node, the requested `CanonicalExecValueTypeKey`, and the finalized layout graph
 for that target. Records use `RecordShapeId` and `RecordFieldId`; tag unions

@@ -155,6 +155,7 @@ pub fn run(
         const proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)];
         var builder = BodyBuilder{
             .allocator = allocator,
+            .program = &program,
             .input = &input.ast,
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
@@ -403,6 +404,7 @@ fn lowerErasedFiniteSetAdapterProc(
     const representation_store = &input.solve_sessions.items[@intFromEnum(first_instance.solve_session)].representation_store;
     var builder = BodyBuilder{
         .allocator = allocator,
+        .program = program,
         .input = &input.ast,
         .output = &program.ast,
         .canonical_names = &program.canonical_names,
@@ -1771,7 +1773,7 @@ fn lowerErasedCaptureExecutableMaterializationNodeExpr(
         .pure_value => |pure_value| try lowerPureComptimeValueExpr(
             allocator,
             program,
-            materialization.values,
+            materialization,
             expected_ty,
             pure_value.schema,
             pure_value.value,
@@ -1789,7 +1791,7 @@ fn lowerErasedCaptureExecutableMaterializationNodeExpr(
 }
 
 const ResolvedConstInstance = struct {
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     instance: checked_artifact.ConstInstance,
 };
 
@@ -1803,7 +1805,7 @@ fn lowerPureConstInstanceExpr(
     return try lowerPureComptimeValueExpr(
         allocator,
         program,
-        resolved.values,
+        resolved.materialization,
         expected_ty,
         resolved.instance.schema,
         resolved.instance.value,
@@ -1817,25 +1819,34 @@ fn resolveConstInstanceForExecutable(
     if (program.artifact_views.root) |root| {
         if (artifactKeyEql(root.artifact.key, ref.owner)) {
             return resolveConstInstanceInView(
-                &root.artifact.comptime_values,
+                .{
+                    .plans = &root.artifact.comptime_plans,
+                    .values = &root.artifact.comptime_values,
+                },
                 root.artifact.const_instances.view(),
                 ref,
             );
         }
         for (root.relation_artifacts) |related| {
             if (!artifactKeyEql(related.key, ref.owner)) continue;
-            return resolveConstInstanceInView(related.comptime_values, related.const_instances, ref);
+            return resolveConstInstanceInView(.{
+                .plans = related.comptime_plans,
+                .values = related.comptime_values,
+            }, related.const_instances, ref);
         }
     }
     for (program.artifact_views.imports) |imported| {
         if (!artifactKeyEql(imported.key, ref.owner)) continue;
-        return resolveConstInstanceInView(imported.comptime_values, imported.const_instances, ref);
+        return resolveConstInstanceInView(.{
+            .plans = imported.comptime_plans,
+            .values = imported.comptime_values,
+        }, imported.const_instances, ref);
     }
     executableInvariant("executable constant materialization referenced an artifact that was not published to executable MIR");
 }
 
 fn resolveConstInstanceInView(
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     instances: checked_artifact.ConstInstantiationStoreView,
     ref: checked_artifact.ConstInstanceRef,
 ) ResolvedConstInstance {
@@ -1857,7 +1868,7 @@ fn resolveConstInstanceInView(
         => executableInvariant("executable constant materialization consumed an unsealed constant instance"),
     };
     return .{
-        .values = values,
+        .materialization = materialization,
         .instance = instance,
     };
 }
@@ -1865,13 +1876,33 @@ fn resolveConstInstanceInView(
 fn lowerPureComptimeValueExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     schema_id: checked_artifact.ComptimeSchemaId,
     value_id: checked_artifact.ComptimeValueId,
 ) Allocator.Error!Ast.ExprId {
-    const schema = comptimeSchema(values, schema_id);
-    const value = comptimeValue(values, value_id);
+    return try lowerComptimeValueExpr(
+        allocator,
+        program,
+        materialization,
+        expected_ty,
+        schema_id,
+        value_id,
+        false,
+    );
+}
+
+fn lowerComptimeValueExpr(
+    allocator: Allocator,
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    schema_id: checked_artifact.ComptimeSchemaId,
+    value_id: checked_artifact.ComptimeValueId,
+    allow_callable: bool,
+) Allocator.Error!Ast.ExprId {
+    const schema = comptimeSchema(materialization.values, schema_id);
+    const value = comptimeValue(materialization.values, value_id);
     return switch (schema) {
         .pending => executableInvariant("executable pure compile-time materialization reached pending schema"),
         .zst => blk: {
@@ -1930,24 +1961,32 @@ fn lowerPureComptimeValueExpr(
             const out = program.ast.freshValueRef();
             break :blk try program.ast.addExpr(expected_ty, out, .{ .str_lit = literal });
         },
-        .list => |elem_schema| try lowerPureComptimeListExpr(allocator, program, values, expected_ty, elem_schema, value),
-        .box => |payload_schema| try lowerPureComptimeBoxExpr(allocator, program, values, expected_ty, payload_schema, value),
-        .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, values, expected_ty, items, value),
-        .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, values, expected_ty, fields, value),
-        .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, values, expected_ty, variants, value),
-        .alias => |alias| try lowerPureComptimeWrappedExpr(allocator, program, values, expected_ty, alias.type_name, alias.backing, value, .alias),
-        .nominal => |nominal| try lowerPureComptimeWrappedExpr(allocator, program, values, expected_ty, nominal.type_name, nominal.backing, value, .nominal),
-        .callable => executableInvariant("executable pure compile-time materialization contained a callable slot"),
+        .list => |elem_schema| try lowerPureComptimeListExpr(allocator, program, materialization, expected_ty, elem_schema, value, allow_callable),
+        .box => |payload_schema| try lowerPureComptimeBoxExpr(allocator, program, materialization, expected_ty, payload_schema, value, allow_callable),
+        .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, materialization, expected_ty, items, value, allow_callable),
+        .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, materialization, expected_ty, fields, value, allow_callable),
+        .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, materialization, expected_ty, variants, value, allow_callable),
+        .alias => |alias| try lowerPureComptimeWrappedExpr(allocator, program, materialization, expected_ty, alias.type_name, alias.backing, value, .alias, allow_callable),
+        .nominal => |nominal| try lowerPureComptimeWrappedExpr(allocator, program, materialization, expected_ty, nominal.type_name, nominal.backing, value, .nominal, allow_callable),
+        .callable => blk: {
+            if (!allow_callable) executableInvariant("executable pure compile-time materialization contained a callable slot");
+            const leaf = switch (value) {
+                .callable => |leaf| leaf,
+                else => executableInvariant("executable compile-time callable materialization value mismatch"),
+            };
+            break :blk try lowerComptimeCallableLeafExpr(allocator, program, materialization, expected_ty, leaf);
+        },
     };
 }
 
 fn lowerPureComptimeListExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     elem_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const elem_ty = switch (program.types.getType(expected_ty)) {
         .list => |elem| elem,
@@ -1960,7 +1999,7 @@ fn lowerPureComptimeListExpr(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, 0..) |item, i| {
-        exprs[i] = try lowerPureComptimeValueExpr(allocator, program, values, elem_ty, elem_schema, item);
+        exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, elem_ty, elem_schema, item, allow_callable);
     }
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .list = try program.ast.addExprSpan(exprs) });
@@ -1969,10 +2008,11 @@ fn lowerPureComptimeListExpr(
 fn lowerPureComptimeBoxExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     payload_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const payload_ty = switch (program.types.getType(expected_ty)) {
         .box => |payload| payload,
@@ -1982,7 +2022,7 @@ fn lowerPureComptimeBoxExpr(
         .box => |payload| payload,
         else => executableInvariant("executable pure compile-time box materialization value mismatch"),
     };
-    const payload_expr = try lowerPureComptimeValueExpr(allocator, program, values, payload_ty, payload_schema, payload_value);
+    const payload_expr = try lowerComptimeValueExpr(allocator, program, materialization, payload_ty, payload_schema, payload_value, allow_callable);
     const exprs = [_]Ast.ExprId{payload_expr};
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .low_level = .{
@@ -1994,10 +2034,11 @@ fn lowerPureComptimeBoxExpr(
 fn lowerPureComptimeTupleExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     schemas: []const checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const item_tys = switch (program.types.getType(expected_ty)) {
         .tuple => |tuple| tuple,
@@ -2013,7 +2054,7 @@ fn lowerPureComptimeTupleExpr(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, schemas, 0..) |item, schema, i| {
-        exprs[i] = try lowerPureComptimeValueExpr(allocator, program, values, item_tys[i], schema, item);
+        exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, item_tys[i], schema, item, allow_callable);
     }
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .tuple = try program.ast.addExprSpan(exprs) });
@@ -2022,10 +2063,11 @@ fn lowerPureComptimeTupleExpr(
 fn lowerPureComptimeRecordExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     schema_fields: []const checked_artifact.ComptimeFieldSchema,
     value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const record_ty = switch (program.types.getType(expected_ty)) {
         .record => |record| record,
@@ -2048,13 +2090,14 @@ fn lowerPureComptimeRecordExpr(
         const materialized = findPureComptimeRecordField(schema_fields, value_fields, expected_label, seen) orelse {
             executableInvariant("executable pure compile-time record materialization missing expected field");
         };
-        const lowered = try lowerPureComptimeValueExpr(
+        const lowered = try lowerComptimeValueExpr(
             allocator,
             program,
-            values,
+            materialization,
             expected_field.ty,
             materialized.schema,
             materialized.value,
+            allow_callable,
         );
         output_fields[expected_i] = .{
             .field = expected_field.field,
@@ -2097,10 +2140,11 @@ fn findPureComptimeRecordField(
 fn lowerPureComptimeTagExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     schema_variants: []const checked_artifact.ComptimeVariantSchema,
     value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const tag_union_ty = switch (program.types.getType(expected_ty)) {
         .tag_union => |tag_union| tag_union,
@@ -2132,13 +2176,14 @@ fn lowerPureComptimeTagExpr(
         if (payload_index >= variant_value.payloads.len) {
             executableInvariant("executable pure compile-time tag materialization payload index exceeded stored arity");
         }
-        const lowered = try lowerPureComptimeValueExpr(
+        const lowered = try lowerComptimeValueExpr(
             allocator,
             program,
-            values,
+            materialization,
             expected_payload.ty,
             schema_variant.payloads[payload_index],
             variant_value.payloads[payload_index],
+            allow_callable,
         );
         output_payloads[expected_i] = .{
             .payload = expected_payload.payload,
@@ -2169,12 +2214,13 @@ fn findPureComptimeTagType(
 fn lowerPureComptimeWrappedExpr(
     allocator: Allocator,
     program: *Program,
-    values: *const checked_artifact.CompileTimeValueStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     nominal: canonical.NominalTypeKey,
     backing_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     comptime wrapper: enum { alias, nominal },
+    allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const expected_nominal = switch (program.types.getType(expected_ty)) {
         .nominal => |expected| expected,
@@ -2193,16 +2239,94 @@ fn lowerPureComptimeWrappedExpr(
             else => executableInvariant("executable pure compile-time nominal materialization value mismatch"),
         },
     };
-    const backing = try lowerPureComptimeValueExpr(
+    const backing = try lowerComptimeValueExpr(
         allocator,
         program,
-        values,
+        materialization,
         expected_nominal.backing,
         backing_schema,
         backing_value,
+        allow_callable,
     );
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .nominal_reinterpret = backing });
+}
+
+fn lowerComptimeCallableLeafExpr(
+    allocator: Allocator,
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    leaf: checked_artifact.CallableLeafInstance,
+) Allocator.Error!Ast.ExprId {
+    return switch (leaf) {
+        .finite => |finite| try lowerComptimeFiniteCallableLeafExpr(program, expected_ty, finite),
+        .erased_boxed => |erased| try lowerMaterializedErasedCallableValue(
+            allocator,
+            program,
+            materialization,
+            expected_ty,
+            .{
+                .source_fn_ty = erased.source_fn_ty,
+                .sig_key = erased.sig_key,
+                .code = erased.code,
+                .capture = erased.capture,
+                .provenance = erased.provenance,
+            },
+        ),
+    };
+}
+
+fn lowerComptimeFiniteCallableLeafExpr(
+    program: *Program,
+    expected_ty: Type.TypeId,
+    finite: checked_artifact.FiniteCallableLeafInstance,
+) Allocator.Error!Ast.ExprId {
+    const callable_set = switch (program.types.getType(expected_ty)) {
+        .callable_set => |callable_set| callable_set,
+        else => executableInvariant("executable compile-time finite callable leaf expected callable-set type"),
+    };
+    const member = findCallableSetMemberForProc(program, callable_set.key, finite.proc_value) orelse {
+        executableInvariant("executable compile-time finite callable leaf missing callable-set member");
+    };
+    if (member.capture_slots.len != 0) {
+        executableInvariant("executable compile-time finite callable leaf must be a closed procedure value");
+    }
+    const member_ty = callableSetMemberType(callable_set, member.member) orelse {
+        executableInvariant("executable compile-time finite callable leaf selected member missing from expected type");
+    };
+    if (member_ty.payload_ty != null) {
+        executableInvariant("executable compile-time finite callable leaf expected type carries capture payload");
+    }
+    const value = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, value, .{ .callable_set_value = .{
+        .construction_plan = null,
+        .callable_set_key = callable_set.key,
+        .member = .{
+            .callable_set_key = callable_set.key,
+            .member_index = member.member,
+        },
+        .capture_record = null,
+    } });
+}
+
+fn findCallableSetMemberForProc(
+    program: *const Program,
+    key: repr.CanonicalCallableSetKey,
+    proc_value: canonical.ProcedureCallableRef,
+) ?*const repr.CanonicalCallableSetMember {
+    const descriptor = programCallableSetDescriptor(program, key) orelse return null;
+    for (descriptor.members) |*member| {
+        if (canonical.procedureCallableRefEql(member.proc_value, proc_value)) return member;
+    }
+    return null;
+}
+
+fn callableSetMemberType(callable_set: Type.CallableSetType, member_id: repr.CallableSetMemberId) ?Type.CallableSetMemberType {
+    for (callable_set.members) |member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
 }
 
 fn comptimeSchema(
@@ -3114,6 +3238,7 @@ const ActiveCallableSetType = struct {
 
 const BodyBuilder = struct {
     allocator: Allocator,
+    program: *Program,
     input: *const LambdaSolved.Ast.Store,
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
@@ -3976,7 +4101,18 @@ const BodyBuilder = struct {
             .str_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .str_lit = literal }),
             .bool_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .bool_lit = literal }),
             .unit => try self.addValueExpr(expr.ty, expr.value_info, .unit),
-            .const_instance => |const_instance| try self.addValueExpr(expr.ty, expr.value_info, .{ .const_instance = const_instance }),
+            .const_instance => |const_instance| blk: {
+                const resolved = resolveConstInstanceForExecutable(self.program, const_instance);
+                break :blk try lowerComptimeValueExpr(
+                    self.allocator,
+                    self.program,
+                    resolved.materialization,
+                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    resolved.instance.schema,
+                    resolved.instance.value,
+                    true,
+                );
+            },
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.assembly_order);
                 break :blk try self.output.addExpr(
