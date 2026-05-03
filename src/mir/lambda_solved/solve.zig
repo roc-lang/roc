@@ -15,6 +15,11 @@ const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 
+pub const ArtifactViews = struct {
+    root: checked_artifact.LoweringModuleView,
+    imports: []const checked_artifact.ImportedModuleView = &.{},
+};
+
 pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     body: Ast.DefId,
@@ -409,7 +414,11 @@ fn createRepresentationSolveSessions(
     return try builder.build(program);
 }
 
-pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Program {
+pub fn run(
+    allocator: Allocator,
+    lifted: Lifted.Lift.Program,
+    artifact_views: ArtifactViews,
+) Allocator.Error!Program {
     var input = lifted;
     errdefer input.deinit();
 
@@ -483,6 +492,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
     try solveRepresentationSessions(&program, proc_build_records.items);
     try assignCallableEmissionPlans(&program, proc_build_records.items);
+    try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
     try finalizeValueTransformBoundaries(&program);
     verifySealedLambdaSolvedProgram(&program);
@@ -1466,6 +1476,329 @@ const CallableEmissionAssigner = struct {
         return &self.program.solve_sessions.items[@intFromEnum(record.solve_session)].representation_store;
     }
 };
+
+const BoxPayloadValueRef = struct {
+    record: *const ProcBuildRecord,
+    value_store: *const repr.ValueInfoStore,
+    value: repr.ValueInfoId,
+};
+
+const NominalCapabilityResolution = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    is_root: bool,
+    capability: checked_artifact.BoxPayloadCapabilityEntry,
+    opaque_proof: ?checked_artifact.OpaqueAtomicProofEntry,
+};
+
+fn finalizeBoxPayloadRepresentationPlans(
+    program: *Program,
+    records: []const ProcBuildRecord,
+    artifact_views: ArtifactViews,
+) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        var finalizer = BoxPayloadPlanFinalizer{
+            .allocator = program.allocator,
+            .program = program,
+            .records = records,
+            .artifact_views = artifact_views,
+            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+            .session = session,
+        };
+        try finalizer.finalize();
+    }
+}
+
+const BoxPayloadPlanFinalizer = struct {
+    allocator: Allocator,
+    program: *Program,
+    records: []const ProcBuildRecord,
+    artifact_views: ArtifactViews,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+
+    fn finalize(self: *BoxPayloadPlanFinalizer) Allocator.Error!void {
+        for (self.representationStore().box_boundaries, 0..) |boundary, raw_boundary| {
+            const boundary_id: repr.BoxBoundaryId = @enumFromInt(@as(u32, @intCast(raw_boundary)));
+            const payload_root = switch (boundary.direction) {
+                .box => boundary.source_root,
+                .unbox => boundary.boundary_root,
+            };
+            const payload_value = self.valueForRoot(payload_root) orelse {
+                lambdaInvariant("lambda-solved BoxBoundary payload root has no published value metadata");
+            };
+            const endpoint = try repr.sessionExecutableTypeEndpointForValue(
+                self.allocator,
+                &self.program.canonical_names,
+                &self.program.row_shapes,
+                &self.program.types,
+                self.representationStore(),
+                payload_value.value_store,
+                payload_value.value,
+            );
+            const plan = try self.planForPayload(endpoint.ty);
+            self.representationStore().setBoxBoundaryPayloadPlan(boundary_id, plan);
+        }
+    }
+
+    fn planForPayload(
+        self: *BoxPayloadPlanFinalizer,
+        payload_ref: repr.SessionExecutableTypePayloadRef,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        return switch (self.representationStore().session_executable_type_payloads.get(payload_ref.payload)) {
+            .pending => lambdaInvariant("lambda-solved boxed payload planning reached pending executable payload"),
+            .primitive,
+            .callable_set,
+            => .unchanged,
+            .erased_fn => |erased| .{ .function_erased = .{
+                .source_fn_ty = erased.sig_key.source_fn_ty,
+                .sig_key = erased.sig_key,
+            } },
+            .record => |record| try self.recordPlan(record),
+            .tuple => |items| try self.tuplePlan(items),
+            .tag_union => |tag_union| try self.tagUnionPlan(tag_union),
+            .list => |child| try self.listPlan(child),
+            .box => |child| try self.nestedBoxPlan(child),
+            .nominal => |nominal| try self.nominalPlan(nominal),
+            .recursive_ref => lambdaInvariant("lambda-solved boxed payload planning reached recursive executable payload without a published recursion binder"),
+        };
+    }
+
+    fn recordPlan(
+        self: *BoxPayloadPlanFinalizer,
+        record: repr.SessionExecutableRecordPayload,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        if (record.fields.len == 0) return .unchanged;
+        const fields = try self.allocator.alloc(repr.BoxPayloadFieldPlan, record.fields.len);
+        errdefer self.allocator.free(fields);
+        var changed = false;
+        for (record.fields, 0..) |field, i| {
+            const child = try self.planForPayload(field.ty);
+            if (planNeedsMaterialization(child)) changed = true;
+            fields[i] = .{
+                .field = field.field,
+                .plan = try self.representationStore().appendBoxPayloadPlan(child),
+            };
+        }
+        if (!changed) {
+            self.allocator.free(fields);
+            return .unchanged;
+        }
+        return .{ .record = fields };
+    }
+
+    fn tuplePlan(
+        self: *BoxPayloadPlanFinalizer,
+        items: []const repr.SessionExecutableTupleElemPayload,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        if (items.len == 0) return .unchanged;
+        const elems = try self.allocator.alloc(repr.BoxPayloadTupleElemPlan, items.len);
+        errdefer self.allocator.free(elems);
+        var changed = false;
+        for (items, 0..) |item, i| {
+            const child = try self.planForPayload(item.ty);
+            if (planNeedsMaterialization(child)) changed = true;
+            elems[i] = .{
+                .index = item.index,
+                .plan = try self.representationStore().appendBoxPayloadPlan(child),
+            };
+        }
+        if (!changed) {
+            self.allocator.free(elems);
+            return .unchanged;
+        }
+        return .{ .tuple = elems };
+    }
+
+    fn tagUnionPlan(
+        self: *BoxPayloadPlanFinalizer,
+        tag_union: repr.SessionExecutableTagUnionPayload,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        if (tag_union.variants.len == 0) return .unchanged;
+        const variants = try self.allocator.alloc(repr.BoxPayloadTagPlan, tag_union.variants.len);
+        for (variants) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (variants) |variant| {
+                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
+            }
+            self.allocator.free(variants);
+        }
+
+        var changed = false;
+        for (tag_union.variants, 0..) |variant, i| {
+            const payloads = try self.allocator.alloc(repr.BoxPayloadTagPayloadPlan, variant.payloads.len);
+            errdefer self.allocator.free(payloads);
+            for (variant.payloads, 0..) |payload, payload_i| {
+                const child = try self.planForPayload(payload.ty);
+                if (planNeedsMaterialization(child)) changed = true;
+                payloads[payload_i] = .{
+                    .payload = payload.payload,
+                    .plan = try self.representationStore().appendBoxPayloadPlan(child),
+                };
+            }
+            variants[i] = .{
+                .tag = variant.tag,
+                .payloads = payloads,
+            };
+        }
+        if (!changed) {
+            for (variants) |variant| {
+                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
+            }
+            self.allocator.free(variants);
+            return .unchanged;
+        }
+        return .{ .tag_union = variants };
+    }
+
+    fn listPlan(
+        self: *BoxPayloadPlanFinalizer,
+        child: repr.SessionExecutableTypePayloadChild,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        const child_plan = try self.planForPayload(child.ty);
+        if (!planNeedsMaterialization(child_plan)) return .unchanged;
+        return .{ .list = try self.representationStore().appendBoxPayloadPlan(child_plan) };
+    }
+
+    fn nestedBoxPlan(
+        self: *BoxPayloadPlanFinalizer,
+        child: repr.SessionExecutableTypePayloadChild,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        const child_plan = try self.planForPayload(child.ty);
+        if (!planNeedsMaterialization(child_plan)) return .unchanged;
+        return .{ .nested_box = try self.representationStore().appendBoxPayloadPlan(child_plan) };
+    }
+
+    fn nominalPlan(
+        self: *BoxPayloadPlanFinalizer,
+        nominal: repr.SessionExecutableNominalPayload,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
+        const capability = self.nominalCapability(nominal) orelse {
+            lambdaInvariant("lambda-solved imported/private nominal boxed payload traversal has no published interface capability");
+        };
+        if (capability.opaque_proof) |proof| {
+            return .{ .nominal = .{ .opaque_atomic = .{
+                .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
+                .proof = .{
+                    .artifact = capability.artifact,
+                    .proof = proof.id,
+                },
+            } } };
+        }
+
+        const backing_plan = try self.planForPayload(nominal.backing);
+        if (!planNeedsMaterialization(backing_plan)) return .unchanged;
+        const backing_plan_id = try self.representationStore().appendBoxPayloadPlan(backing_plan);
+
+        const nominal_plan: repr.NominalPayloadRepresentation = if (capability.is_root)
+            .{ .transparent_backing = .{
+                .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
+                .backing_plan = backing_plan_id,
+            } }
+        else
+            .{ .imported_capability = .{
+                .nominal = nominal.nominal,
+                .source_ty = nominal.source_ty,
+                .capability = .{
+                    .artifact = capability.artifact,
+                    .capability = capability.capability.id,
+                },
+                .backing_plan = backing_plan_id,
+            } };
+        return .{ .nominal = nominal_plan };
+    }
+
+    fn nominalCapability(
+        self: *BoxPayloadPlanFinalizer,
+        nominal: repr.SessionExecutableNominalPayload,
+    ) ?NominalCapabilityResolution {
+        if (self.capabilityInArtifact(
+            self.artifact_views.root.artifact.key,
+            true,
+            &self.artifact_views.root.artifact.interface_capabilities,
+            nominal.source_ty,
+        )) |capability| return capability;
+
+        for (self.artifact_views.root.relation_artifacts) |related| {
+            if (self.capabilityInArtifact(related.key, false, related.interface_capabilities, nominal.source_ty)) |capability| return capability;
+        }
+        for (self.artifact_views.imports) |imported| {
+            if (self.capabilityInArtifact(imported.key, false, imported.interface_capabilities, nominal.source_ty)) |capability| return capability;
+        }
+        return null;
+    }
+
+    fn capabilityInArtifact(
+        self: *BoxPayloadPlanFinalizer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        is_root: bool,
+        capabilities: *const checked_artifact.ModuleInterfaceCapabilities,
+        source_ty: canonical.CanonicalTypeKey,
+    ) ?NominalCapabilityResolution {
+        _ = self;
+        const capability = capabilities.boxPayloadCapabilityForSource(source_ty) orelse return null;
+        return .{
+            .artifact = artifact,
+            .is_root = is_root,
+            .capability = capability,
+            .opaque_proof = capabilities.opaqueAtomicProofForSource(source_ty),
+        };
+    }
+
+    fn valueForRoot(self: *BoxPayloadPlanFinalizer, root: repr.RepRootId) ?BoxPayloadValueRef {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items, 0..) |value, raw_value| {
+                if (value.root == root) {
+                    return .{
+                        .record = record,
+                        .value_store = value_store,
+                        .value = @enumFromInt(@as(u32, @intCast(raw_value))),
+                    };
+                }
+            }
+        }
+        return null;
+    }
+
+    fn recordForInstance(
+        self: *BoxPayloadPlanFinalizer,
+        id: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(id);
+        if (index >= self.records.len) {
+            lambdaInvariant("lambda-solved boxed payload plan referenced out-of-range procedure instance");
+        }
+        return &self.records[index];
+    }
+
+    fn valueStoreFor(
+        self: *BoxPayloadPlanFinalizer,
+        record: *const ProcBuildRecord,
+    ) *repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(record.value_store)];
+    }
+
+    fn representationStore(self: *BoxPayloadPlanFinalizer) *repr.RepresentationStore {
+        return &self.session.representation_store;
+    }
+};
+
+fn planNeedsMaterialization(plan: repr.BoxPayloadRepresentationPlan) bool {
+    return switch (plan) {
+        .unchanged => false,
+        .function_erased,
+        .record,
+        .tag_union,
+        .tuple,
+        .list,
+        .nested_box,
+        .nominal,
+        => true,
+    };
+}
 
 fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
     return switch (kind) {

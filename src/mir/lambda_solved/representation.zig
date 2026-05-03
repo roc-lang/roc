@@ -19,6 +19,7 @@ pub const CallSiteInfoId = enum(u32) { _ };
 pub const JoinInfoId = enum(u32) { _ };
 pub const ReturnInfoId = enum(u32) { _ };
 pub const BoxBoundaryId = canonical.BoxBoundaryId;
+pub const BoxPayloadRepresentationPlanId = enum(u32) { _ };
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
@@ -440,13 +441,13 @@ pub const NominalPayloadRepresentation = union(enum) {
     transparent_backing: struct {
         nominal: canonical.NominalTypeKey,
         source_ty: canonical.CanonicalTypeKey,
-        child: BoxBoundaryId,
+        backing_plan: BoxPayloadRepresentationPlanId,
     },
     imported_capability: struct {
         nominal: canonical.NominalTypeKey,
         source_ty: canonical.CanonicalTypeKey,
         capability: BoxPayloadCapabilityRef,
-        child: BoxBoundaryId,
+        backing_plan: BoxPayloadRepresentationPlanId,
     },
     opaque_atomic: struct {
         nominal: canonical.NominalTypeKey,
@@ -465,20 +466,53 @@ pub const BoxPayloadRepresentationPlan = union(enum) {
     },
     record: []const BoxPayloadFieldPlan,
     tag_union: []const BoxPayloadTagPlan,
-    tuple: []const BoxBoundaryId,
-    list: BoxBoundaryId,
+    tuple: []const BoxPayloadTupleElemPlan,
+    list: BoxPayloadRepresentationPlanId,
+    nested_box: BoxPayloadRepresentationPlanId,
     nominal: NominalPayloadRepresentation,
 };
 
 pub const BoxPayloadFieldPlan = struct {
     field: row.RecordFieldId,
-    boundary: BoxBoundaryId,
+    plan: BoxPayloadRepresentationPlanId,
+};
+
+pub const BoxPayloadTupleElemPlan = struct {
+    index: u32,
+    plan: BoxPayloadRepresentationPlanId,
 };
 
 pub const BoxPayloadTagPlan = struct {
     tag: row.TagId,
-    payloads: []const BoxBoundaryId,
+    payloads: []const BoxPayloadTagPayloadPlan,
 };
+
+pub const BoxPayloadTagPayloadPlan = struct {
+    payload: row.TagPayloadId,
+    plan: BoxPayloadRepresentationPlanId,
+};
+
+fn deinitBoxPayloadRepresentationPlan(
+    allocator: std.mem.Allocator,
+    plan: BoxPayloadRepresentationPlan,
+) void {
+    switch (plan) {
+        .unchanged,
+        .function_erased,
+        .list,
+        .nested_box,
+        .nominal,
+        => {},
+        .record => |fields| if (fields.len > 0) allocator.free(fields),
+        .tuple => |items| if (items.len > 0) allocator.free(items),
+        .tag_union => |tags| {
+            for (tags) |tag| {
+                if (tag.payloads.len > 0) allocator.free(tag.payloads);
+            }
+            if (tags.len > 0) allocator.free(tags);
+        },
+    }
+}
 
 pub const BoxBoundary = struct {
     box_ty: canonical.CanonicalTypeKey,
@@ -1143,7 +1177,8 @@ pub const RepresentationStore = struct {
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
     session_executable_type_payloads: SessionExecutableTypePayloadStore,
     erased_fn_abis: ErasedFnAbiStore = .{},
-    box_boundaries: []const BoxBoundary = &.{},
+    box_payload_plans: []const BoxPayloadRepresentationPlan = &.{},
+    box_boundaries: []BoxBoundary = &.{},
     capture_boundaries: []CaptureBoundaryInfo = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
     transform_endpoint_scopes: std.ArrayList(TransformEndpointScope) = .empty,
@@ -1197,6 +1232,9 @@ pub const RepresentationStore = struct {
             if (descriptor.members.len > 0) self.allocator.free(descriptor.members);
         }
         if (self.callable_set_descriptors.len > 0) self.allocator.free(self.callable_set_descriptors);
+        for (self.box_payload_plans) |plan| deinitBoxPayloadRepresentationPlan(self.allocator, plan);
+        if (self.box_payload_plans.len > 0) self.allocator.free(self.box_payload_plans);
+        for (self.box_boundaries) |*boundary| deinitBoxPayloadRepresentationPlan(self.allocator, boundary.payload_plan);
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
@@ -1295,6 +1333,40 @@ pub const RepresentationStore = struct {
         allocator.free(old);
         self.box_boundaries = next;
         return id;
+    }
+
+    pub fn appendBoxPayloadPlan(
+        self: *RepresentationStore,
+        plan: BoxPayloadRepresentationPlan,
+    ) std.mem.Allocator.Error!BoxPayloadRepresentationPlanId {
+        const old = self.box_payload_plans;
+        const next = try self.allocator.alloc(BoxPayloadRepresentationPlan, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        if (old.len > 0) self.allocator.free(old);
+        const id: BoxPayloadRepresentationPlanId = @enumFromInt(@as(u32, @intCast(old.len)));
+        next[old.len] = plan;
+        self.box_payload_plans = next;
+        return id;
+    }
+
+    pub fn setBoxBoundaryPayloadPlan(
+        self: *RepresentationStore,
+        boundary_id: BoxBoundaryId,
+        plan: BoxPayloadRepresentationPlan,
+    ) void {
+        const index: usize = @intFromEnum(boundary_id);
+        if (index >= self.box_boundaries.len) {
+            debug.invariant(false, "lambda-solved invariant violated: boxed payload plan referenced missing BoxBoundary");
+            unreachable;
+        }
+        switch (self.box_boundaries[index].payload_plan) {
+            .unchanged => {},
+            else => {
+                debug.invariant(false, "lambda-solved invariant violated: BoxBoundary payload plan was finalized twice");
+                unreachable;
+            },
+        }
+        self.box_boundaries[index].payload_plan = plan;
     }
 
     pub fn appendTransformEndpointScope(

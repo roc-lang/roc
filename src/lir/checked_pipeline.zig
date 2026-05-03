@@ -116,7 +116,10 @@ pub fn lowerArtifactsToLir(
     var lifted = try mir.Lifted.Lift.run(allocator, row_finalized);
     errdefer lifted.deinit();
 
-    var solved = try mir.LambdaSolved.Solve.run(allocator, lifted);
+    var solved = try mir.LambdaSolved.Solve.run(allocator, lifted, .{
+        .root = artifacts.root,
+        .imports = artifacts.imports,
+    });
     errdefer solved.deinit();
 
     try publishCallableSetDescriptorsForLowering(
@@ -2103,6 +2106,7 @@ const CaptureSlotPlanBuilder = struct {
             .tag_union,
             .tuple,
             .list,
+            .nested_box,
             .nominal,
             => true,
         };
