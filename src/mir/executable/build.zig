@@ -6147,6 +6147,7 @@ const BodyBuilder = struct {
             },
             .call_value_finite,
             .call_value_erased,
+            .call_value_pending,
             => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         }
 
@@ -6623,6 +6624,7 @@ const BodyBuilder = struct {
         const callable_set_key = switch (call_site.dispatch) {
             .call_value_finite => |key| key,
             .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call.call_site, call_site, sig_key),
+            .call_value_pending => executableInvariant("executable call_value reached unresolved call-site dispatch"),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
         };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;

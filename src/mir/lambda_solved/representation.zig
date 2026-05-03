@@ -987,6 +987,7 @@ pub const ProjectionInfo = struct {
 
 pub const CallSiteDispatch = union(enum) {
     call_proc: ProcRepresentationInstanceId,
+    call_value_pending: ValueInfoId,
     call_value_finite: CanonicalCallableSetKey,
     call_value_erased: ErasedFnSigKey,
 };

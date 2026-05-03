@@ -550,6 +550,7 @@ const CrossProcedureRepresentationLinker = struct {
         for (self.value_store.call_sites.items) |call_site| {
             switch (call_site.dispatch) {
                 .call_proc => |target| try self.appendDirectCallEdges(call_site, target),
+                .call_value_pending => |callee| try self.appendPendingCallValueEdges(call_site, callee),
                 .call_value_finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
                 .call_value_erased => {},
             }
@@ -600,6 +601,22 @@ const CrossProcedureRepresentationLinker = struct {
         for (descriptor.members) |member| {
             const target_id = self.procInstanceForSource(member.source_proc);
             try self.appendDirectCallEdges(call_site, target_id);
+        }
+    }
+
+    fn appendPendingCallValueEdges(
+        self: *CrossProcedureRepresentationLinker,
+        call_site: repr.CallSiteInfo,
+        callee: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        const value_info = self.value_store.values.items[@intFromEnum(callee)];
+        const callable = value_info.callable orelse lambdaInvariant("lambda-solved pending call_value has non-callable callee");
+        switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
+            .already_erased,
+            .erase_finite_set,
+            .erase_proc_value,
+            => {},
         }
     }
 
@@ -886,6 +903,7 @@ const ValueTransformFinalizer = struct {
             const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
             switch (call_site.dispatch) {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
+                .call_value_pending => |callee| try self.finalizePendingCallValue(call_site_id, call_site, callee),
                 .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
             }
@@ -962,6 +980,37 @@ const ValueTransformFinalizer = struct {
                 .alternative = match_branch.alternative,
             } },
             .loop_phi => |loop_phi| .{ .loop_phi = loop_phi },
+        };
+    }
+
+    fn finalizePendingCallValue(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        call_site: *repr.CallSiteInfo,
+        callee: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        const dispatch = self.resolvedCallValueDispatch(callee);
+        call_site.dispatch = dispatch;
+        switch (dispatch) {
+            .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
+            .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
+            .call_proc,
+            .call_value_pending,
+            => lambdaInvariant("lambda-solved pending call_value resolved to a non-call_value dispatch"),
+        }
+    }
+
+    fn resolvedCallValueDispatch(
+        self: *ValueTransformFinalizer,
+        callee: repr.ValueInfoId,
+    ) repr.CallSiteDispatch {
+        const value_info = self.valueStore().values.items[@intFromEnum(callee)];
+        const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
+        return switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| .{ .call_value_finite = key },
+            .already_erased => |erased| .{ .call_value_erased = erased.sig_key },
+            .erase_finite_set => |erase| .{ .call_value_erased = erase.adapter.erased_fn_sig_key },
+            .erase_proc_value => |erase| .{ .call_value_erased = erase.erased_fn_sig_key },
         };
     }
 
@@ -2657,7 +2706,7 @@ const BodySolver = struct {
                     .result = value,
                     .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
-                    .dispatch = self.callSiteDispatchForCallee(callee_value),
+                    .dispatch = .{ .call_value_pending = callee_value },
                 });
                 try self.publishCallValueRequestedFunctionEdges(
                     call_site,
@@ -3166,20 +3215,6 @@ const BodySolver = struct {
         return .{
             .exprs = try self.output.addExprSpan(exprs),
             .values = try self.value_store.addValueSpan(values),
-        };
-    }
-
-    fn callSiteDispatchForCallee(
-        self: *BodySolver,
-        callee_value: repr.ValueInfoId,
-    ) repr.CallSiteDispatch {
-        const value_info = self.value_store.values.items[@intFromEnum(callee_value)];
-        const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
-        return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| .{ .call_value_finite = key },
-            .already_erased => |erased| .{ .call_value_erased = erased.sig_key },
-            .erase_finite_set => |erase| .{ .call_value_erased = erase.adapter.erased_fn_sig_key },
-            .erase_proc_value => |erase| .{ .call_value_erased = erase.erased_fn_sig_key },
         };
     }
 
