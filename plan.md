@@ -622,8 +622,22 @@ const ExecutableValueTransformRef = union(enum) {
     published: PublishedExecutableValueTransformRef,
 };
 
+const SessionExecutableValueEndpointOwner = union(enum) {
+    local_value: ValueInfoId,
+    procedure_param: struct {
+        instance: ProcRepresentationInstanceId,
+        index: u32,
+    },
+    procedure_return: ProcRepresentationInstanceId,
+    call_raw_result: CallSiteInfoId,
+    callable_match_branch_raw_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+};
+
 const SessionExecutableValueEndpoint = struct {
-    value: ValueInfoId,
+    owner: SessionExecutableValueEndpointOwner,
     logical_ty: LambdaSolvedTypeId,
     key: CanonicalExecValueTypeKey,
 };
@@ -1037,11 +1051,26 @@ session, not in the checked-artifact cache and not in any cross-module cache.
 This store is a linear arena for explicit transform plans selected during
 representation solving; it is not a memoizing cache and it must not be consulted
 by other specializations. Session transform endpoints are
-`SessionExecutableValueEndpoint` values: the source/target `ValueInfoId`, the
-lambda-solved logical type id for that value, and the canonical executable type
-key selected for that value. They do not contain
+`SessionExecutableValueEndpoint` values: an explicit endpoint owner, the
+lambda-solved logical type id for that endpoint, and the canonical executable
+type key selected for that endpoint. They do not contain
 `ExecutableTypePayloadRef`, because ordinary run-local values do not have
 artifact-published executable type payloads.
+
+The endpoint owner is mandatory because not every session transform endpoint is
+a local expression value in the current procedure. Call transforms cross a real
+procedure boundary. A `call_proc` argument transforms from the caller's local
+argument value to a target `procedure_param`; a `call_proc` result transforms
+from the target `procedure_return` or explicit `call_raw_result` endpoint to the
+call expression's local result value. A finite callable-set
+`callable_match` branch transforms from its
+`callable_match_branch_raw_result` endpoint to the shared call result endpoint.
+Branch joins, captures, mutable joins, loop phis, aggregate existing-value
+edges, and ordinary existing local values use `local_value`. Executable MIR must
+consume these endpoint owners directly. It must not synthesize dummy local
+`ValueInfoId`s for target procedure params/returns, look up a target signature by
+source procedure name, or infer a branch result endpoint from a direct-call
+layout.
 
 Executable MIR lowers a published transform by first lowering the published
 endpoint `ExecutableTypePayloadRef`s into the current executable type store,
@@ -3177,12 +3206,24 @@ procedure names, or layout compatibility.
 
 For run-local boundaries, `transform` normally points at the current session
 transform store. It may point at a published transform only when the boundary is
-explicitly between a run-local value and a value whose representation was
+explicitly between a run-local endpoint and an endpoint whose representation was
 published by a checked artifact, such as a promoted constant/private capture
 boundary. The endpoint pair still remains session-local: executable lowering
 checks that applying the published operation to the session endpoint keys is
-valid, but it does not pretend the run-local value has an artifact-owned type
+valid, but it does not pretend the run-local endpoint has an artifact-owned type
 payload ref.
+
+`from_value` and `to_value` remain on `ValueTransformBoundary` only for the
+value-flow graph edge that representation solving connected. They are not the
+complete executable endpoint identity. The endpoint identity is
+`from_endpoint.owner` and `to_endpoint.owner`. For example, a `call_arg`
+boundary's `from_value` is the caller argument occurrence and `to_value` may be
+the same value-flow relation target used by solving, but `to_endpoint.owner` is
+the target procedure parameter. A `call_result` boundary's `from_endpoint.owner`
+is the target procedure return or raw call result, and `to_endpoint.owner` is the
+caller result `local_value`. Debug verification must assert that the
+`ValueInfoId` edge and endpoint-owner pair agree; executable lowering consumes
+the endpoint owners and transform operation, not the `ValueInfoId`s alone.
 
 Branch joins use the same rule. Source `match`, `if`, mutable joins, and loop
 phis record the result value and each returning incoming value, then publish one

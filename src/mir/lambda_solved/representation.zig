@@ -233,8 +233,22 @@ pub const AggregateValueInfo = union(enum) {
     },
 };
 
+pub const SessionExecutableValueEndpointOwner = union(enum) {
+    local_value: ValueInfoId,
+    procedure_param: struct {
+        instance: ProcRepresentationInstanceId,
+        index: u32,
+    },
+    procedure_return: ProcRepresentationInstanceId,
+    call_raw_result: CallSiteInfoId,
+    callable_match_branch_raw_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+};
+
 pub const SessionExecutableValueEndpoint = struct {
-    value: ValueInfoId,
+    owner: SessionExecutableValueEndpointOwner,
     logical_ty: TypeVarId,
     key: CanonicalExecValueTypeKey,
 };
