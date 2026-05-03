@@ -40,6 +40,11 @@ const ErasedAdapterProcReservation = struct {
     executable_proc: Ast.ExecutableProcId,
 };
 
+const ConstInstanceAdapterVisitKey = struct {
+    owner: [32]u8,
+    instance: checked_artifact.ConstInstanceId,
+};
+
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -118,7 +123,7 @@ pub fn run(
     defer proc_exec_map.deinit();
     const normal_proc_count = input.procs.items.len;
     const executable_synthetic_proc_count = input.executable_synthetic_procs.items.len;
-    var erased_adapter_keys = try collectErasedAdapterKeys(allocator, &input);
+    var erased_adapter_keys = try collectErasedAdapterKeys(allocator, &input, program.artifact_views);
     defer erased_adapter_keys.deinit(allocator);
     const erased_adapter_proc_count = erased_adapter_keys.items.len;
     const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_adapter_proc_count;
@@ -247,9 +252,12 @@ fn programCallableSetMember(
 fn collectErasedAdapterKeys(
     allocator: Allocator,
     input: *const LambdaSolved.Solve.Program,
+    artifact_views: ArtifactViews,
 ) Allocator.Error!std.ArrayList(repr.ErasedAdapterKey) {
     var adapters = std.ArrayList(repr.ErasedAdapterKey).empty;
     errdefer adapters.deinit(allocator);
+    var visited_const_instances = std.AutoHashMap(ConstInstanceAdapterVisitKey, void).init(allocator);
+    defer visited_const_instances.deinit();
 
     for (input.solve_sessions.items) |*session| {
         for (session.representation_store.callable_emission_plans) |plan| {
@@ -263,14 +271,41 @@ fn collectErasedAdapterKeys(
         }
     }
 
+    for (input.ast.exprs.items) |expr| {
+        switch (expr.data) {
+            .const_instance => |const_instance| try collectConstInstanceAdapters(
+                allocator,
+                &adapters,
+                artifact_views,
+                &visited_const_instances,
+                const_instance,
+            ),
+            else => {},
+        }
+    }
+
     for (input.executable_synthetic_procs.items) |synthetic| {
         switch (synthetic.body) {
             .erased_promoted_wrapper => |erased| {
                 try collectErasedCodeRefAdapter(allocator, &adapters, erased.code);
-                try collectErasedCaptureMaterializationAdapters(allocator, &adapters, synthetic.comptime_plans, erased.capture);
+                try collectErasedCaptureMaterializationAdapters(
+                    allocator,
+                    &adapters,
+                    artifact_views,
+                    &visited_const_instances,
+                    synthetic.comptime_plans,
+                    erased.capture,
+                );
                 switch (erased.hidden_capture_arg) {
                     .none => {},
-                    .materialized_capture => |capture| try collectErasedCaptureMaterializationAdapters(allocator, &adapters, synthetic.comptime_plans, capture),
+                    .materialized_capture => |capture| try collectErasedCaptureMaterializationAdapters(
+                        allocator,
+                        &adapters,
+                        artifact_views,
+                        &visited_const_instances,
+                        synthetic.comptime_plans,
+                        capture,
+                    ),
                 }
             },
         }
@@ -293,6 +328,8 @@ fn collectErasedCodeRefAdapter(
 fn collectErasedCaptureMaterializationAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     plans: *const checked_artifact.CompileTimePlanStore,
     capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!void {
@@ -300,43 +337,271 @@ fn collectErasedCaptureMaterializationAdapters(
         .none,
         .zero_sized_typed,
         => {},
-        .node => |node| try collectErasedCaptureMaterializationNodeAdapters(allocator, adapters, plans, node),
+        .node => |node| try collectErasedCaptureMaterializationNodeAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            plans,
+            node,
+        ),
     }
 }
 
 fn collectErasedCaptureMaterializationNodeAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     plans: *const checked_artifact.CompileTimePlanStore,
     node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!void {
     const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
     switch (node) {
         .pending => executableInvariant("executable adapter collection reached pending erased capture materialization node"),
-        .const_instance,
         .pure_const,
         .pure_value,
-        .finite_callable_set,
         => {},
+        .const_instance => |const_instance| try collectConstInstanceAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            const_instance,
+        ),
+        .finite_callable_set => |finite| for (finite.captures) |capture| {
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                capture,
+            );
+        },
         .erased_callable => |erased| {
             try collectErasedCodeRefAdapter(allocator, adapters, erased.code);
-            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, erased.capture);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                erased.capture,
+            );
         },
         .record => |fields| for (fields) |field| {
-            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, field.value);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                field.value,
+            );
         },
         .tuple => |items| for (items) |item| {
-            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, item);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                item,
+            );
         },
         .tag_union => |tag| for (tag.payloads) |payload| {
-            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, payload.value);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                payload.value,
+            );
         },
         .list => |items| for (items) |item| {
-            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, item);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                item,
+            );
         },
-        .box => |payload| try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, payload),
-        .nominal => |nominal| try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, nominal.backing),
-        .recursive_ref => |ref| try collectErasedCaptureMaterializationNodeAdapters(allocator, adapters, plans, ref),
+        .box => |payload| try collectErasedCaptureMaterializationAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            plans,
+            payload,
+        ),
+        .nominal => |nominal| try collectErasedCaptureMaterializationAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            plans,
+            nominal.backing,
+        ),
+        .recursive_ref => |ref| try collectErasedCaptureMaterializationNodeAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            plans,
+            ref,
+        ),
+    }
+}
+
+fn collectConstInstanceAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    ref: checked_artifact.ConstInstanceRef,
+) Allocator.Error!void {
+    const visit_key = ConstInstanceAdapterVisitKey{
+        .owner = ref.owner.bytes,
+        .instance = ref.instance,
+    };
+    const visit = try visited_const_instances.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    const resolved = resolveConstInstanceInArtifactViews(artifact_views, ref);
+    try collectComptimeValueAdapters(
+        allocator,
+        adapters,
+        artifact_views,
+        visited_const_instances,
+        resolved.materialization,
+        resolved.instance.schema,
+        resolved.instance.value,
+    );
+}
+
+fn collectComptimeValueAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    materialization: MaterializationStores,
+    schema_id: checked_artifact.ComptimeSchemaId,
+    value_id: checked_artifact.ComptimeValueId,
+) Allocator.Error!void {
+    const schema = comptimeSchema(materialization.values, schema_id);
+    const value = comptimeValue(materialization.values, value_id);
+    switch (schema) {
+        .pending => executableInvariant("executable adapter collection reached pending compile-time schema"),
+        .zst,
+        .int,
+        .frac,
+        .str,
+        => {},
+        .list => |elem_schema| {
+            const items = switch (value) {
+                .list => |items| items,
+                else => executableInvariant("executable adapter collection reached list schema/value mismatch"),
+            };
+            for (items) |item| {
+                try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, elem_schema, item);
+            }
+        },
+        .box => |payload_schema| {
+            const payload = switch (value) {
+                .box => |payload| payload,
+                else => executableInvariant("executable adapter collection reached Box(T) schema/value mismatch"),
+            };
+            try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, payload_schema, payload);
+        },
+        .tuple => |schemas| {
+            const items = switch (value) {
+                .tuple => |items| items,
+                else => executableInvariant("executable adapter collection reached tuple schema/value mismatch"),
+            };
+            if (schemas.len != items.len) executableInvariant("executable adapter collection reached tuple arity mismatch");
+            for (schemas, items) |item_schema, item| {
+                try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, item_schema, item);
+            }
+        },
+        .record => |fields| {
+            const values = switch (value) {
+                .record => |values| values,
+                else => executableInvariant("executable adapter collection reached record schema/value mismatch"),
+            };
+            if (fields.len != values.len) executableInvariant("executable adapter collection reached record field count mismatch");
+            for (fields, values) |field, field_value| {
+                try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, field.schema, field_value);
+            }
+        },
+        .tag_union => |variants| {
+            const tag = switch (value) {
+                .tag_union => |tag| tag,
+                else => executableInvariant("executable adapter collection reached tag-union schema/value mismatch"),
+            };
+            const index: usize = @intCast(tag.variant_index);
+            if (index >= variants.len) executableInvariant("executable adapter collection reached tag index outside schema");
+            const variant = variants[index];
+            if (variant.payloads.len != tag.payloads.len) executableInvariant("executable adapter collection reached tag payload count mismatch");
+            for (variant.payloads, tag.payloads) |payload_schema, payload| {
+                try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, payload_schema, payload);
+            }
+        },
+        .alias => |alias| {
+            const backing = switch (value) {
+                .alias => |backing| backing,
+                else => executableInvariant("executable adapter collection reached alias schema/value mismatch"),
+            };
+            try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, alias.backing, backing);
+        },
+        .nominal => |nominal| {
+            const backing = switch (value) {
+                .nominal => |backing| backing,
+                else => executableInvariant("executable adapter collection reached nominal schema/value mismatch"),
+            };
+            try collectComptimeValueAdapters(allocator, adapters, artifact_views, visited_const_instances, materialization, nominal.backing, backing);
+        },
+        .callable => {
+            const leaf = switch (value) {
+                .callable => |leaf| leaf,
+                else => executableInvariant("executable adapter collection reached callable schema/value mismatch"),
+            };
+            try collectComptimeCallableLeafAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                materialization.plans,
+                leaf,
+            );
+        },
+    }
+}
+
+fn collectComptimeCallableLeafAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    plans: *const checked_artifact.CompileTimePlanStore,
+    leaf: checked_artifact.CallableLeafInstance,
+) Allocator.Error!void {
+    switch (leaf) {
+        .finite => {},
+        .erased_boxed => |erased| {
+            try collectErasedCodeRefAdapter(allocator, adapters, erased.code);
+            try collectErasedCaptureMaterializationAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                visited_const_instances,
+                plans,
+                erased.capture,
+            );
+        },
     }
 }
 
@@ -1839,7 +2104,14 @@ fn resolveConstInstanceForExecutable(
     program: *const Program,
     ref: checked_artifact.ConstInstanceRef,
 ) ResolvedConstInstance {
-    if (program.artifact_views.root) |root| {
+    return resolveConstInstanceInArtifactViews(program.artifact_views, ref);
+}
+
+fn resolveConstInstanceInArtifactViews(
+    artifact_views: ArtifactViews,
+    ref: checked_artifact.ConstInstanceRef,
+) ResolvedConstInstance {
+    if (artifact_views.root) |root| {
         if (artifactKeyEql(root.artifact.key, ref.owner)) {
             return resolveConstInstanceInView(
                 .{
@@ -1858,7 +2130,7 @@ fn resolveConstInstanceForExecutable(
             }, related.const_instances, ref);
         }
     }
-    for (program.artifact_views.imports) |imported| {
+    for (artifact_views.imports) |imported| {
         if (!artifactKeyEql(imported.key, ref.owner)) continue;
         return resolveConstInstanceInView(.{
             .plans = imported.comptime_plans,

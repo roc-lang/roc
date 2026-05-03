@@ -1251,6 +1251,10 @@ const ErasedCaptureExecutableMaterializationPlan = union(enum) {
 };
 
 const ErasedCaptureExecutableMaterializationNode = union(enum) {
+    // General constant materialization. The referenced const instance may contain
+    // callable leaves, including erased boxed callable leaves, so executable MIR
+    // must use the full callable-aware constant materialization path.
+    const_instance: ConstInstanceRef,
     pure_const: PureConstInstanceRef,
     finite_callable_set: MaterializedFiniteCallableSetValue,
     erased_callable: MaterializedErasedCallableValue,
@@ -7416,6 +7420,46 @@ Executable MIR maps those stable structural entries to local row-finalized ids
 from the expected executable capture type payload in the current lowering run,
 with debug-only assertions that the stable entries and expected type are exactly
 consistent.
+
+Before executable MIR assigns procedure ids, it must reserve every synthetic
+erased finite-set adapter procedure reachable from the executable input. This is
+not a cache and not a second semantic analysis pass; it is a deterministic
+reservation walk over already-published executable inputs. The walk must include:
+
+- every `CallableValueEmissionPlan` in every lambda-solved representation store
+- every `ErasedPromotedWrapperBodyPlan.code`
+- every `ErasedPromotedWrapperBodyPlan.capture`
+- every `ErasedPromotedWrapperBodyPlan.hidden_capture_arg`
+- every `const_instance` expression in lambda-solved MIR
+- every `const_instance` node inside an
+  `ErasedCaptureExecutableMaterializationPlan`
+
+When the walk reaches a `ConstInstanceRef`, it resolves that reference through
+the same zero-copy checked-artifact views used for executable materialization:
+root artifact, relation artifacts, and imported artifacts. It then traverses the
+sealed `CompileTimeValueStore` graph for that concrete instance. Pure scalar,
+string, list, record, tuple, tag, box, alias, and nominal nodes only recurse into
+their children. A finite callable leaf reserves no erased adapter by itself. An
+erased boxed callable leaf reserves the adapter named by its explicit
+`ErasedCallableCodeRef` when that code ref is `finite_set_adapter`, and then
+recurses into its explicit erased capture materialization plan.
+
+The same rule applies inside executable erased-capture materialization graphs. A
+`finite_callable_set` materialization node must recurse into every materialized
+capture, because a capture can itself contain an erased boxed callable. A
+`const_instance` materialization node must recurse through the referenced
+constant instance. `pure_const` and `pure_value` are the only constant-like nodes
+that may be skipped, and only because their
+`NoReachableCallableSlotsProof` proves there are no reachable callable leaves.
+
+This reservation walk must not inspect source syntax, infer erasedness from
+types, scan all constants in every imported artifact, build a runtime closure
+object, allocate a runtime thunk, deserialize another copy of an imported
+constant, or use a target-layout handle as adapter identity. Its key for adapter
+deduplication is exactly `ErasedAdapterKey`: source function type, callable-set
+key, erased function signature key, and capture shape key. Omitting any part is a
+compiler bug: debug assertion in debug builds and `unreachable` in release
+builds.
 
 Mono MIR lookup of a top-level compile-time constant emits a constant reference
 expression:
