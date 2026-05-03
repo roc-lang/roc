@@ -3465,7 +3465,9 @@ const BodySolver = struct {
             .var_ => |symbol| {
                 const binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info");
                 const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
-                const lowered = try self.output.addExpr(ty, expr.source_ty, binding.value, .{ .var_ = .{
+                const value = try self.newValue(ty, expr.source_ty);
+                try self.publishValueAlias(binding.value, value);
+                const lowered = try self.output.addExpr(ty, expr.source_ty, value, .{ .var_ = .{
                     .symbol = symbol,
                     .binding_info = binding_info,
                 } });
@@ -3477,7 +3479,10 @@ const BodySolver = struct {
                 const captures = self.value_store.sliceValueSpan(captures_span);
                 const capture_index: usize = @intCast(slot);
                 if (capture_index >= captures.len) lambdaInvariant("lambda-solved capture_ref slot does not exist in procedure capture roots");
-                const lowered = try self.output.addExpr(ty, expr.source_ty, captures[capture_index], .{ .capture_ref = slot });
+                const source = captures[capture_index];
+                const value = try self.newValue(ty, expr.source_ty);
+                try self.publishValueAlias(source, value);
+                const lowered = try self.output.addExpr(ty, expr.source_ty, value, .{ .capture_ref = slot });
                 try self.expr_map.put(expr_id, lowered);
                 return lowered;
             },
@@ -3648,6 +3653,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .{ .record_field = access.field },
                 });
+                try self.publishProjectionRepresentationEdge(self.exprValue(record), value, .{ .record_field = access.field });
                 break :blk .{ .access = .{
                     .record = record,
                     .field = access.field,
@@ -3759,6 +3765,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .{ .tag_payload = payload.payload },
                 });
+                try self.publishProjectionRepresentationEdge(self.exprValue(tag_union), value, .{ .tag_payload = payload.payload });
                 break :blk .{ .tag_payload = .{
                     .tag_union = tag_union,
                     .payload = payload.payload,
@@ -3773,6 +3780,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .{ .tuple_elem = access.elem_index },
                 });
+                try self.publishProjectionRepresentationEdge(self.exprValue(tuple), value, .{ .tuple_elem = access.elem_index });
                 break :blk .{ .tuple_access = .{
                     .tuple = tuple,
                     .elem_index = access.elem_index,
@@ -4237,9 +4245,9 @@ const BodySolver = struct {
                 const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
                 if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.unbox reached non-unary low-level expression");
                 const boxed_value = arg_values[0];
-                const boxed_info = self.value_store.values.items[@intFromEnum(boxed_value)];
+                const boxed_source_ty = self.value_store.values.items[@intFromEnum(boxed_value)].source_ty;
                 const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
-                    .box_ty = boxed_info.source_ty,
+                    .box_ty = boxed_source_ty,
                     .payload_source_ty = result_source_ty,
                     .payload_boundary_ty = result_source_ty,
                     .direction = .unbox,
@@ -4593,6 +4601,36 @@ const BodySolver = struct {
                 }
             },
         }
+    }
+
+    fn publishValueAlias(
+        self: *BodySolver,
+        source: repr.ValueInfoId,
+        result: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = self.valueRoot(source) },
+            .to = .{ .local = self.valueRoot(result) },
+            .kind = .value_alias,
+        });
+    }
+
+    fn publishProjectionRepresentationEdge(
+        self: *BodySolver,
+        source: repr.ValueInfoId,
+        result: repr.ValueInfoId,
+        kind: repr.ProjectionKind,
+    ) Allocator.Error!void {
+        const edge_kind: repr.RepresentationEdgeKind = switch (kind) {
+            .record_field => |field| .{ .record_field = field },
+            .tuple_elem => |index| .{ .tuple_elem = index },
+            .tag_payload => |payload| .{ .tag_payload = payload },
+        };
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = self.valueRoot(source) },
+            .to = .{ .local = self.valueRoot(result) },
+            .kind = edge_kind,
+        });
     }
 
     fn lowerTagPayloadPatternSpan(

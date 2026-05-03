@@ -1006,6 +1006,7 @@ fn deinitSessionCallableToErasedTransformPlan(
             var key = proc.executable_specialization_key;
             deinitExecutableSpecializationKey(allocator, &key);
             if (proc.capture_slots.len > 0) allocator.free(proc.capture_slots);
+            if (proc.capture_transforms.len > 0) allocator.free(proc.capture_transforms);
             if (proc.provenance.len > 0) allocator.free(proc.provenance);
         },
     }
