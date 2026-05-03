@@ -284,6 +284,7 @@ const IrBuilder = struct {
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .payload_transform_tag_union => |tag_transform| try self.lowerPayloadTransformTagUnion(expr, tag_transform, stmts),
+            .payload_transform_list => |list_transform| try self.lowerPayloadTransformList(expr, list_transform, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
             .bridge => |bridge_expr| blk: {
@@ -626,6 +627,72 @@ const IrBuilder = struct {
         } }));
         try self.value_env.put(expr.value, result);
         return result;
+    }
+
+    fn lowerPayloadTransformList(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        list_transform: Exec.Ast.PayloadTransformList,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const source = self.value_env.get(list_transform.source) orelse
+            irInvariant("IR lowering payload_transform_list source value was not bound");
+        const source_elem_layout = try self.layoutForType(list_transform.source_elem_ty);
+        const result_layout = try self.layoutForType(expr.ty);
+
+        const len = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .list_len,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{source}),
+        } }, stmts);
+        const result = try self.bindExpr(expr.value, result_layout, .{ .call_low_level = .{
+            .op = .list_with_capacity,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{len}),
+        } }, stmts);
+
+        const elem = try self.freshVar(source_elem_layout);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .for_list = .{
+            .elem = elem,
+            .iterable = source,
+            .body = try self.lowerPayloadTransformListBodyBlock(list_transform, elem, result, result_layout),
+            .elem_bridge_plan = try self.output.store.addBridgePlan(.direct),
+        } }));
+
+        try self.value_env.put(expr.value, result);
+        return result;
+    }
+
+    fn lowerPayloadTransformListBodyBlock(
+        self: *IrBuilder,
+        list_transform: Exec.Ast.PayloadTransformList,
+        elem: Ast.Var,
+        result: Ast.Var,
+        result_layout: Ast.LayoutRef,
+    ) LowerResourceError!Ast.BlockId {
+        var saved = std.ArrayList(SavedValueBinding).empty;
+        defer {
+            self.restoreValueBindings(saved.items);
+            saved.deinit(self.allocator);
+        }
+
+        var body_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer body_stmts.deinit(self.allocator);
+
+        try self.pushValueBinding(list_transform.source_elem, elem, &saved);
+        const transformed = try self.lowerExpr(list_transform.body, &body_stmts);
+        const append_args = [_]Ast.Var{ result, transformed };
+        const appended = try self.bindAnonymous(result_layout, .{ .call_low_level = .{
+            .op = .list_append_unsafe,
+            .args = try self.output.store.addVarSpan(&append_args),
+        } }, &body_stmts);
+        try body_stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+            .target = result,
+            .value = appended,
+        } }));
+
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(body_stmts.items),
+            .term = .{ .value = result },
+        });
     }
 
     fn lowerForExpr(

@@ -11713,16 +11713,58 @@ payloads, applies child transforms, constructs the target tag, and assigns the
 shared result value. This is not source `match`, does not consume
 `PatternDecisionPlan`, and does not run source pattern exhaustiveness logic.
 
-`payload_transform_list` lowers to a compiler-owned list loop. The loop may be
-lowered directly to IR/LIR loop primitives, but it must keep the child transform
-as an explicit compiler-owned operation and must not introduce a Roc callable or
-call `List.map`.
+`payload_transform_list` lowers to a compiler-owned list loop. The checked
+artifact `ExecutablePayloadTransformOp.list` stores only the element child
+transform, but executable MIR must expand that child transform before IR
+lowering. The executable node must carry exactly:
+
+```zig
+payload_transform_list: struct {
+    source: ExecutableValueRef,
+    source_elem: ExecutableValueRef,
+    source_elem_ty: TypeId,
+    target_elem_ty: TypeId,
+    body: ExecutableExprId,
+}
+```
+
+`source` is the already-bound source list value. `source_elem` is the executable
+value handle bound to each source element inside the compiler-owned loop.
+`source_elem_ty` is the executable type of elements read from `source`.
+`target_elem_ty` is the executable type produced by the child transform. `body`
+is the already-lowered child transform expression that consumes `source_elem`
+and returns one transformed target element. The result list type is the type of
+the `payload_transform_list` expression itself, so the node does not duplicate
+that type.
+
+IR lowering for `payload_transform_list` must be mechanical and must not reopen
+checked artifacts:
+
+1. bind the source list once before the node is lowered
+2. compute its length with the compiler low-level `list_len`
+3. allocate an empty target list with `list_with_capacity(length)`
+4. emit an IR/LIR `for_list` over the source list
+5. inside the loop, bind `source_elem` to the loop element, lower `body`, append
+   the transformed element with `list_append_unsafe`, and update the target-list
+   accumulator with `set`
+6. return the accumulator as the transformed list
+
+This loop is an internal compiler lowering of a representation transform. It is
+not a Roc source `for`, does not introduce a Roc callable value, does not call
+`List.map`, and does not participate in static dispatch. The only possible
+child behavior is the explicit executable child expression already produced
+from the payload-transform plan.
 
 `payload_transform_box` lowers to explicit unbox/box low-level operations plus
 the child transform according to `BoxPayloadTransformKind`. It must allocate a
 fresh target box for `payload_to_box` and `box_to_box` in the required baseline.
 Any future reuse optimization must be represented by an explicit runtime
 uniqueness mutation site and must still preserve ordinary ARC semantics.
+Executable lowering must use the payload type from the already-lowered source or
+target `Box(T)` endpoint for the actual unbox/box node. It must not compare
+executable `TypeId` identity between separately lowered endpoint graphs; the
+checked artifact verifier owns endpoint-alignment validation before executable
+lowering begins.
 
 Delete executable semantic parameter-mode solving entirely. Executable MIR must
 not compute per-procedure parameter modes, escape relations, result

@@ -183,6 +183,14 @@ pub const PayloadTransformTagBranch = struct {
     body: ExprId,
 };
 
+pub const PayloadTransformList = struct {
+    source: ExecutableValueRef,
+    source_elem: ExecutableValueRef,
+    source_elem_ty: TypeId,
+    target_elem_ty: TypeId,
+    body: ExprId,
+};
+
 pub const PatternDecisionPlan = struct {
     scrutinees: Span(ExecutableValueRef),
     branches: Span(BranchId),
@@ -260,6 +268,7 @@ pub const Expr = struct {
             source: ExecutableValueRef,
             branches: Span(PayloadTransformTagBranch),
         },
+        payload_transform_list: PayloadTransformList,
         if_: struct {
             cond: ExprId,
             then_body: ExprId,

@@ -863,7 +863,16 @@ fn applyPublishedExecutablePayloadTransform(
             cases,
             value,
         ),
-        .list => executableInvariant("executable list payload transform lowering has not been implemented"),
+        .list => |list| try applyListPayloadTransform(
+            program,
+            plans,
+            published_types,
+            transforms,
+            stmts,
+            plan,
+            list.elem,
+            value,
+        ),
         .box_payload => |box| try applyBoxPayloadTransform(
             program,
             plans,
@@ -1115,6 +1124,70 @@ fn findPayloadTransformTupleElem(
     return null;
 }
 
+fn applyListPayloadTransform(
+    program: *Program,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    elem_transform: checked_artifact.ExecutablePayloadTransformPlanId,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+    const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+    const source_elem_ty = listElementTypeForTransform(program, from_ty, "source");
+    const target_elem_ty = listElementTypeForTransform(program, to_ty, "target");
+
+    const source_elem = program.ast.freshValueRef();
+    var body_stmts = std.ArrayList(Ast.StmtId).empty;
+    defer body_stmts.deinit(program.allocator);
+
+    const transformed_elem = try applyPublishedExecutablePayloadTransform(
+        program,
+        plans,
+        published_types,
+        transforms,
+        &body_stmts,
+        elem_transform,
+        source_elem,
+    );
+    const transformed_expr = try program.ast.addExpr(target_elem_ty, transformed_elem, .{ .value_ref = transformed_elem });
+    const body_expr = if (body_stmts.items.len == 0)
+        transformed_expr
+    else
+        try program.ast.addExpr(target_elem_ty, transformed_elem, .{ .block = .{
+            .stmts = try program.ast.addStmtSpan(body_stmts.items),
+            .final_expr = transformed_expr,
+        } });
+
+    const list_value = program.ast.freshValueRef();
+    const list_expr = try program.ast.addExpr(to_ty, list_value, .{ .payload_transform_list = .{
+        .source = value,
+        .source_elem = source_elem,
+        .source_elem_ty = source_elem_ty,
+        .target_elem_ty = target_elem_ty,
+        .body = body_expr,
+    } });
+    try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = list_value,
+        .body = list_expr,
+    } }));
+
+    return list_value;
+}
+
+fn listElementTypeForTransform(
+    program: *Program,
+    list_ty: Type.TypeId,
+    comptime side: []const u8,
+) Type.TypeId {
+    return switch (program.types.getType(list_ty)) {
+        .list => |elem| elem,
+        else => executableInvariant("list payload transform " ++ side ++ " endpoint is not List(T)"),
+    };
+}
+
 fn applyTagUnionPayloadTransform(
     program: *Program,
     plans: *const checked_artifact.CompileTimePlanStore,
@@ -1315,7 +1388,6 @@ fn applyBoxPayloadTransform(
 ) Allocator.Error!Ast.ExecutableValueRef {
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
-    const child_plan = transforms.get(box.payload);
 
     switch (box.kind) {
         .payload_to_box => {
@@ -1329,11 +1401,11 @@ fn applyBoxPayloadTransform(
                 box.payload,
                 value,
             );
-            return try boxTransformedPayload(program, published_types, stmts, child_plan, to_ty, transformed);
+            return try boxTransformedPayload(program, stmts, to_ty, transformed);
         },
         .box_to_payload => {
             _ = boxPayloadType(program, from_ty);
-            const unboxed = try unboxPayloadForTransform(program, published_types, stmts, child_plan, from_ty, value);
+            const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
             return try applyPublishedExecutablePayloadTransform(
                 program,
                 plans,
@@ -1347,7 +1419,7 @@ fn applyBoxPayloadTransform(
         .box_to_box => {
             _ = boxPayloadType(program, from_ty);
             _ = boxPayloadType(program, to_ty);
-            const unboxed = try unboxPayloadForTransform(program, published_types, stmts, child_plan, from_ty, value);
+            const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
             const transformed = try applyPublishedExecutablePayloadTransform(
                 program,
                 plans,
@@ -1357,29 +1429,23 @@ fn applyBoxPayloadTransform(
                 box.payload,
                 unboxed,
             );
-            return try boxTransformedPayload(program, published_types, stmts, child_plan, to_ty, transformed);
+            return try boxTransformedPayload(program, stmts, to_ty, transformed);
         },
     }
 }
 
 fn unboxPayloadForTransform(
     program: *Program,
-    published_types: *PublishedTypeLowerer,
     stmts: *std.ArrayList(Ast.StmtId),
-    child_plan: checked_artifact.ExecutablePayloadTransformPlan,
     source_box_ty: Type.TypeId,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
-    const expected_payload_ty = try published_types.lower(child_plan.from.ty, child_plan.from.key);
-    const actual_payload_ty = boxPayloadType(program, source_box_ty);
-    if (actual_payload_ty != expected_payload_ty) {
-        executableInvariant("box payload transform child source endpoint differs from source Box(T) payload");
-    }
+    const payload_ty = boxPayloadType(program, source_box_ty);
 
     const source_expr = try program.ast.addExpr(source_box_ty, value, .{ .value_ref = value });
     const unboxed_value = program.ast.freshValueRef();
     const args = [_]Ast.ExprId{source_expr};
-    const unboxed_expr = try program.ast.addExpr(expected_payload_ty, unboxed_value, .{ .low_level = .{
+    const unboxed_expr = try program.ast.addExpr(payload_ty, unboxed_value, .{ .low_level = .{
         .op = .box_unbox,
         .args = try program.ast.addExprSpan(&args),
     } });
@@ -1392,19 +1458,13 @@ fn unboxPayloadForTransform(
 
 fn boxTransformedPayload(
     program: *Program,
-    published_types: *PublishedTypeLowerer,
     stmts: *std.ArrayList(Ast.StmtId),
-    child_plan: checked_artifact.ExecutablePayloadTransformPlan,
     target_box_ty: Type.TypeId,
     payload: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
-    const expected_payload_ty = try published_types.lower(child_plan.to.ty, child_plan.to.key);
-    const actual_payload_ty = boxPayloadType(program, target_box_ty);
-    if (actual_payload_ty != expected_payload_ty) {
-        executableInvariant("box payload transform child target endpoint differs from target Box(T) payload");
-    }
+    const payload_ty = boxPayloadType(program, target_box_ty);
 
-    const payload_expr = try program.ast.addExpr(expected_payload_ty, payload, .{ .value_ref = payload });
+    const payload_expr = try program.ast.addExpr(payload_ty, payload, .{ .value_ref = payload });
     const boxed_value = program.ast.freshValueRef();
     const args = [_]Ast.ExprId{payload_expr};
     const boxed_expr = try program.ast.addExpr(target_box_ty, boxed_value, .{ .low_level = .{
