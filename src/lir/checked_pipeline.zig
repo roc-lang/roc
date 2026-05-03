@@ -1037,7 +1037,14 @@ const ExecutableTypePayloadBuilder = struct {
         const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
         const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
         const captures = value_store.sliceValueSpan(instance.public_roots.captures);
-        return try self.tuplePayloadForCaptureValues(instance.value_store, value_store, representation_store, captures, null);
+        return try self.tuplePayloadForTargetCaptureSlots(
+            instance.value_store,
+            value_store,
+            representation_store,
+            captures,
+            member.capture_slots,
+            repr.captureTupleExecKeyForSlots(member.capture_slots),
+        );
     }
 
     fn erasedFnPayloadForAlreadyErased(
