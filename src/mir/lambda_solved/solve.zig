@@ -548,9 +548,13 @@ const CrossProcedureRepresentationLinker = struct {
 
     fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
         for (self.value_store.call_sites.items) |call_site| {
-            switch (call_site.dispatch) {
+            const dispatch = call_site.dispatch orelse {
+                const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
+                try self.appendPendingCallValueEdges(call_site, callee);
+                continue;
+            };
+            switch (dispatch) {
                 .call_proc => |target| try self.appendDirectCallEdges(call_site, target),
-                .call_value_pending => |callee| try self.appendPendingCallValueEdges(call_site, callee),
                 .call_value_finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
                 .call_value_erased => {},
             }
@@ -901,9 +905,13 @@ const ValueTransformFinalizer = struct {
         const value_store = self.valueStore();
         for (value_store.call_sites.items, 0..) |*call_site, raw_call_site| {
             const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
-            switch (call_site.dispatch) {
+            const dispatch = call_site.dispatch orelse {
+                const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
+                try self.finalizePendingCallValue(call_site_id, call_site, callee);
+                continue;
+            };
+            switch (dispatch) {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
-                .call_value_pending => |callee| try self.finalizePendingCallValue(call_site_id, call_site, callee),
                 .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
             }
@@ -994,9 +1002,7 @@ const ValueTransformFinalizer = struct {
         switch (dispatch) {
             .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
             .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
-            .call_proc,
-            .call_value_pending,
-            => lambdaInvariant("lambda-solved pending call_value resolved to a non-call_value dispatch"),
+            .call_proc => lambdaInvariant("lambda-solved pending call_value resolved to a non-call_value dispatch"),
         }
     }
 
@@ -2706,7 +2712,7 @@ const BodySolver = struct {
                     .result = value,
                     .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
-                    .dispatch = .{ .call_value_pending = callee_value },
+                    .dispatch = null,
                 });
                 try self.publishCallValueRequestedFunctionEdges(
                     call_site,

@@ -987,7 +987,6 @@ pub const ProjectionInfo = struct {
 
 pub const CallSiteDispatch = union(enum) {
     call_proc: ProcRepresentationInstanceId,
-    call_value_pending: ValueInfoId,
     call_value_finite: CanonicalCallableSetKey,
     call_value_erased: ErasedFnSigKey,
 };
@@ -998,7 +997,7 @@ pub const CallSiteInfo = struct {
     result: ValueInfoId,
     requested_fn_root: RepRootId,
     requested_source_fn_ty: canonical.CanonicalTypeKey,
-    dispatch: CallSiteDispatch,
+    dispatch: ?CallSiteDispatch = null,
     arg_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
     branch_result_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
     result_transform: ?ValueTransformBoundaryId = null,

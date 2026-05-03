@@ -6139,7 +6139,8 @@ const BodyBuilder = struct {
         if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, call_site.requested_source_fn_ty)) {
             executableInvariant("executable call_proc target specialization source type differs from call site");
         }
-        switch (call_site.dispatch) {
+        const dispatch = call_site.dispatch orelse executableInvariant("executable call_proc reached unresolved call-site dispatch");
+        switch (dispatch) {
             .call_proc => |target| {
                 if (target != target_instance_id) {
                     executableInvariant("executable call_proc dispatch target differs from expression target");
@@ -6147,7 +6148,6 @@ const BodyBuilder = struct {
             },
             .call_value_finite,
             .call_value_erased,
-            .call_value_pending,
             => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         }
 
@@ -6621,10 +6621,10 @@ const BodyBuilder = struct {
         if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
             executableInvariant("executable call_value call-site requested source type differs from expression");
         }
-        const callable_set_key = switch (call_site.dispatch) {
+        const dispatch = call_site.dispatch orelse executableInvariant("executable call_value reached unresolved call-site dispatch");
+        const callable_set_key = switch (dispatch) {
             .call_value_finite => |key| key,
             .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call.call_site, call_site, sig_key),
-            .call_value_pending => executableInvariant("executable call_value reached unresolved call-site dispatch"),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
         };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
