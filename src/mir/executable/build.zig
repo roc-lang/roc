@@ -5719,21 +5719,6 @@ const BodyBuilder = struct {
         const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
 
         const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
-        const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_items.len);
-        defer self.allocator.free(direct_args);
-        const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len);
-        defer self.allocator.free(stmt_ids);
-
-        for (arg_items, 0..) |arg, i| {
-            const lowered = try self.lowerExpr(arg);
-            const value = self.exprValue(lowered);
-            direct_args[i] = .{ .value = value };
-            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = lowered,
-            } });
-        }
-
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
         if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
             executableInvariant("executable call_proc call-site requested source type differs from expression");
@@ -5751,21 +5736,121 @@ const BodyBuilder = struct {
             .call_value_erased,
             => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         }
-        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
-        const result_value = self.output.freshValueRef();
-        const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_direct = .{
+
+        const arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.arg_transforms);
+        if (arg_transform_ids.len != arg_items.len) {
+            executableInvariant("executable call_proc argument transform count differs from call arity");
+        }
+        const result_transform_id = call_site.result_transform orelse {
+            executableInvariant("executable call_proc has no result transform");
+        };
+        const result_boundary = self.representation_store.valueTransformBoundary(result_transform_id);
+        self.verifyCallProcResultBoundary(result_boundary, call.call_site, target_instance_id, target_instance);
+
+        const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_items.len);
+        defer self.allocator.free(direct_args);
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+
+        for (arg_items, 0..) |arg, i| {
+            const lowered = try self.lowerExpr(arg);
+            const value = self.exprValue(lowered);
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } }));
+            const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
+            self.verifyCallProcArgBoundary(boundary, call.call_site, target_instance_id, target_instance, @intCast(i));
+            direct_args[i] = .{ .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, value) };
+        }
+
+        const raw_result_ty = try self.lowerSessionExecutableEndpointType(result_boundary.from_endpoint);
+        const raw_result_value = self.output.freshValueRef();
+        const final_call = try self.output.addExpr(raw_result_ty, raw_result_value, .{ .call_direct = .{
             .source = call.proc.proc,
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
             .executable_proc = target_proc,
             .direct_args = try self.output.addDirectCallArgSpan(direct_args),
         } });
-
-        if (stmt_ids.len == 0) return final_call;
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = raw_result_value,
+            .body = final_call,
+        } }));
+        const result_value = try self.applyValueTransformBoundary(&stmt_ids, result_boundary, raw_result_value);
+        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
+        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids),
-            .final_expr = final_call,
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
         } });
+    }
+
+    fn verifyCallProcArgBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+        index: u32,
+    ) void {
+        _ = self;
+        const kind = switch (boundary.kind) {
+            .call_arg => |call_arg| call_arg,
+            else => executableInvariant("executable call_proc argument transform has non-call-arg boundary kind"),
+        };
+        if (kind.call != call_site_id or kind.arg_index != index) {
+            executableInvariant("executable call_proc argument transform boundary kind differs from call site");
+        }
+        switch (boundary.from_endpoint.owner) {
+            .local_value => {},
+            else => executableInvariant("executable call_proc argument transform source is not a local value"),
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_param => |param| param,
+            else => executableInvariant("executable call_proc argument transform target is not a procedure parameter"),
+        };
+        if (to.instance != target_instance_id or to.index != index) {
+            executableInvariant("executable call_proc argument transform target differs from target procedure");
+        }
+        const arg_index: usize = @intCast(index);
+        if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
+            executableInvariant("executable call_proc argument transform index exceeds target arity");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+            executableInvariant("executable call_proc argument endpoint key differs from target specialization");
+        }
+    }
+
+    fn verifyCallProcResultBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+    ) void {
+        _ = self;
+        const kind = switch (boundary.kind) {
+            .call_result => |call_result| call_result,
+            else => executableInvariant("executable call_proc result transform has non-call-result boundary kind"),
+        };
+        if (kind != call_site_id) {
+            executableInvariant("executable call_proc result transform boundary kind differs from call site");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .procedure_return => |proc| proc,
+            else => executableInvariant("executable call_proc result transform source is not a procedure return"),
+        };
+        if (from != target_instance_id) {
+            executableInvariant("executable call_proc result transform source differs from target procedure");
+        }
+        switch (boundary.to_endpoint.owner) {
+            .local_value => {},
+            else => executableInvariant("executable call_proc result transform target is not a local value"),
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.from_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+            executableInvariant("executable call_proc result endpoint key differs from target specialization");
+        }
     }
 
     fn lowerProcValue(
