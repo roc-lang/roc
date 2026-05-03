@@ -525,6 +525,17 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
                     lambdaInvariant("lambda-solved value alias source points outside the value store");
                 }
             }
+            if (value.projection_info) |projection_info| {
+                const projection_index = @intFromEnum(projection_info);
+                if (projection_index >= value_store.projections.items.len) {
+                    lambdaInvariant("lambda-solved value projection metadata points outside the projection store");
+                }
+                const projection = value_store.projections.items[projection_index];
+                const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                if (projection.result != value_id) {
+                    lambdaInvariant("lambda-solved value projection metadata is attached to a different result value");
+                }
+            }
             if (value.join_info) |join_info| {
                 const join_index = @intFromEnum(join_info);
                 if (join_index >= value_store.joins.items.len) {
@@ -3785,13 +3796,7 @@ const BodySolver = struct {
             .nominal_reinterpret => |backing| .{ .nominal_reinterpret = try self.lowerExpr(backing) },
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record);
-                const projection = try self.value_store.addProjection(.{
-                    .source = self.exprValue(record),
-                    .result = value,
-                    .root = self.valueRoot(value),
-                    .kind = .{ .record_field = access.field },
-                });
-                try self.publishProjectionRepresentationEdge(self.exprValue(record), value, .{ .record_field = access.field });
+                const projection = try self.publishProjectionInfo(self.exprValue(record), value, .{ .record_field = access.field });
                 break :blk .{ .access = .{
                     .record = record,
                     .field = access.field,
@@ -3897,13 +3902,7 @@ const BodySolver = struct {
             },
             .tag_payload => |payload| blk: {
                 const tag_union = try self.lowerExpr(payload.tag_union);
-                const projection = try self.value_store.addProjection(.{
-                    .source = self.exprValue(tag_union),
-                    .result = value,
-                    .root = self.valueRoot(value),
-                    .kind = .{ .tag_payload = payload.payload },
-                });
-                try self.publishProjectionRepresentationEdge(self.exprValue(tag_union), value, .{ .tag_payload = payload.payload });
+                const projection = try self.publishProjectionInfo(self.exprValue(tag_union), value, .{ .tag_payload = payload.payload });
                 break :blk .{ .tag_payload = .{
                     .tag_union = tag_union,
                     .payload = payload.payload,
@@ -3912,13 +3911,7 @@ const BodySolver = struct {
             },
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
-                const projection = try self.value_store.addProjection(.{
-                    .source = self.exprValue(tuple),
-                    .result = value,
-                    .root = self.valueRoot(value),
-                    .kind = .{ .tuple_elem = access.elem_index },
-                });
-                try self.publishProjectionRepresentationEdge(self.exprValue(tuple), value, .{ .tuple_elem = access.elem_index });
+                const projection = try self.publishProjectionInfo(self.exprValue(tuple), value, .{ .tuple_elem = access.elem_index });
                 break :blk .{ .tuple_access = .{
                     .tuple = tuple,
                     .elem_index = access.elem_index,
@@ -4797,6 +4790,28 @@ const BodySolver = struct {
             .to = .{ .local = self.valueRoot(result) },
             .kind = edge_kind,
         });
+    }
+
+    fn publishProjectionInfo(
+        self: *BodySolver,
+        source: repr.ValueInfoId,
+        result: repr.ValueInfoId,
+        kind: repr.ProjectionKind,
+    ) Allocator.Error!repr.ProjectionInfoId {
+        const projection = try self.value_store.addProjection(.{
+            .source = source,
+            .result = result,
+            .root = self.valueRoot(result),
+            .kind = kind,
+        });
+        const result_info = &self.value_store.values.items[@intFromEnum(result)];
+        if (result_info.projection_info) |existing| {
+            if (existing != projection) lambdaInvariant("lambda-solved projection result already points at a different projection");
+        } else {
+            result_info.projection_info = projection;
+        }
+        try self.publishProjectionRepresentationEdge(source, result, kind);
+        return projection;
     }
 
     fn lowerTagPayloadPatternSpan(

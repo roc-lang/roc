@@ -1039,6 +1039,7 @@ pub const ValueInfo = struct {
     root: RepRootId,
     solved_class: ?RepresentationClassId = null,
     value_alias_source: ?ValueInfoId = null,
+    projection_info: ?ProjectionInfoId = null,
     join_info: ?JoinInfoId = null,
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
