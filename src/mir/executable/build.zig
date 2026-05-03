@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const check = @import("check");
 const types = @import("types");
 const symbol_mod = @import("symbol");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 const LambdaSolved = @import("../lambda_solved/mod.zig");
 const MonoRow = @import("../mono_row/mod.zig");
 const debug = @import("../debug_verify.zig");
@@ -55,6 +56,7 @@ const ConstInstanceAdapterVisitKey = struct {
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
+    concrete_source_types: ConcreteSourceType.Store,
     literal_pool: ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
     row_shapes: MonoRow.Store,
@@ -72,6 +74,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .canonical_names = canonical.CanonicalNameStore.init(allocator),
+            .concrete_source_types = ConcreteSourceType.Store.init(allocator),
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
             .row_shapes = MonoRow.Store.init(allocator),
@@ -95,6 +98,7 @@ pub const Program = struct {
         self.row_shapes.deinit();
         self.symbols.deinit();
         self.literal_pool.deinit();
+        self.concrete_source_types.deinit();
         self.canonical_names.deinit();
         self.* = Program.init(self.allocator);
     }
@@ -115,6 +119,8 @@ pub fn run(
     program.artifact_views = artifact_views;
     program.canonical_names = input.canonical_names;
     input.canonical_names = canonical.CanonicalNameStore.init(allocator);
+    program.concrete_source_types = input.concrete_source_types;
+    input.concrete_source_types = ConcreteSourceType.Store.init(allocator);
     program.literal_pool = input.literal_pool;
     input.literal_pool = ids.ProgramLiteralPool.init(allocator);
     program.symbols = input.symbols;

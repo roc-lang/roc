@@ -3,6 +3,7 @@
 const std = @import("std");
 const check = @import("check");
 const symbol_mod = @import("symbol");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 const MonoRow = @import("../mono_row/mod.zig");
 const ids = @import("../ids.zig");
 
@@ -52,6 +53,7 @@ pub const Proc = struct {
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
+    concrete_source_types: ConcreteSourceType.Store,
     literal_pool: ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
     row_shapes: MonoRow.Store,
@@ -66,6 +68,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .canonical_names = canonical.CanonicalNameStore.init(allocator),
+            .concrete_source_types = ConcreteSourceType.Store.init(allocator),
             .literal_pool = ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
             .row_shapes = MonoRow.Store.init(allocator),
@@ -88,6 +91,7 @@ pub const Program = struct {
         self.row_shapes.deinit();
         self.symbols.deinit();
         self.literal_pool.deinit();
+        self.concrete_source_types.deinit();
         self.canonical_names.deinit();
         self.* = Program.init(self.allocator);
     }
@@ -101,6 +105,8 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
     errdefer program.deinit();
     program.canonical_names = input.program.canonical_names;
     input.program.canonical_names = canonical.CanonicalNameStore.init(allocator);
+    program.concrete_source_types = input.program.concrete_source_types;
+    input.program.concrete_source_types = ConcreteSourceType.Store.init(allocator);
     program.types = input.program.types;
     input.program.types = Type.Store.init(allocator);
     program.literal_pool = input.program.literal_pool;
