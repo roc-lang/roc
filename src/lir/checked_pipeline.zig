@@ -99,6 +99,13 @@ pub fn lowerArtifactsToLir(
         roots,
         target.artifact_state,
     );
+    try publishErasedFnAbisForLowering(
+        allocator,
+        artifacts.root.artifact,
+        &solved,
+        roots,
+        target.artifact_state,
+    );
 
     const compile_time_root_payloads = try publishCompileTimeRootPayloads(
         allocator,
@@ -208,6 +215,41 @@ fn callableSetDescriptorEql(a: repr.CanonicalCallableSetDescriptor, b: repr.Cano
         }
     }
     return true;
+}
+
+fn publishErasedFnAbisForLowering(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    solved: *const mir.LambdaSolved.Solve.Program,
+    roots: RootRequestSet,
+    artifact_state: ArtifactState,
+) Allocator.Error!void {
+    switch (artifact_state) {
+        .published => {
+            if (builtin.mode != .Debug) return;
+            for (solved.solve_sessions.items) |*session| {
+                session.representation_store.erased_fn_abis.verifyPublished();
+                for (session.representation_store.erased_fn_abis.abis) |abi| {
+                    if (artifact.erased_fn_abis.abiFor(abi.key) == null) {
+                        checkedPipelineInvariant("published checked artifact is missing an erased ABI required by lowering");
+                    }
+                }
+            }
+        },
+        .checking_finalization => {
+            const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization erased ABI publication requires mutable checked artifact sink");
+            if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
+                checkedPipelineInvariant("checking-finalization erased ABI publication artifact sink does not match root artifact");
+            }
+
+            for (solved.solve_sessions.items) |*session| {
+                session.representation_store.erased_fn_abis.verifyPublished();
+                for (session.representation_store.erased_fn_abis.abis) |abi| {
+                    _ = try artifact_sink.erased_fn_abis.append(allocator, abi);
+                }
+            }
+        },
+    }
 }
 
 fn publishCompileTimeRootPayloads(

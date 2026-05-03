@@ -5,6 +5,7 @@
 //! `Ident.Idx` values or raw `Symbol` values as semantic identity.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
@@ -139,6 +140,110 @@ pub const ErasedFnSigKey = struct {
     capture_ty: ?CanonicalExecValueTypeKey = null,
 };
 
+pub const HostedAbiKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+pub const ErasedPackedFunctionArgAbi = union(enum) {
+    ordinary_refcounted_value,
+    hosted: HostedAbiKey,
+    intrinsic: IntrinsicWrapperId,
+};
+
+pub const ErasedValueAbi = union(enum) {
+    ordinary_roc_value,
+    opaque_ptr,
+    hosted: HostedAbiKey,
+    intrinsic: IntrinsicWrapperId,
+};
+
+pub const ErasedResultAbi = union(enum) {
+    ordinary_roc_value,
+    opaque_ptr,
+    hosted: HostedAbiKey,
+    intrinsic: IntrinsicWrapperId,
+};
+
+pub const ErasedCaptureArgAbi = union(enum) {
+    ordinary_roc_value,
+    zero_sized_roc_value,
+    hosted: HostedAbiKey,
+    intrinsic: IntrinsicWrapperId,
+};
+
+pub const ErasedFnAbi = struct {
+    key: ErasedFnAbiKey = .{},
+    fixed_arity: u32,
+    arg_exec_keys: []const CanonicalExecValueTypeKey = &.{},
+    ret_exec_key: CanonicalExecValueTypeKey,
+    packed_function_arg: ErasedPackedFunctionArgAbi = .ordinary_refcounted_value,
+    arg_abis: []const ErasedValueAbi = &.{},
+    result_abi: ErasedResultAbi = .ordinary_roc_value,
+    capture_arg: ?ErasedCaptureArgAbi = null,
+    hosted_owner: ?HostedAbiKey = null,
+};
+
+pub const ErasedFnAbiStore = struct {
+    abis: []const ErasedFnAbi = &.{},
+
+    pub fn deinit(self: *ErasedFnAbiStore, allocator: Allocator) void {
+        for (self.abis) |abi| {
+            allocator.free(abi.arg_exec_keys);
+            allocator.free(abi.arg_abis);
+        }
+        allocator.free(self.abis);
+        self.* = .{};
+    }
+
+    pub fn abiFor(self: *const ErasedFnAbiStore, key: ErasedFnAbiKey) ?*const ErasedFnAbi {
+        for (self.abis) |*abi| {
+            if (erasedFnAbiKeyEql(abi.key, key)) return abi;
+        }
+        return null;
+    }
+
+    pub fn append(self: *ErasedFnAbiStore, allocator: Allocator, abi: ErasedFnAbi) Allocator.Error!ErasedFnAbiKey {
+        const key = computeErasedFnAbiKey(abi);
+        if (self.abiFor(key) != null) return key;
+
+        const arg_exec_keys = try allocator.dupe(CanonicalExecValueTypeKey, abi.arg_exec_keys);
+        errdefer allocator.free(arg_exec_keys);
+        const arg_abis = try allocator.dupe(ErasedValueAbi, abi.arg_abis);
+        errdefer allocator.free(arg_abis);
+
+        const old = self.abis;
+        const next = try allocator.alloc(ErasedFnAbi, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = .{
+            .key = key,
+            .fixed_arity = abi.fixed_arity,
+            .arg_exec_keys = arg_exec_keys,
+            .ret_exec_key = abi.ret_exec_key,
+            .packed_function_arg = abi.packed_function_arg,
+            .arg_abis = arg_abis,
+            .result_abi = abi.result_abi,
+            .capture_arg = abi.capture_arg,
+            .hosted_owner = abi.hosted_owner,
+        };
+        allocator.free(old);
+        self.abis = next;
+        return key;
+    }
+
+    pub fn verifyPublished(self: *const ErasedFnAbiStore) void {
+        if (builtin.mode != .Debug) return;
+        for (self.abis) |abi| {
+            if (abi.arg_exec_keys.len != abi.fixed_arity or abi.arg_abis.len != abi.fixed_arity) {
+                std.debug.panic("erased ABI store invariant violated: ABI arity disagrees with argument payloads", .{});
+            }
+            const recomputed = computeErasedFnAbiKey(abi);
+            if (!erasedFnAbiKeyEql(recomputed, abi.key)) {
+                std.debug.panic("erased ABI store invariant violated: ABI key does not match payload", .{});
+            }
+        }
+    }
+};
+
 pub const CallableSetMemberRef = struct {
     callable_set_key: CanonicalCallableSetKey,
     member_index: CallableSetMemberId,
@@ -267,6 +372,97 @@ pub const NominalTypeKey = struct {
     module_name: ModuleNameId,
     type_name: TypeNameId,
 };
+
+pub fn erasedFnAbiKeyEql(a: ErasedFnAbiKey, b: ErasedFnAbiKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+pub fn computeErasedFnAbiKey(abi: ErasedFnAbi) ErasedFnAbiKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "erased-fn-abi");
+    writeHashU32(&hasher, abi.fixed_arity);
+    writeHashU32(&hasher, @intCast(abi.arg_exec_keys.len));
+    for (abi.arg_exec_keys) |key| hasher.update(&key.bytes);
+    hasher.update(&abi.ret_exec_key.bytes);
+    hashErasedPackedFunctionArgAbi(&hasher, abi.packed_function_arg);
+    writeHashU32(&hasher, @intCast(abi.arg_abis.len));
+    for (abi.arg_abis) |arg_abi| hashErasedValueAbi(&hasher, arg_abi);
+    hashErasedResultAbi(&hasher, abi.result_abi);
+    if (abi.capture_arg) |capture_arg| {
+        writeHashBool(&hasher, true);
+        hashErasedCaptureArgAbi(&hasher, capture_arg);
+    } else {
+        writeHashBool(&hasher, false);
+    }
+    if (abi.hosted_owner) |hosted_owner| {
+        writeHashBool(&hasher, true);
+        hasher.update(&hosted_owner.bytes);
+    } else {
+        writeHashBool(&hasher, false);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn hashErasedPackedFunctionArgAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedPackedFunctionArgAbi) void {
+    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
+    switch (abi) {
+        .ordinary_refcounted_value => {},
+        .hosted => |key| hasher.update(&key.bytes),
+        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
+    }
+}
+
+fn hashErasedValueAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedValueAbi) void {
+    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
+    switch (abi) {
+        .ordinary_roc_value,
+        .opaque_ptr,
+        => {},
+        .hosted => |key| hasher.update(&key.bytes),
+        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
+    }
+}
+
+fn hashErasedResultAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedResultAbi) void {
+    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
+    switch (abi) {
+        .ordinary_roc_value,
+        .opaque_ptr,
+        => {},
+        .hosted => |key| hasher.update(&key.bytes),
+        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
+    }
+}
+
+fn hashErasedCaptureArgAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedCaptureArgAbi) void {
+    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
+    switch (abi) {
+        .ordinary_roc_value,
+        .zero_sized_roc_value,
+        => {},
+        .hosted => |key| hasher.update(&key.bytes),
+        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
+    }
+}
+
+fn writeHashTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
+    writeHashBytes(hasher, tag);
+}
+
+fn writeHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    writeHashU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+    hasher.update(&[_]u8{if (value) 1 else 0});
+}
+
+fn writeHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
 
 pub const CanonicalNameStore = struct {
     allocator: Allocator,

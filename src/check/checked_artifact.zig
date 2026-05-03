@@ -2956,9 +2956,13 @@ pub const ExecutableTypePayloadStore = struct {
         return self.payloads[index];
     }
 
-    pub fn verifyPublished(self: *const ExecutableTypePayloadStore, artifact_key: CheckedModuleArtifactKey) void {
+    pub fn verifyPublished(
+        self: *const ExecutableTypePayloadStore,
+        artifact_key: CheckedModuleArtifactKey,
+        erased_fn_abis: *const canonical.ErasedFnAbiStore,
+    ) void {
         if (builtin.mode != .Debug) return;
-        for (self.payloads) |payload| verifyExecutableTypePayload(self, artifact_key, payload);
+        for (self.payloads) |payload| verifyExecutableTypePayload(self, artifact_key, erased_fn_abis, payload);
     }
 
     pub fn deinit(self: *ExecutableTypePayloadStore, allocator: Allocator) void {
@@ -3288,6 +3292,8 @@ pub const PromotedCallableBodyPlanTable = struct {
         plans: *const CompileTimePlanStore,
         callable_set_descriptors: *const CallableSetDescriptorStore,
         executable_type_payloads: *const ExecutableTypePayloadStore,
+        executable_value_transforms: *const ExecutableValueTransformPlanStore,
+        erased_fn_abis: *const canonical.ErasedFnAbiStore,
         artifact_key: CheckedModuleArtifactKey,
     ) void {
         if (builtin.mode != .Debug) return;
@@ -3296,6 +3302,8 @@ pub const PromotedCallableBodyPlanTable = struct {
             plans,
             callable_set_descriptors,
             executable_type_payloads,
+            executable_value_transforms,
+            erased_fn_abis,
             artifact_key,
             plan,
         );
@@ -6661,6 +6669,7 @@ fn verifyExecutableTypePayloadRef(
 fn verifyExecutableTypePayload(
     payloads: *const ExecutableTypePayloadStore,
     artifact_key: CheckedModuleArtifactKey,
+    erased_fn_abis: *const canonical.ErasedFnAbiStore,
     payload: ExecutableTypePayload,
 ) void {
     switch (payload) {
@@ -6681,6 +6690,9 @@ fn verifyExecutableTypePayload(
             if (member.payload_ty) |payload_ty| verifyExecutableTypePayloadRef(payloads, artifact_key, payload_ty);
         },
         .erased_fn => |erased| {
+            const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+                std.debug.panic("checked artifact invariant violated: erased executable payload signature ABI is not published", .{});
+            };
             if ((erased.capture_ty == null) != (erased.capture_ty_key == null)) {
                 std.debug.panic("checked artifact invariant violated: erased executable payload has mismatched capture ref/key presence", .{});
             }
@@ -6690,6 +6702,9 @@ fn verifyExecutableTypePayload(
             }
             if (erased.sig_key.capture_ty != null and erased.capture_ty == null) {
                 std.debug.panic("checked artifact invariant violated: erased executable payload signature has capture but payload is missing", .{});
+            }
+            if ((erased.sig_key.capture_ty == null) != (abi.capture_arg == null)) {
+                std.debug.panic("checked artifact invariant violated: erased executable payload signature capture disagrees with ABI payload", .{});
             }
         },
         .recursive_ref => |ref| {
@@ -6702,12 +6717,19 @@ fn verifyExecutableTypePayload(
 
 fn verifyErasedPromotedProcedureExecutableSignature(
     payloads: *const ExecutableTypePayloadStore,
+    erased_fn_abis: *const canonical.ErasedFnAbiStore,
     artifact_key: CheckedModuleArtifactKey,
     signature: ErasedPromotedProcedureExecutableSignature,
     erased: ErasedPromotedWrapperBodyPlan,
 ) void {
+    const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable signature ABI is not published", .{});
+    };
     if (!std.mem.eql(u8, &signature.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature source type differs from wrapper source type", .{});
+    }
+    if (!std.mem.eql(u8, &erased.sig_key.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable signature key source type differs from wrapper source type", .{});
     }
     if (!std.mem.eql(u8, &signature.specialization_key.requested_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable specialization source type differs from wrapper source type", .{});
@@ -6739,8 +6761,22 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     if (signature.erased_call_args.len != signature.erased_call_arg_keys.len) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg refs/keys differ in length", .{});
     }
+    if (signature.erased_call_arg_keys.len != abi.fixed_arity) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arity differs from ABI payload", .{});
+    }
+    for (signature.erased_call_arg_keys, abi.arg_exec_keys) |arg_key, abi_arg_key| {
+        if (!std.mem.eql(u8, &arg_key.bytes, &abi_arg_key.bytes)) {
+            std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg key differs from ABI payload", .{});
+        }
+    }
+    if (!std.mem.eql(u8, &signature.erased_call_ret_key.bytes, &abi.ret_exec_key.bytes)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from ABI payload", .{});
+    }
     if ((erased.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from signature key", .{});
+    }
+    if ((erased.sig_key.capture_ty == null) != (abi.capture_arg == null)) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from ABI payload", .{});
     }
     if (signature.hidden_capture) |hidden| {
         const capture_ty = erased.sig_key.capture_ty orelse unreachable;
@@ -6816,6 +6852,7 @@ fn verifyPromotedCallableBodyPlan(
     callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
     executable_value_transforms: *const ExecutableValueTransformPlanStore,
+    erased_fn_abis: *const canonical.ErasedFnAbiStore,
     artifact_key: CheckedModuleArtifactKey,
     plan: PromotedCallableBodyPlan,
 ) void {
@@ -6847,6 +6884,7 @@ fn verifyPromotedCallableBodyPlan(
             verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, erased.result_transform);
             verifyErasedPromotedProcedureExecutableSignature(
                 executable_type_payloads,
+                erased_fn_abis,
                 artifact_key,
                 erased.executable_signature,
                 erased,
@@ -8911,6 +8949,7 @@ pub const CheckedModuleArtifact = struct {
     executable_type_payloads: ExecutableTypePayloadStore = .{},
     executable_value_transforms: ExecutableValueTransformPlanStore = .{},
     callable_set_descriptors: CallableSetDescriptorStore = .{},
+    erased_fn_abis: canonical.ErasedFnAbiStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -9079,6 +9118,7 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
+        self.erased_fn_abis.deinit(allocator);
         self.callable_set_descriptors.deinit(allocator);
         self.executable_value_transforms.deinit(allocator);
         self.executable_type_payloads.deinit(allocator);
@@ -9392,14 +9432,16 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.executable_type_payloads.verifyPublished(self.key);
+        self.executable_type_payloads.verifyPublished(self.key, &self.erased_fn_abis);
         self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
         self.callable_set_descriptors.verifyPublished();
+        self.erased_fn_abis.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
             &self.callable_set_descriptors,
             &self.executable_type_payloads,
             &self.executable_value_transforms,
+            &self.erased_fn_abis,
             self.key,
         );
         self.promoted_callable_wrappers.verifyPublished(
@@ -9487,6 +9529,7 @@ pub const ImportedModuleView = struct {
     executable_type_payloads: *const ExecutableTypePayloadStore,
     executable_value_transforms: *const ExecutableValueTransformPlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
+    erased_fn_abis: *const canonical.ErasedFnAbiStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -9526,6 +9569,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .executable_type_payloads = &artifact.executable_type_payloads,
         .executable_value_transforms = &artifact.executable_value_transforms,
         .callable_set_descriptors = &artifact.callable_set_descriptors,
+        .erased_fn_abis = &artifact.erased_fn_abis,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),

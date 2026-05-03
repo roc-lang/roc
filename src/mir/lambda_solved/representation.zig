@@ -60,6 +60,8 @@ pub const CanonicalCallableSetKey = canonical.CanonicalCallableSetKey;
 pub const CaptureShapeKey = canonical.CaptureShapeKey;
 pub const CanonicalExecValueTypeKey = canonical.CanonicalExecValueTypeKey;
 pub const ErasedFnAbiKey = canonical.ErasedFnAbiKey;
+pub const ErasedFnAbi = canonical.ErasedFnAbi;
+pub const ErasedFnAbiStore = canonical.ErasedFnAbiStore;
 pub const ErasedFnSigKey = canonical.ErasedFnSigKey;
 pub const CallableSetMemberRef = canonical.CallableSetMemberRef;
 pub const CallableSetCaptureSlot = canonical.CallableSetCaptureSlot;
@@ -706,6 +708,7 @@ pub const RepresentationStore = struct {
     callable_emission_plans: []const CallableValueEmissionPlan = &.{},
     callable_construction_plans: []const CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
+    erased_fn_abis: ErasedFnAbiStore = .{},
     box_boundaries: []const BoxBoundary = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
     session_value_transforms: SessionExecutableValueTransformStore = .{},
@@ -718,6 +721,7 @@ pub const RepresentationStore = struct {
 
     pub fn deinit(self: *RepresentationStore) void {
         self.session_value_transforms.deinit(self.allocator);
+        self.erased_fn_abis.deinit(self.allocator);
         for (self.callable_emission_plans) |plan| {
             switch (plan) {
                 .already_erased => |erased| {

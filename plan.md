@@ -1067,9 +1067,14 @@ procedure boundary. A `call_proc` argument transforms from the caller's local
 argument value to a target `procedure_param`; a `call_proc` result transforms
 from the target `procedure_return` endpoint to the call expression's local
 result value. A `call_value_erased` argument transforms from the caller's local
-argument value to a `call_raw_arg` endpoint whose key is
-`ErasedFnSigKey.args[index]`; its raw result transforms from `call_raw_result`
-whose key is `ErasedFnSigKey.ret` to the call expression's local result value.
+argument value to a `call_raw_arg` endpoint whose key comes from the explicit
+erased ABI payload `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`; its raw
+result transforms from `call_raw_result`, whose key is
+`erased_fn_abi(sig_key.abi).ret_exec_key`, to the call expression's local result
+value. The ABI payload must be read from the checked artifact or lambda-solved
+solve session that owns the erased-call site. It must not be reconstructed from
+the source function type, physical layout, callee body, runtime packed value, or
+backend calling convention.
 A finite callable-set `callable_match` branch transforms from its
 `callable_match_branch_raw_result` endpoint to the shared call result endpoint.
 Branch joins, captures, mutable joins, loop phis, aggregate existing-value
@@ -1284,11 +1289,16 @@ For an erased promoted procedure:
   promoted procedure after applying `result_transform`, not merely the erased-call
   ABI return.
 - `erased_call_args` and `erased_call_arg_keys` describe the exact ABI argument
-  values passed to `call_erased` after applying `arg_transforms`. Their arity
-  must exactly match the fixed arity encoded by `sig_key`.
+  values passed to `call_erased` after applying `arg_transforms`. They are
+  copied from the same `ErasedFnAbi` payload named by `sig_key.abi`, not computed
+  independently. Their arity must exactly match
+  `erased_fn_abi(sig_key.abi).fixed_arity`, and each key must exactly equal the
+  corresponding `erased_fn_abi(sig_key.abi).arg_exec_keys[index]`.
 - `erased_call_ret` and `erased_call_ret_key` describe the raw erased-call result
-  before applying `result_transform`. `erased_call_ret_key` must exactly match
-  the return key encoded by `sig_key`.
+  before applying `result_transform`. They are copied from the same
+  `ErasedFnAbi` payload named by `sig_key.abi`, not computed independently.
+  `erased_call_ret_key` must exactly equal
+  `erased_fn_abi(sig_key.abi).ret_exec_key`.
 - `hidden_capture` is present exactly when `sig_key.capture_ty` is non-null. Its
   `exec_ty_key` must equal `sig_key.capture_ty`. If `sig_key.capture_ty` is null,
   `hidden_capture` must be null. Runtime pointer nullness, runtime capture byte
@@ -3865,11 +3875,12 @@ must not ask whether the current syntax is inside `Box.box(...)`, compare source
 and target executable shapes, recover erasedness from a physical layout, or
 re-run representation solving.
 
-`ErasedFnSigKey` equality includes the erased-call ABI shape and hidden capture
-type. Two erased callables with the same erased argument and return
-representations but different hidden capture types or different `ErasedFnAbiKey`
-values are different erased callable representations. They must not silently
-merge.
+`ErasedFnSigKey` equality includes the canonical source function type, hidden
+capture type, and `ErasedFnAbiKey`. The erased argument and return
+representations live in the `ErasedFnAbi` payload named by that ABI key. Two
+erased callables with the same source function type but different hidden capture
+types or different `ErasedFnAbiKey` values are different erased callable
+representations. They must not silently merge.
 
 `ErasedFnSigKey.capture_ty` is a canonical executable-value type key, not an
 executable `TypeId`. It is correct for equality, interning, and debug
@@ -4168,9 +4179,10 @@ four fields. It must not contain expression ids, side-table ids, raw type ids,
 symbol freshening suffixes, LIR temporaries, ARC placement records, or
 allocation-order-dependent data.
 
-`ErasedFnSigKey` must include the canonical erased argument types, canonical
-erased return type, fixed Roc arity, canonical hidden capture type, and an
-`ErasedFnAbiKey`.
+`ErasedFnSigKey` must include the canonical source function type, canonical
+hidden capture type, and an `ErasedFnAbiKey`. The canonical erased argument
+types, canonical erased return type, fixed Roc arity, and low-level erased-call
+ABI shape are owned by the `ErasedFnAbi` payload named by that key.
 
 Executable MIR values that have already been evaluated are referenced through
 explicit value handles:
@@ -4256,22 +4268,24 @@ The erased code signature is keyed by `ErasedFnSigKey`:
 
 ```zig
 const ErasedFnSigKey = struct {
-    fixed_arity: u32,
-    args: Span(CanonicalExecValueTypeKey),
-    ret: CanonicalExecValueTypeKey,
-    capture_ty: ?ErasedCaptureTypeKey,
+    source_fn_ty: CanonicalTypeKey,
     abi: ErasedFnAbiKey,
+    capture_ty: ?CanonicalExecValueTypeKey,
 };
 ```
 
-- `args` are the fixed-arity Roc source arguments after erased-boundary
-  representation rewriting.
-- `ret` is the erased-boundary return representation.
+- `source_fn_ty` is the canonical Roc source function type requested at the
+  erased boundary. It is source type identity for verification and adapter
+  selection; it is not the erased-call ABI shape.
+- `abi` names the immutable erased-call ABI payload that owns the fixed Roc
+  arity, canonical erased argument representations, canonical erased return
+  representation, and low-level erased-call ABI behavior.
 - `capture_ty` is null when the callable has no capture argument.
 - `capture_ty` is non-null when erased code expects an explicit hidden capture
-  argument.
+  argument. It is a canonical executable-value type key, not an executable
+  `TypeId`.
 - the hidden capture argument, when present, is appended after all fixed-arity
-  Roc source arguments.
+  Roc source arguments recorded in `erased_fn_abi(abi).arg_exec_keys`.
 
 No-capture erased functions have `capture_ty = null`, no hidden capture
 argument, and `capture = none`.
@@ -4295,48 +4309,75 @@ either `zero_sized_typed` with the exact capture type key or `boxed` with the
 same capture type key. A mismatch is a compiler invariant violation handled by
 debug-only assertion in debug builds and `unreachable` in release builds.
 
-`ErasedFnAbiKey` interns an explicit erased-call ABI shape:
+`ErasedFnAbiKey` interns an explicit erased-call ABI payload owned by an
+`ErasedFnAbiStore`:
 
 ```zig
-ErasedFnAbi {
-    kind: ErasedFnAbiKind,
+const ErasedFnAbi = struct {
+    key: ErasedFnAbiKey,
     fixed_arity: u32,
+    arg_exec_keys: Span(CanonicalExecValueTypeKey),
+    ret_exec_key: CanonicalExecValueTypeKey,
     packed_function_arg: ErasedPackedFunctionArgAbi,
     arg_abis: Span(ErasedValueAbi),
     result_abi: ErasedResultAbi,
     capture_arg: ?ErasedCaptureArgAbi,
     hosted_owner: ?HostedAbiKey,
-}
+};
+
+const ErasedFnAbiStore = struct {
+    abis: Store(ErasedFnAbi),
+    arg_exec_keys: Store(CanonicalExecValueTypeKey),
+    arg_abis: Store(ErasedValueAbi),
+};
 ```
 
-The ABI shape describes the erased boundary's required calling convention. It
-says how the packed erased function value is passed, how each fixed-arity Roc
-argument is represented at the boundary, how the result is materialized, and
-whether an explicit hidden capture argument exists. `arg_abis.len` must equal
-`fixed_arity`. `capture_arg` must agree exactly with
-`ErasedFnSigKey.capture_ty`.
+The ABI payload is semantic compiler-stage data, not a memoizing cache. Checked
+artifacts own published erased ABI stores. Lambda-solved representation solve
+sessions own session-local erased ABI stores. Imported module views expose
+read-only access to their published ABI stores. A later stage that has an
+`ErasedFnSigKey` must resolve `sig_key.abi` through the explicit store selected
+by the owning artifact or solve session. It must not ask a global cache, rebuild
+the payload from the source function type, inspect layouts, inspect the callee
+body, or derive ABI behavior from backend lowering.
+
+The ABI payload describes the erased boundary's required calling convention. It
+says the fixed Roc arity, the canonical executable-value key of every erased
+argument endpoint, the canonical executable-value key of the raw erased result
+endpoint, how the packed erased function value is passed, how each fixed-arity
+Roc argument is represented at the boundary, how the result is materialized, and
+whether an explicit hidden capture argument exists. `arg_exec_keys.len`,
+`arg_abis.len`, and the source function type arity must all equal `fixed_arity`.
+`capture_arg` must agree exactly with `ErasedFnSigKey.capture_ty`: null capture
+type means no hidden capture argument, and non-null capture type means exactly
+one hidden capture argument after all fixed-arity Roc source arguments.
 
 `hosted_owner` is set only for hosted, platform, or intrinsic ABI shapes whose
 ABI is defined outside ordinary Roc boxed-erased calling.
 
-The ABI shape must not contain expression ids, mutable type-store ids, source
-syntax pointers, runtime function pointers, capture-layout pointers, LIR
-temporaries, ARC placement records, or backend-specific layout handles. Those
-belong to executable MIR, LIR, or backend lowering, not to erased callable
-identity.
+`ErasedFnAbiKey` is the content hash of the ABI payload, including
+`fixed_arity`, every `arg_exec_keys` entry in order, `ret_exec_key`,
+`packed_function_arg`, every `arg_abis` entry in order, `result_abi`,
+`capture_arg`, and `hosted_owner`. It must not include expression ids, mutable
+type-store ids, source syntax pointers, runtime function pointers,
+capture-layout pointers, LIR temporaries, ARC placement records, backend layout
+handles, or allocation-order-dependent ids. Debug verification recomputes the
+hash from the stored payload and asserts that it equals `ErasedFnAbi.key`.
 
-That ABI shape is part of key identity. Exact `ErasedFnSigKey` equality means:
+That ABI payload is part of key identity through `ErasedFnAbiKey`. Exact
+`ErasedFnSigKey` equality means:
 
 ```text
-same fixed Roc arity
-same canonical erased argument representations
-same canonical erased return representation
+same canonical source function type
+same ErasedFnAbiKey, whose payload includes fixed arity, erased arguments,
+  erased return, and ABI behavior
 same canonical hidden capture type, including null vs non-null
-same ErasedFnAbiKey
 ```
 
-Same erased arguments and same erased return with a different hidden capture
-type or a different `ErasedFnAbiKey` is not the same erased callable
+Same source function type and same hidden capture type with a different
+`ErasedFnAbiKey` is not the same erased callable representation. Same erased
+arguments and same erased return with a different hidden capture type or a
+different `ErasedFnAbiKey` is not the same erased callable
 representation. The compiler must either emit an explicit adapter or bridge at a
 boundary that names both shapes. If no explicit adapter or bridge path exists
 after checking, that is a compiler invariant violation. A later stage must not
@@ -4361,10 +4402,11 @@ intrinsic ABI metadata.
 
 `ErasedAdapterKey` and boxed payload plans are reserved before executable MIR
 emits adapter bodies. `ErasedFnSigKey` must not contain procedure body summaries,
-expression ids, side-table ids, LIR temporaries, or runtime function pointers. A
-later LIR or backend stage must not recover erased-call ABI shape from the
-adapter body, capture layout, host symbol, runtime function pointer, or ARC
-placement.
+expression ids, side-table ids, LIR temporaries, runtime function pointers, or
+owned spans of erased argument/return keys. Variable-length erased-call ABI data
+belongs only to `ErasedFnAbiStore`. A later LIR or backend stage must not
+recover erased-call ABI shape from the adapter body, capture layout, host
+symbol, runtime function pointer, or ARC placement.
 
 ### Executable MIR
 
@@ -7837,8 +7879,9 @@ artifact. If the leaf names an imported procedure, the imported artifact view
 must expose the procedure and its checked template/capability record. An erased
 boxed callable leaf stores the exact erased function signature, erased code ref,
 capture materialization, and non-empty `BoxBoundaryId` provenance. The exact
-erased ABI is inside `ErasedFnSigKey`; it must not be duplicated as a second
-field. Later stages instantiate callable leaf templates into ordinary
+erased ABI is named by `ErasedFnSigKey.abi` and owned by the explicit
+`ErasedFnAbiStore`; it must not be duplicated as a second independently
+computed field. Later stages instantiate callable leaf templates into ordinary
 `proc_value` or explicit erased callable values and must not rediscover their
 targets from source syntax, layout shape, runtime bytes, generated symbol text,
 or field/tag names.
@@ -10163,8 +10206,9 @@ LIR, ARC, or backend stages. If a later stage needs executable code for a member
 it derives or reserves that code from the descriptor plus the requested
 executable call/adapter/materialization context.
 
-`ErasedFnSigKey` is the canonical fixed-arity erased function argument and return
-signature plus canonical hidden capture type and `ErasedFnAbiKey`.
+`ErasedFnSigKey` is the canonical source function type plus canonical hidden
+capture type plus `ErasedFnAbiKey`. The fixed-arity erased function argument and
+return signature lives in the `ErasedFnAbi` payload named by that key.
 `CaptureShapeKey` is the canonical `CaptureSlot.index` ordered capture layout
 and capture representation. Each capture slot in the key stores a
 `CanonicalExecValueTypeKey` for that captured value, or the canonical erased
@@ -13784,7 +13828,8 @@ Executable MIR:
   executable MIR only debug-verifies that none reached it
 - every erased capture record has deterministic field ordering
 - every erased call has an explicit erased function type
-- every erased call has an explicit `ErasedFnAbiKey` inside `ErasedFnSigKey`
+- every erased call has an explicit `ErasedFnSigKey` whose `abi` resolves through
+  the owning `ErasedFnAbiStore`
 - every runtime mutation site has an explicit runtime uniqueness check
 - executable MIR contains no semantic parameter-mode solver output
 - first-class intrinsic references use explicit wrapper procedures
@@ -14338,8 +14383,13 @@ objects.
   compiler-invariant path.
 - add hidden-capture ABI tests distinguishing no capture, typed zero-sized
   capture, and boxed runtime capture. The expected keys must prove
-  `ErasedFnSigKey.capture_ty` participates in equality; same args, same return,
-  and same `ErasedFnAbiKey` with different `capture_ty` must not merge.
+  `ErasedFnSigKey.capture_ty` participates in equality; same
+  `source_fn_ty`, same `ErasedFnAbiKey`, and different `capture_ty` must not
+  merge. Add a separate ABI-store verification case where two erased callables
+  with the same `source_fn_ty` and hidden capture type but different
+  `ErasedFnAbiKey` payloads do not merge, and where corrupting an
+  `ErasedFnAbi.key` so it no longer matches the stored payload panics in the
+  first debug-only verifier that consumes the ABI store.
 - add source `match` tests with nested tag patterns, multi-scrutinee patterns,
   record and tuple patterns, list exact/spread/rest patterns, guards that can
   fail after structural tests pass, and binders under several nested paths. The
@@ -15128,8 +15178,8 @@ The cutover is complete only when all of these are true:
 - executable MIR consumes `BoxPayloadRepresentationPlan` instead of making
   semantic erased-shape compatibility decisions
 - executable MIR consumes erased-call ABI shapes from `ErasedFnSigKey` through
-  explicit `ErasedFnAbiKey` values instead of recovering ABI behavior from
-  runtime function pointers or capture layouts
+  explicit `ErasedFnAbiKey` values and the owning `ErasedFnAbiStore` instead of
+  recovering ABI behavior from runtime function pointers or capture layouts
 - erased callable merge requires exact `ErasedFnSigKey` equality, including
   hidden capture type and `ErasedFnAbiKey`; hidden-capture or ABI-shape
   mismatches require explicit adapters or bridges
