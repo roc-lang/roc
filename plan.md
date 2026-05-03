@@ -1190,10 +1190,19 @@ callable code ref may store a finite callable leaf, executable specialization
 key, layout id, generated symbol text, runtime function pointer, or target ABI
 handle.
 
-`CallableLeafInstance` remains a pre-executable, source-level value record. It
-is valid in compile-time value graphs, public constants, and private promoted
-capture graphs that will still pass through mono, row-finalized mono, lifted
-MIR, and lambda-solved MIR. Its finite case must remain exactly:
+`CallableLeafInstance` is not one universal capture representation. It has two
+allowed homes with different stage contracts:
+
+- compile-time constant graphs may contain finite callable leaves and erased
+  boxed callable leaves, because executable MIR materializes concrete
+  `ConstInstanceRef` values from explicit target-specific materialization plans
+  before IR
+- source-level private promoted-capture graphs may contain only finite callable
+  leaves, because they are consumed first by mono MIR and then pass through
+  row-finalized mono, lifted MIR, lambda-solved MIR, and executable MIR in order
+
+The finite leaf case remains the only callable leaf shape that source private
+capture graphs may store:
 
 ```zig
 const FiniteCallableLeafInstance = struct {
@@ -1207,6 +1216,21 @@ layout ids, generated symbol text, runtime function pointers, or runtime capture
 pointers. Those are not known at this type state, and adding them here would
 create a second source of truth competing with lambda-solved callable-set
 descriptors.
+
+An erased boxed callable leaf is executable-ready data, not source-level private
+capture data. It is valid only inside compile-time constant graph instances and
+executable erased capture materialization graphs. It must never appear in
+`PrivateCaptureNode`, `PrivateCaptureRef`, mono MIR input, row-finalized mono
+input, lifted MIR input, or lambda-solved MIR input. If source private capture
+construction reaches a non-function value subtree whose concrete representation
+contains an erased boxed callable payload, it must stop the source private graph
+at that subtree and store a concrete private `ConstInstanceRef` leaf instead.
+Executable MIR later materializes that const instance through the normal
+constant materialization path. If source private capture construction reaches a
+function-typed value, it must recursively promote that callable to a sealed
+procedure value and store a finite `ProcedureCallableRef` leaf. It must not store
+`ErasedFnSigKey`, erased callable code refs, executable hidden-capture plans, or
+boxed-erased callable payloads in the source private capture graph.
 
 Sealed erased promoted wrappers are different. An
 `ErasedPromotedWrapperBodyPlan` is consumed first by executable MIR, because the
@@ -6107,25 +6131,30 @@ pretend that it is an empty-capture finite leaf.
 Capture values are structural compiler-owned graphs. A `serializable_leaf`
 points at a source-visible top-level constant or at a serializable private
 capture leaf created while promoting a compile-time callable. A `callable_leaf`
-points at another compiler-owned callable value that must be promoted
-recursively. Records, tuples, tags, lists, boxes, transparent aliases, and
-nominals preserve the exact source-level container shape. The same graph
-discipline is used for public constant graphs and for private promoted-capture
-graphs: serializable leaves live in `CompileTimeValueStore`, callable leaves
-are explicit procedure values after promotion, and no graph stores raw
-interpreter addresses, Roc heap
-pointers, runtime closure objects, or thunk entrypoints. The `ConstRef.owner`
-identifies source-visible top-level data versus private capture data.
+inside a compile-time callable graph points at another compiler-owned callable
+value that must be promoted recursively. Records, tuples, tags, lists, boxes,
+transparent aliases, and nominals preserve the exact source-level container
+shape. Public constant graphs and source private capture graphs share the same
+logical container discipline, but not the same callable leaf contract: public
+constant graphs may contain finite callable leaves and erased boxed callable
+leaves, while source private capture graphs may contain only finite callable
+leaves and concrete const-instance leaves. No graph stores raw interpreter
+addresses, Roc heap pointers, runtime closure objects, or thunk entrypoints. The
+`ConstRef.owner` identifies source-visible top-level data versus private capture
+data.
 
 Private promoted-capture data has two forms. Serializable leaves are ordinary
 compiler-owned constant templates addressed by `ConstRef` with
 `ConstOwner.promoted_capture`; concrete uses carry `ConstInstantiationKey`.
 Mixed structural capture graphs are addressed by
-`PrivateCaptureRef` and may contain serializable leaves, callable leaves, and
-source-level containers. Neither form corresponds to a source top-level binding,
-is exported or imported by name, appears as a `TopLevelValueTable` entry, or can
-be looked up by later stages except through explicit promoted-procedure body
-operands or debug provenance.
+`PrivateCaptureRef` and may contain concrete const-instance leaves, finite
+callable leaves, and source-level containers. They must not contain erased boxed
+callable leaves; any non-function subtree that needs erased boxed callable
+materialization is represented by a concrete private `ConstInstanceRef` leaf.
+Neither form corresponds to a source top-level binding, is exported or imported
+by name, appears as a `TopLevelValueTable` entry, or can be looked up by later
+stages except through explicit promoted-procedure body operands or debug
+provenance.
 
 Erased compile-time callable results are allowed only when their
 `ErasedFnSigKey` and callable provenance came from explicit `Box(T)` boundaries.
@@ -6392,14 +6421,17 @@ Callable promotion uses a reserve/fill/seal lifecycle:
 
 Private capture graph materialization is deterministic:
 
-- a `serializable_leaf` materializes as the exact `ConstInstanceRef`
+- a `const_instance_leaf` materializes as the exact `ConstInstanceRef`; in pure
+  mode the artifact must prove the referenced const instance has no reachable
+  callable slots, and in general mode executable MIR must materialize the const
+  instance through the full callable-aware constant materialization path before
+  IR
 - a finite `callable_leaf` materializes as
   `proc_value { template = leaf.proc_value.template, captures = [], fn_ty = leaf.proc_value.source_fn_ty }`
-- an erased boxed `callable_leaf` materializes from the explicit
-  `ErasedCallableLeafInstance`; it may be emitted only through the named
-  `ErasedFnSigKey`, erased code ref, capture materialization plan, and non-empty
-  `BoxBoundaryId` provenance. The `ErasedFnAbiKey` is reached only through
-  `ErasedFnSigKey`.
+- an erased boxed callable leaf is forbidden in source private capture graphs;
+  erased boxed callable leaves may materialize only from compile-time constant
+  materialization graphs or from sealed
+  `ErasedCaptureExecutableMaterializationPlan` graphs consumed by executable MIR
 - a record materializes by assembling finalized field ids in logical field
   order while preserving the captured evaluation order recorded by the
   reification plan
@@ -6421,6 +6453,33 @@ before passing or returning it. If the wrapper needs only leaves or projections,
 the wrapper lowers those reads directly from the private capture graph. Both
 cases consume `PrivateCaptureRef` handles; neither case creates a runtime
 top-level global, runtime thunk, or runtime closure object.
+
+The source private capture graph deliberately stops at a concrete
+`ConstInstanceRef` leaf when the captured non-function value subtree already
+requires executable-owned callable materialization. For example:
+
+```roc
+make_adder : I64 -> Box(I64 -> I64)
+make_adder = |n| Box.box(|x| x + n)
+
+make_runner : { f : Box(I64 -> I64), bonus : I64 } -> (I64 -> I64)
+make_runner = |table| |x| Box.unbox(table.f)(x) + table.bonus
+
+run : I64 -> I64
+run = make_runner({ f: make_adder(41), bonus: 1 })
+```
+
+`run` is a finite promoted callable wrapper, so its wrapper body still lowers
+through mono MIR. The captured record is source-level private capture data, but
+the `f` field's boxed payload is erased only because of the explicit
+`Box(I64 -> I64)` boundary. The source private capture graph therefore stores
+the concrete `Box(I64 -> I64)` subtree as a private `ConstInstanceRef` leaf whose
+constant materialization graph contains the erased boxed callable leaf and the
+executable-ready capture materialization for `41`. Mono sees a const-instance
+read for the field value, not an `ErasedCallableLeafInstance`. Executable MIR
+resolves and materializes that const instance before IR. No runtime thunk,
+runtime global initializer, runtime closure object, source-shape recovery, or
+post-check erasure inference is allowed.
 
 For example:
 
@@ -7264,8 +7323,8 @@ const PrivateCaptureInstantiationKey = struct {
 };
 
 const PrivateCaptureNode = union(enum) {
-    serializable_leaf: ConstRef,
-    callable_leaf_template: CallableLeafTemplate,
+    const_instance_leaf: PrivateCaptureConstLeaf,
+    finite_callable_leaf_template: FiniteCallableLeafTemplate,
     record: Span(PrivateCaptureField),
     tuple: Span(PrivateCaptureNodeId),
     tag_union: PrivateCaptureTagNode,
@@ -7274,15 +7333,29 @@ const PrivateCaptureNode = union(enum) {
     nominal: PrivateCaptureNominalNode,
     recursive_ref: PrivateCaptureNodeId,
 };
+
+const PrivateCaptureConstLeaf = struct {
+    const_instance: ConstInstanceRef,
+    mode: PrivateCaptureConstMode,
+};
+
+const PrivateCaptureConstMode = union(enum) {
+    pure_no_callable_slots: NoReachableCallableSlotsProof,
+    general_may_contain_callable_slots,
+};
 ```
 
-Top-level constants and source-level private capture graphs both may contain
-callable leaves. A `top_level_binding` constant is source-visible and importable
-through its `ConstRef`; a `PrivateCaptureRef` is reachable only from promoted
-procedure bodies that still pass through the normal MIR-family stages. Later
-stages must consume the explicit constant nodes or private capture nodes and
-must not rediscover callable leaves from source syntax, runtime values, field
-names, layout order, or expression shape.
+Top-level constants and source-level private capture graphs have different
+callable contracts. A `top_level_binding` constant is source-visible and
+importable through its `ConstRef`; its constant graph may contain finite callable
+leaves and erased boxed callable leaves because executable MIR materializes
+concrete const instances through target-specific materialization plans before
+IR. A `PrivateCaptureRef` is reachable only from promoted procedure bodies that
+still pass through the normal MIR-family stages; its source private graph may
+contain only finite callable leaf templates and concrete const-instance leaves.
+Later stages must consume the explicit constant nodes or private capture nodes
+and must not rediscover callable leaves from source syntax, runtime values,
+field names, layout order, or expression shape.
 
 Sealed erased promoted wrappers are not consumers of `PrivateCaptureRef`.
 Checking finalization must recursively convert any private capture graph needed
@@ -7311,6 +7384,20 @@ reservation, and it cannot contain a bare procedure value without
 `source_fn_ty`. This is what allows promoted wrapper lowering to materialize
 callable leaves as ordinary `proc_value` values without consulting the
 compile-time callable graph, interpreter results, or source syntax again.
+
+If private capture construction reaches a function-typed capture, it must
+recursively promote that callable and store a finite callable leaf template. If
+it reaches a non-function subtree whose concrete materialization contains erased
+boxed callable slots, it must store a `const_instance_leaf` for that subtree
+instead of embedding the erased callable in the private capture graph.
+`pure_no_callable_slots` may be used only when debug verification can prove the
+referenced const instance contains no reachable callable slots. Otherwise the
+leaf must use `general_may_contain_callable_slots`, and executable MIR must use
+the full callable-aware const materialization path. A private capture graph must
+never contain `ErasedCallableLeafInstance`, `ErasedFnSigKey`,
+`ErasedCallableCodeRef`, `ErasedCaptureExecutableMaterializationPlan`,
+`CallableResultPlanId`, interpreter addresses, runtime packed-function bytes, or
+any request to re-run compile-time evaluation.
 
 Private capture structural nodes for source-level promoted bodies are owned by
 the checked artifact, but their row and tag identities must become explicit
@@ -12277,11 +12364,13 @@ callable value, not a separate alias concept, not a syntax shortcut, and not an
 Serializable top-level captures become reads of their published `ConstRef`
 templates plus concrete instantiation requests. Local captures are reified into
 private structural promoted-capture data: serializable leaves become
-artifact-private `ConstRef` templates, callable leaves become explicit
-`CallableLeafTemplate` records that instantiate to `CallableLeafInstance`
-records at concrete use sites. A finite callable leaf instance records both the
-sealed procedure template and the exact canonical source function type for that
-occurrence; a bare procedure value is not enough. Existing
+artifact-private `ConstRef` templates or concrete private `ConstInstanceRef`
+leaves, and function-typed callable leaves become explicit finite
+`FiniteCallableLeafTemplate` records that instantiate to
+`FiniteCallableLeafInstance` records at concrete use sites. A finite callable
+leaf instance records both the sealed procedure template and the exact canonical
+source function type for that occurrence; a bare procedure value is not enough.
+Existing
 source/imported/hosted/platform-required procedure bindings remain existing
 procedure templates and are mono-specialized from explicit requests; local closure leaves and
 evaluated callable leaves are recursively promoted to private procedure values
@@ -12290,6 +12379,11 @@ aliases, and nominals preserve the source container shape as private
 compiler-owned capture nodes. Public non-function constants use the same
 constant-template node kinds for nested callable leaves and must be published as
 `ConstRef` templates, not reported as invalid or converted to runtime globals.
+When a local non-function capture subtree contains erased boxed callable slots,
+promotion must store that subtree as a concrete private `ConstInstanceRef` leaf
+and leave erased callable materialization to executable MIR's const
+materialization path; it must not put an erased boxed callable leaf in
+`PrivateCaptureRef`.
 
 `ComptimeCallable` has finite and erased cases. The finite case names the
 procedure, lifted lambda, or callable-set member plus compiler-owned captures.
@@ -12333,8 +12427,10 @@ The promotion implementation order is:
 2. Reserve procedure values, `ProcBaseKeyRef` values, `PromotedCallableNodeId`
    values, and checked template slots for the whole recursive promotion group.
 3. Build `PrivateCaptureRef` graphs for local captures. Whole private capture
-   aggregates and projected leaves both remain explicit value handles; neither
-   becomes a source-visible top-level value.
+   aggregates and projected leaves both remain explicit value handles. Subtrees
+   that require boxed-erased callable materialization are represented as concrete
+   private const-instance leaves. Neither form becomes a source-visible top-level
+   value.
 4. Fill every `PromotedCallableWrapper` body by referencing ordinary parameters
    and explicit private-capture operands.
 5. Seal the promoted checked templates.
@@ -13848,12 +13944,15 @@ Compile-time constants:
   top-level captures are consumed through published `ConstRef` templates plus
   sealed concrete `ConstInstanceRef` values, local captures are consumed through
   private structural promoted-capture nodes, serializable leaves are private
-  capture `ConstRef` templates, and callable leaves are explicit
-  `CallableLeafTemplate` records that instantiate to `CallableLeafInstance`
-  records. Finite callable leaf instances store the sealed checked procedure
-  template plus the exact canonical source function
-  type for the occurrence; captured local callable leaves are recursively
-  promoted to private procedure values before being stored as finite leaves.
+  capture `ConstRef`/`ConstInstanceRef` data, and function-typed callable leaves
+  are explicit finite `FiniteCallableLeafTemplate` records that instantiate to
+  `FiniteCallableLeafInstance` records. Finite callable leaf instances store the
+  sealed checked procedure template plus the exact canonical source function type
+  for the occurrence; captured local callable leaves are recursively promoted to
+  private procedure values before being stored as finite leaves. Erased boxed
+  callable leaves are forbidden in private capture graphs; a captured
+  non-function subtree containing erased boxed callable slots must be stored as a
+  concrete private `ConstInstanceRef` leaf and materialized by executable MIR.
 - promotion consumes `CallablePromotionPlan` and `CallableResultPlan` records and
   does not discover new root dependencies by inspecting runtime capture memory
   or source syntax after dependency ordering is complete
@@ -13872,6 +13971,14 @@ Compile-time constants:
   records through `CallableProcedureTemplateRef.checked`. A test must use a
   generic procedure in two finite leaves at different concrete function types and
   prove the leaves differ by `source_fn_ty`, not by procedure template alone.
+- private capture graphs must reject erased callable payloads at the source graph
+  boundary. A debug-only verifier test must corrupt a source private capture node
+  by inserting `ErasedCallableLeafInstance`, `ErasedFnSigKey`,
+  `ErasedCallableCodeRef`, `ErasedCaptureExecutableMaterializationPlan`, or
+  `CallableResultPlanId` and require a loud panic. A separate positive test must
+  capture a non-function aggregate containing `Box(I64 -> I64)` and prove the
+  source private capture graph stores a concrete private `ConstInstanceRef` leaf
+  while executable MIR materializes the boxed erased callable before IR.
 - debug-only artifact verifier tests corrupt a promoted `procedure_value` to
   remove its checked template, corrupt a private capture promoted
   `callable_leaf` to point at a symbol with no `PromotedProcedureTable` row,
