@@ -603,39 +603,50 @@ const ErasedPromotedWrapperBodyPlan = struct {
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    arg_transforms: Span(ExecutablePayloadTransformPlanId),
+    arg_transforms: Span(PublishedExecutableValueTransformRef),
     hidden_capture_arg: ?ErasedHiddenCaptureArgPlan,
-    result_transform: ExecutablePayloadTransformPlanId,
+    result_transform: PublishedExecutableValueTransformRef,
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 
-const ExecutablePayloadTransformPlanId = enum(u32) { _ };
+const ExecutableValueTransformPlanId = enum(u32) { _ };
+const SessionExecutableValueTransformId = enum(u32) { _ };
+
+const PublishedExecutableValueTransformRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    transform: ExecutableValueTransformPlanId,
+};
+
+const ExecutableValueTransformRef = union(enum) {
+    session: SessionExecutableValueTransformId,
+    published: PublishedExecutableValueTransformRef,
+};
 
 const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
-const PayloadTransformRecordField = struct {
+const ValueTransformRecordField = struct {
     field: RecordFieldLabelId,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-const PayloadTransformTupleElem = struct {
+const ValueTransformTupleElem = struct {
     index: u32,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-const PayloadTransformTagPayloadEdge = struct {
+const ValueTransformTagPayloadEdge = struct {
     source_payload_index: u32,
     target_payload_index: u32,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-const PayloadTransformTagCase = struct {
+const ValueTransformTagCase = struct {
     source_tag: TagLabelId,
     target_tag: TagLabelId,
-    payloads: Span(PayloadTransformTagPayloadEdge),
+    payloads: Span(ValueTransformTagPayloadEdge),
 };
 
 const BoxPayloadTransformKind = enum {
@@ -647,21 +658,21 @@ const BoxPayloadTransformKind = enum {
 const BoxPayloadTransformPlan = struct {
     boundary: BoxBoundaryId,
     kind: BoxPayloadTransformKind,
-    payload: ExecutablePayloadTransformPlanId,
+    payload: ExecutableValueTransformPlanId,
 };
 
-const ExecutablePayloadTransformOp = union(enum) {
+const ExecutableValueTransformOp = union(enum) {
     identity,
     structural_bridge: ExecutableStructuralBridgePlan,
-    record: Span(PayloadTransformRecordField),
-    tuple: Span(PayloadTransformTupleElem),
-    tag_union: Span(PayloadTransformTagCase),
+    record: Span(ValueTransformRecordField),
+    tuple: Span(ValueTransformTupleElem),
+    tag_union: Span(ValueTransformTagCase),
     nominal: struct {
         nominal: NominalTypeKey,
-        backing: ExecutablePayloadTransformPlanId,
+        backing: ExecutableValueTransformPlanId,
     },
     list: struct {
-        elem: ExecutablePayloadTransformPlanId,
+        elem: ExecutableValueTransformPlanId,
     },
     box_payload: BoxPayloadTransformPlan,
     callable_to_erased: CallableToErasedTransformPlan,
@@ -673,17 +684,17 @@ const ExecutableStructuralBridgePlan = union(enum) {
     zst,
     list_reinterpret,
     nominal_reinterpret,
-    box_unbox: ExecutablePayloadTransformPlanId,
-    box_box: ExecutablePayloadTransformPlanId,
+    box_unbox: ExecutableValueTransformPlanId,
+    box_box: ExecutableValueTransformPlanId,
     singleton_to_tag_union: struct {
         source_tag: TagLabelId,
         target_tag: TagLabelId,
-        payload_transform: ?ExecutablePayloadTransformPlanId,
+        value_transform: ?ExecutableValueTransformPlanId,
     },
     tag_union_to_singleton: struct {
         source_tag: TagLabelId,
         target_tag: TagLabelId,
-        payload_transform: ?ExecutablePayloadTransformPlanId,
+        value_transform: ?ExecutableValueTransformPlanId,
     },
 };
 
@@ -710,14 +721,14 @@ const AlreadyErasedCallableTransformPlan = struct {
     sig_key: ErasedFnSigKey,
 };
 
-const ExecutablePayloadTransformPlan = struct {
+const ExecutableValueTransformPlan = struct {
     from: ExecutableValueEndpoint,
     to: ExecutableValueEndpoint,
-    provenance: PayloadTransformProvenance,
-    op: ExecutablePayloadTransformOp,
+    provenance: ValueTransformProvenance,
+    op: ExecutableValueTransformOp,
 };
 
-const PayloadTransformProvenance = union(enum) {
+const ValueTransformProvenance = union(enum) {
     none,
     box_erasure: NonEmptySpan(BoxBoundaryId),
 };
@@ -793,7 +804,7 @@ is mandatory:
   `ProcedureValueRef`, `ProcBaseKeyRef`, source function type, and complete
   `ErasedPromotedWrapperBodyPlan`, but mono MIR must not lower their body and
   must not import `ErasedFnSigKey`, `CanonicalExecValueTypeKey`, executable
-  payload transforms, hidden erased capture arguments, or any other executable
+  value transforms, hidden erased capture arguments, or any other executable
   call signature data.
 
 This is not a runtime thunk or a runtime closure object. For example:
@@ -825,7 +836,7 @@ add1 = Box.unbox(make_boxed({}))
 because the result flowed through the explicit `Box(I64 -> I64)` boundary.
 Checking finalization evaluates the function-valued root, reifies the exact
 erased code ref, `ErasedFnSigKey`, erased capture materialization plan,
-executable payload transforms, the full
+executable value transforms, the full
 `ErasedPromotedProcedureExecutableSignature`, and non-empty `BoxBoundaryId`
 provenance, then reserves a promoted procedure identity. Mono
 may call or pass that procedure identity as an opaque `ProcedureValueRef` at the
@@ -833,8 +844,8 @@ source function type `I64 -> I64`, but mono does not lower the body. Executable
 MIR later emits the synthetic procedure body from the published erased plan by
 lowering the explicit executable type payloads in
 `ErasedPromotedProcedureExecutableSignature`, materializing the explicit capture,
-applying the argument payload transforms, issuing `call_erased`, and applying
-the result payload transform. No runtime thunk, runtime initializer procedure,
+applying the argument value transforms, issuing `call_erased`, and applying
+the result value transform. No runtime thunk, runtime initializer procedure,
 runtime top-level erased callable object, runtime closure object,
 source-shape recovery, or canonical-key-to-TypeId cache is allowed.
 
@@ -897,7 +908,7 @@ the same body shape in different branches must still have different site ids.
 The erased promoted wrapper plan must be complete enough to emit the wrapper
 without inspecting the callable expression again. `params` are the ordinary
 fixed-arity Roc parameters in source order. `arg_transforms` contains exactly
-one `ExecutablePayloadTransformPlanId` per ordinary parameter, including
+one `PublishedExecutableValueTransformRef` per ordinary parameter, including
 identity transforms. Each transform converts the wrapper parameter endpoint to
 the erased-call argument endpoint described by `sig_key` and
 `ErasedPromotedProcedureExecutableSignature`. `result_transform` converts the
@@ -913,20 +924,32 @@ explicit `BoxBoundaryId` values. A promoted erased wrapper must not rediscover
 any of these decisions from the code ref, source syntax, runtime bytes, layout
 shape, or shape comparison.
 
-`ExecutablePayloadTransformPlanId` is an artifact-owned value-transform plan id.
-It is not an executable-MIR `BridgeId`, an IR `BridgePlanId`, a layout id, a
-row-finalized MIR field id, or a run-local type id. The checked artifact must
-publish an `ExecutablePayloadTransformPlanStore` next to the promoted wrapper
-body plans and executable type payload store. Every `arg_transforms` entry and
-the mandatory `result_transform` point into that store. Executable MIR lowers a
-payload transform by first lowering the transform endpoint
-`ExecutableTypePayloadRef`s into the current executable type store, then
-lowering the already-published transform operation. Executable MIR may use the
-endpoint `key` fields only for debug-only verification that the endpoint
-payloads match the expected canonical executable types. It must not derive a
-transform by comparing source and target shapes.
+`ExecutableValueTransformPlanId` is a transform-store-local plan id. It is not
+an executable-MIR `BridgeId`, an IR `BridgePlanId`, a layout id, a row-finalized
+MIR field id, or a run-local type id. The owner is explicit:
 
-Executable payload transforms are recursive value-conversion plans, not merely
+- `PublishedExecutableValueTransformRef` names a checked-artifact-owned plan in
+  another or current artifact. These are used for promoted wrappers, imported
+  constants, private promoted captures, and other published cross-artifact
+  boundaries.
+- `SessionExecutableValueTransformId` names a transform owned by the current
+  lambda-solved/executable lowering session. These are used for branch joins,
+  `if` joins, call arguments, call results, procedure returns, captures, mutable
+  joins, loop phis, and aggregate existing-value edges inside one executable
+  specialization session.
+
+The checked artifact must publish an `ExecutableValueTransformPlanStore` next to
+the promoted wrapper body plans and executable type payload store. Every
+`arg_transforms` entry and the mandatory `result_transform` in a published
+erased wrapper point into that store through a published transform ref.
+Executable MIR lowers a value transform by first lowering the transform endpoint
+`ExecutableTypePayloadRef`s into the current executable type store, then
+lowering the explicit transform operation. Executable MIR may use the endpoint
+`key` fields only for debug-only verification that the endpoint payloads match
+the expected canonical executable types. It must not derive a transform by
+comparing source and target shapes.
+
+Executable value transforms are recursive value-conversion plans, not merely
 layout bridges. They are the only artifact-published mechanism that may describe
 finite-callable-to-erased-callable packing at an explicit `Box(T)` boundary.
 When a transform reaches a callable leaf whose target endpoint is erased, the
@@ -942,19 +965,19 @@ published `ErasedFnSigKey`. No transform may introduce erased callable
 representation without explicit `BoxBoundaryId` provenance.
 
 Structural bridges still exist, but only as a sub-operation of executable
-payload transforms. `ExecutableStructuralBridgePlan` covers representation
+value transforms. `ExecutableStructuralBridgePlan` covers representation
 preserving or purely structural conversions such as `direct`, `zst`,
 `nominal_reinterpret`, `box_unbox`, `box_box`, and singleton/tag reshaping.
 It must not pack finite callable sets, synthesize erased adapters, materialize
 captures, inspect source syntax, or recover callable representation from shape
 comparison. Records, tuples, tag unions, nominals, lists, and boxes that contain
-callable children must use recursive `ExecutablePayloadTransformPlanId` children
+callable children must use recursive `ExecutableValueTransformPlanId` children
 so that callable leaves are transformed by explicit callable operations.
 `list_reinterpret` is allowed only when the element endpoint representation is
 identical; if a list element transform changes callable representation, the plan
 must be a recursive list transform that rebuilds or maps the list explicitly.
 
-Executable payload transforms have two lowering modes, and the distinction is
+Executable value transforms have two lowering modes, and the distinction is
 mandatory:
 
 - **construction lowering**: the value is being built by the current executable
@@ -972,6 +995,27 @@ mandatory:
   boundaries such as erased promoted wrapper arguments, erased promoted wrapper
   results, imported constants, private promoted captures, branch joins that have
   already produced a value, and explicit `Box(T)` boundary crossings.
+
+Executable expression lowering must accept an expected executable endpoint
+whenever the consumer already knows the required representation. Under an
+expected endpoint, constructors build directly into that endpoint:
+
+- record, tuple, tag, list, `Box(T)`, nominal, and finite callable-set
+  construction lower children into the target child endpoints selected by
+  lambda-solved MIR
+- branch bodies lower under the join result endpoint
+- call arguments lower under the target parameter endpoint
+- return expressions lower under the procedure return endpoint
+- capture values lower under the capture-slot endpoint
+
+If the expression is an existing value whose producer representation is already
+sealed, executable MIR evaluates or reads that value once and applies the
+explicit `ExecutableValueTransformRef`. If the expression is a constructor, it
+must not construct in some other representation and then apply an existing-value
+transform. This is the production Roc version of Cor/LSS's correct behavior:
+the representation is solved before lowering, so construction emits the selected
+representation directly and existing-value transforms are reserved for values
+that genuinely already exist.
 
 An executable lowering implementation must never use an existing-value transform
 as a workaround for missing construction lowering. If a constructor's target
@@ -992,11 +1036,11 @@ is a compiler invariant violation: debug builds assert at the transform
 publication or transform-lowering boundary and release builds use
 `unreachable`.
 
-A `tag_union` executable payload transform is an existing-value switch plan, not
-a source `match` and not a compatible-shape repair. Each `PayloadTransformTagCase`
+A `tag_union` executable value transform is an existing-value switch plan, not
+a source `match` and not a compatible-shape repair. Each `ValueTransformTagCase`
 maps one source tag label to one target tag label. For ordinary full-union to
 full-union transforms the labels are usually identical; singleton/full reshaping
-with recursive non-bridge payload transforms must use explicit cases instead of
+with recursive non-bridge value transforms must use explicit cases instead of
 pretending to be a structural bridge. Each reachable source tag has exactly one
 case. Inside a case, payload edges map source payload indexes to target payload
 indexes and name the child transform for that payload. Executable MIR lowers
@@ -1006,7 +1050,7 @@ child transforms in target logical payload order, and constructing the target
 tag with the finalized target `TagId`. The generated default branch is compiler
 `unreachable`; it is not a user-facing runtime error.
 
-A `list` executable payload transform is an existing-value compiler-owned list
+A `list` executable value transform is an existing-value compiler-owned list
 loop. It must not call Roc `List.map`, create a callable value, or depend on a
 user-visible module import. If the element transform is identity and the list
 endpoint representation is identical, the transform is identity or
@@ -1014,17 +1058,17 @@ endpoint representation is identical, the transform is identity or
 transform by evaluating the source list once, reading its length, allocating a
 fresh target list with that length/capacity policy, iterating by index in source
 order, reading each element with the checked low-level list access operation,
-applying the child payload transform to the element, and writing/appending the
+applying the child value transform to the element, and writing/appending the
 transformed element to the target list. The low-level operations used for the
 loop must have explicit value-flow, ABI, and reference-counting metadata. ARC
 insertion emits the required `incref`, `decref`, and `free`; backends still only
 follow explicit LIR statements.
 
-A `box_payload` executable payload transform is directional. `payload_to_box`
+A `box_payload` executable value transform is directional. `payload_to_box`
 transforms an unboxed payload value and allocates a fresh `Box(T)` containing
 the transformed payload. `box_to_payload` unboxes the source box exactly once,
-applies the child payload transform, and returns the transformed payload.
-`box_to_box` unboxes the source box exactly once, applies the child payload
+applies the child value transform, and returns the transformed payload.
+`box_to_box` unboxes the source box exactly once, applies the child value
 transform, and allocates a fresh target box. Reusing or mutating an existing box
 is only a future optimization through an explicit runtime uniqueness mutation
 site where `refcount == 1`; the required baseline is fresh allocation. The
@@ -1033,10 +1077,10 @@ erasure is authorized only when the callable leaf transform has non-empty
 `box_erasure` provenance naming the explicit `BoxBoundaryId`.
 
 Checking finalization and lambda-solved representation solving are responsible
-for publishing executable payload transform plans. They must publish a transform
+for publishing executable value transform plans. They must publish a transform
 for every erased promoted wrapper ordinary argument and for every erased
 promoted wrapper result, including identity transforms. Finite promoted wrappers
-do not publish or consume executable payload transforms for their wrapper bodies
+do not publish or consume executable value transforms for their wrapper bodies
 because they are mono-MIR bodies, not executable-MIR bodies. If an endpoint's
 keys differ and the transform is `identity`, or if a transform's endpoint keys
 do not match the wrapper signature, the erased promoted wrapper is invalid;
@@ -1109,7 +1153,7 @@ An erased promoted wrapper plan is consumed by executable MIR, not by mono MIR.
 The checked artifact publishes it early so that all later stages have explicit
 procedure identity and dependency information, but executable MIR is the first
 stage allowed to read `sig_key`, `hidden_capture_arg`,
-`ErasedPromotedProcedureExecutableSignature`, erased payload transforms, or
+`ErasedPromotedProcedureExecutableSignature`, erased value transforms, or
 erased capture materialization. Mono, row-finalized mono, lifted MIR, and
 lambda-solved MIR may carry the erased promoted wrapper's opaque
 procedure identity and source function type through `call_proc`, `proc_value`,
@@ -2556,7 +2600,7 @@ edge together.
 runtime object layout.
 
 The argument and return children are required because calls, bridges, erased
-function signatures, boxed payload transforms, specialization keys, and
+function signatures, Box payload representation plans, specialization keys, and
 higher-order value flow must know how function-typed values are used. They do
 not become runtime fields of a function value. After representation solving, an
 executable value whose source type is a function is represented by the solved
@@ -2972,6 +3016,61 @@ representation root and the solved callable child; executable MIR consumes it
 directly. A singleton finite callable set still produces
 `call_value_finite`/`callable_match`. The only source-level direct-call case is
 `call_proc`.
+
+Representation boundaries also have explicit value-transform metadata:
+
+```zig
+const ValueTransformBoundaryKind = union(enum) {
+    call_arg: struct { call: CallSiteInfoId, arg_index: u32 },
+    call_result: CallSiteInfoId,
+    callable_match_branch_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+    source_match_branch_result: struct {
+        match: SourceMatchId,
+        branch: CheckedBranchId,
+        alternative: CheckedMatchBranchPatternId,
+    },
+    if_branch_result: struct {
+        if_expr: ExprId,
+        branch: enum { then_, else_ },
+    },
+    return_value: ProcedureId,
+    capture_value: CaptureSlotId,
+    mutable_join: MutableJoinId,
+    loop_phi: LoopPhiId,
+    aggregate_existing_value: AggregateBoundaryId,
+};
+
+const ValueTransformBoundary = struct {
+    kind: ValueTransformBoundaryKind,
+    from_value: ValueInfoId,
+    to_value: ValueInfoId,
+    from_endpoint: ExecutableValueEndpoint,
+    to_endpoint: ExecutableValueEndpoint,
+    transform: ExecutableValueTransformRef,
+};
+```
+
+The exact Zig shape may differ, but every real existing-value representation
+boundary must have equivalent explicit data. The transform is mandatory,
+including identity. `no_return` and degenerate branch alternatives carry no
+boundary because they do not produce a value. `from_value` and `to_value` are
+the value-flow occurrences that representation solving already connected; the
+transform converts the sealed executable representation of `from_value` into
+the required executable representation of `to_value`. Later stages must not
+derive this conversion from equal `TypeId`s, row names, expression syntax,
+procedure names, or layout compatibility.
+
+Branch joins use the same rule. Source `match`, `if`, mutable joins, and loop
+phis record the result value and each returning incoming value, then publish one
+mandatory `ExecutableValueTransformRef` per returning incoming value. This
+matches Cor/LSS's correct semantic behavior: branch results are unified before
+lowering, and the switch/join lowers to one result. Roc's production lowering
+adds explicit transform metadata so Box-only erased callable representation,
+recursive aggregate children, and imported/published values remain correct
+without shape recovery.
 
 Intrinsic and low-level value-flow behavior is also represented through this
 same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
@@ -4271,8 +4370,8 @@ const CallProcExecutablePlan = struct {
     representation_root: RepClassId,
     executable_specialization_key: ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
-    arg_transforms: Span(ExecutableValueTransformId),
-    result_transform: ExecutableValueTransformId,
+    arg_transforms: Span(ExecutableValueTransformRef),
+    result_transform: ExecutableValueTransformRef,
     result_ty: ExecTypeId,
 };
 ```
@@ -4287,7 +4386,7 @@ procedure id allocated by that reservation, not a generated symbol used as a
 semantic key. `arg_transforms` and `result_transform` are explicit value
 transform obligations between the caller's executable values and the target
 specialization signature. They use the same operation family as artifact-owned
-`ExecutablePayloadTransformPlan` records, but may be stored in the current
+`ExecutableValueTransformPlan` records, but may be stored in the current
 executable lowering run when the call is not a promoted-wrapper artifact
 boundary.
 
@@ -4314,8 +4413,8 @@ callable set, executable MIR must lower the call to an explicit
    member.
 8. Pass the original argument temporaries plus the explicit capture argument
    required by that member's executable specialization.
-9. Insert explicit bridges when branch result representations differ from the
-   call's required executable result type.
+9. Lower the branch result through the explicit value transform selected by
+   lambda-solved MIR for this branch result boundary.
 
 The `callable_match` node must represent the whole call, not only the branch
 switch. It owns the callable expression, the original argument expressions, the
@@ -4326,7 +4425,7 @@ or rediscover the original arguments.
 Concrete shape:
 
 ```zig
-CallableMatch {
+const CallableMatch = struct {
     id: CallableMatchId,
     callable_set_key: CanonicalCallableSetKey,
     requested_source_fn_ty: CanonicalTypeKey,
@@ -4337,7 +4436,7 @@ CallableMatch {
     branches: Span(CallableBranch),
     result_ty: ExecTypeId,
     result_tmp: TempId,
-}
+};
 ```
 
 `requested_source_fn_ty` is the exact canonical fixed-arity source function type
@@ -4353,15 +4452,23 @@ whole `callable_match`.
 Every `callable_match` branch must store:
 
 ```zig
-CallableBranch {
+const CallableBranch = struct {
     member: CallableSetMemberRef,
     capture_payload: ?TempId,
     executable_specialization_key: ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(ExecutableValueRef),
-    direct_call_result: TempId,
-    bridge_to_result: ?BridgeId,
-}
+    result: CallableBranchResult,
+};
+
+const CallableBranchResult = union(enum) {
+    returns: struct {
+        direct_call_result: TempId,
+        result_transform: ExecutableValueTransformRef,
+        final_result: TempId,
+    },
+    no_return,
+};
 ```
 
 `member` identifies the lambda-solved callable-set member through the canonical
@@ -4406,16 +4513,20 @@ temporaries, in source call order, followed by the destructured capture payload
 temporary when `capture_payload` is present. It must not contain source
 expressions, nested calls, field projections, box operations, or anything that
 could evaluate again inside the branch.
-`direct_call_result` is branch-local. If its executable type is not exactly
-`result_ty`, `bridge_to_result` names the explicit branch-local bridge into the
-single `result_tmp`. No branch-local layout or branch-local return type may
-escape the `callable_match` node. `no_return` branches do not constrain
-returning branches.
+`result.returns.direct_call_result` is branch-local. Its
+`result_transform` is mandatory, including the identity case, and transforms the
+branch-local direct-call result endpoint to the `callable_match.result_ty`
+endpoint. `result.returns.final_result` is the value assigned to the single
+`result_tmp`. No branch-local layout or branch-local return type may escape the
+`callable_match` node. `no_return` branches carry no result transform and do not
+constrain returning branches.
 
 Every returning branch must assign exactly one value to the shared
-`result_tmp`: either the `direct_call_result` itself when its type is already
-`result_ty`, or the result of `bridge_to_result`. Branch lowering may not add,
-remove, duplicate, or reorder direct-call arguments.
+`result_tmp`: the `final_result` produced by applying
+`result_transform` to `direct_call_result`. The identity transform is represented
+explicitly; absence of a transform is allowed only for `no_return` branches.
+Branch lowering may not add, remove, duplicate, or reorder direct-call
+arguments.
 
 `callable_match` is not a curried-call loop. It dispatches one fixed-arity Roc
 call. Every branch must call a member specialization whose source-argument arity
@@ -4482,9 +4593,18 @@ const SourceMatchBranch = struct {
     materialized_paths: Span(MaterializedPatternPathValue),
     bindings: Span(PatternBinding),
     guard: ?GuardPlanId,
-    body: ExprId,
-    branch_result: TempId,
-    bridge_to_result: ?BridgeId,
+    result: SourceBranchResult,
+};
+
+const SourceBranchResult = union(enum) {
+    returns: struct {
+        body: ExprId,
+        branch_result: TempId,
+        result_transform: ExecutableValueTransformRef,
+        final_result: TempId,
+    },
+    degenerate_runtime_error,
+    no_return,
 };
 
 const SourceMatchAlternative = struct {
@@ -4839,10 +4959,12 @@ not reorder scrutinee evaluation, guard evaluation, branch body evaluation, or
 branch-local payload/list/field extractions relative to the selected branch.
 
 Every returning source `match` branch must assign exactly one value to the
-shared `result_tmp`: either the `branch_result` itself when its executable type
-is already `result_ty`, or the result of `bridge_to_result`. Branch-local
-layouts and branch-local return types must not escape the `SourceMatch` node.
-`no_return` branches do not constrain returning branch result representation.
+shared `result_tmp`: `SourceBranchResult.returns.final_result`, produced by
+applying the mandatory `result_transform` to the branch-local `branch_result`.
+The identity case is an explicit transform. Absence of a result transform is
+allowed only for `no_return` and `degenerate_runtime_error` branches. Branch
+local layouts and branch-local return types must not escape the `SourceMatch`
+node.
 
 IR lowering of source `match` is mechanical lowering of `PatternDecisionPlan`.
 The IR builder must consume `PatternDecisionPlan.root`, `DecisionNode`,
@@ -4876,12 +4998,16 @@ test named by each `DecisionEdge.test`:
 
 When a decision leaf is reached, IR lowering must materialize exactly the
 `SourceMatchBranch.materialized_paths` required by that branch, bind every
-`PatternBinding.temp` from its source path value, lower the branch body, bridge
-the branch result if `bridge_to_result` is present, and assign the shared match
-result variable exactly once. A leaf that is reachable from several decision
-paths must receive all needed materialized path values through explicit
+`PatternBinding.temp` from its source path value, lower the branch body under
+the branch's expected result endpoint, apply the explicit
+`ExecutableValueTransformRef` only if the branch body produced an existing value
+whose endpoint differs from the shared result endpoint, and assign the shared
+match result variable exactly once. A leaf that is reachable from several
+decision paths must receive all needed materialized path values through explicit
 control-flow-local temporaries or an explicit join block; it must not recompute
-path extractions from the original scrutinees.
+path extractions from the original scrutinees. IR lowering consumes the
+already-lowered executable MIR transform nodes; it must not reopen checked
+artifacts or a lambda-solved representation store to interpret transform ids.
 
 If the reached `DecisionLeaf.degenerate` flag is true, IR lowering must emit the
 checked degenerate-alternative runtime-error path immediately. It must not
@@ -10488,7 +10614,7 @@ Executable type lowering consumes the solved `FunctionRepShape.callable` child
 and produces either `callable_set` or `erased_fn`.
 
 Function argument and return executable value keys still exist as metadata for
-calls, bridges, erased signatures, boxed payload transforms, and specialization
+calls, bridges, erased signatures, Box payload representation plans, and specialization
 keys. They are reached from the lambda-solved `FunctionRepShape`, not from a
 runtime function-object field. A nested function argument such as:
 
@@ -11235,7 +11361,8 @@ Executable MIR:
 - emits `packed_erased_fn` only for explicitly erased callable values
 - emits `call_erased`
 - emits `call_direct` where executable targets are exact
-- inserts explicit bridges
+- inserts explicit value transforms at branch, call, return, capture, mutable,
+  loop, aggregate, and published constant boundaries
 - emits explicit runtime-uniqueness mutation sites
 - exposes enough explicit values, call ABI shapes, and low-level RC-effect
   metadata for LIR ARC insertion
@@ -12069,7 +12196,7 @@ Commit when lambda-solved MIR verification proves:
   variables or representation variables
 - generalized procedure and SCC templates generalize only variables not reachable
   from the already-bound outer environment
-- canonical type keys and boxed payload transforms are cycle-safe graph
+- canonical type keys and Box payload representation plans are cycle-safe graph
   transforms with stable recursion binders/backrefs
 - canonical callable-set keys, capture-shape keys, erased function signature
   keys, erased adapter keys, and boxed payload representation plans are
@@ -12108,9 +12235,10 @@ after all fixed-arity Roc source arguments.
 
 Make `callable_match` a whole-call result-join node. It must own one
 `result_ty` and one `result_tmp`. Every returning branch must produce a
-branch-local direct-call result and then either assign it directly to the shared
-result temp or bridge it through an explicit branch-local bridge. Branch-local
-layout choices must not escape the node.
+branch-local direct-call result and then assign the value produced by its
+mandatory `ExecutableValueTransformRef` to the shared result temp. The identity
+case is represented explicitly. Branch-local layout choices must not escape the
+node.
 
 Make ordinary source `match` a concrete executable MIR result-join node distinct
 from callable-set `callable_match`. It must evaluate every scrutinee once,
@@ -12119,7 +12247,7 @@ records once per selected path at the control-flow point where they are needed
 before projecting individual binders by finalized path ids, handle records,
 tuples, lists, literals, opaque unwraps, newtypes, and guards through explicit
 decision-path records, and join returning branches into one `result_tmp` through
-explicit bridges when needed.
+mandatory branch result transforms, including identity.
 
 Enforce single-evaluation boundary discipline: source operands lower once to
 `ExecutableValueRef` handles in source order, and bridges, calls, aggregate
@@ -12128,38 +12256,38 @@ value handles. Executable MIR may remain expression-based where no semantic
 boundary is crossed. LIR must be in administrative normal form before reference
 counting and backend consumption.
 
-Executable MIR must own explicit existing-value payload-transform nodes for
+Executable MIR must own explicit existing-value value-transform nodes for
 aggregate conversions that cannot be represented as ordinary structural bridges:
 
 ```zig
-payload_transform_tag_union
-payload_transform_list
-payload_transform_box
+value_transform_tag_union
+value_transform_list
+value_transform_box
 ```
 
 The exact Zig names may differ, but the semantics must not. These nodes consume
 an already-bound `ExecutableValueRef`, a lowered executable source type, a
 lowered executable target type, and a checked-artifact or run-local
-`ExecutablePayloadTransformPlanId`. They are executable-MIR operations, not
+`ExecutableValueTransformRef`. They are executable-MIR operations, not
 source syntax and not IR side tables. IR lowering consumes executable MIR only;
 it must not reopen checked artifacts to discover transform semantics. Record,
 tuple, nominal, identity, structural-bridge, callable-to-erased, and
 already-erased callable transforms may still expand directly to ordinary
 executable MIR nodes when doing so preserves single evaluation.
 
-`payload_transform_tag_union` lowers to an executable discriminant switch over
+`value_transform_tag_union` lowers to an executable discriminant switch over
 the already-bound source union value. Each branch extracts the selected source
 payloads, applies child transforms, constructs the target tag, and assigns the
 shared result value. This is not source `match`, does not consume
 `PatternDecisionPlan`, and does not run source pattern exhaustiveness logic.
 
-`payload_transform_list` lowers to a compiler-owned list loop. The checked
-artifact `ExecutablePayloadTransformOp.list` stores only the element child
+`value_transform_list` lowers to a compiler-owned list loop. The checked
+artifact `ExecutableValueTransformOp.list` stores only the element child
 transform, but executable MIR must expand that child transform before IR
 lowering. The executable node must carry exactly:
 
 ```zig
-payload_transform_list: struct {
+value_transform_list: struct {
     source: ExecutableValueRef,
     source_elem: ExecutableValueRef,
     source_elem_ty: TypeId,
@@ -12174,10 +12302,10 @@ value handle bound to each source element inside the compiler-owned loop.
 `target_elem_ty` is the executable type produced by the child transform. `body`
 is the already-lowered child transform expression that consumes `source_elem`
 and returns one transformed target element. The result list type is the type of
-the `payload_transform_list` expression itself, so the node does not duplicate
+the `value_transform_list` expression itself, so the node does not duplicate
 that type.
 
-IR lowering for `payload_transform_list` must be mechanical and must not reopen
+IR lowering for `value_transform_list` must be mechanical and must not reopen
 checked artifacts:
 
 1. bind the source list once before the node is lowered
@@ -12193,9 +12321,9 @@ This loop is an internal compiler lowering of a representation transform. It is
 not a Roc source `for`, does not introduce a Roc callable value, does not call
 `List.map`, and does not participate in static dispatch. The only possible
 child behavior is the explicit executable child expression already produced
-from the payload-transform plan.
+from the value-transform plan.
 
-`payload_transform_box` lowers to explicit unbox/box low-level operations plus
+`value_transform_box` lowers to explicit unbox/box low-level operations plus
 the child transform according to `BoxPayloadTransformKind`. It must allocate a
 fresh target box for `payload_to_box` and `box_to_box` in the required baseline.
 Any future reuse optimization must be represented by an explicit runtime
@@ -12304,8 +12432,9 @@ Commit when executable MIR verification proves:
 - every `callable_match` branch records exact `direct_args` as
   `ExecutableValueRef` handles
 - every `callable_match` has one result type and one result temp
-- every returning `callable_match` branch bridges its branch-local result into
-  the shared result temp when needed
+- every returning `callable_match` branch applies its mandatory value transform
+  to the branch-local result and assigns the transformed value to the shared
+  result temp
 - no branch-local result layout escapes a `callable_match`
 - every callable member direct-call signature is source args plus optional
   trailing capture record
@@ -13319,7 +13448,7 @@ Lambda-solved MIR:
 - every `CaptureShapeKey` slot is encoded as `CanonicalExecValueTypeKey` or the
   canonical erased capture type key, never as a source type id, lambda-solved
   type id, layout id, source name, generated symbol text, or expression id
-- canonical type keys and boxed payload transforms handle recursive types without
+- canonical type keys and Box payload representation plans handle recursive types without
   raw type ids or infinite recursion
 - canonical callable-set keys, capture-shape keys, erased signature keys, and
   erased adapter keys handle recursive callable/capture graphs without raw type
@@ -13396,8 +13525,9 @@ Executable MIR:
   `ExecutableValueRef` handles, never as arbitrary expressions
 - every `callable_match` branch passes all fixed-arity source arguments exactly
   once, plus only the optional trailing capture record
-- every `callable_match` branch produces a branch-local result and bridges it
-  into one shared result temp when needed
+- every returning `callable_match` branch produces a branch-local result and
+  assigns the value produced by its mandatory value transform to one shared
+  result temp
 - `no_return` callable-match branches do not constrain returning branch result
   representation
 - ordinary source `match` does not satisfy callable-set lowering verification
@@ -13409,7 +13539,7 @@ Executable MIR:
 - every `SourceMatch` supports records, tuples, lists, literals, opaque unwraps,
   newtypes, tags, and guards through explicit decision-path records
 - every returning `SourceMatch` branch joins into one shared result temp through
-  explicit bridges when needed
+  a mandatory value transform, including the identity case
 - singleton finite callable-set calls still lower to `callable_match`
 - every callable-set value has explicit member capture payload metadata
 - every callable-set value has deterministic member tag ordering
@@ -13650,10 +13780,11 @@ Callable/capture behavior:
   only the stored payload
 - finite callable-set branch direct calls receive source args plus optional
   trailing capture record
-- finite callable-set branch results bridge into one shared callable-match
-  result temp
-- bridges around calls, boxes, tag construction, record construction, constants,
-  erased adapters, and result joins consume already-evaluated values only
+- finite callable-set branch results transform into one shared callable-match
+  result temp through explicit value-transform metadata
+- value transforms around calls, boxes, tag construction, record construction,
+  constants, erased adapters, and result joins consume already-evaluated values
+  only
 - boxed erased-boundary packaging with capture record
 - finite callable-set value crossing an erased `Box(T)` boundary synthesizes an
   erased adapter whose body uses `callable_match`
@@ -13812,6 +13943,26 @@ objects.
   class with `BoxBoundaryId` provenance, and executable MIR must pack the finite
   closure from its `CallableValueEmissionPlan` even though that branch is not
   syntactically inside `Box.box(...)`.
+  Include this exact Roc-shape test:
+
+  ```roc
+  make_boxed : {} -> Box(I64 -> I64)
+  make_boxed = |_| Box.box(|x| x + 1)
+
+  choose : Bool -> (I64 -> I64)
+  choose = |use_box|
+      boxed = make_boxed({})
+      if use_box {
+          Box.unbox(boxed)
+      } else {
+          |n| n + 10
+      }
+  ```
+
+  The expected executable MIR must not contain a branch-local structural bridge
+  for the `else` branch. The `else` branch finite closure must lower through an
+  explicit value transform whose callable leaf operation is `callable_to_erased`
+  with non-empty `BoxBoundaryId` provenance from the `Box.unbox` branch.
 - add higher-order boxed erased tests where the boxed payload type contains a
   function in an argument position, a return position, and both positions. The
   expected lambda-solved output must show `BoxPayloadRepresentationPlan.function`
@@ -13832,7 +13983,7 @@ objects.
   ```
 
   The expected checked artifact publishes an erased promoted wrapper whose
-  ordinary argument has an explicit `ExecutablePayloadTransformPlan` from the
+  ordinary argument has an explicit `ExecutableValueTransformPlan` from the
   finite callable-set endpoint to the erased-call argument endpoint. Executable
   MIR must lower that transform by emitting `packed_erased_fn` with the finite
   callable-set value as the hidden capture and an adapter keyed by the full
@@ -13855,7 +14006,7 @@ objects.
   The expected representation after unboxing keeps the returned callable in
   erased representation. Executable MIR must not attempt to recover a finite
   callable set from the erased return value.
-- add explicit aggregate payload-transform tests where the erased boundary
+- add explicit aggregate value-transform tests where the erased boundary
   reaches callable leaves inside records and lists:
 
   ```roc
@@ -13879,7 +14030,7 @@ objects.
   element value are packed through explicit callable transforms with
   `BoxBoundaryId` provenance. `list_reinterpret` is forbidden when the element
   representation changes.
-- add explicit tag-union payload-transform tests where callable leaves are
+- add explicit tag-union value-transform tests where callable leaves are
   stored in tag payloads and cross an erased boxed boundary:
 
   ```roc
@@ -13898,8 +14049,8 @@ objects.
   main = apply_tag(Apply(|x| x + 1))
   ```
 
-  The expected checked artifact publishes a `tag_union` payload transform with
-  one explicit `PayloadTransformTagCase` for `Apply` and one for `Keep`. The
+  The expected checked artifact publishes a `tag_union` value transform with
+  one explicit `ValueTransformTagCase` for `Apply` and one for `Keep`. The
   `Apply` case maps source payload index `0` to target payload index `0` through
   a callable-to-erased child transform with `BoxBoundaryId` provenance. The
   `Keep` case uses identity. Executable MIR must lower this as a
@@ -13910,7 +14061,7 @@ objects.
   explicit tag cases and payload edges; `singleton_to_tag_union` and
   `tag_union_to_singleton` structural bridges are valid only when the payload
   transform is identity or another true structural bridge.
-- add nested `Box(T)` payload-transform tests where an existing boxed aggregate
+- add nested `Box(T)` value-transform tests where an existing boxed aggregate
   contains callable leaves:
 
   ```roc
@@ -14111,7 +14262,7 @@ Compile-time constants:
   procedure identities whose bodies are emitted by executable MIR from sealed
   `ErasedPromotedWrapperBodyPlan` records. Mono may call or pass those procedure
   identities at their source function type, but mono must not lower their bodies
-  and must not carry `ErasedFnSigKey`, executable payload transforms, hidden
+  and must not carry `ErasedFnSigKey`, executable value transforms, hidden
   capture arguments, executable result type keys, or erased capture ABI data.
 - top-level function-valued declarations that evaluate to erased callable values
   must include the direct promoted-procedure case:
@@ -14713,7 +14864,7 @@ The cutover is complete only when all of these are true:
   explicitly
 - lambda-solved MIR exports only fully resolved executable specialization inputs
 - lambda-solved MIR enforces canonical callable-set unification algebra
-- canonical type keys and boxed payload transforms are cycle-safe graph
+- canonical type keys and Box payload representation plans are cycle-safe graph
   transforms with stable recursion binders/backrefs
 - canonical callable-set keys, capture-shape keys, erased function signature
   keys, erased adapter keys, and boxed payload representation plans are
@@ -14741,7 +14892,8 @@ The cutover is complete only when all of these are true:
 - executable MIR records exact branch `direct_args` as `ExecutableValueRef`
   handles
 - executable MIR gives every `callable_match` one result type and one result
-  temp, and every returning branch bridges into that temp when needed
+  temp, and every returning branch reaches that temp through a mandatory value
+  transform, including identity
 - executable MIR direct, erased, and callable-set calls preserve fixed Roc arity
 - executable MIR ordinary source `match` and callable-set `callable_match` are
   structurally distinguishable

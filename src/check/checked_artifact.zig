@@ -2634,33 +2634,44 @@ pub const PromotedWrapperArg = union(enum) {
     private_capture: PrivateCaptureRef,
 };
 
-pub const ExecutablePayloadTransformPlanId = enum(u32) { _ };
+pub const ExecutableValueTransformPlanId = enum(u32) { _ };
+pub const SessionExecutableValueTransformId = enum(u32) { _ };
+
+pub const PublishedExecutableValueTransformRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    transform: ExecutableValueTransformPlanId,
+};
+
+pub const ExecutableValueTransformRef = union(enum) {
+    session: SessionExecutableValueTransformId,
+    published: PublishedExecutableValueTransformRef,
+};
 
 pub const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
-pub const PayloadTransformRecordField = struct {
+pub const ValueTransformRecordField = struct {
     field: canonical.RecordFieldLabelId,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-pub const PayloadTransformTupleElem = struct {
+pub const ValueTransformTupleElem = struct {
     index: u32,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-pub const PayloadTransformTagPayloadEdge = struct {
+pub const ValueTransformTagPayloadEdge = struct {
     source_payload_index: u32,
     target_payload_index: u32,
-    transform: ExecutablePayloadTransformPlanId,
+    transform: ExecutableValueTransformPlanId,
 };
 
-pub const PayloadTransformTagCase = struct {
+pub const ValueTransformTagCase = struct {
     source_tag: canonical.TagLabelId,
     target_tag: canonical.TagLabelId,
-    payloads: []const PayloadTransformTagPayloadEdge = &.{},
+    payloads: []const ValueTransformTagPayloadEdge = &.{},
 };
 
 pub const BoxPayloadTransformKind = enum {
@@ -2672,21 +2683,21 @@ pub const BoxPayloadTransformKind = enum {
 pub const BoxPayloadTransformPlan = struct {
     boundary: canonical.BoxBoundaryId,
     kind: BoxPayloadTransformKind,
-    payload: ExecutablePayloadTransformPlanId,
+    payload: ExecutableValueTransformPlanId,
 };
 
-pub const ExecutablePayloadTransformOp = union(enum) {
+pub const ExecutableValueTransformOp = union(enum) {
     identity,
     structural_bridge: ExecutableStructuralBridgePlan,
-    record: []const PayloadTransformRecordField,
-    tuple: []const PayloadTransformTupleElem,
-    tag_union: []const PayloadTransformTagCase,
+    record: []const ValueTransformRecordField,
+    tuple: []const ValueTransformTupleElem,
+    tag_union: []const ValueTransformTagCase,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
-        backing: ExecutablePayloadTransformPlanId,
+        backing: ExecutableValueTransformPlanId,
     },
     list: struct {
-        elem: ExecutablePayloadTransformPlanId,
+        elem: ExecutableValueTransformPlanId,
     },
     box_payload: BoxPayloadTransformPlan,
     callable_to_erased: CallableToErasedTransformPlan,
@@ -2698,17 +2709,17 @@ pub const ExecutableStructuralBridgePlan = union(enum) {
     zst,
     list_reinterpret,
     nominal_reinterpret,
-    box_unbox: ExecutablePayloadTransformPlanId,
-    box_box: ExecutablePayloadTransformPlanId,
+    box_unbox: ExecutableValueTransformPlanId,
+    box_box: ExecutableValueTransformPlanId,
     singleton_to_tag_union: struct {
         source_tag: canonical.TagLabelId,
         target_tag: canonical.TagLabelId,
-        payload_transform: ?ExecutablePayloadTransformPlanId = null,
+        value_transform: ?ExecutableValueTransformPlanId = null,
     },
     tag_union_to_singleton: struct {
         source_tag: canonical.TagLabelId,
         target_tag: canonical.TagLabelId,
-        payload_transform: ?ExecutablePayloadTransformPlanId = null,
+        value_transform: ?ExecutableValueTransformPlanId = null,
     },
 };
 
@@ -2735,29 +2746,29 @@ pub const AlreadyErasedCallableTransformPlan = struct {
     sig_key: canonical.ErasedFnSigKey,
 };
 
-pub const PayloadTransformProvenance = union(enum) {
+pub const ValueTransformProvenance = union(enum) {
     none,
     box_erasure: []const canonical.BoxBoundaryId,
 };
 
-pub const ExecutablePayloadTransformPlan = struct {
+pub const ExecutableValueTransformPlan = struct {
     from: ExecutableValueEndpoint,
     to: ExecutableValueEndpoint,
-    provenance: PayloadTransformProvenance = .none,
-    op: ExecutablePayloadTransformOp,
+    provenance: ValueTransformProvenance = .none,
+    op: ExecutableValueTransformOp,
 };
 
-pub const ExecutablePayloadTransformPlanStore = struct {
-    plans: []ExecutablePayloadTransformPlan = &.{},
+pub const ExecutableValueTransformPlanStore = struct {
+    plans: []ExecutableValueTransformPlan = &.{},
 
     pub fn append(
-        self: *ExecutablePayloadTransformPlanStore,
+        self: *ExecutableValueTransformPlanStore,
         allocator: Allocator,
-        plan: ExecutablePayloadTransformPlan,
-    ) Allocator.Error!ExecutablePayloadTransformPlanId {
-        const id: ExecutablePayloadTransformPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
+        plan: ExecutableValueTransformPlan,
+    ) Allocator.Error!ExecutableValueTransformPlanId {
+        const id: ExecutableValueTransformPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
         const old = self.plans;
-        const next = try allocator.alloc(ExecutablePayloadTransformPlan, old.len + 1);
+        const next = try allocator.alloc(ExecutableValueTransformPlan, old.len + 1);
         @memcpy(next[0..old.len], old);
         next[old.len] = plan;
         allocator.free(old);
@@ -2765,16 +2776,16 @@ pub const ExecutablePayloadTransformPlanStore = struct {
         return id;
     }
 
-    pub fn get(self: *const ExecutablePayloadTransformPlanStore, id: ExecutablePayloadTransformPlanId) ExecutablePayloadTransformPlan {
+    pub fn get(self: *const ExecutableValueTransformPlanStore, id: ExecutableValueTransformPlanId) ExecutableValueTransformPlan {
         const index = @intFromEnum(id);
         if (index >= self.plans.len) {
-            checkedArtifactInvariant("executable payload transform id is out of range", .{});
+            checkedArtifactInvariant("executable value transform id is out of range", .{});
         }
         return self.plans[index];
     }
 
     pub fn verifyPublished(
-        self: *const ExecutablePayloadTransformPlanStore,
+        self: *const ExecutableValueTransformPlanStore,
         payloads: *const ExecutableTypePayloadStore,
         artifact_key: CheckedModuleArtifactKey,
     ) void {
@@ -2782,7 +2793,7 @@ pub const ExecutablePayloadTransformPlanStore = struct {
         for (self.plans) |plan| {
             verifyExecutableTypePayloadRef(payloads, artifact_key, plan.from.ty);
             verifyExecutableTypePayloadRef(payloads, artifact_key, plan.to.ty);
-            verifyPayloadTransformProvenance(plan.provenance);
+            verifyValueTransformProvenance(plan.provenance);
             switch (plan.op) {
                 .callable_to_erased => switch (plan.provenance) {
                     .box_erasure => {},
@@ -2790,12 +2801,12 @@ pub const ExecutablePayloadTransformPlanStore = struct {
                 },
                 else => {},
             }
-            verifyExecutablePayloadTransformOp(self, plan.op);
+            verifyExecutableValueTransformOp(self, plan.op);
         }
     }
 
-    pub fn deinit(self: *ExecutablePayloadTransformPlanStore, allocator: Allocator) void {
-        for (self.plans) |*plan| deinitExecutablePayloadTransformPlan(allocator, plan);
+    pub fn deinit(self: *ExecutableValueTransformPlanStore, allocator: Allocator) void {
+        for (self.plans) |*plan| deinitExecutableValueTransformPlan(allocator, plan);
         allocator.free(self.plans);
         self.* = .{};
     }
@@ -3208,9 +3219,9 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    arg_transforms: []const ExecutablePayloadTransformPlanId = &.{},
+    arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
     hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
-    result_transform: ExecutablePayloadTransformPlanId,
+    result_transform: PublishedExecutableValueTransformRef,
     provenance: []const canonical.BoxBoundaryId,
 };
 
@@ -6234,7 +6245,7 @@ fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePay
     payload.* = .pending;
 }
 
-fn deinitPayloadTransformProvenance(allocator: Allocator, provenance: PayloadTransformProvenance) void {
+fn deinitValueTransformProvenance(allocator: Allocator, provenance: ValueTransformProvenance) void {
     switch (provenance) {
         .none => {},
         .box_erasure => |boundaries| allocator.free(boundaries),
@@ -6248,8 +6259,8 @@ fn deinitCallableToErasedTransformPlan(allocator: Allocator, plan: CallableToEra
     }
 }
 
-fn deinitExecutablePayloadTransformPlan(allocator: Allocator, plan: *ExecutablePayloadTransformPlan) void {
-    deinitPayloadTransformProvenance(allocator, plan.provenance);
+fn deinitExecutableValueTransformPlan(allocator: Allocator, plan: *ExecutableValueTransformPlan) void {
+    deinitValueTransformProvenance(allocator, plan.provenance);
     switch (plan.op) {
         .identity,
         .structural_bridge,
@@ -6740,51 +6751,62 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     }
 }
 
-fn verifyExecutablePayloadTransformRef(store: *const ExecutablePayloadTransformPlanStore, transform: ExecutablePayloadTransformPlanId) void {
+fn verifyExecutableValueTransformRef(store: *const ExecutableValueTransformPlanStore, transform: ExecutableValueTransformPlanId) void {
     if (@intFromEnum(transform) >= store.plans.len) {
-        std.debug.panic("checked artifact invariant violated: executable payload transform id is out of range", .{});
+        std.debug.panic("checked artifact invariant violated: executable value transform id is out of range", .{});
     }
 }
 
-fn verifyPayloadTransformProvenance(provenance: PayloadTransformProvenance) void {
+fn verifyPublishedExecutableValueTransformRef(
+    store: *const ExecutableValueTransformPlanStore,
+    artifact_key: CheckedModuleArtifactKey,
+    transform: PublishedExecutableValueTransformRef,
+) void {
+    if (!std.mem.eql(u8, &transform.artifact.bytes, &artifact_key.bytes)) {
+        std.debug.panic("checked artifact invariant violated: published executable value transform points at a different artifact", .{});
+    }
+    verifyExecutableValueTransformRef(store, transform.transform);
+}
+
+fn verifyValueTransformProvenance(provenance: ValueTransformProvenance) void {
     switch (provenance) {
         .none => {},
         .box_erasure => |boundaries| {
             if (boundaries.len == 0) {
-                std.debug.panic("checked artifact invariant violated: executable payload transform has empty Box(T) erasure provenance", .{});
+                std.debug.panic("checked artifact invariant violated: executable value transform has empty Box(T) erasure provenance", .{});
             }
         },
     }
 }
 
-fn verifyExecutableStructuralBridgePlan(store: *const ExecutablePayloadTransformPlanStore, plan: ExecutableStructuralBridgePlan) void {
+fn verifyExecutableStructuralBridgePlan(store: *const ExecutableValueTransformPlanStore, plan: ExecutableStructuralBridgePlan) void {
     switch (plan) {
         .direct,
         .zst,
         .list_reinterpret,
         .nominal_reinterpret,
         => {},
-        .box_unbox => |child| verifyExecutablePayloadTransformRef(store, child),
-        .box_box => |child| verifyExecutablePayloadTransformRef(store, child),
-        .singleton_to_tag_union => |singleton| if (singleton.payload_transform) |payload| verifyExecutablePayloadTransformRef(store, payload),
-        .tag_union_to_singleton => |singleton| if (singleton.payload_transform) |payload| verifyExecutablePayloadTransformRef(store, payload),
+        .box_unbox => |child| verifyExecutableValueTransformRef(store, child),
+        .box_box => |child| verifyExecutableValueTransformRef(store, child),
+        .singleton_to_tag_union => |singleton| if (singleton.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
+        .tag_union_to_singleton => |singleton| if (singleton.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
     }
 }
 
-fn verifyExecutablePayloadTransformOp(store: *const ExecutablePayloadTransformPlanStore, op: ExecutablePayloadTransformOp) void {
+fn verifyExecutableValueTransformOp(store: *const ExecutableValueTransformPlanStore, op: ExecutableValueTransformOp) void {
     switch (op) {
         .identity,
         .already_erased_callable,
         => {},
         .structural_bridge => |bridge| verifyExecutableStructuralBridgePlan(store, bridge),
-        .record => |fields| for (fields) |field| verifyExecutablePayloadTransformRef(store, field.transform),
-        .tuple => |items| for (items) |item| verifyExecutablePayloadTransformRef(store, item.transform),
+        .record => |fields| for (fields) |field| verifyExecutableValueTransformRef(store, field.transform),
+        .tuple => |items| for (items) |item| verifyExecutableValueTransformRef(store, item.transform),
         .tag_union => |tags| for (tags) |tag| {
-            for (tag.payloads) |payload| verifyExecutablePayloadTransformRef(store, payload.transform);
+            for (tag.payloads) |payload| verifyExecutableValueTransformRef(store, payload.transform);
         },
-        .nominal => |nominal| verifyExecutablePayloadTransformRef(store, nominal.backing),
-        .list => |list| verifyExecutablePayloadTransformRef(store, list.elem),
-        .box_payload => |box| verifyExecutablePayloadTransformRef(store, box.payload),
+        .nominal => |nominal| verifyExecutableValueTransformRef(store, nominal.backing),
+        .list => |list| verifyExecutableValueTransformRef(store, list.elem),
+        .box_payload => |box| verifyExecutableValueTransformRef(store, box.payload),
         .callable_to_erased => {},
     }
 }
@@ -6793,7 +6815,7 @@ fn verifyPromotedCallableBodyPlan(
     store: *const CompileTimePlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
-    executable_payload_transforms: *const ExecutablePayloadTransformPlanStore,
+    executable_value_transforms: *const ExecutableValueTransformPlanStore,
     artifact_key: CheckedModuleArtifactKey,
     plan: PromotedCallableBodyPlan,
 ) void {
@@ -6821,8 +6843,8 @@ fn verifyPromotedCallableBodyPlan(
             if (erased.arg_transforms.len != erased.params.len) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable arg transform count differs from wrapper params", .{});
             }
-            for (erased.arg_transforms) |transform| verifyExecutablePayloadTransformRef(executable_payload_transforms, transform);
-            verifyExecutablePayloadTransformRef(executable_payload_transforms, erased.result_transform);
+            for (erased.arg_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
+            verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, erased.result_transform);
             verifyErasedPromotedProcedureExecutableSignature(
                 executable_type_payloads,
                 artifact_key,
@@ -8887,7 +8909,7 @@ pub const CheckedModuleArtifact = struct {
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     executable_type_payloads: ExecutableTypePayloadStore = .{},
-    executable_payload_transforms: ExecutablePayloadTransformPlanStore = .{},
+    executable_value_transforms: ExecutableValueTransformPlanStore = .{},
     callable_set_descriptors: CallableSetDescriptorStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
@@ -9058,7 +9080,7 @@ pub const CheckedModuleArtifact = struct {
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
         self.callable_set_descriptors.deinit(allocator);
-        self.executable_payload_transforms.deinit(allocator);
+        self.executable_value_transforms.deinit(allocator);
         self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
@@ -9371,13 +9393,13 @@ pub const CheckedModuleArtifact = struct {
 
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key);
-        self.executable_payload_transforms.verifyPublished(&self.executable_type_payloads, self.key);
+        self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
         self.callable_set_descriptors.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
             &self.callable_set_descriptors,
             &self.executable_type_payloads,
-            &self.executable_payload_transforms,
+            &self.executable_value_transforms,
             self.key,
         );
         self.promoted_callable_wrappers.verifyPublished(
@@ -9463,7 +9485,7 @@ pub const ImportedModuleView = struct {
     promoted_callable_wrappers: *const PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
     executable_type_payloads: *const ExecutableTypePayloadStore,
-    executable_payload_transforms: *const ExecutablePayloadTransformPlanStore,
+    executable_value_transforms: *const ExecutableValueTransformPlanStore,
     callable_set_descriptors: *const CallableSetDescriptorStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
@@ -9502,7 +9524,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
         .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
         .executable_type_payloads = &artifact.executable_type_payloads,
-        .executable_payload_transforms = &artifact.executable_payload_transforms,
+        .executable_value_transforms = &artifact.executable_value_transforms,
         .callable_set_descriptors = &artifact.callable_set_descriptors,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),

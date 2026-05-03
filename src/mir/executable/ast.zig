@@ -113,7 +113,6 @@ pub const Branch = struct {
 
 pub const DirectCallArg = struct {
     value: ExecutableValueRef,
-    bridge: ?BridgeId = null,
 };
 
 pub const CallDirectPlan = struct {
@@ -121,7 +120,6 @@ pub const CallDirectPlan = struct {
     executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
-    result_bridge: ?BridgeId = null,
 };
 
 pub const CallableSetMemberRef = repr.CallableSetMemberRef;
@@ -174,7 +172,6 @@ pub const CallableMatchBranch = struct {
     executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     direct_args: Span(DirectCallArg),
-    result_bridge: ?BridgeId = null,
 };
 
 pub const SourceMatch = struct {
@@ -184,12 +181,12 @@ pub const SourceMatch = struct {
     branches: Span(BranchId),
 };
 
-pub const PayloadTransformTagBranch = struct {
+pub const ValueTransformTagBranch = struct {
     discriminant: u16,
     body: ExprId,
 };
 
-pub const PayloadTransformList = struct {
+pub const ValueTransformList = struct {
     source: ExecutableValueRef,
     source_elem: ExecutableValueRef,
     source_elem_ty: TypeId,
@@ -393,11 +390,11 @@ pub const Expr = struct {
             args: Span(ExprId),
         },
         source_match: SourceMatch,
-        payload_transform_tag_union: struct {
+        value_transform_tag_union: struct {
             source: ExecutableValueRef,
-            branches: Span(PayloadTransformTagBranch),
+            branches: Span(ValueTransformTagBranch),
         },
-        payload_transform_list: PayloadTransformList,
+        value_transform_list: ValueTransformList,
         if_: struct {
             cond: ExprId,
             then_body: ExprId,
@@ -500,7 +497,7 @@ pub const Store = struct {
     capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
-    payload_transform_tag_branches: std.ArrayList(PayloadTransformTagBranch),
+    value_transform_tag_branches: std.ArrayList(ValueTransformTagBranch),
     pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
     pattern_path_value_plans: std.ArrayList(PatternPathValuePlan),
     pattern_path_value_plan_ids: std.ArrayList(PatternPathValuePlanId),
@@ -537,7 +534,7 @@ pub const Store = struct {
             .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
-            .payload_transform_tag_branches = .empty,
+            .value_transform_tag_branches = .empty,
             .pattern_decision_plans = .empty,
             .pattern_path_value_plans = .empty,
             .pattern_path_value_plan_ids = .empty,
@@ -580,7 +577,7 @@ pub const Store = struct {
             repr.deinitExecutableSpecializationKey(self.allocator, &branch.executable_specialization_key);
         }
         self.callable_match_branches.deinit(self.allocator);
-        self.payload_transform_tag_branches.deinit(self.allocator);
+        self.value_transform_tag_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
@@ -798,10 +795,10 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addPayloadTransformTagBranchSpan(self: *Store, values: []const PayloadTransformTagBranch) std.mem.Allocator.Error!Span(PayloadTransformTagBranch) {
-        if (values.len == 0) return Span(PayloadTransformTagBranch).empty();
-        const start: u32 = @intCast(self.payload_transform_tag_branches.items.len);
-        try self.payload_transform_tag_branches.appendSlice(self.allocator, values);
+    pub fn addValueTransformTagBranchSpan(self: *Store, values: []const ValueTransformTagBranch) std.mem.Allocator.Error!Span(ValueTransformTagBranch) {
+        if (values.len == 0) return Span(ValueTransformTagBranch).empty();
+        const start: u32 = @intCast(self.value_transform_tag_branches.items.len);
+        try self.value_transform_tag_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

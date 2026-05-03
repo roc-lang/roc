@@ -556,7 +556,7 @@ fn publishErasedCallableResult(
         erased,
         params,
     );
-    const transforms = try publishErasedPromotedWrapperPayloadTransforms(
+    const transforms = try publishErasedPromotedWrapperValueTransforms(
         allocator,
         artifact,
         executable_signature,
@@ -761,16 +761,16 @@ fn erasedClosureHiddenCapturePhysical(
     };
 }
 
-const ErasedPromotedWrapperPayloadTransforms = struct {
-    args: []const checked_artifact.ExecutablePayloadTransformPlanId,
-    result: checked_artifact.ExecutablePayloadTransformPlanId,
+const ErasedPromotedWrapperValueTransforms = struct {
+    args: []const checked_artifact.PublishedExecutableValueTransformRef,
+    result: checked_artifact.PublishedExecutableValueTransformRef,
 };
 
-fn publishErasedPromotedWrapperPayloadTransforms(
+fn publishErasedPromotedWrapperValueTransforms(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
-) Allocator.Error!ErasedPromotedWrapperPayloadTransforms {
+) Allocator.Error!ErasedPromotedWrapperValueTransforms {
     if (signature.wrapper_params.len != signature.erased_call_args.len or
         signature.wrapper_params.len != signature.erased_call_arg_keys.len)
     {
@@ -780,11 +780,11 @@ fn publishErasedPromotedWrapperPayloadTransforms(
     const arg_transforms = if (signature.wrapper_params.len == 0)
         &.{}
     else
-        try allocator.alloc(checked_artifact.ExecutablePayloadTransformPlanId, signature.wrapper_params.len);
+        try allocator.alloc(checked_artifact.PublishedExecutableValueTransformRef, signature.wrapper_params.len);
     errdefer if (arg_transforms.len > 0) allocator.free(arg_transforms);
 
     for (signature.wrapper_params, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |param, erased_arg, erased_arg_key, i| {
-        arg_transforms[i] = try publishIdentityPayloadTransform(
+        arg_transforms[i] = try publishIdentityValueTransform(
             allocator,
             artifact,
             .{ .ty = param.exec_ty, .key = param.exec_ty_key },
@@ -792,7 +792,7 @@ fn publishErasedPromotedWrapperPayloadTransforms(
         );
     }
 
-    const result_transform = try publishIdentityPayloadTransform(
+    const result_transform = try publishIdentityValueTransform(
         allocator,
         artifact,
         .{ .ty = signature.erased_call_ret, .key = signature.erased_call_ret_key },
@@ -805,21 +805,25 @@ fn publishErasedPromotedWrapperPayloadTransforms(
     };
 }
 
-fn publishIdentityPayloadTransform(
+fn publishIdentityValueTransform(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     from: checked_artifact.ExecutableValueEndpoint,
     to: checked_artifact.ExecutableValueEndpoint,
-) Allocator.Error!checked_artifact.ExecutablePayloadTransformPlanId {
+) Allocator.Error!checked_artifact.PublishedExecutableValueTransformRef {
     if (!std.mem.eql(u8, &from.key.bytes, &to.key.bytes)) {
-        compileTimeFinalizationInvariant("erased promoted wrapper requires non-identity payload transform publication");
+        compileTimeFinalizationInvariant("erased promoted wrapper requires non-identity value transform publication");
     }
-    return try artifact.executable_payload_transforms.append(allocator, .{
+    const transform = try artifact.executable_value_transforms.append(allocator, .{
         .from = from,
         .to = to,
         .provenance = .none,
         .op = .identity,
     });
+    return .{
+        .artifact = artifact.key,
+        .transform = transform,
+    };
 }
 
 fn buildErasedPromotedProcedureExecutableSignature(

@@ -877,7 +877,6 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
             .executable_proc = executable_proc,
             .direct_args = try program.ast.addDirectCallArgSpan(direct_args),
-            .result_bridge = null,
         };
     }
 
@@ -921,7 +920,8 @@ fn lowerErasedPromotedWrapperProc(
             .plans = synthetic.comptime_plans,
             .values = synthetic.comptime_values,
         },
-        synthetic.executable_payload_transforms,
+        synthetic.artifact,
+        synthetic.executable_value_transforms,
         &published_types,
         args,
         signature,
@@ -961,7 +961,8 @@ fn lowerErasedPromotedWrapperBody(
     allocator: Allocator,
     program: *Program,
     materialization: MaterializationStores,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transform_owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     published_types: *PublishedTypeLowerer,
     args: Ast.Span(Ast.TypedValue),
     signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
@@ -1026,9 +1027,10 @@ fn lowerErasedPromotedWrapperBody(
     for (wrapper_args, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |arg, erased_arg, erased_arg_key, i| {
         _ = erased_arg;
         _ = erased_arg_key;
-        call_args[i] = try applyPublishedExecutablePayloadTransform(
+        call_args[i] = try applyPublishedExecutableValueTransformRef(
             program,
             materialization,
+            transform_owner_artifact,
             published_types,
             transforms,
             &stmts,
@@ -1045,7 +1047,8 @@ fn lowerErasedPromotedWrapperBody(
         .capture_ty = capture_ty,
     } });
 
-    const result_plan = transforms.get(erased.result_transform);
+    const result_transform = publishedExecutableValueTransformId(transform_owner_artifact, erased.result_transform);
+    const result_plan = transforms.get(result_transform);
     const final_expr = switch (result_plan.op) {
         .identity => raw_call_expr,
         else => blk: {
@@ -1053,13 +1056,13 @@ fn lowerErasedPromotedWrapperBody(
                 .value = raw_call_value,
                 .body = raw_call_expr,
             } }));
-            const result_value = try applyPublishedExecutablePayloadTransform(
+            const result_value = try applyPublishedExecutableValueTransform(
                 program,
                 materialization,
                 published_types,
                 transforms,
                 &stmts,
-                erased.result_transform,
+                result_transform,
                 raw_call_value,
             );
             break :blk try program.ast.addExpr(wrapper_ret_ty, result_value, .{ .value_ref = result_value });
@@ -1072,26 +1075,57 @@ fn lowerErasedPromotedWrapperBody(
     } });
 }
 
-fn applyPublishedExecutablePayloadTransform(
+fn publishedExecutableValueTransformId(
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    transform_ref: checked_artifact.PublishedExecutableValueTransformRef,
+) checked_artifact.ExecutableValueTransformPlanId {
+    if (!std.mem.eql(u8, &owner_artifact.bytes, &transform_ref.artifact.bytes)) {
+        executableInvariant("executable published value transform refers to a different checked artifact");
+    }
+    return transform_ref.transform;
+}
+
+fn applyPublishedExecutableValueTransformRef(
+    program: *Program,
+    materialization: MaterializationStores,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    stmts: *std.ArrayList(Ast.StmtId),
+    transform_ref: checked_artifact.PublishedExecutableValueTransformRef,
+    value: Ast.ExecutableValueRef,
+) Allocator.Error!Ast.ExecutableValueRef {
+    return try applyPublishedExecutableValueTransform(
+        program,
+        materialization,
+        published_types,
+        transforms,
+        stmts,
+        publishedExecutableValueTransformId(owner_artifact, transform_ref),
+        value,
+    );
+}
+
+fn applyPublishedExecutableValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    transform_id: checked_artifact.ExecutablePayloadTransformPlanId,
+    transform_id: checked_artifact.ExecutableValueTransformPlanId,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
     const plan = transforms.get(transform_id);
     switch (plan.op) {
         .identity => {
             if (!repr.canonicalExecValueTypeKeyEql(plan.from.key, plan.to.key)) {
-                executableInvariant("executable identity payload transform changes representation");
+                executableInvariant("executable identity value transform changes representation");
             }
             return value;
         },
         .structural_bridge => |structural| {
             const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
-            const bridge = try lowerPublishedExecutablePayloadTransformAsBridge(
+            const bridge = try lowerPublishedExecutableValueTransformAsBridge(
                 program,
                 published_types,
                 transforms,
@@ -1109,7 +1143,7 @@ fn applyPublishedExecutablePayloadTransform(
             } }));
             return bridged_value;
         },
-        .record => |fields| try applyRecordPayloadTransform(
+        .record => |fields| try applyRecordValueTransform(
             program,
             materialization,
             published_types,
@@ -1119,7 +1153,7 @@ fn applyPublishedExecutablePayloadTransform(
             fields,
             value,
         ),
-        .tuple => |items| try applyTuplePayloadTransform(
+        .tuple => |items| try applyTupleValueTransform(
             program,
             materialization,
             published_types,
@@ -1129,7 +1163,7 @@ fn applyPublishedExecutablePayloadTransform(
             items,
             value,
         ),
-        .nominal => |nominal| try applyNominalPayloadTransform(
+        .nominal => |nominal| try applyNominalValueTransform(
             program,
             materialization,
             published_types,
@@ -1139,7 +1173,7 @@ fn applyPublishedExecutablePayloadTransform(
             nominal,
             value,
         ),
-        .tag_union => |cases| try applyTagUnionPayloadTransform(
+        .tag_union => |cases| try applyTagUnionValueTransform(
             program,
             materialization,
             published_types,
@@ -1149,7 +1183,7 @@ fn applyPublishedExecutablePayloadTransform(
             cases,
             value,
         ),
-        .list => |list| try applyListPayloadTransform(
+        .list => |list| try applyListValueTransform(
             program,
             materialization,
             published_types,
@@ -1159,7 +1193,7 @@ fn applyPublishedExecutablePayloadTransform(
             list.elem,
             value,
         ),
-        .box_payload => |box| try applyBoxPayloadTransform(
+        .box_payload => |box| try applyBoxValueTransform(
             program,
             materialization,
             published_types,
@@ -1169,7 +1203,7 @@ fn applyPublishedExecutablePayloadTransform(
             box,
             value,
         ),
-        .callable_to_erased => |callable| try applyCallableToErasedPayloadTransform(
+        .callable_to_erased => |callable| try applyCallableToErasedValueTransform(
             program,
             materialization,
             published_types,
@@ -1182,35 +1216,35 @@ fn applyPublishedExecutablePayloadTransform(
             const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
             const erased_ty = erasedFnType(program, to_ty);
             if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, already_erased.sig_key)) {
-                executableInvariant("already-erased payload transform signature differs from target endpoint");
+                executableInvariant("already-erased value transform signature differs from target endpoint");
             }
             return value;
         },
     }
 }
 
-fn applyRecordPayloadTransform(
+fn applyRecordValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
-    fields: []const checked_artifact.PayloadTransformRecordField,
+    plan: checked_artifact.ExecutableValueTransformPlan,
+    fields: []const checked_artifact.ValueTransformRecordField,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
     const source = switch (program.types.getType(from_ty)) {
         .record => |record| record,
-        else => executableInvariant("record payload transform source endpoint is not a record"),
+        else => executableInvariant("record value transform source endpoint is not a record"),
     };
     const target = switch (program.types.getType(to_ty)) {
         .record => |record| record,
-        else => executableInvariant("record payload transform target endpoint is not a record"),
+        else => executableInvariant("record value transform target endpoint is not a record"),
     };
     if (fields.len != target.fields.len) {
-        executableInvariant("record payload transform field count differs from target record");
+        executableInvariant("record value transform field count differs from target record");
     }
 
     const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
@@ -1222,8 +1256,8 @@ fn applyRecordPayloadTransform(
     defer program.allocator.free(output_fields);
     for (target.fields, 0..) |target_field, target_i| {
         const label = program.row_shapes.recordField(target_field.field).label;
-        const field_plan = findPayloadTransformRecordField(fields, label, seen) orelse {
-            executableInvariant("record payload transform omitted a target field");
+        const field_plan = findValueTransformRecordField(fields, label, seen) orelse {
+            executableInvariant("record value transform omitted a target field");
         };
         const source_field = recordFieldForLabel(program, source, label);
         const access_value = program.ast.freshValueRef();
@@ -1235,7 +1269,7 @@ fn applyRecordPayloadTransform(
             .value = access_value,
             .body = access_expr,
         } }));
-        const transformed = try applyPublishedExecutablePayloadTransform(
+        const transformed = try applyPublishedExecutableValueTransform(
             program,
             materialization,
             published_types,
@@ -1251,7 +1285,7 @@ fn applyRecordPayloadTransform(
             .value = transformed,
         };
     }
-    verifyAllSeen(seen, "record payload transform had an extra source field transform");
+    verifyAllSeen(seen, "record value transform had an extra source field transform");
 
     const record_value = program.ast.freshValueRef();
     const record_expr = try program.ast.addExpr(to_ty, record_value, .{ .record = .{
@@ -1265,27 +1299,27 @@ fn applyRecordPayloadTransform(
     return record_value;
 }
 
-fn findPayloadTransformRecordField(
-    fields: []const checked_artifact.PayloadTransformRecordField,
+fn findValueTransformRecordField(
+    fields: []const checked_artifact.ValueTransformRecordField,
     label: canonical.RecordFieldLabelId,
     seen: []bool,
-) ?checked_artifact.PayloadTransformRecordField {
+) ?checked_artifact.ValueTransformRecordField {
     for (fields, 0..) |field, i| {
         if (field.field != label) continue;
-        if (seen[i]) executableInvariant("record payload transform duplicated a field");
+        if (seen[i]) executableInvariant("record value transform duplicated a field");
         seen[i] = true;
         return field;
     }
     return null;
 }
 
-fn applyNominalPayloadTransform(
+fn applyNominalValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    plan: checked_artifact.ExecutableValueTransformPlan,
     nominal: anytype,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
@@ -1293,14 +1327,14 @@ fn applyNominalPayloadTransform(
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
     const source = switch (program.types.getType(from_ty)) {
         .nominal => |source| source,
-        else => executableInvariant("nominal payload transform source endpoint is not nominal"),
+        else => executableInvariant("nominal value transform source endpoint is not nominal"),
     };
     const target = switch (program.types.getType(to_ty)) {
         .nominal => |target| target,
-        else => executableInvariant("nominal payload transform target endpoint is not nominal"),
+        else => executableInvariant("nominal value transform target endpoint is not nominal"),
     };
     if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
-        executableInvariant("nominal payload transform target nominal differs from plan");
+        executableInvariant("nominal value transform target nominal differs from plan");
     }
 
     const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
@@ -1311,7 +1345,7 @@ fn applyNominalPayloadTransform(
         .body = backing_expr,
     } }));
 
-    const transformed_backing = try applyPublishedExecutablePayloadTransform(
+    const transformed_backing = try applyPublishedExecutableValueTransform(
         program,
         materialization,
         published_types,
@@ -1330,28 +1364,28 @@ fn applyNominalPayloadTransform(
     return nominal_value;
 }
 
-fn applyTuplePayloadTransform(
+fn applyTupleValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
-    items: []const checked_artifact.PayloadTransformTupleElem,
+    plan: checked_artifact.ExecutableValueTransformPlan,
+    items: []const checked_artifact.ValueTransformTupleElem,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
     const source = switch (program.types.getType(from_ty)) {
         .tuple => |tuple| tuple,
-        else => executableInvariant("tuple payload transform source endpoint is not a tuple"),
+        else => executableInvariant("tuple value transform source endpoint is not a tuple"),
     };
     const target = switch (program.types.getType(to_ty)) {
         .tuple => |tuple| tuple,
-        else => executableInvariant("tuple payload transform target endpoint is not a tuple"),
+        else => executableInvariant("tuple value transform target endpoint is not a tuple"),
     };
     if (items.len != target.len or source.len != target.len) {
-        executableInvariant("tuple payload transform arity differs from endpoint tuple");
+        executableInvariant("tuple value transform arity differs from endpoint tuple");
     }
 
     const tuple_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
@@ -1362,8 +1396,8 @@ fn applyTuplePayloadTransform(
     const output_items = try program.allocator.alloc(Ast.ExprId, target.len);
     defer program.allocator.free(output_items);
     for (target, 0..) |target_item_ty, i| {
-        const item_plan = findPayloadTransformTupleElem(items, @intCast(i), seen) orelse {
-            executableInvariant("tuple payload transform omitted a target element");
+        const item_plan = findValueTransformTupleElem(items, @intCast(i), seen) orelse {
+            executableInvariant("tuple value transform omitted a target element");
         };
         const access_value = program.ast.freshValueRef();
         const access_expr = try program.ast.addExpr(source[i], access_value, .{ .tuple_access = .{
@@ -1374,7 +1408,7 @@ fn applyTuplePayloadTransform(
             .value = access_value,
             .body = access_expr,
         } }));
-        const transformed = try applyPublishedExecutablePayloadTransform(
+        const transformed = try applyPublishedExecutableValueTransform(
             program,
             materialization,
             published_types,
@@ -1385,7 +1419,7 @@ fn applyTuplePayloadTransform(
         );
         output_items[i] = try program.ast.addExpr(target_item_ty, transformed, .{ .value_ref = transformed });
     }
-    verifyAllSeen(seen, "tuple payload transform had an extra element transform");
+    verifyAllSeen(seen, "tuple value transform had an extra element transform");
 
     const tuple_value = program.ast.freshValueRef();
     const result_expr = try program.ast.addExpr(to_ty, tuple_value, .{ .tuple = try program.ast.addExprSpan(output_items) });
@@ -1396,28 +1430,28 @@ fn applyTuplePayloadTransform(
     return tuple_value;
 }
 
-fn findPayloadTransformTupleElem(
-    items: []const checked_artifact.PayloadTransformTupleElem,
+fn findValueTransformTupleElem(
+    items: []const checked_artifact.ValueTransformTupleElem,
     index: u32,
     seen: []bool,
-) ?checked_artifact.PayloadTransformTupleElem {
+) ?checked_artifact.ValueTransformTupleElem {
     for (items, 0..) |item, i| {
         if (item.index != index) continue;
-        if (seen[i]) executableInvariant("tuple payload transform duplicated an element");
+        if (seen[i]) executableInvariant("tuple value transform duplicated an element");
         seen[i] = true;
         return item;
     }
     return null;
 }
 
-fn applyListPayloadTransform(
+fn applyListValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
-    elem_transform: checked_artifact.ExecutablePayloadTransformPlanId,
+    plan: checked_artifact.ExecutableValueTransformPlan,
+    elem_transform: checked_artifact.ExecutableValueTransformPlanId,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
@@ -1429,7 +1463,7 @@ fn applyListPayloadTransform(
     var body_stmts = std.ArrayList(Ast.StmtId).empty;
     defer body_stmts.deinit(program.allocator);
 
-    const transformed_elem = try applyPublishedExecutablePayloadTransform(
+    const transformed_elem = try applyPublishedExecutableValueTransform(
         program,
         materialization,
         published_types,
@@ -1448,7 +1482,7 @@ fn applyListPayloadTransform(
         } });
 
     const list_value = program.ast.freshValueRef();
-    const list_expr = try program.ast.addExpr(to_ty, list_value, .{ .payload_transform_list = .{
+    const list_expr = try program.ast.addExpr(to_ty, list_value, .{ .value_transform_list = .{
         .source = value,
         .source_elem = source_elem,
         .source_elem_ty = source_elem_ty,
@@ -1470,50 +1504,50 @@ fn listElementTypeForTransform(
 ) Type.TypeId {
     return switch (program.types.getType(list_ty)) {
         .list => |elem| elem,
-        else => executableInvariant("list payload transform " ++ side ++ " endpoint is not List(T)"),
+        else => executableInvariant("list value transform " ++ side ++ " endpoint is not List(T)"),
     };
 }
 
-fn applyTagUnionPayloadTransform(
+fn applyTagUnionValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
-    cases: []const checked_artifact.PayloadTransformTagCase,
+    plan: checked_artifact.ExecutableValueTransformPlan,
+    cases: []const checked_artifact.ValueTransformTagCase,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
     const source = switch (program.types.getType(from_ty)) {
         .tag_union => |tag_union| tag_union,
-        else => executableInvariant("tag-union payload transform source endpoint is not a tag union"),
+        else => executableInvariant("tag-union value transform source endpoint is not a tag union"),
     };
     const target = switch (program.types.getType(to_ty)) {
         .tag_union => |tag_union| tag_union,
-        else => executableInvariant("tag-union payload transform target endpoint is not a tag union"),
+        else => executableInvariant("tag-union value transform target endpoint is not a tag union"),
     };
     if (cases.len != source.tags.len) {
-        executableInvariant("tag-union payload transform case count differs from source tag-union arity");
+        executableInvariant("tag-union value transform case count differs from source tag-union arity");
     }
 
     const seen_cases = try program.allocator.alloc(bool, cases.len);
     defer program.allocator.free(seen_cases);
     @memset(seen_cases, false);
 
-    const branches = try program.allocator.alloc(Ast.PayloadTransformTagBranch, source.tags.len);
+    const branches = try program.allocator.alloc(Ast.ValueTransformTagBranch, source.tags.len);
     defer program.allocator.free(branches);
     for (source.tags, 0..) |source_tag, source_i| {
         const source_label = program.row_shapes.tag(source_tag.tag).label;
-        const case = findPayloadTransformTagCase(cases, source_label, seen_cases) orelse {
-            executableInvariant("tag-union payload transform omitted a source tag case");
+        const case = findValueTransformTagCase(cases, source_label, seen_cases) orelse {
+            executableInvariant("tag-union value transform omitted a source tag case");
         };
         const target_tag = tagTypeForLabel(program, target, case.target_tag);
 
         var branch_stmts = std.ArrayList(Ast.StmtId).empty;
         defer branch_stmts.deinit(program.allocator);
-        const branch_body = try tagUnionPayloadTransformBranchBody(
+        const branch_body = try tagUnionValueTransformBranchBody(
             program,
             materialization,
             published_types,
@@ -1533,12 +1567,12 @@ fn applyTagUnionPayloadTransform(
             .body = branch_body,
         };
     }
-    verifyAllSeen(seen_cases, "tag-union payload transform had an extra source tag case");
+    verifyAllSeen(seen_cases, "tag-union value transform had an extra source tag case");
 
     const transformed_value = program.ast.freshValueRef();
-    const transformed_expr = try program.ast.addExpr(to_ty, transformed_value, .{ .payload_transform_tag_union = .{
+    const transformed_expr = try program.ast.addExpr(to_ty, transformed_value, .{ .value_transform_tag_union = .{
         .source = value,
-        .branches = try program.ast.addPayloadTransformTagBranchSpan(branches),
+        .branches = try program.ast.addValueTransformTagBranchSpan(branches),
     } });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
         .value = transformed_value,
@@ -1547,22 +1581,22 @@ fn applyTagUnionPayloadTransform(
     return transformed_value;
 }
 
-fn tagUnionPayloadTransformBranchBody(
+fn tagUnionValueTransformBranchBody(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     branch_stmts: *std.ArrayList(Ast.StmtId),
     source_union_ty: Type.TypeId,
     target_union_ty: Type.TypeId,
     source_tag: Type.TagType,
     target_union: Type.TagUnionType,
     target_tag: Type.TagType,
-    case: checked_artifact.PayloadTransformTagCase,
+    case: checked_artifact.ValueTransformTagCase,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExprId {
     if (case.payloads.len != target_tag.payloads.len) {
-        executableInvariant("tag-union payload transform payload edge count differs from target tag arity");
+        executableInvariant("tag-union value transform payload edge count differs from target tag arity");
     }
 
     const source_expr = try program.ast.addExpr(source_union_ty, value, .{ .value_ref = value });
@@ -1573,12 +1607,12 @@ fn tagUnionPayloadTransformBranchBody(
     const payload_exprs = try program.allocator.alloc(Ast.TagPayloadExpr, target_tag.payloads.len);
     defer program.allocator.free(payload_exprs);
     for (target_tag.payloads, 0..) |target_payload, target_i| {
-        const edge = findPayloadTransformPayloadEdge(case.payloads, @intCast(target_i), seen_payloads) orelse {
-            executableInvariant("tag-union payload transform omitted a target payload edge");
+        const edge = findValueTransformPayloadEdge(case.payloads, @intCast(target_i), seen_payloads) orelse {
+            executableInvariant("tag-union value transform omitted a target payload edge");
         };
         const source_payload_index: usize = @intCast(edge.source_payload_index);
         if (source_payload_index >= source_tag.payloads.len) {
-            executableInvariant("tag-union payload transform source payload index exceeded source tag arity");
+            executableInvariant("tag-union value transform source payload index exceeded source tag arity");
         }
         const source_payload = source_tag.payloads[source_payload_index];
 
@@ -1592,7 +1626,7 @@ fn tagUnionPayloadTransformBranchBody(
             .body = access_expr,
         } }));
 
-        const transformed = try applyPublishedExecutablePayloadTransform(
+        const transformed = try applyPublishedExecutableValueTransform(
             program,
             materialization,
             published_types,
@@ -1608,7 +1642,7 @@ fn tagUnionPayloadTransformBranchBody(
             .value = transformed,
         };
     }
-    verifyAllSeen(seen_payloads, "tag-union payload transform had an extra payload edge");
+    verifyAllSeen(seen_payloads, "tag-union value transform had an extra payload edge");
 
     const tag_value = program.ast.freshValueRef();
     const tag_expr = try program.ast.addExpr(target_union_ty, tag_value, .{ .tag = .{
@@ -1623,28 +1657,28 @@ fn tagUnionPayloadTransformBranchBody(
     } });
 }
 
-fn findPayloadTransformTagCase(
-    cases: []const checked_artifact.PayloadTransformTagCase,
+fn findValueTransformTagCase(
+    cases: []const checked_artifact.ValueTransformTagCase,
     source_label: canonical.TagLabelId,
     seen: []bool,
-) ?checked_artifact.PayloadTransformTagCase {
+) ?checked_artifact.ValueTransformTagCase {
     for (cases, 0..) |case, i| {
         if (case.source_tag != source_label) continue;
-        if (seen[i]) executableInvariant("tag-union payload transform duplicated a source tag case");
+        if (seen[i]) executableInvariant("tag-union value transform duplicated a source tag case");
         seen[i] = true;
         return case;
     }
     return null;
 }
 
-fn findPayloadTransformPayloadEdge(
-    payloads: []const checked_artifact.PayloadTransformTagPayloadEdge,
+fn findValueTransformPayloadEdge(
+    payloads: []const checked_artifact.ValueTransformTagPayloadEdge,
     target_payload_index: u32,
     seen: []bool,
-) ?checked_artifact.PayloadTransformTagPayloadEdge {
+) ?checked_artifact.ValueTransformTagPayloadEdge {
     for (payloads, 0..) |payload, i| {
         if (payload.target_payload_index != target_payload_index) continue;
-        if (seen[i]) executableInvariant("tag-union payload transform duplicated a target payload edge");
+        if (seen[i]) executableInvariant("tag-union value transform duplicated a target payload edge");
         seen[i] = true;
         return payload;
     }
@@ -1659,16 +1693,16 @@ fn tagTypeForLabel(
     for (tag_union.tags) |tag| {
         if (program.row_shapes.tag(tag.tag).label == label) return tag;
     }
-    executableInvariant("tag-union payload transform target tag label is absent from target type");
+    executableInvariant("tag-union value transform target tag label is absent from target type");
 }
 
-fn applyBoxPayloadTransform(
+fn applyBoxValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    plan: checked_artifact.ExecutableValueTransformPlan,
     box: checked_artifact.BoxPayloadTransformPlan,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
@@ -1678,7 +1712,7 @@ fn applyBoxPayloadTransform(
     switch (box.kind) {
         .payload_to_box => {
             _ = boxPayloadType(program, to_ty);
-            const transformed = try applyPublishedExecutablePayloadTransform(
+            const transformed = try applyPublishedExecutableValueTransform(
                 program,
                 materialization,
                 published_types,
@@ -1692,7 +1726,7 @@ fn applyBoxPayloadTransform(
         .box_to_payload => {
             _ = boxPayloadType(program, from_ty);
             const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
-            return try applyPublishedExecutablePayloadTransform(
+            return try applyPublishedExecutableValueTransform(
                 program,
                 materialization,
                 published_types,
@@ -1706,7 +1740,7 @@ fn applyBoxPayloadTransform(
             _ = boxPayloadType(program, from_ty);
             _ = boxPayloadType(program, to_ty);
             const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
-            const transformed = try applyPublishedExecutablePayloadTransform(
+            const transformed = try applyPublishedExecutableValueTransform(
                 program,
                 materialization,
                 published_types,
@@ -1767,16 +1801,16 @@ fn boxTransformedPayload(
 fn boxPayloadType(program: *const Program, ty: Type.TypeId) Type.TypeId {
     return switch (program.types.getType(ty)) {
         .box => |payload| payload,
-        else => executableInvariant("box payload transform endpoint is not Box(T)"),
+        else => executableInvariant("box value transform endpoint is not Box(T)"),
     };
 }
 
-fn applyCallableToErasedPayloadTransform(
+fn applyCallableToErasedValueTransform(
     program: *Program,
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     stmts: *std.ArrayList(Ast.StmtId),
-    plan: checked_artifact.ExecutablePayloadTransformPlan,
+    plan: checked_artifact.ExecutableValueTransformPlan,
     callable: checked_artifact.CallableToErasedTransformPlan,
     value: Ast.ExecutableValueRef,
 ) Allocator.Error!Ast.ExecutableValueRef {
@@ -1843,15 +1877,15 @@ fn applyCallableToErasedPayloadTransform(
 fn erasedFnType(program: *const Program, ty: Type.TypeId) Type.ErasedFnType {
     return switch (program.types.getType(ty)) {
         .erased_fn => |erased_fn| erased_fn,
-        else => executableInvariant("executable payload transform expected erased function target"),
+        else => executableInvariant("executable value transform expected erased function target"),
     };
 }
 
-fn lowerPublishedExecutablePayloadTransformAsBridge(
+fn lowerPublishedExecutableValueTransformAsBridge(
     program: *Program,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
-    transform_id: checked_artifact.ExecutablePayloadTransformPlanId,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    transform_id: checked_artifact.ExecutableValueTransformPlanId,
     structural: checked_artifact.ExecutableStructuralBridgePlan,
 ) Allocator.Error!Ast.BridgeId {
     const plan = transforms.get(transform_id);
@@ -1860,16 +1894,16 @@ fn lowerPublishedExecutablePayloadTransformAsBridge(
     return try lowerExecutableStructuralBridgePlan(program, published_types, transforms, from_ty, to_ty, structural);
 }
 
-fn lowerExecutablePayloadChildBridge(
+fn lowerExecutableValueChildBridge(
     program: *Program,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
-    child: checked_artifact.ExecutablePayloadTransformPlanId,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    child: checked_artifact.ExecutableValueTransformPlanId,
 ) Allocator.Error!Ast.BridgeId {
     const plan = transforms.get(child);
     return switch (plan.op) {
         .identity => try program.ast.addBridgePlan(.direct),
-        .structural_bridge => |structural| try lowerPublishedExecutablePayloadTransformAsBridge(
+        .structural_bridge => |structural| try lowerPublishedExecutableValueTransformAsBridge(
             program,
             published_types,
             transforms,
@@ -1883,7 +1917,7 @@ fn lowerExecutablePayloadChildBridge(
 fn lowerExecutableStructuralBridgePlan(
     program: *Program,
     published_types: *PublishedTypeLowerer,
-    transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     from_ty: Type.TypeId,
     to_ty: Type.TypeId,
     op: checked_artifact.ExecutableStructuralBridgePlan,
@@ -1893,17 +1927,17 @@ fn lowerExecutableStructuralBridgePlan(
         .zst => .zst,
         .list_reinterpret => .list_reinterpret,
         .nominal_reinterpret => .nominal_reinterpret,
-        .box_unbox => |child| .{ .box_unbox = try lowerExecutablePayloadChildBridge(program, published_types, transforms, child) },
-        .box_box => |child| .{ .box_box = try lowerExecutablePayloadChildBridge(program, published_types, transforms, child) },
+        .box_unbox => |child| .{ .box_unbox = try lowerExecutableValueChildBridge(program, published_types, transforms, child) },
+        .box_box => |child| .{ .box_box = try lowerExecutableValueChildBridge(program, published_types, transforms, child) },
         .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
             .source_payload = from_ty,
             .target_discriminant = try tagDiscriminantForLabel(program, to_ty, singleton.target_tag),
-            .payload_plan = if (singleton.payload_transform) |payload| try lowerExecutablePayloadChildBridge(program, published_types, transforms, payload) else null,
+            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, published_types, transforms, payload) else null,
         } },
         .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
             .target_payload = to_ty,
             .source_discriminant = try tagDiscriminantForLabel(program, from_ty, singleton.source_tag),
-            .payload_plan = if (singleton.payload_transform) |payload| try lowerExecutablePayloadChildBridge(program, published_types, transforms, payload) else null,
+            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, published_types, transforms, payload) else null,
         } },
     };
     return try program.ast.addBridgePlan(plan);
@@ -1917,7 +1951,7 @@ fn recordFieldForLabel(
     for (record.fields) |field| {
         if (program.row_shapes.recordField(field.field).label == label) return field;
     }
-    executableInvariant("record payload transform source field label is absent from source type");
+    executableInvariant("record value transform source field label is absent from source type");
 }
 
 fn tagDiscriminantForLabel(
@@ -3137,7 +3171,7 @@ fn executableProcForSpecializationKey(
         const def = program.ast.defs.items[@intFromEnum(proc.body)];
         if (repr.executableSpecializationKeyEql(def.specialization_key, key)) return proc.executable_proc;
     }
-    executableInvariant("executable payload transform referenced an unreserved executable specialization");
+    executableInvariant("executable value transform referenced an unreserved executable specialization");
 }
 
 fn executableProcForErasedAdapter(
@@ -5354,7 +5388,6 @@ const BodyBuilder = struct {
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
             .executable_proc = target_proc,
             .direct_args = try self.output.addDirectCallArgSpan(direct_args),
-            .result_bridge = null,
         } });
 
         if (stmt_ids.len == 0) return final_call;
@@ -5786,7 +5819,6 @@ const BodyBuilder = struct {
                 .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
                 .executable_proc = executable_proc,
                 .direct_args = try self.output.addDirectCallArgSpan(direct_args),
-                .result_bridge = null,
             };
         }
 

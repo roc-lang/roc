@@ -45,10 +45,11 @@ pub const ExecutableSyntheticProcBody = union(enum) {
 };
 
 pub const ExecutableSyntheticProc = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
     source_proc: canonical.MirProcedureRef,
     template: canonical.ProcedureTemplateRef,
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
-    executable_payload_transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
+    executable_value_transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,
     comptime_values: *const checked_artifact.CompileTimeValueStore,
     body: ExecutableSyntheticProcBody,

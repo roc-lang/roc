@@ -283,8 +283,8 @@ const IrBuilder = struct {
             .callable_set_value => |callable| try self.lowerCallableSetValue(expr, callable, stmts),
             .callable_match => |callable_match| try self.lowerCallableMatch(expr, callable_match, stmts),
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
-            .payload_transform_tag_union => |tag_transform| try self.lowerPayloadTransformTagUnion(expr, tag_transform, stmts),
-            .payload_transform_list => |list_transform| try self.lowerPayloadTransformList(expr, list_transform, stmts),
+            .value_transform_tag_union => |tag_transform| try self.lowerValueTransformTagUnion(expr, tag_transform, stmts),
+            .value_transform_list => |list_transform| try self.lowerValueTransformList(expr, list_transform, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
             .bridge => |bridge_expr| blk: {
@@ -338,19 +338,12 @@ const IrBuilder = struct {
         call: Exec.Ast.CallDirectPlan,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const args = try self.lowerDirectCallArgSpan(call.executable_proc, call.direct_args, stmts);
+        const args = try self.lowerDirectCallArgSpan(call.direct_args);
         defer if (args.len > 0) self.allocator.free(args);
         const direct_call: Ast.Expr = .{ .call_direct = .{
             .proc = call.executable_proc,
             .args = try self.output.store.addVarSpan(args),
         } };
-        if (call.result_bridge) |result_bridge| {
-            const raw_result = try self.bindAnonymous(try self.procReturnLayout(call.executable_proc), direct_call, stmts);
-            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .bridge = .{
-                .value = raw_result,
-                .plan = try self.lowerBridgePlan(result_bridge),
-            } }, stmts);
-        }
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), direct_call, stmts);
     }
 
@@ -545,20 +538,13 @@ const IrBuilder = struct {
             irInvariant("IR lowering callable_match branch has payload type without payload value");
         }
 
-        const args = try self.lowerDirectCallArgSpan(branch.executable_proc, branch.direct_args, &stmts);
+        const args = try self.lowerDirectCallArgSpan(branch.direct_args);
         defer if (args.len > 0) self.allocator.free(args);
         const direct_call: Ast.Expr = .{ .call_direct = .{
             .proc = branch.executable_proc,
             .args = try self.output.store.addVarSpan(args),
         } };
-        const raw_result = try self.bindAnonymous(try self.procReturnLayout(branch.executable_proc), direct_call, &stmts);
-        const result = if (branch.result_bridge) |result_bridge|
-            try self.bindAnonymous(try self.layoutForType(result_ty), .{ .bridge = .{
-                .value = raw_result,
-                .plan = try self.lowerBridgePlan(result_bridge),
-            } }, &stmts)
-        else
-            raw_result;
+        const result = try self.bindAnonymous(try self.layoutForType(result_ty), direct_call, &stmts);
 
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(stmts.items),
@@ -589,14 +575,14 @@ const IrBuilder = struct {
         return result;
     }
 
-    fn lowerPayloadTransformTagUnion(
+    fn lowerValueTransformTagUnion(
         self: *IrBuilder,
         expr: Exec.Ast.Expr,
         tag_transform: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
         const source = self.value_env.get(tag_transform.source) orelse
-            irInvariant("IR lowering payload_transform_tag_union source value was not bound");
+            irInvariant("IR lowering value_transform_tag_union source value was not bound");
         const discriminant = try self.bindExpr(
             self.freshInternalValueRef(),
             .{ .canonical = .u16 },
@@ -604,8 +590,8 @@ const IrBuilder = struct {
             stmts,
         );
 
-        const input_branches = self.input.ast.payload_transform_tag_branches.items[tag_transform.branches.start..][0..tag_transform.branches.len];
-        if (input_branches.len == 0) irInvariant("IR lowering payload_transform_tag_union had no branches");
+        const input_branches = self.input.ast.value_transform_tag_branches.items[tag_transform.branches.start..][0..tag_transform.branches.len];
+        if (input_branches.len == 0) irInvariant("IR lowering value_transform_tag_union had no branches");
         const branches = try self.allocator.alloc(Ast.Branch, input_branches.len);
         defer self.allocator.free(branches);
         for (input_branches, 0..) |branch, i| {
@@ -629,14 +615,14 @@ const IrBuilder = struct {
         return result;
     }
 
-    fn lowerPayloadTransformList(
+    fn lowerValueTransformList(
         self: *IrBuilder,
         expr: Exec.Ast.Expr,
-        list_transform: Exec.Ast.PayloadTransformList,
+        list_transform: Exec.Ast.ValueTransformList,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
         const source = self.value_env.get(list_transform.source) orelse
-            irInvariant("IR lowering payload_transform_list source value was not bound");
+            irInvariant("IR lowering value_transform_list source value was not bound");
         const source_elem_layout = try self.layoutForType(list_transform.source_elem_ty);
         const result_layout = try self.layoutForType(expr.ty);
 
@@ -653,7 +639,7 @@ const IrBuilder = struct {
         try stmts.append(self.allocator, try self.output.store.addStmt(.{ .for_list = .{
             .elem = elem,
             .iterable = source,
-            .body = try self.lowerPayloadTransformListBodyBlock(list_transform, elem, result, result_layout),
+            .body = try self.lowerValueTransformListBodyBlock(list_transform, elem, result, result_layout),
             .elem_bridge_plan = try self.output.store.addBridgePlan(.direct),
         } }));
 
@@ -661,9 +647,9 @@ const IrBuilder = struct {
         return result;
     }
 
-    fn lowerPayloadTransformListBodyBlock(
+    fn lowerValueTransformListBodyBlock(
         self: *IrBuilder,
-        list_transform: Exec.Ast.PayloadTransformList,
+        list_transform: Exec.Ast.ValueTransformList,
         elem: Ast.Var,
         result: Ast.Var,
         result_layout: Ast.LayoutRef,
@@ -1564,25 +1550,13 @@ const IrBuilder = struct {
 
     fn lowerDirectCallArgSpan(
         self: *IrBuilder,
-        proc: Exec.Ast.ExecutableProcId,
         span: Exec.Ast.Span(Exec.Ast.DirectCallArg),
-        stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError![]const Ast.Var {
         if (span.len == 0) return &.{};
         const input_items = self.input.ast.direct_call_args.items[span.start..][0..span.len];
         const values = try self.allocator.alloc(Ast.Var, input_items.len);
         for (input_items, 0..) |arg, i| {
-            const source = self.value_env.get(arg.value) orelse irInvariant("IR lowering direct call argument value was not bound");
-            values[i] = if (arg.bridge) |bridge| blk: {
-                break :blk try self.bindAnonymous(
-                    try self.procArgLayout(proc, i),
-                    .{ .bridge = .{
-                        .value = source,
-                        .plan = try self.lowerBridgePlan(bridge),
-                    } },
-                    stmts,
-                );
-            } else source;
+            values[i] = self.value_env.get(arg.value) orelse irInvariant("IR lowering direct call argument value was not bound");
         }
         return values;
     }
