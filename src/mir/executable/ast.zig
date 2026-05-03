@@ -324,9 +324,14 @@ pub const DefVal = union(enum) {
     hosted_fn: HostedFnDef,
 };
 
+pub const ProcOrigin = union(enum) {
+    source: canonical.MirProcedureRef,
+    erased_adapter: repr.ErasedAdapterKey,
+};
+
 pub const Def = struct {
     proc: ExecutableProcId,
-    source_proc: canonical.MirProcedureRef,
+    origin: ProcOrigin,
     specialization_key: repr.ExecutableSpecializationKey,
     value: DefVal,
 };

@@ -3542,6 +3542,23 @@ ErasedAdapterKey {
 }
 ```
 
+Executable procedure definitions must carry an explicit origin instead of a
+mandatory source procedure:
+
+```zig
+const ExecutableProcOrigin = union(enum) {
+    source: MirProcedureRef,
+    erased_adapter: ErasedAdapterKey,
+};
+```
+
+Source procedure lookup may only inspect `ExecutableProcOrigin.source`.
+Erased-adapter lookup may only inspect `ExecutableProcOrigin.erased_adapter`
+and must compare the full `ErasedAdapterKey`. An erased adapter must never fake
+its origin by borrowing the first member procedure's `MirProcedureRef`; doing so
+would create two executable procedures with the same apparent source identity
+and would reintroduce an implicit side channel for adapter identity.
+
 An erased adapter's signature is the fixed-arity erased function signature from
 the boxed payload boundary. It captures exactly the finite callable-set value, or
 an explicit capture record containing that value. Its body receives the erased

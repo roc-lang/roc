@@ -20,8 +20,13 @@ const repr = LambdaSolved.Representation;
 
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
-    source_proc: canonical.MirProcedureRef,
+    origin: Ast.ProcOrigin,
     body: Ast.DefId,
+};
+
+const ErasedAdapterProcReservation = struct {
+    key: repr.ErasedAdapterKey,
+    executable_proc: Ast.ExecutableProcId,
 };
 
 pub const Program = struct {
@@ -33,6 +38,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    erased_adapter_procs: std.ArrayList(ErasedAdapterProcReservation),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
@@ -48,6 +54,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .erased_adapter_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
         };
@@ -57,6 +64,7 @@ pub const Program = struct {
         if (self.layouts) |*layouts| layouts.deinit();
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        self.erased_adapter_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -96,7 +104,10 @@ pub fn run(
     defer proc_exec_map.deinit();
     const normal_proc_count = input.procs.items.len;
     const executable_synthetic_proc_count = input.executable_synthetic_procs.items.len;
-    const total_proc_count = normal_proc_count + executable_synthetic_proc_count;
+    var erased_adapter_keys = try collectErasedAdapterKeys(allocator, &input);
+    defer erased_adapter_keys.deinit(allocator);
+    const erased_adapter_proc_count = erased_adapter_keys.items.len;
+    const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_adapter_proc_count;
 
     try proc_map.ensureTotalCapacity(@intCast(total_proc_count));
     try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
@@ -110,6 +121,14 @@ pub fn run(
     for (input.executable_synthetic_procs.items, 0..) |proc, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + i)));
         proc_map.putAssumeCapacity(proc.source_proc, executable_proc);
+    }
+    try program.erased_adapter_procs.ensureTotalCapacity(allocator, erased_adapter_proc_count);
+    for (erased_adapter_keys.items, 0..) |adapter, i| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + executable_synthetic_proc_count + i)));
+        program.erased_adapter_procs.appendAssumeCapacity(.{
+            .key = adapter,
+            .executable_proc = executable_proc,
+        });
     }
 
     try program.procs.ensureTotalCapacity(allocator, total_proc_count);
@@ -141,13 +160,14 @@ pub fn run(
             .proc_map = &proc_map,
             .proc_instance_map = &proc_instance_map,
             .proc_exec_map = &proc_exec_map,
+            .erased_adapter_procs = program.erased_adapter_procs.items,
             .active_callable_sets = std.ArrayList(ActiveCallableSetType).empty,
         };
         defer builder.deinit();
 
         program.procs.appendAssumeCapacity(.{
             .executable_proc = executable_proc,
-            .source_proc = proc.proc,
+            .origin = .{ .source = proc.proc },
             .body = try builder.lowerDef(proc.body),
         });
     }
@@ -155,8 +175,15 @@ pub fn run(
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + i)));
         program.procs.appendAssumeCapacity(.{
             .executable_proc = executable_proc,
-            .source_proc = synthetic.source_proc,
+            .origin = .{ .source = synthetic.source_proc },
             .body = try lowerExecutableSyntheticProc(allocator, &program, synthetic, executable_proc),
+        });
+    }
+    for (program.erased_adapter_procs.items) |adapter| {
+        program.procs.appendAssumeCapacity(.{
+            .executable_proc = adapter.executable_proc,
+            .origin = .{ .erased_adapter = adapter.key },
+            .body = try lowerErasedFiniteSetAdapterProc(allocator, &program, &input, &type_lowerer, &proc_map, &proc_instance_map, &proc_exec_map, adapter.key, adapter.executable_proc),
         });
     }
 
@@ -202,6 +229,118 @@ fn programCallableSetMember(
     return null;
 }
 
+fn collectErasedAdapterKeys(
+    allocator: Allocator,
+    input: *const LambdaSolved.Solve.Program,
+) Allocator.Error!std.ArrayList(repr.ErasedAdapterKey) {
+    var adapters = std.ArrayList(repr.ErasedAdapterKey).empty;
+    errdefer adapters.deinit(allocator);
+
+    for (input.solve_sessions.items) |*session| {
+        for (session.representation_store.callable_emission_plans) |plan| {
+            switch (plan) {
+                .already_erased => |erased| try collectErasedCodeRefAdapter(allocator, &adapters, erased.code),
+                .erase_finite_set => |erase| try appendErasedAdapterKey(allocator, &adapters, erase.adapter),
+                .finite,
+                .erase_proc_value,
+                => {},
+            }
+        }
+    }
+
+    for (input.executable_synthetic_procs.items) |synthetic| {
+        switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| {
+                try collectErasedCodeRefAdapter(allocator, &adapters, erased.code);
+                try collectErasedCaptureMaterializationAdapters(allocator, &adapters, synthetic.comptime_plans, erased.capture);
+                switch (erased.hidden_capture_arg) {
+                    .none => {},
+                    .materialized_capture => |capture| try collectErasedCaptureMaterializationAdapters(allocator, &adapters, synthetic.comptime_plans, capture),
+                }
+            },
+        }
+    }
+
+    return adapters;
+}
+
+fn collectErasedCodeRefAdapter(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    code: canonical.ErasedCallableCodeRef,
+) Allocator.Error!void {
+    switch (code) {
+        .direct_proc_value => {},
+        .finite_set_adapter => |adapter| try appendErasedAdapterKey(allocator, adapters, adapter),
+    }
+}
+
+fn collectErasedCaptureMaterializationAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    plans: *const checked_artifact.CompileTimePlanStore,
+    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+) Allocator.Error!void {
+    switch (capture) {
+        .none,
+        .zero_sized_typed,
+        => {},
+        .node => |node| try collectErasedCaptureMaterializationNodeAdapters(allocator, adapters, plans, node),
+    }
+}
+
+fn collectErasedCaptureMaterializationNodeAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    plans: *const checked_artifact.CompileTimePlanStore,
+    node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+) Allocator.Error!void {
+    const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
+    switch (node) {
+        .pending => executableInvariant("executable adapter collection reached pending erased capture materialization node"),
+        .pure_const,
+        .finite_callable_set,
+        => {},
+        .erased_callable => |erased| {
+            try collectErasedCodeRefAdapter(allocator, adapters, erased.code);
+            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, erased.capture);
+        },
+        .record => |fields| for (fields) |field| {
+            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, field.value);
+        },
+        .tuple => |items| for (items) |item| {
+            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, item);
+        },
+        .tag_union => |tag| for (tag.payloads) |payload| {
+            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, payload.value);
+        },
+        .list => |items| for (items) |item| {
+            try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, item);
+        },
+        .box => |payload| try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, payload),
+        .nominal => |nominal| try collectErasedCaptureMaterializationAdapters(allocator, adapters, plans, nominal.backing),
+        .recursive_ref => |ref| try collectErasedCaptureMaterializationNodeAdapters(allocator, adapters, plans, ref),
+    }
+}
+
+fn appendErasedAdapterKey(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapter: repr.ErasedAdapterKey,
+) Allocator.Error!void {
+    for (adapters.items) |existing| {
+        if (erasedAdapterKeyEql(existing, adapter)) return;
+    }
+    try adapters.append(allocator, adapter);
+}
+
+fn erasedAdapterKeyEql(a: repr.ErasedAdapterKey, b: repr.ErasedAdapterKey) bool {
+    return repr.canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and
+        repr.callableSetKeyEql(a.callable_set_key, b.callable_set_key) and
+        repr.erasedFnSigKeyEql(a.erased_fn_sig_key, b.erased_fn_sig_key) and
+        repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+}
+
 fn lowerExecutableSyntheticProc(
     allocator: Allocator,
     program: *Program,
@@ -217,6 +356,258 @@ fn lowerExecutableSyntheticProc(
             erased,
         ),
     }
+}
+
+fn lowerErasedFiniteSetAdapterProc(
+    allocator: Allocator,
+    program: *Program,
+    input: *const LambdaSolved.Solve.Program,
+    type_lowerer: *TypeLowerer,
+    proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
+    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
+    adapter: repr.ErasedAdapterKey,
+    executable_proc: Ast.ExecutableProcId,
+) Allocator.Error!Ast.DefId {
+    const descriptor = programCallableSetDescriptor(program, adapter.callable_set_key) orelse {
+        executableInvariant("executable erased finite-set adapter has no callable-set descriptor");
+    };
+    if (descriptor.members.len == 0) {
+        executableInvariant("executable erased finite-set adapter descriptor has no members");
+    }
+
+    const first_member = descriptor.members[0];
+    const first_instance_id = proc_instance_map.get(first_member.source_proc) orelse {
+        executableInvariant("executable erased finite-set adapter first member has no representation instance");
+    };
+    const first_instance = &input.proc_instances.items[@intFromEnum(first_instance_id)];
+    if (!repr.canonicalTypeKeyEql(first_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
+        executableInvariant("executable erased finite-set adapter source function type differs from first member specialization");
+    }
+
+    const value_store = &input.value_stores.items[@intFromEnum(first_instance.value_store)];
+    const representation_store = &input.solve_sessions.items[@intFromEnum(first_instance.solve_session)].representation_store;
+    var builder = BodyBuilder{
+        .allocator = allocator,
+        .input = &input.ast,
+        .output = &program.ast,
+        .canonical_names = &program.canonical_names,
+        .type_lowerer = type_lowerer,
+        .value_store = value_store,
+        .representation_store = representation_store,
+        .callable_set_descriptors = program.callable_set_descriptors,
+        .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
+        .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
+        .executable_proc = executable_proc,
+        .source_proc = first_member.source_proc,
+        .representation_instance = first_instance_id,
+        .proc_instance = first_instance,
+        .proc_instances = input.proc_instances.items,
+        .solve_sessions = input.solve_sessions.items,
+        .value_stores = input.value_stores.items,
+        .proc_map = proc_map,
+        .proc_instance_map = proc_instance_map,
+        .proc_exec_map = proc_exec_map,
+        .erased_adapter_procs = program.erased_adapter_procs.items,
+        .active_callable_sets = std.ArrayList(ActiveCallableSetType).empty,
+    };
+    defer builder.deinit();
+
+    const public_params = value_store.sliceValueSpan(first_instance.public_roots.params);
+    const hidden_capture_ty = try builder.lowerFiniteSetAdapterCaptureType(adapter);
+    if (hidden_capture_ty == null and descriptor.members.len != 1) {
+        executableInvariant("executable erased finite-set adapter without hidden capture cannot dispatch a multi-member callable set");
+    }
+
+    const hidden_capture_arg_count: usize = if (hidden_capture_ty == null) 0 else 1;
+    const typed_arg_count = public_params.len + hidden_capture_arg_count;
+    const typed_args = try allocator.alloc(Ast.TypedValue, typed_arg_count);
+    defer allocator.free(typed_args);
+    for (public_params, 0..) |param, i| {
+        const param_info = value_store.values.items[@intFromEnum(param)];
+        typed_args[i] = .{
+            .ty = try builder.lowerExecutableValueTypeInStore(param_info.logical_ty, param, value_store, representation_store),
+            .value = program.ast.freshValueRef(),
+        };
+    }
+
+    const hidden_capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_ty) |capture_ty| blk: {
+        const value = program.ast.freshValueRef();
+        typed_args[public_params.len] = .{
+            .ty = capture_ty,
+            .value = value,
+        };
+        break :blk value;
+    } else null;
+
+    const args = try program.ast.addTypedValueSpan(typed_args);
+    const ret_info = value_store.values.items[@intFromEnum(first_instance.public_roots.ret)];
+    const result_ty = try builder.lowerExecutableValueTypeInStore(
+        ret_info.logical_ty,
+        first_instance.public_roots.ret,
+        value_store,
+        representation_store,
+    );
+    const body = try lowerErasedFiniteSetAdapterBody(
+        allocator,
+        program,
+        &builder,
+        adapter,
+        descriptor,
+        typed_args[0..public_params.len],
+        hidden_capture_value,
+        result_ty,
+    );
+
+    var specialization_key = try repr.cloneExecutableSpecializationKey(allocator, first_instance.executable_specialization_key);
+    specialization_key.callable_repr_mode = .erased_adapter;
+    specialization_key.capture_shape_key = adapter.capture_shape_key;
+    return try program.ast.addDef(.{
+        .proc = executable_proc,
+        .origin = .{ .erased_adapter = adapter },
+        .specialization_key = specialization_key,
+        .value = .{ .fn_ = .{
+            .args = args,
+            .body = body,
+        } },
+    });
+}
+
+fn lowerErasedFiniteSetAdapterBody(
+    allocator: Allocator,
+    program: *Program,
+    builder: *BodyBuilder,
+    adapter: repr.ErasedAdapterKey,
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    explicit_args: []const Ast.TypedValue,
+    hidden_capture: ?Ast.ExecutableValueRef,
+    result_ty: Type.TypeId,
+) Allocator.Error!Ast.ExprId {
+    if (!repr.callableSetKeyEql(descriptor.key, adapter.callable_set_key)) {
+        executableInvariant("executable erased finite-set adapter descriptor key differs from adapter key");
+    }
+
+    const callee_value = hidden_capture orelse blk: {
+        const member = descriptor.members[0];
+        if (member.capture_slots.len != 0) {
+            executableInvariant("executable erased finite-set adapter without hidden capture cannot synthesize captured callable set");
+        }
+        const callable_set_ty = try builder.lowerFiniteCallableSetType(adapter.callable_set_key, builder.representation_store);
+        const value = program.ast.freshValueRef();
+        const singleton = try program.ast.addExpr(callable_set_ty, value, .{ .callable_set_value = .{
+            .construction_plan = null,
+            .callable_set_key = adapter.callable_set_key,
+            .member = .{
+                .callable_set_key = adapter.callable_set_key,
+                .member_index = member.member,
+            },
+            .capture_record = null,
+        } });
+        const stmt = try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = singleton,
+        } });
+        const final_call = try lowerErasedFiniteSetAdapterCallableMatch(
+            allocator,
+            program,
+            builder,
+            adapter,
+            descriptor,
+            explicit_args,
+            value,
+            result_ty,
+        );
+        return try program.ast.addExpr(result_ty, program.ast.getExpr(final_call).value, .{ .block = .{
+            .stmts = try program.ast.addStmtSpan(&.{stmt}),
+            .final_expr = final_call,
+        } });
+    };
+
+    return try lowerErasedFiniteSetAdapterCallableMatch(
+        allocator,
+        program,
+        builder,
+        adapter,
+        descriptor,
+        explicit_args,
+        callee_value,
+        result_ty,
+    );
+}
+
+fn lowerErasedFiniteSetAdapterCallableMatch(
+    allocator: Allocator,
+    program: *Program,
+    builder: *BodyBuilder,
+    adapter: repr.ErasedAdapterKey,
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    explicit_args: []const Ast.TypedValue,
+    callee_value: Ast.ExecutableValueRef,
+    result_ty: Type.TypeId,
+) Allocator.Error!Ast.ExprId {
+    const arg_values: []Ast.ExecutableValueRef = if (explicit_args.len == 0)
+        &.{}
+    else
+        try allocator.alloc(Ast.ExecutableValueRef, explicit_args.len);
+    defer if (arg_values.len > 0) allocator.free(arg_values);
+    for (explicit_args, 0..) |arg, i| {
+        arg_values[i] = arg.value;
+    }
+
+    const branches = try allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
+    defer allocator.free(branches);
+    for (descriptor.members, 0..) |member, i| {
+        if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, adapter.source_fn_ty)) {
+            executableInvariant("executable erased finite-set adapter member source type differs from adapter key");
+        }
+        const executable_proc = builder.proc_map.get(member.source_proc) orelse {
+            executableInvariant("executable erased finite-set adapter member target was not reserved");
+        };
+        const target_instance_id = builder.proc_instance_map.get(member.source_proc) orelse {
+            executableInvariant("executable erased finite-set adapter member target has no representation instance");
+        };
+        const target_instance = builder.proc_instances[@intFromEnum(target_instance_id)];
+        if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
+            executableInvariant("executable erased finite-set adapter member target specialization source type differs from adapter key");
+        }
+
+        const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(member);
+        const capture_payload = if (capture_payload_ty != null) program.ast.freshValueRef() else null;
+        const capture_arg_len: usize = if (capture_payload == null) 0 else 1;
+        const direct_args = try allocator.alloc(Ast.DirectCallArg, explicit_args.len + capture_arg_len);
+        defer allocator.free(direct_args);
+        for (explicit_args, 0..) |arg, arg_i| {
+            direct_args[arg_i] = .{ .value = arg.value };
+        }
+        if (capture_payload) |payload| {
+            direct_args[explicit_args.len] = .{ .value = payload };
+        }
+
+        branches[i] = .{
+            .member = .{
+                .callable_set_key = adapter.callable_set_key,
+                .member_index = member.member,
+            },
+            .source_fn_ty = member.proc_value.source_fn_ty,
+            .capture_payload = capture_payload,
+            .capture_payload_ty = capture_payload_ty,
+            .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
+            .executable_proc = executable_proc,
+            .direct_args = try program.ast.addDirectCallArgSpan(direct_args),
+            .result_bridge = null,
+        };
+    }
+
+    const result_value = program.ast.freshValueRef();
+    return try program.ast.addExpr(result_ty, result_value, .{ .callable_match = .{
+        .callable_set_key = adapter.callable_set_key,
+        .requested_source_fn_ty = adapter.source_fn_ty,
+        .callee = callee_value,
+        .args = try program.ast.addValueRefSpan(arg_values),
+        .branches = try program.ast.addCallableMatchBranchSpan(branches),
+        .result_ty = result_ty,
+        .result_value = result_value,
+    } });
 }
 
 fn lowerErasedPromotedWrapperProc(
@@ -252,7 +643,7 @@ fn lowerErasedPromotedWrapperProc(
 
     return try program.ast.addDef(.{
         .proc = executable_proc,
-        .source_proc = synthetic.source_proc,
+        .origin = .{ .source = synthetic.source_proc },
         .specialization_key = try repr.cloneExecutableSpecializationKey(allocator, signature.specialization_key),
         .value = .{ .fn_ = .{
             .args = args,
@@ -867,7 +1258,7 @@ fn executableProcForErasedCode(
 ) Ast.ExecutableProcId {
     return switch (code) {
         .direct_proc_value => |direct| executableProcForCallable(program, direct.proc_value),
-        .finite_set_adapter => executableInvariant("executable erased promoted finite-set adapter body emission is not implemented"),
+        .finite_set_adapter => |adapter| executableProcForErasedAdapter(program, adapter),
     };
 }
 
@@ -876,9 +1267,23 @@ fn executableProcForCallable(
     callable: canonical.ProcedureCallableRef,
 ) Ast.ExecutableProcId {
     for (program.procs.items) |proc| {
-        if (canonical.procedureCallableRefEql(proc.source_proc.callable, callable)) return proc.executable_proc;
+        const source = switch (proc.origin) {
+            .source => |source| source,
+            .erased_adapter => continue,
+        };
+        if (canonical.procedureCallableRefEql(source.callable, callable)) return proc.executable_proc;
     }
     executableInvariant("executable erased promoted wrapper referenced an unreserved callable procedure");
+}
+
+fn executableProcForErasedAdapter(
+    program: *const Program,
+    adapter: repr.ErasedAdapterKey,
+) Ast.ExecutableProcId {
+    for (program.erased_adapter_procs.items) |proc| {
+        if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
+    }
+    executableInvariant("executable erased callable referenced an unreserved finite-set adapter");
 }
 
 const PublishedTypeLowerer = struct {
@@ -1283,6 +1688,7 @@ const BodyBuilder = struct {
     proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
     proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
+    erased_adapter_procs: []const ErasedAdapterProcReservation,
     active_callable_sets: std.ArrayList(ActiveCallableSetType),
     capture_record_arg: ?Ast.TypedValue = null,
 
@@ -1300,7 +1706,7 @@ const BodyBuilder = struct {
                 const body = try self.lowerExpr(fn_.body);
                 break :blk .{
                     .proc = self.executable_proc,
-                    .source_proc = def.proc,
+                    .origin = .{ .source = def.proc },
                     .specialization_key = try self.executableSpecializationKey(),
                     .value = .{ .fn_ = .{
                         .args = args,
@@ -1313,7 +1719,7 @@ const BodyBuilder = struct {
                 const args = try self.lowerParamSpan(hosted.args);
                 break :blk .{
                     .proc = self.executable_proc,
-                    .source_proc = def.proc,
+                    .origin = .{ .source = def.proc },
                     .specialization_key = try self.executableSpecializationKey(),
                     .value = .{ .hosted_fn = .{
                         .args = args,
@@ -1327,7 +1733,7 @@ const BodyBuilder = struct {
                 const body = try self.lowerExpr(expr);
                 break :blk .{
                     .proc = self.executable_proc,
-                    .source_proc = def.proc,
+                    .origin = .{ .source = def.proc },
                     .specialization_key = try self.executableSpecializationKey(),
                     .value = .{ .fn_ = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
@@ -1340,7 +1746,7 @@ const BodyBuilder = struct {
                 const body = try self.lowerExpr(run.body);
                 break :blk .{
                     .proc = self.executable_proc,
-                    .source_proc = def.proc,
+                    .origin = .{ .source = def.proc },
                     .specialization_key = try self.executableSpecializationKey(),
                     .value = .{ .fn_ = .{
                         .args = Ast.Span(Ast.TypedValue).empty(),
@@ -1369,6 +1775,16 @@ const BodyBuilder = struct {
             }
         }
         executableInvariant("executable specialization key was not reserved before body lowering");
+    }
+
+    fn executableProcForErasedAdapter(
+        self: *const BodyBuilder,
+        adapter: repr.ErasedAdapterKey,
+    ) Ast.ExecutableProcId {
+        for (self.erased_adapter_procs) |proc| {
+            if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
+        }
+        executableInvariant("executable finite-set erase plan referenced an unreserved erased adapter");
     }
 
     fn lowerExecutableValueType(
@@ -2717,9 +3133,8 @@ const BodyBuilder = struct {
         switch (emission) {
             .finite => {},
             .erase_proc_value => |erase| return try self.lowerProcValueErased(source_ty, value_info_id, callable, proc_value, erase),
-            .already_erased,
-            .erase_finite_set,
-            => executableInvariant("executable proc_value reached erased emission that is not a proc-value erase plan"),
+            .erase_finite_set => |erase| return try self.lowerFiniteSetValueErased(source_ty, value_info_id, callable, proc_value, erase),
+            .already_erased => executableInvariant("executable proc_value reached erased emission that is not a proc-value erase plan"),
         }
 
         const construction_id = callable.construction_plan orelse executableInvariant("executable proc_value reached finite callable value without construction metadata");
@@ -2790,6 +3205,134 @@ const BodyBuilder = struct {
 
         if (stmt_ids.len == 0) return final_value;
 
+        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .final_expr = final_value,
+        } });
+    }
+
+    fn lowerFiniteSetValueErased(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        value_info_id: repr.ValueInfoId,
+        callable: repr.CallableValueInfo,
+        proc_value: anytype,
+        erase: repr.FiniteSetErasePlan,
+    ) Allocator.Error!Ast.ExprId {
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => executableInvariant("executable finite-set erase plan is attached to a non-proc callable source"),
+        };
+        if (!canonical.mirProcedureRefEql(source.proc, proc_value.proc)) {
+            executableInvariant("executable finite-set erase source procedure differs from proc_value expression");
+        }
+        if (!repr.canonicalTypeKeyEql(source.fn_ty, erase.adapter.source_fn_ty)) {
+            executableInvariant("executable finite-set erase source type differs from adapter key");
+        }
+
+        const construction_id = callable.construction_plan orelse {
+            executableInvariant("executable finite-set erase reached callable value without construction metadata");
+        };
+        const construction = self.representation_store.callableConstructionPlan(construction_id);
+        if (construction.result != value_info_id) {
+            executableInvariant("executable finite-set erase construction plan is attached to the wrong value");
+        }
+        if (!repr.callableSetKeyEql(construction.callable_set_key, erase.adapter.callable_set_key)) {
+            executableInvariant("executable finite-set erase construction key differs from adapter key");
+        }
+        if (!repr.canonicalTypeKeyEql(construction.source_fn_ty, erase.adapter.source_fn_ty)) {
+            executableInvariant("executable finite-set erase construction source type differs from adapter key");
+        }
+
+        const descriptor = callableSetDescriptorFromSlice(self.callable_set_descriptors, erase.adapter.callable_set_key) orelse {
+            executableInvariant("executable finite-set erase adapter has no callable-set descriptor");
+        };
+        const member = self.representation_store.callableSetMember(construction.callable_set_key, construction.selected_member) orelse {
+            executableInvariant("executable finite-set erase construction selected a missing callable-set member");
+        };
+        if (member.capture_slots.len != construction.capture_values.len) {
+            executableInvariant("executable finite-set erase capture count differs from descriptor member");
+        }
+
+        const capture_items = self.input.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
+        if (capture_items.len != construction.capture_values.len) {
+            executableInvariant("executable finite-set erase proc_value capture arity does not match construction plan");
+        }
+
+        const result_ty = try self.lowerExecutableValueType(source_ty, value_info_id);
+        const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(erase.adapter);
+        if (hidden_capture_ty == null and (descriptor.members.len != 1 or capture_items.len != 0)) {
+            executableInvariant("executable finite-set erase without hidden capture cannot preserve callable-set value");
+        }
+
+        const capture_refs: []Ast.CaptureValueRef = if (capture_items.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(Ast.CaptureValueRef, capture_items.len);
+        defer if (capture_refs.len > 0) self.allocator.free(capture_refs);
+        const hidden_capture_stmt_count: usize = if (hidden_capture_ty == null) 0 else 1;
+        const stmt_count = capture_items.len + hidden_capture_stmt_count;
+        const stmt_ids: []Ast.StmtId = if (stmt_count == 0)
+            &.{}
+        else
+            try self.allocator.alloc(Ast.StmtId, stmt_count);
+        defer if (stmt_ids.len > 0) self.allocator.free(stmt_ids);
+
+        for (capture_items, 0..) |capture, i| {
+            if (capture.slot != @as(u32, @intCast(i))) {
+                executableInvariant("executable finite-set erase proc_value capture slots are not canonical");
+            }
+            if (capture.value_info != construction.capture_values[i]) {
+                executableInvariant("executable finite-set erase proc_value capture value differs from construction plan");
+            }
+            if (member.capture_slots[i].slot != capture.slot) {
+                executableInvariant("executable finite-set erase capture slot differs from descriptor member");
+            }
+            const lowered = try self.lowerExpr(capture.expr);
+            const value = self.exprValue(lowered);
+            capture_refs[i] = .{
+                .slot = capture.slot,
+                .value = value,
+                .exec_ty = self.output.getExpr(lowered).ty,
+            };
+            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = lowered,
+            } });
+        }
+
+        const hidden_capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_ty) |capture_ty| blk: {
+            const value = self.output.freshValueRef();
+            const capture_expr = try self.output.addExpr(capture_ty, value, .{ .callable_set_value = .{
+                .construction_plan = construction_id,
+                .callable_set_key = construction.callable_set_key,
+                .member = .{
+                    .callable_set_key = construction.callable_set_key,
+                    .member_index = construction.selected_member,
+                },
+                .capture_record = if (capture_refs.len == 0) null else .{
+                    .capture_shape_key = member.capture_shape_key,
+                    .values = try self.output.addCaptureValueRefSpan(capture_refs),
+                    .record_tmp = self.output.freshValueRef(),
+                },
+            } });
+            stmt_ids[capture_items.len] = try self.output.addStmt(.{ .decl = .{
+                .value = value,
+                .body = capture_expr,
+            } });
+            break :blk value;
+        } else null;
+
+        const result_value = self.output.freshValueRef();
+        const final_value = try self.output.addExpr(result_ty, result_value, .{ .packed_erased_fn = .{
+            .sig_key = erase.adapter.erased_fn_sig_key,
+            .code = self.executableProcForErasedAdapter(erase.adapter),
+            .capture = hidden_capture_value,
+            .capture_ty = hidden_capture_ty,
+            .capture_shape = erase.adapter.capture_shape_key,
+        } });
+
+        if (stmt_ids.len == 0) return final_value;
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids),
             .final_expr = final_value,
@@ -3135,10 +3678,11 @@ fn executableInvariant(comptime message: []const u8) noreturn {
 
 fn executableProcForSource(program: *const Program, source_proc: canonical.MirProcedureRef) ?Ast.ExecutableProcId {
     for (program.procs.items) |proc| {
-        if (canonical.mirProcedureRefEql(proc.source_proc, source_proc))
-        {
-            return proc.executable_proc;
-        }
+        const source = switch (proc.origin) {
+            .source => |source| source,
+            .erased_adapter => continue,
+        };
+        if (canonical.mirProcedureRefEql(source, source_proc)) return proc.executable_proc;
     }
     return null;
 }
