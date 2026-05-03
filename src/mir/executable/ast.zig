@@ -22,6 +22,10 @@ pub const ExecutableProcId = enum(u32) { _ };
 pub const ExecutableValueRef = enum(u32) { _ };
 pub const BridgeId = enum(u32) { _ };
 pub const PatternDecisionPlanId = enum(u32) { _ };
+pub const PatternPathValuePlanId = enum(u32) { _ };
+pub const DecisionNodeId = enum(u32) { _ };
+pub const DecisionLeafId = enum(u32) { _ };
+pub const RecordRestProjectionId = enum(u32) { _ };
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -195,7 +199,130 @@ pub const PayloadTransformList = struct {
 
 pub const PatternDecisionPlan = struct {
     scrutinees: Span(ExecutableValueRef),
+    path_value_plans: Span(PatternPathValuePlanId),
+    root: DecisionNodeId,
+    leaves: Span(DecisionLeafId),
     branches: Span(BranchId),
+};
+
+pub const PatternPathValuePlan = struct {
+    path: PatternPath,
+    source: PatternPathValueSource,
+    ty: TypeId,
+};
+
+pub const PatternPath = struct {
+    scrutinee: u32,
+    steps: Span(PatternPathStep),
+};
+
+pub const PatternPathStep = union(enum) {
+    tag_payload_record: row.TagId,
+    tag_payload: row.TagPayloadId,
+    record_field: row.RecordFieldId,
+    record_rest: RecordRestProjectionId,
+    tuple_field: u32,
+    list_index: ListElementProbe,
+    list_rest: ListRestProbe,
+    nominal_payload,
+};
+
+pub const PatternPathValueSource = union(enum) {
+    scrutinee: u32,
+    tag_payload_record: struct {
+        parent: PatternPathValuePlanId,
+        tag: row.TagId,
+    },
+    tag_payload_field: struct {
+        parent_payload_record: PatternPathValuePlanId,
+        payload: row.TagPayloadId,
+    },
+    record_field: struct {
+        parent: PatternPathValuePlanId,
+        field: row.RecordFieldId,
+    },
+    record_rest: RecordRestProjectionId,
+    tuple_field: struct {
+        parent: PatternPathValuePlanId,
+        field: u32,
+    },
+    list_element: struct {
+        parent: PatternPathValuePlanId,
+        probe: ListElementProbe,
+    },
+    list_rest: struct {
+        parent: PatternPathValuePlanId,
+        probe: ListRestProbe,
+    },
+    nominal_payload: PatternPathValuePlanId,
+};
+
+pub const RecordRestProjection = struct {
+    parent: PatternPathValuePlanId,
+    source_shape: row.RecordShapeId,
+    result_shape: row.RecordShapeId,
+    projected_fields: Span(RecordRestProjectedField),
+};
+
+pub const RecordRestProjectedField = struct {
+    source_field: row.RecordFieldId,
+    result_field: row.RecordFieldId,
+    ty: TypeId,
+    result_logical_index: u32,
+};
+
+pub const ListElementProbe = struct {
+    index: u32,
+    from_end: bool = false,
+};
+
+pub const ListRestProbe = struct {
+    start: u32,
+    from_end_count: u32,
+};
+
+pub const DecisionNode = union(enum) {
+    leaf: DecisionLeafId,
+    test: DecisionTestNode,
+};
+
+pub const DecisionTestNode = struct {
+    path_value: PatternPathValuePlanId,
+    edges: Span(DecisionEdge),
+    default: ?DecisionNodeId,
+};
+
+pub const DecisionEdge = struct {
+    test: PatternTest,
+    next: DecisionNodeId,
+};
+
+pub const PatternTest = union(enum) {
+    tag: row.TagId,
+    bool_literal: bool,
+    int_literal: i128,
+    float_f32_literal: f32,
+    float_f64_literal: f64,
+    decimal_literal: i128,
+    str_literal: ProgramLiteralId,
+    list_len_exact: u32,
+    list_len_at_least: u32,
+    guard: ExprId,
+};
+
+pub const DecisionLeaf = struct {
+    branch: BranchId,
+    degenerate: bool,
+    guard: ?ExprId = null,
+    body: ExprId,
+    fallback: ?DecisionNodeId = null,
+    bindings: Span(PatternBinding),
+};
+
+pub const PatternBinding = struct {
+    binder: ExecutableValueRef,
+    source: PatternPathValuePlanId,
+    ty: TypeId,
 };
 
 pub const PackedErasedFn = struct {
@@ -375,6 +502,16 @@ pub const Store = struct {
     callable_match_branches: std.ArrayList(CallableMatchBranch),
     payload_transform_tag_branches: std.ArrayList(PayloadTransformTagBranch),
     pattern_decision_plans: std.ArrayList(PatternDecisionPlan),
+    pattern_path_value_plans: std.ArrayList(PatternPathValuePlan),
+    pattern_path_value_plan_ids: std.ArrayList(PatternPathValuePlanId),
+    pattern_path_steps: std.ArrayList(PatternPathStep),
+    decision_nodes: std.ArrayList(DecisionNode),
+    decision_edges: std.ArrayList(DecisionEdge),
+    decision_leaves: std.ArrayList(DecisionLeaf),
+    decision_leaf_ids: std.ArrayList(DecisionLeafId),
+    pattern_bindings: std.ArrayList(PatternBinding),
+    record_rest_projections: std.ArrayList(RecordRestProjection),
+    record_rest_projected_fields: std.ArrayList(RecordRestProjectedField),
     bridge_plans: std.ArrayList(BridgePlan),
     tag_payload_patterns: std.ArrayList(TagPayloadPattern),
     record_field_patterns: std.ArrayList(RecordFieldPattern),
@@ -402,6 +539,16 @@ pub const Store = struct {
             .callable_match_branches = .empty,
             .payload_transform_tag_branches = .empty,
             .pattern_decision_plans = .empty,
+            .pattern_path_value_plans = .empty,
+            .pattern_path_value_plan_ids = .empty,
+            .pattern_path_steps = .empty,
+            .decision_nodes = .empty,
+            .decision_edges = .empty,
+            .decision_leaves = .empty,
+            .decision_leaf_ids = .empty,
+            .pattern_bindings = .empty,
+            .record_rest_projections = .empty,
+            .record_rest_projected_fields = .empty,
             .bridge_plans = .empty,
             .tag_payload_patterns = .empty,
             .record_field_patterns = .empty,
@@ -418,6 +565,16 @@ pub const Store = struct {
         self.record_field_patterns.deinit(self.allocator);
         self.tag_payload_patterns.deinit(self.allocator);
         self.bridge_plans.deinit(self.allocator);
+        self.record_rest_projected_fields.deinit(self.allocator);
+        self.record_rest_projections.deinit(self.allocator);
+        self.pattern_bindings.deinit(self.allocator);
+        self.decision_leaf_ids.deinit(self.allocator);
+        self.decision_leaves.deinit(self.allocator);
+        self.decision_edges.deinit(self.allocator);
+        self.decision_nodes.deinit(self.allocator);
+        self.pattern_path_steps.deinit(self.allocator);
+        self.pattern_path_value_plan_ids.deinit(self.allocator);
+        self.pattern_path_value_plans.deinit(self.allocator);
         self.pattern_decision_plans.deinit(self.allocator);
         for (self.callable_match_branches.items) |*branch| {
             repr.deinitExecutableSpecializationKey(self.allocator, &branch.executable_specialization_key);
@@ -486,6 +643,40 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.pattern_decision_plans.items.len);
         try self.pattern_decision_plans.append(self.allocator, plan);
         return @enumFromInt(idx);
+    }
+
+    pub fn getPatternDecisionPlan(self: *const Store, id: PatternDecisionPlanId) PatternDecisionPlan {
+        return self.pattern_decision_plans.items[@intFromEnum(id)];
+    }
+
+    pub fn addPatternPathValuePlan(self: *Store, plan: PatternPathValuePlan) std.mem.Allocator.Error!PatternPathValuePlanId {
+        const idx: u32 = @intCast(self.pattern_path_value_plans.items.len);
+        try self.pattern_path_value_plans.append(self.allocator, plan);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getPatternPathValuePlan(self: *const Store, id: PatternPathValuePlanId) PatternPathValuePlan {
+        return self.pattern_path_value_plans.items[@intFromEnum(id)];
+    }
+
+    pub fn addDecisionNode(self: *Store, node: DecisionNode) std.mem.Allocator.Error!DecisionNodeId {
+        const idx: u32 = @intCast(self.decision_nodes.items.len);
+        try self.decision_nodes.append(self.allocator, node);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getDecisionNode(self: *const Store, id: DecisionNodeId) DecisionNode {
+        return self.decision_nodes.items[@intFromEnum(id)];
+    }
+
+    pub fn addDecisionLeaf(self: *Store, leaf: DecisionLeaf) std.mem.Allocator.Error!DecisionLeafId {
+        const idx: u32 = @intCast(self.decision_leaves.items.len);
+        try self.decision_leaves.append(self.allocator, leaf);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getDecisionLeaf(self: *const Store, id: DecisionLeafId) DecisionLeaf {
+        return self.decision_leaves.items[@intFromEnum(id)];
     }
 
     pub fn addBridgePlan(self: *Store, plan: BridgePlan) std.mem.Allocator.Error!BridgeId {
@@ -612,6 +803,88 @@ pub const Store = struct {
         const start: u32 = @intCast(self.payload_transform_tag_branches.items.len);
         try self.payload_transform_tag_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addPatternPathStepSpan(self: *Store, values: []const PatternPathStep) std.mem.Allocator.Error!Span(PatternPathStep) {
+        if (values.len == 0) return Span(PatternPathStep).empty();
+        const start: u32 = @intCast(self.pattern_path_steps.items.len);
+        try self.pattern_path_steps.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn slicePatternPathStepSpan(self: *const Store, span: Span(PatternPathStep)) []const PatternPathStep {
+        if (span.len == 0) return &.{};
+        return self.pattern_path_steps.items[span.start..][0..span.len];
+    }
+
+    pub fn addPatternPathValuePlanSpan(self: *Store, ids: []const PatternPathValuePlanId) std.mem.Allocator.Error!Span(PatternPathValuePlanId) {
+        if (ids.len == 0) return Span(PatternPathValuePlanId).empty();
+        const start: u32 = @intCast(self.pattern_path_value_plan_ids.items.len);
+        try self.pattern_path_value_plan_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn slicePatternPathValuePlanSpan(self: *const Store, span: Span(PatternPathValuePlanId)) []const PatternPathValuePlanId {
+        if (span.len == 0) return &.{};
+        return self.pattern_path_value_plan_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addDecisionEdgeSpan(self: *Store, values: []const DecisionEdge) std.mem.Allocator.Error!Span(DecisionEdge) {
+        if (values.len == 0) return Span(DecisionEdge).empty();
+        const start: u32 = @intCast(self.decision_edges.items.len);
+        try self.decision_edges.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceDecisionEdgeSpan(self: *const Store, span: Span(DecisionEdge)) []const DecisionEdge {
+        if (span.len == 0) return &.{};
+        return self.decision_edges.items[span.start..][0..span.len];
+    }
+
+    pub fn addDecisionLeafSpan(self: *Store, ids: []const DecisionLeafId) std.mem.Allocator.Error!Span(DecisionLeafId) {
+        if (ids.len == 0) return Span(DecisionLeafId).empty();
+        const start: u32 = @intCast(self.decision_leaf_ids.items.len);
+        try self.decision_leaf_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn sliceDecisionLeafSpan(self: *const Store, span: Span(DecisionLeafId)) []const DecisionLeafId {
+        if (span.len == 0) return &.{};
+        return self.decision_leaf_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addPatternBindingSpan(self: *Store, values: []const PatternBinding) std.mem.Allocator.Error!Span(PatternBinding) {
+        if (values.len == 0) return Span(PatternBinding).empty();
+        const start: u32 = @intCast(self.pattern_bindings.items.len);
+        try self.pattern_bindings.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn slicePatternBindingSpan(self: *const Store, span: Span(PatternBinding)) []const PatternBinding {
+        if (span.len == 0) return &.{};
+        return self.pattern_bindings.items[span.start..][0..span.len];
+    }
+
+    pub fn addRecordRestProjectedFieldSpan(self: *Store, values: []const RecordRestProjectedField) std.mem.Allocator.Error!Span(RecordRestProjectedField) {
+        if (values.len == 0) return Span(RecordRestProjectedField).empty();
+        const start: u32 = @intCast(self.record_rest_projected_fields.items.len);
+        try self.record_rest_projected_fields.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceRecordRestProjectedFieldSpan(self: *const Store, span: Span(RecordRestProjectedField)) []const RecordRestProjectedField {
+        if (span.len == 0) return &.{};
+        return self.record_rest_projected_fields.items[span.start..][0..span.len];
+    }
+
+    pub fn addRecordRestProjection(self: *Store, projection: RecordRestProjection) std.mem.Allocator.Error!RecordRestProjectionId {
+        const idx: u32 = @intCast(self.record_rest_projections.items.len);
+        try self.record_rest_projections.append(self.allocator, projection);
+        return @enumFromInt(idx);
+    }
+
+    pub fn getRecordRestProjection(self: *const Store, id: RecordRestProjectionId) RecordRestProjection {
+        return self.record_rest_projections.items[@intFromEnum(id)];
     }
 };
 

@@ -4501,6 +4501,7 @@ const AlternativeBinderRemap = struct {
 };
 
 const PatternPathValuePlanId = distinct u32;
+const RecordRestProjectionId = distinct u32;
 
 const PatternPathValuePlan = struct {
     id: PatternPathValuePlanId,
@@ -4528,6 +4529,7 @@ const PatternPathValueSource = union(enum) {
         parent: PatternPathValuePlanId,
         field: RecordFieldId,
     },
+    record_rest: RecordRestProjectionId,
     tuple_field: struct {
         parent: PatternPathValuePlanId,
         field: TupleFieldId,
@@ -4548,6 +4550,21 @@ const PatternPathValueSource = union(enum) {
         parent: PatternPathValuePlanId,
         payload: NewtypePayloadId,
     },
+};
+
+const RecordRestProjection = struct {
+    id: RecordRestProjectionId,
+    parent: PatternPathValuePlanId,
+    source_shape: RecordShapeId,
+    result_shape: RecordShapeId,
+    projected_fields: Span(RecordRestProjectedField),
+};
+
+const RecordRestProjectedField = struct {
+    source_field: RecordFieldId,
+    result_field: RecordFieldId,
+    exec_ty: ExecTypeId,
+    result_logical_index: u32,
 };
 
 const PatternBinding = struct {
@@ -4602,6 +4619,7 @@ const PatternPath = struct {
 const PatternPathStep = union(enum) {
     tag_payload: TagPayloadId,
     record_field: RecordFieldId,
+    record_rest: RecordRestProjectionId,
     tuple_field: TupleFieldId,
     list_index: ListElementProbeId,
     list_rest: ListRestProbeId,
@@ -4626,6 +4644,8 @@ const DecisionLeaf = struct {
     source_branch: CheckedBranchId,
     source_branch_pattern: CheckedMatchBranchPatternId,
     degenerate: bool,
+    guard: ?GuardPlanId,
+    fallback_after_guard: ?DecisionNodeId,
     body: ExprId,
 };
 ```
@@ -4688,10 +4708,18 @@ Decision construction follows these rules:
   order at which each test can matter.
 - A default edge exists only when the tests at a path are incomplete for the
   already-checked pattern matrix.
-- Guards are ordered decision tests. A branch whose structural tests pass but
-  whose guard fails must continue to the next source-compatible branch. This is
-  the same semantic requirement that old Rust handled with
-  `PlaceholderWithGuard`, `GuardedNoTest`, and `break_out_guard`.
+- Guards are ordered decision tests, but their representation must make binder
+  scope explicit. A guard may appear either as `PatternTest.guard` after the
+  selected alternative's pattern bindings have been materialized, or as the
+  equivalent `DecisionLeaf.guard` plus `fallback_after_guard` continuation. In
+  both encodings, a branch whose structural tests pass but whose guard fails
+  continues to the next source-compatible branch through an explicit
+  `DecisionNodeId`. The guard must run with only the selected alternative's
+  remapped representative binders in scope, and the fallback continuation must
+  run after those branch-local bindings have been removed. This is the same
+  semantic requirement that old Rust handled with `PlaceholderWithGuard`,
+  `GuardedNoTest`, and `break_out_guard`, but production MIR carries it as
+  explicit decision-plan data.
 - A degenerate branch alternative is explicit runtime semantics, not a compiler
   invariant and not a post-check user-facing error. Canonicalization marks an
   alternative as degenerate when that alternative does not bind every symbol the
@@ -4732,6 +4760,27 @@ path plans keyed by `TagPayloadId.payload_index`. It must not emit a separate
 union-payload extraction for every binder. A zero-payload tag has no
 payload-record path plan.
 
+Record rest bindings are explicit record-assembly path values. For a pattern
+like:
+
+```roc
+strip_name = |{ name: _, ..rest }| rest
+```
+
+the selected branch does not ask IR to infer "all fields except `name`." The
+decision plan contains a `record_rest` path value that points at an explicit
+`RecordRestProjectionId`. The projection's `parent` is the original record path,
+its `source_shape` is the row-finalized input record shape, its `result_shape` is
+the row-finalized rest record shape, and its `projected_fields` list gives the
+exact source field id, exact result field id, field executable type, and result
+logical assembly index for every field in the rest record. IR materializes the
+rest value by loading that projection id, projecting those source fields from the
+parent record, and assembling the result record in finalized logical order. Empty
+rest records materialize as the unit/empty-record representation selected by
+executable layout metadata. Post-check lowering must not compute a record-rest
+complement by scanning source field names, row labels, source patterns, or type
+syntax.
+
 Branch binder extraction uses `AlternativeBinderRemap`. When an alternative is
 selected, executable MIR walks the selected alternative's pattern paths and
 creates `PatternBinding` records for representative binders only. The source path
@@ -4757,6 +4806,13 @@ values are control-flow-local temps created only when a decision node or selecte
 branch needs them. Guards and pattern binders consume these already-materialized
 path values. They must not ask executable MIR to reconstruct a path by scanning
 source patterns, sorting row names, or re-running decision tests.
+
+Record rest path values use the same `PatternPathValuePlan` table as record
+fields, tag payloads, tuples, lists, opaque payloads, and newtype payloads. The
+record-rest projection id is allocated by row-finalized mono MIR or executable
+decision-plan construction while finalized source and result shapes are both
+available. Later stages may verify the projection in debug builds, but they must
+not derive it.
 
 List element and rest bindings are also explicit probes. Head indexes, tail
 indexes, rest start, and rest length come from the checked list-pattern arity,

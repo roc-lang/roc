@@ -574,17 +574,17 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         const scrutinee_exprs = self.input.ast.expr_ids.items[source_match.scrutinee_exprs.start..][0..source_match.scrutinee_exprs.len];
         const scrutinee_values = self.input.ast.value_refs.items[source_match.scrutinees.start..][0..source_match.scrutinees.len];
-        if (scrutinee_exprs.len != 1 or scrutinee_values.len != 1) {
-            irInvariant("IR lowering source_match requires executable decision-plan lowering for multi-scrutinee matches");
+        if (scrutinee_exprs.len != scrutinee_values.len) {
+            irInvariant("IR lowering source_match scrutinee expr/value counts disagreed");
+        }
+        for (scrutinee_exprs) |scrutinee_expr| {
+            _ = try self.lowerExpr(scrutinee_expr, stmts);
         }
 
-        const scrutinee = try self.lowerExpr(scrutinee_exprs[0], stmts);
-        const subject = try self.sourceMatchSwitchSubject(scrutinee, source_match.branches, stmts);
-        const branch_ids = self.input.ast.branch_ids.items[source_match.branches.start..][0..source_match.branches.len];
-        if (branch_ids.len == 0) irInvariant("IR lowering source_match received no branches");
-
         const result = try self.freshVar(try self.layoutForType(expr.ty));
-        try self.appendSourceMatchBranchSwitch(branch_ids, 0, scrutinee, subject, result, stmts);
+        var path_values = std.ArrayList(SourceMatchPathValue).empty;
+        defer path_values.deinit(self.allocator);
+        try self.appendSourceMatchDecisionNode(source_match.decision_plan, scrutinee_values, result, &path_values, stmts);
         try self.value_env.put(expr.value, result);
         return result;
     }
@@ -768,7 +768,7 @@ const IrBuilder = struct {
         var body_stmts = std.ArrayList(Ast.StmtId).empty;
         defer body_stmts.deinit(self.allocator);
         const pat = self.input.ast.pats.items[@intFromEnum(pat_id)];
-        try self.bindSourceMatchPatternValues(pat, elem, &body_stmts, &saved);
+        try self.bindForPatternValues(pat, elem, &body_stmts, &saved);
         const result = try self.lowerExpr(body, &body_stmts);
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(body_stmts.items),
@@ -776,193 +776,496 @@ const IrBuilder = struct {
         });
     }
 
-    fn sourceMatchSwitchSubject(
-        self: *IrBuilder,
-        scrutinee: Ast.Var,
-        branches: Exec.Ast.Span(Exec.Ast.BranchId),
-        stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError!Ast.Var {
-        const branch_ids = self.input.ast.branch_ids.items[branches.start..][0..branches.len];
-        var needs_discriminant = false;
-        for (branch_ids) |branch_id| {
-            const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
-            const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-            if (self.sourceMatchPatternNeedsDiscriminant(pat)) needs_discriminant = true;
-        }
-        if (!needs_discriminant) return scrutinee;
-
-        for (branch_ids) |branch_id| {
-            const branch = self.input.ast.branches.items[@intFromEnum(branch_id)];
-            const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-            if (!self.sourceMatchPatternCanUseTagSubject(pat)) irInvariant("IR lowering source_match cannot mix tag tests with non-tag literal tests");
-        }
-
-        return try self.bindExpr(
-            self.freshInternalValueRef(),
-            .{ .canonical = .u16 },
-            .{ .get_union_id = scrutinee },
-            stmts,
-        );
-    }
-
-    fn sourceMatchPatternNeedsDiscriminant(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
-        return switch (pat.data) {
-            .as => |as| self.sourceMatchPatternNeedsDiscriminant(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
-            .nominal => |child| self.sourceMatchPatternNeedsDiscriminant(self.input.ast.pats.items[@intFromEnum(child)]),
-            .tag => true,
-            .wildcard, .bind, .bool_lit, .int_lit => false,
-            else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
-        };
-    }
-
-    fn sourceMatchPatternCanUseTagSubject(self: *IrBuilder, pat: Exec.Ast.Pat) bool {
-        return switch (pat.data) {
-            .as => |as| self.sourceMatchPatternCanUseTagSubject(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
-            .nominal => |child| self.sourceMatchPatternCanUseTagSubject(self.input.ast.pats.items[@intFromEnum(child)]),
-            .tag, .wildcard, .bind => true,
-            else => false,
-        };
-    }
-
-    fn sourceMatchPatternSwitchValue(self: *IrBuilder, pat: Exec.Ast.Pat) ?u64 {
-        return switch (pat.data) {
-            .as => |as| self.sourceMatchPatternSwitchValue(self.input.ast.pats.items[@intFromEnum(as.pattern)]),
-            .nominal => |child| self.sourceMatchPatternSwitchValue(self.input.ast.pats.items[@intFromEnum(child)]),
-            .wildcard, .bind => null,
-            .tag => |tag| @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
-            .bool_lit => |value| @as(u64, if (value) 1 else 0),
-            .int_lit => |value| blk: {
-                if (value < 0) irInvariant("IR lowering source_match needs signed-int pattern lowering for negative literals");
-                if (value > std.math.maxInt(u64)) irInvariant("IR lowering source_match needs large-int pattern lowering");
-                break :blk @intCast(value);
-            },
-            else => irInvariant("IR lowering source_match needs full pattern-decision lowering for this pattern form"),
-        };
-    }
-
     const SavedValueBinding = struct {
         value: Exec.Ast.ExecutableValueRef,
         previous: ?Ast.Var,
     };
 
-    fn appendSourceMatchBranchSwitch(
+    const SourceMatchPathValue = struct {
+        plan: Exec.Ast.PatternPathValuePlanId,
+        value: Ast.Var,
+    };
+
+    fn appendSourceMatchDecisionNode(
         self: *IrBuilder,
-        branch_ids: []const Exec.Ast.BranchId,
-        index: usize,
-        scrutinee: Ast.Var,
-        subject: Ast.Var,
+        decision_plan_id: Exec.Ast.PatternDecisionPlanId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
         result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!void {
-        if (index >= branch_ids.len) irInvariant("IR lowering source_match exhausted branches while emitting ordered cascade");
+        const decision_plan = self.input.ast.getPatternDecisionPlan(decision_plan_id);
+        try self.appendDecisionNode(decision_plan.root, scrutinee_values, result, path_values, stmts);
+    }
 
-        const branch = self.input.ast.branches.items[@intFromEnum(branch_ids[index])];
-        const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-        const fallback = if (branch.guard != null)
-            try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result)
-        else
-            null;
-        const body = try self.lowerSourceMatchBranchBlock(branch, scrutinee, result, fallback);
+    fn appendDecisionNode(
+        self: *IrBuilder,
+        node_id: Exec.Ast.DecisionNodeId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        return switch (self.input.ast.getDecisionNode(node_id)) {
+            .leaf => |leaf_id| try self.appendDecisionLeaf(leaf_id, scrutinee_values, result, path_values, stmts),
+            .test => |test| try self.appendDecisionTest(test, scrutinee_values, result, path_values, stmts),
+        };
+    }
 
-        if (self.sourceMatchPatternSwitchValue(pat)) |value| {
-            const branches = [_]Ast.Branch{.{
-                .value = value,
-                .block = body,
+    fn appendDecisionTest(
+        self: *IrBuilder,
+        test_node: Exec.Ast.DecisionTestNode,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        const path_value = try self.materializePatternPathValue(test_node.path_value, scrutinee_values, path_values, stmts);
+        const edges = self.input.ast.sliceDecisionEdgeSpan(test_node.edges);
+        if (edges.len == 0) irInvariant("IR lowering source_match decision test had no edges");
+        try self.appendDecisionEdgeCascade(edges, 0, path_value, test_node.default, scrutinee_values, result, path_values, stmts);
+    }
+
+    fn appendDecisionEdgeCascade(
+        self: *IrBuilder,
+        edges: []const Exec.Ast.DecisionEdge,
+        index: usize,
+        path_value: Ast.Var,
+        default_node: ?Exec.Ast.DecisionNodeId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        if (index >= edges.len) {
+            if (default_node) |node| {
+                try self.appendDecisionNode(node, scrutinee_values, result, path_values, stmts);
+            } else {
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+                    .cond = try self.trueValue(stmts),
+                    .branches = Ast.Span(Ast.BranchId).empty(),
+                    .default_block = try self.unreachableBlock(),
+                    .join = result,
+                } }));
+            }
+            return;
+        }
+
+        const edge = edges[index];
+        const condition = try self.lowerPatternTest(path_value, edge.test, stmts);
+        const true_block = try self.decisionNodeBlock(edge.next, scrutinee_values, result, path_values);
+        const false_block = try self.decisionEdgeCascadeBlock(edges, index + 1, path_value, default_node, scrutinee_values, result, path_values);
+        const true_branches = [_]Ast.Branch{.{
+            .value = 1,
+            .block = true_block,
+        }};
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+            .cond = condition,
+            .branches = try self.output.store.addBranchSpan(&true_branches),
+            .default_block = false_block,
+            .join = result,
+        } }));
+    }
+
+    fn decisionEdgeCascadeBlock(
+        self: *IrBuilder,
+        edges: []const Exec.Ast.DecisionEdge,
+        index: usize,
+        path_value: Ast.Var,
+        default_node: ?Exec.Ast.DecisionNodeId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+    ) LowerResourceError!Ast.BlockId {
+        var path_copy = try self.clonePathValues(path_values.items);
+        defer path_copy.deinit(self.allocator);
+        var block_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer block_stmts.deinit(self.allocator);
+        try self.appendDecisionEdgeCascade(edges, index, path_value, default_node, scrutinee_values, result, &path_copy, &block_stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(block_stmts.items),
+            .term = .{ .value = result },
+        });
+    }
+
+    fn decisionNodeBlock(
+        self: *IrBuilder,
+        node_id: Exec.Ast.DecisionNodeId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+    ) LowerResourceError!Ast.BlockId {
+        var path_copy = try self.clonePathValues(path_values.items);
+        defer path_copy.deinit(self.allocator);
+        var block_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer block_stmts.deinit(self.allocator);
+        try self.appendDecisionNode(node_id, scrutinee_values, result, &path_copy, &block_stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(block_stmts.items),
+            .term = .{ .value = result },
+        });
+    }
+
+    fn appendDecisionLeaf(
+        self: *IrBuilder,
+        leaf_id: Exec.Ast.DecisionLeafId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        result: Ast.Var,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        const leaf = self.input.ast.getDecisionLeaf(leaf_id);
+        if (leaf.degenerate) {
+            const runtime_error = try self.lowerExpr(leaf.body, stmts);
+            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+                .target = result,
+                .value = runtime_error,
+            } }));
+            return;
+        }
+
+        var saved = std.ArrayList(SavedValueBinding).empty;
+        var bindings_restored = false;
+        defer {
+            if (!bindings_restored) self.restoreValueBindings(saved.items);
+            saved.deinit(self.allocator);
+        }
+
+        const bindings = self.input.ast.slicePatternBindingSpan(leaf.bindings);
+        for (bindings) |binding| {
+            const value = try self.materializePatternPathValue(binding.source, scrutinee_values, path_values, stmts);
+            try self.pushValueBinding(binding.binder, value, &saved);
+        }
+
+        if (leaf.guard) |guard_expr| {
+            const guard = try self.lowerExpr(guard_expr, stmts);
+            const true_block = try self.decisionLeafBodyBlock(leaf, result);
+            self.restoreValueBindings(saved.items);
+            saved.clearRetainingCapacity();
+            bindings_restored = true;
+            const true_branches = [_]Ast.Branch{.{
+                .value = 1,
+                .block = true_block,
             }};
-            const default_block = if (fallback) |block|
-                block
+            const default_block = if (leaf.fallback) |fallback|
+                try self.decisionNodeBlock(fallback, scrutinee_values, result, path_values)
             else
-                try self.sourceMatchBranchCascadeBlock(branch_ids, index + 1, scrutinee, subject, result);
+                try self.unreachableBlock();
             try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
-                .cond = subject,
-                .branches = try self.output.store.addBranchSpan(&branches),
+                .cond = guard,
+                .branches = try self.output.store.addBranchSpan(&true_branches),
                 .default_block = default_block,
                 .join = result,
             } }));
-        } else {
-            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
-                .cond = subject,
-                .branches = Ast.Span(Ast.BranchId).empty(),
-                .default_block = body,
-                .join = result,
-            } }));
+            return;
         }
+
+        const branch_result = try self.lowerExpr(leaf.body, stmts);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+            .target = result,
+            .value = branch_result,
+        } }));
     }
 
-    fn sourceMatchBranchCascadeBlock(
+    fn clonePathValues(
         self: *IrBuilder,
-        branch_ids: []const Exec.Ast.BranchId,
-        index: usize,
-        scrutinee: Ast.Var,
-        subject: Ast.Var,
+        path_values: []const SourceMatchPathValue,
+    ) LowerResourceError!std.ArrayList(SourceMatchPathValue) {
+        var clone = std.ArrayList(SourceMatchPathValue).empty;
+        errdefer clone.deinit(self.allocator);
+        try clone.appendSlice(self.allocator, path_values);
+        return clone;
+    }
+
+    fn decisionLeafBodyBlock(
+        self: *IrBuilder,
+        leaf: Exec.Ast.DecisionLeaf,
         result: Ast.Var,
     ) LowerResourceError!Ast.BlockId {
-        if (index >= branch_ids.len) {
-            return try self.output.store.addBlock(.{
-                .stmts = Ast.Span(Ast.StmtId).empty(),
-                .term = .@"unreachable",
-            });
-        }
-
         var stmts = std.ArrayList(Ast.StmtId).empty;
         defer stmts.deinit(self.allocator);
-        try self.appendSourceMatchBranchSwitch(branch_ids, index, scrutinee, subject, result, &stmts);
+        const value = try self.lowerExpr(leaf.body, &stmts);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+            .target = result,
+            .value = value,
+        } }));
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(stmts.items),
             .term = .{ .value = result },
         });
     }
 
-    fn lowerSourceMatchBranchBlock(
-        self: *IrBuilder,
-        branch: Exec.Ast.Branch,
-        scrutinee: Ast.Var,
-        result: Ast.Var,
-        fallback: ?Ast.BlockId,
-    ) LowerResourceError!Ast.BlockId {
-        if (branch.degenerate) return try self.lowerExprToBlock(branch.body);
-
-        var saved = std.ArrayList(SavedValueBinding).empty;
-        defer {
-            self.restoreValueBindings(saved.items);
-            saved.deinit(self.allocator);
-        }
-
-        var branch_stmts = std.ArrayList(Ast.StmtId).empty;
-        defer branch_stmts.deinit(self.allocator);
-        const pat = self.input.ast.pats.items[@intFromEnum(branch.pat)];
-        try self.bindSourceMatchPatternValues(pat, scrutinee, &branch_stmts, &saved);
-
-        if (branch.guard) |guard_expr| {
-            const guard = try self.lowerExpr(guard_expr, &branch_stmts);
-            const true_branches = [_]Ast.Branch{.{
-                .value = 1,
-                .block = try self.lowerExprToBlock(branch.body),
-            }};
-            const default_block = fallback orelse try self.output.store.addBlock(.{
-                .stmts = Ast.Span(Ast.StmtId).empty(),
-                .term = .@"unreachable",
-            });
-            try branch_stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
-                .cond = guard,
-                .branches = try self.output.store.addBranchSpan(&true_branches),
-                .default_block = default_block,
-                .join = result,
-            } }));
-            return try self.output.store.addBlock(.{
-                .stmts = try self.output.store.addStmtSpan(branch_stmts.items),
-                .term = .{ .value = result },
-            });
-        }
-
-        const branch_result = try self.lowerExpr(branch.body, &branch_stmts);
+    fn unreachableBlock(self: *IrBuilder) LowerResourceError!Ast.BlockId {
         return try self.output.store.addBlock(.{
-            .stmts = try self.output.store.addStmtSpan(branch_stmts.items),
-            .term = .{ .value = branch_result },
+            .stmts = Ast.Span(Ast.StmtId).empty(),
+            .term = .@"unreachable",
         });
     }
 
-    fn bindSourceMatchPatternValues(
+    fn trueValue(self: *IrBuilder, stmts: *std.ArrayList(Ast.StmtId)) LowerResourceError!Ast.Var {
+        return try self.bindAnonymous(.{ .canonical = .bool }, .{ .lit = .{ .bool = true } }, stmts);
+    }
+
+    fn materializePatternPathValue(
+        self: *IrBuilder,
+        plan_id: Exec.Ast.PatternPathValuePlanId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        for (path_values.items) |entry| {
+            if (entry.plan == plan_id) return entry.value;
+        }
+
+        const plan = self.input.ast.getPatternPathValuePlan(plan_id);
+        const value = switch (plan.source) {
+            .scrutinee => |index| blk: {
+                if (index >= scrutinee_values.len) irInvariant("IR lowering source_match path referenced missing scrutinee");
+                break :blk self.value_env.get(scrutinee_values[index]) orelse
+                    irInvariant("IR lowering source_match scrutinee value was not bound");
+            },
+            .tag_payload_record => |payload| blk: {
+                const parent = try self.materializePatternPathValue(payload.parent, scrutinee_values, path_values, stmts);
+                break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_union_struct = .{
+                    .value = parent,
+                    .tag_discriminant = @intCast(self.input.row_shapes.tag(payload.tag).logical_index),
+                } }, stmts);
+            },
+            .tag_payload_field => |payload| blk: {
+                const parent = try self.materializePatternPathValue(payload.parent_payload_record, scrutinee_values, path_values, stmts);
+                const parent_plan = self.input.ast.getPatternPathValuePlan(payload.parent_payload_record);
+                if (self.singlePayloadRecordPath(parent_plan)) break :blk parent;
+                break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
+                    .record = parent,
+                    .field_index = @intCast(self.input.row_shapes.tagPayload(payload.payload).logical_index),
+                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                } }, stmts);
+            },
+            .record_field => |field| blk: {
+                const parent = try self.materializePatternPathValue(field.parent, scrutinee_values, path_values, stmts);
+                break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
+                    .record = parent,
+                    .field_index = @intCast(self.input.row_shapes.recordField(field.field).logical_index),
+                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                } }, stmts);
+            },
+            .record_rest => |projection| try self.materializeRecordRestPatternPath(plan.ty, projection, scrutinee_values, path_values, stmts),
+            .tuple_field => |field| blk: {
+                const parent = try self.materializePatternPathValue(field.parent, scrutinee_values, path_values, stmts);
+                break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
+                    .record = parent,
+                    .field_index = @intCast(field.field),
+                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                } }, stmts);
+            },
+            .list_element => |element| try self.materializeListElementPatternPath(plan.ty, element, scrutinee_values, path_values, stmts),
+            .list_rest => |rest| try self.materializeListRestPatternPath(plan.ty, rest, scrutinee_values, path_values, stmts),
+            .nominal_payload => |parent| try self.materializePatternPathValue(parent, scrutinee_values, path_values, stmts),
+        };
+
+        try path_values.append(self.allocator, .{
+            .plan = plan_id,
+            .value = value,
+        });
+        return value;
+    }
+
+    fn singlePayloadRecordPath(self: *IrBuilder, plan: Exec.Ast.PatternPathValuePlan) bool {
+        return switch (plan.source) {
+            .tag_payload_record => |payload| self.input.row_shapes.tagPayloads(payload.tag).len == 1,
+            else => false,
+        };
+    }
+
+    fn materializeRecordRestPatternPath(
+        self: *IrBuilder,
+        ty: Exec.Type.TypeId,
+        projection_id: Exec.Ast.RecordRestProjectionId,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const projection = self.input.ast.getRecordRestProjection(projection_id);
+        const parent = try self.materializePatternPathValue(projection.parent, scrutinee_values, path_values, stmts);
+        const projected = self.input.ast.sliceRecordRestProjectedFieldSpan(projection.projected_fields);
+        const fields = try self.allocator.alloc(Ast.Var, projected.len);
+        defer self.allocator.free(fields);
+        const seen = try self.allocator.alloc(bool, projected.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (projected) |field| {
+            const index: usize = @intCast(field.result_logical_index);
+            if (index >= fields.len) irInvariant("IR lowering record-rest result field index exceeded projection arity");
+            if (seen[index]) irInvariant("IR lowering record-rest projection saw duplicate result field index");
+            fields[index] = try self.bindAnonymous(try self.layoutForType(field.ty), .{ .get_struct_field = .{
+                .record = parent,
+                .field_index = @intCast(self.input.row_shapes.recordField(field.source_field).logical_index),
+                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+            } }, stmts);
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) irInvariant("IR lowering record-rest projection did not provide every result field");
+        }
+        return try self.bindAnonymous(try self.layoutForType(ty), .{ .make_struct = try self.output.store.addVarSpan(fields) }, stmts);
+    }
+
+    fn materializeListElementPatternPath(
+        self: *IrBuilder,
+        ty: Exec.Type.TypeId,
+        element: anytype,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const parent = try self.materializePatternPathValue(element.parent, scrutinee_values, path_values, stmts);
+        const index = try self.listProbeIndex(parent, element.probe, stmts);
+        const args = [_]Ast.Var{ parent, index };
+        return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
+            .op = .list_get_unsafe,
+            .args = try self.output.store.addVarSpan(&args),
+        } }, stmts);
+    }
+
+    fn materializeListRestPatternPath(
+        self: *IrBuilder,
+        ty: Exec.Type.TypeId,
+        rest: anytype,
+        scrutinee_values: []const Exec.Ast.ExecutableValueRef,
+        path_values: *std.ArrayList(SourceMatchPathValue),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const parent = try self.materializePatternPathValue(rest.parent, scrutinee_values, path_values, stmts);
+        const len = try self.listLength(parent, stmts);
+        const dropped_tail = try self.u64Literal(@intCast(rest.probe.from_end_count), stmts);
+        const len_without_tail = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .num_minus,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len, dropped_tail }),
+        } }, stmts);
+        const start = try self.u64Literal(@intCast(rest.probe.start), stmts);
+        const rest_len = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .num_minus,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len_without_tail, start }),
+        } }, stmts);
+        const slice_record = try self.bindAnonymous(try self.structLayout(&[_]Ast.Var{ rest_len, start }), .{
+            .make_struct = try self.output.store.addVarSpan(&[_]Ast.Var{ rest_len, start }),
+        }, stmts);
+        return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
+            .op = .list_sublist,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ parent, slice_record }),
+        } }, stmts);
+    }
+
+    fn listProbeIndex(
+        self: *IrBuilder,
+        list: Ast.Var,
+        probe: Exec.Ast.ListElementProbe,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const offset = try self.u64Literal(@intCast(probe.index), stmts);
+        if (!probe.from_end) return offset;
+        const len = try self.listLength(list, stmts);
+        return try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .num_minus,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len, offset }),
+        } }, stmts);
+    }
+
+    fn listLength(
+        self: *IrBuilder,
+        list: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        return try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .list_len,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{list}),
+        } }, stmts);
+    }
+
+    fn u64Literal(
+        self: *IrBuilder,
+        value: u64,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        return try self.bindAnonymous(.{ .canonical = .u64 }, .{ .lit = .{ .int = @intCast(value) } }, stmts);
+    }
+
+    fn lowerPatternTest(
+        self: *IrBuilder,
+        path_value: Ast.Var,
+        test: Exec.Ast.PatternTest,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        return switch (test) {
+            .tag => |tag| blk: {
+                const discriminant = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .get_union_id = path_value }, stmts);
+                const literal = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{ .int = @intCast(self.input.row_shapes.tag(tag).logical_index) } }, stmts);
+                break :blk try self.boolLowLevel(.num_is_eq, discriminant, literal, stmts);
+            },
+            .bool_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(.{ .canonical = .bool }, .{ .lit = .{ .bool = literal } }, stmts);
+                break :blk try self.boolStructuralEq(path_value, expected, stmts);
+            },
+            .int_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(path_value.layout, .{ .lit = .{ .int = literal } }, stmts);
+                break :blk try self.boolStructuralEq(path_value, expected, stmts);
+            },
+            .float_f32_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(path_value.layout, .{ .lit = .{ .f32 = literal } }, stmts);
+                break :blk try self.boolStructuralEq(path_value, expected, stmts);
+            },
+            .float_f64_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(path_value.layout, .{ .lit = .{ .f64 = literal } }, stmts);
+                break :blk try self.boolStructuralEq(path_value, expected, stmts);
+            },
+            .decimal_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(path_value.layout, .{ .lit = .{ .dec = literal } }, stmts);
+                break :blk try self.boolStructuralEq(path_value, expected, stmts);
+            },
+            .str_literal => |literal| blk: {
+                const expected = try self.bindAnonymous(.{ .canonical = .str }, .{ .lit = .{ .str = literal } }, stmts);
+                break :blk try self.boolLowLevel(.str_is_eq, path_value, expected, stmts);
+            },
+            .list_len_exact => |expected_len| blk: {
+                const len = try self.listLength(path_value, stmts);
+                const expected = try self.u64Literal(@intCast(expected_len), stmts);
+                break :blk try self.boolLowLevel(.num_is_eq, len, expected, stmts);
+            },
+            .list_len_at_least => |expected_len| blk: {
+                const len = try self.listLength(path_value, stmts);
+                const expected = try self.u64Literal(@intCast(expected_len), stmts);
+                break :blk try self.boolLowLevel(.num_is_gte, len, expected, stmts);
+            },
+            .guard => |guard_expr| try self.lowerExpr(guard_expr, stmts),
+        };
+    }
+
+    fn boolStructuralEq(
+        self: *IrBuilder,
+        lhs: Ast.Var,
+        rhs: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        return try self.bindAnonymous(.{ .canonical = .bool }, .{ .structural_eq = .{
+            .lhs = lhs,
+            .rhs = rhs,
+        } }, stmts);
+    }
+
+    fn boolLowLevel(
+        self: *IrBuilder,
+        op: base.LowLevel,
+        lhs: Ast.Var,
+        rhs: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        return try self.bindAnonymous(.{ .canonical = .bool }, .{ .call_low_level = .{
+            .op = op,
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ lhs, rhs }),
+        } }, stmts);
+    }
+
+    fn bindForPatternValues(
         self: *IrBuilder,
         pat: Exec.Ast.Pat,
         value: Ast.Var,
@@ -981,12 +1284,12 @@ const IrBuilder = struct {
             .as => |as| {
                 try self.pushValueBinding(as.bind, value, saved);
                 const child_pat = self.input.ast.pats.items[@intFromEnum(as.pattern)];
-                try self.bindSourceMatchPatternValues(child_pat, value, stmts, saved);
+                try self.bindForPatternValues(child_pat, value, stmts, saved);
             },
             .bind => |bind| try self.pushValueBinding(bind, value, saved),
             .nominal => |child| {
                 const child_pat = self.input.ast.pats.items[@intFromEnum(child)];
-                try self.bindSourceMatchPatternValues(child_pat, value, stmts, saved);
+                try self.bindForPatternValues(child_pat, value, stmts, saved);
             },
             .tuple => |items| {
                 const child_pats = self.input.ast.pat_ids.items[items.start..][0..items.len];
@@ -1003,11 +1306,11 @@ const IrBuilder = struct {
                         } },
                         stmts,
                     );
-                    try self.bindSourceMatchPatternValues(child_pat, child_value, stmts, saved);
+                    try self.bindForPatternValues(child_pat, child_value, stmts, saved);
                 }
             },
             .record => |record| {
-                if (record.rest != null) irInvariant("IR lowering record rest pattern requires executable decision-plan materialization");
+                if (record.rest != null) irInvariant("IR lowering for pattern requires explicit record-rest materialization");
                 const field_patterns = self.input.ast.record_field_patterns.items[record.fields.start..][0..record.fields.len];
                 for (field_patterns) |field_pattern| {
                     const child_pat = self.input.ast.pats.items[@intFromEnum(field_pattern.pattern)];
@@ -1023,10 +1326,10 @@ const IrBuilder = struct {
                         } },
                         stmts,
                     );
-                    try self.bindSourceMatchPatternValues(child_pat, child_value, stmts, saved);
+                    try self.bindForPatternValues(child_pat, child_value, stmts, saved);
                 }
             },
-            .list => irInvariant("IR lowering list pattern requires executable decision-plan materialization"),
+            .list => irInvariant("IR lowering for pattern requires explicit list-pattern materialization"),
             .tag => |tag| {
                 const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_ids.len == 0) return;
@@ -1058,7 +1361,7 @@ const IrBuilder = struct {
                             stmts,
                         );
                     };
-                    try self.bindSourceMatchPatternValues(child_pat, payload_value, stmts, saved);
+                    try self.bindForPatternValues(child_pat, payload_value, stmts, saved);
                 }
             },
         }

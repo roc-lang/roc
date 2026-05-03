@@ -4574,10 +4574,7 @@ const BodyBuilder = struct {
                 const lowered_branches = try self.lowerBranchSpan(match_.branches);
                 const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
                 const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
-                const decision_plan = try self.output.addPatternDecisionPlan(.{
-                    .scrutinees = scrutinee_span,
-                    .branches = lowered_branches,
-                });
+                const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, lowered_branches);
                 break :blk try self.output.addExpr(
                     try self.lowerExecutableValueType(expr.ty, expr.value_info),
                     self.output.freshValueRef(),
@@ -4625,6 +4622,374 @@ const BodyBuilder = struct {
         };
         try self.expr_map.put(expr_id, lowered);
         return lowered;
+    }
+
+    const PendingPatternTest = struct {
+        path_value: Ast.PatternPathValuePlanId,
+        test: Ast.PatternTest,
+    };
+
+    fn buildSourceMatchDecisionPlan(
+        self: *BodyBuilder,
+        scrutinees: Ast.Span(Ast.ExecutableValueRef),
+        scrutinee_ty: Type.TypeId,
+        branches: Ast.Span(Ast.BranchId),
+    ) Allocator.Error!Ast.PatternDecisionPlanId {
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        if (branch_ids.len == 0) executableInvariant("executable source_match decision plan requires at least one branch");
+
+        var path_plans = std.ArrayList(Ast.PatternPathValuePlanId).empty;
+        defer path_plans.deinit(self.allocator);
+        const root_path = try self.addPatternPathValuePlan(&path_plans, .{
+            .path = .{
+                .scrutinee = 0,
+                .steps = Ast.Span(Ast.PatternPathStep).empty(),
+            },
+            .source = .{ .scrutinee = 0 },
+            .ty = scrutinee_ty,
+        });
+
+        var leaves = std.ArrayList(Ast.DecisionLeafId).empty;
+        defer leaves.deinit(self.allocator);
+        const root = (try self.buildSourceMatchDecisionCascade(branch_ids, 0, root_path, &path_plans, &leaves)) orelse
+            executableInvariant("executable source_match decision plan had no reachable root");
+
+        return try self.output.addPatternDecisionPlan(.{
+            .scrutinees = scrutinees,
+            .path_value_plans = try self.output.addPatternPathValuePlanSpan(path_plans.items),
+            .root = root,
+            .leaves = try self.output.addDecisionLeafSpan(leaves.items),
+            .branches = branches,
+        });
+    }
+
+    fn buildSourceMatchDecisionCascade(
+        self: *BodyBuilder,
+        branch_ids: []const Ast.BranchId,
+        index: usize,
+        root_path: Ast.PatternPathValuePlanId,
+        path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
+        leaves: *std.ArrayList(Ast.DecisionLeafId),
+    ) Allocator.Error!?Ast.DecisionNodeId {
+        if (index >= branch_ids.len) return null;
+
+        const fallback = try self.buildSourceMatchDecisionCascade(branch_ids, index + 1, root_path, path_plans, leaves);
+        const branch_id = branch_ids[index];
+        const branch = self.output.branches.items[@intFromEnum(branch_id)];
+
+        var tests = std.ArrayList(PendingPatternTest).empty;
+        defer tests.deinit(self.allocator);
+        var bindings = std.ArrayList(Ast.PatternBinding).empty;
+        defer bindings.deinit(self.allocator);
+        try self.collectPatternDecisionData(branch.pat, root_path, &tests, &bindings, path_plans);
+
+        const leaf_id = try self.output.addDecisionLeaf(.{
+            .branch = branch_id,
+            .degenerate = branch.degenerate,
+            .guard = branch.guard,
+            .body = branch.body,
+            .fallback = fallback,
+            .bindings = try self.output.addPatternBindingSpan(bindings.items),
+        });
+        try leaves.append(self.allocator, leaf_id);
+
+        var next = try self.output.addDecisionNode(.{ .leaf = leaf_id });
+        var test_i = tests.items.len;
+        while (test_i > 0) {
+            test_i -= 1;
+            const pending = tests.items[test_i];
+            const edges = [_]Ast.DecisionEdge{.{
+                .test = pending.test,
+                .next = next,
+            }};
+            next = try self.output.addDecisionNode(.{ .test = .{
+                .path_value = pending.path_value,
+                .edges = try self.output.addDecisionEdgeSpan(&edges),
+                .default = fallback,
+            } });
+        }
+
+        return next;
+    }
+
+    fn addPatternPathValuePlan(
+        self: *BodyBuilder,
+        path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
+        plan: Ast.PatternPathValuePlan,
+    ) Allocator.Error!Ast.PatternPathValuePlanId {
+        const id = try self.output.addPatternPathValuePlan(plan);
+        try path_plans.append(self.allocator, id);
+        return id;
+    }
+
+    fn addChildPatternPathValuePlan(
+        self: *BodyBuilder,
+        path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
+        parent_id: Ast.PatternPathValuePlanId,
+        step: Ast.PatternPathStep,
+        source: Ast.PatternPathValueSource,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatternPathValuePlanId {
+        const parent = self.output.getPatternPathValuePlan(parent_id);
+        const parent_steps = self.output.slicePatternPathStepSpan(parent.path.steps);
+        const steps = try self.allocator.alloc(Ast.PatternPathStep, parent_steps.len + 1);
+        defer self.allocator.free(steps);
+        if (parent_steps.len > 0) @memcpy(steps[0..parent_steps.len], parent_steps);
+        steps[parent_steps.len] = step;
+        return try self.addPatternPathValuePlan(path_plans, .{
+            .path = .{
+                .scrutinee = parent.path.scrutinee,
+                .steps = try self.output.addPatternPathStepSpan(steps),
+            },
+            .source = source,
+            .ty = ty,
+        });
+    }
+
+    fn collectPatternDecisionData(
+        self: *BodyBuilder,
+        pat_id: Ast.PatId,
+        path_value: Ast.PatternPathValuePlanId,
+        tests: *std.ArrayList(PendingPatternTest),
+        bindings: *std.ArrayList(Ast.PatternBinding),
+        path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
+    ) Allocator.Error!void {
+        const pat = self.output.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .wildcard => {},
+            .bind => |bind| try bindings.append(self.allocator, .{
+                .binder = bind,
+                .source = path_value,
+                .ty = pat.ty,
+            }),
+            .as => |as| {
+                try bindings.append(self.allocator, .{
+                    .binder = as.bind,
+                    .source = path_value,
+                    .ty = pat.ty,
+                });
+                try self.collectPatternDecisionData(as.pattern, path_value, tests, bindings, path_plans);
+            },
+            .nominal => |child| try self.collectPatternDecisionData(child, path_value, tests, bindings, path_plans),
+            .bool_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .bool_literal = literal } }),
+            .int_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .int_literal = literal } }),
+            .frac_f32_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .float_f32_literal = literal } }),
+            .frac_f64_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .float_f64_literal = literal } }),
+            .dec_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .decimal_literal = literal } }),
+            .str_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .str_literal = literal } }),
+            .tuple => |items| {
+                const child_ids = self.output.pat_ids.items[items.start..][0..items.len];
+                for (child_ids, 0..) |child_id, i| {
+                    const child = self.output.pats.items[@intFromEnum(child_id)];
+                    const child_path = try self.addChildPatternPathValuePlan(
+                        path_plans,
+                        path_value,
+                        .{ .tuple_field = @intCast(i) },
+                        .{ .tuple_field = .{ .parent = path_value, .field = @intCast(i) } },
+                        child.ty,
+                    );
+                    try self.collectPatternDecisionData(child_id, child_path, tests, bindings, path_plans);
+                }
+            },
+            .record => |record| {
+                const field_patterns = self.output.record_field_patterns.items[record.fields.start..][0..record.fields.len];
+                for (field_patterns) |field_pattern| {
+                    const child = self.output.pats.items[@intFromEnum(field_pattern.pattern)];
+                    const child_path = try self.addChildPatternPathValuePlan(
+                        path_plans,
+                        path_value,
+                        .{ .record_field = field_pattern.field },
+                        .{ .record_field = .{ .parent = path_value, .field = field_pattern.field } },
+                        child.ty,
+                    );
+                    try self.collectPatternDecisionData(field_pattern.pattern, child_path, tests, bindings, path_plans);
+                }
+                if (record.rest) |rest_pat| {
+                    const rest = self.output.pats.items[@intFromEnum(rest_pat)];
+                    const projection = try self.recordRestProjection(path_value, record.shape, rest.ty);
+                    const rest_path = try self.addChildPatternPathValuePlan(
+                        path_plans,
+                        path_value,
+                        .{ .record_rest = projection },
+                        .{ .record_rest = projection },
+                        rest.ty,
+                    );
+                    try self.collectPatternDecisionData(rest_pat, rest_path, tests, bindings, path_plans);
+                }
+            },
+            .tag => |tag| {
+                try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .tag = tag.tag } });
+                const payload_patterns = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
+                if (payload_patterns.len == 0) return;
+
+                const payload_record_ty = try self.payloadRecordTypeForPattern(pat.ty, tag.tag);
+                const payload_record_path = try self.addChildPatternPathValuePlan(
+                    path_plans,
+                    path_value,
+                    .{ .tag_payload_record = tag.tag },
+                    .{ .tag_payload_record = .{ .parent = path_value, .tag = tag.tag } },
+                    payload_record_ty,
+                );
+                for (payload_patterns) |payload_pattern| {
+                    const child = self.output.pats.items[@intFromEnum(payload_pattern.pattern)];
+                    const child_path = try self.addChildPatternPathValuePlan(
+                        path_plans,
+                        payload_record_path,
+                        .{ .tag_payload = payload_pattern.payload },
+                        .{ .tag_payload_field = .{ .parent_payload_record = payload_record_path, .payload = payload_pattern.payload } },
+                        child.ty,
+                    );
+                    try self.collectPatternDecisionData(payload_pattern.pattern, child_path, tests, bindings, path_plans);
+                }
+            },
+            .list => |list| {
+                const item_ids = self.output.pat_ids.items[list.items.start..][0..list.items.len];
+                try tests.append(self.allocator, .{
+                    .path_value = path_value,
+                    .test = if (list.rest == null)
+                        .{ .list_len_exact = @intCast(item_ids.len) }
+                    else
+                        .{ .list_len_at_least = @intCast(item_ids.len) },
+                });
+
+                for (item_ids, 0..) |child_id, i| {
+                    const child = self.output.pats.items[@intFromEnum(child_id)];
+                    const probe = listElementProbe(i, item_ids.len, list.rest);
+                    const child_path = try self.addChildPatternPathValuePlan(
+                        path_plans,
+                        path_value,
+                        .{ .list_index = probe },
+                        .{ .list_element = .{ .parent = path_value, .probe = probe } },
+                        child.ty,
+                    );
+                    try self.collectPatternDecisionData(child_id, child_path, tests, bindings, path_plans);
+                }
+
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pat| {
+                        const rest_child = self.output.pats.items[@intFromEnum(rest_pat)];
+                        const probe = Ast.ListRestProbe{
+                            .start = rest.index,
+                            .from_end_count = @intCast(item_ids.len - rest.index),
+                        };
+                        const rest_path = try self.addChildPatternPathValuePlan(
+                            path_plans,
+                            path_value,
+                            .{ .list_rest = probe },
+                            .{ .list_rest = .{ .parent = path_value, .probe = probe } },
+                            rest_child.ty,
+                        );
+                        try self.collectPatternDecisionData(rest_pat, rest_path, tests, bindings, path_plans);
+                    }
+                }
+            },
+        }
+    }
+
+    fn listElementProbe(index: usize, item_count: usize, rest: ?Ast.ListRestPattern) Ast.ListElementProbe {
+        if (rest) |rest_info| {
+            if (index >= rest_info.index) {
+                return .{
+                    .index = @intCast(item_count - index),
+                    .from_end = true,
+                };
+            }
+        }
+        return .{ .index = @intCast(index), .from_end = false };
+    }
+
+    fn recordRestProjection(
+        self: *BodyBuilder,
+        parent: Ast.PatternPathValuePlanId,
+        source_shape: MonoRow.RecordShapeId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.RecordRestProjectionId {
+        const result_record = self.recordTypeForPattern(result_ty);
+        const result_fields = self.program.row_shapes.recordShapeFields(result_record.shape);
+        const projected = try self.allocator.alloc(Ast.RecordRestProjectedField, result_fields.len);
+        defer self.allocator.free(projected);
+        for (result_fields, 0..) |result_field, i| {
+            const result_field_info = self.program.row_shapes.recordField(result_field);
+            projected[i] = .{
+                .source_field = self.matchingSourceRecordField(source_shape, result_field),
+                .result_field = result_field,
+                .ty = self.recordFieldType(result_record, result_field),
+                .result_logical_index = result_field_info.logical_index,
+            };
+        }
+        return try self.output.addRecordRestProjection(.{
+            .parent = parent,
+            .source_shape = source_shape,
+            .result_shape = result_record.shape,
+            .projected_fields = try self.output.addRecordRestProjectedFieldSpan(projected),
+        });
+    }
+
+    fn matchingSourceRecordField(
+        self: *BodyBuilder,
+        source_shape: MonoRow.RecordShapeId,
+        result_field: MonoRow.RecordFieldId,
+    ) MonoRow.RecordFieldId {
+        const result_label = self.program.row_shapes.recordField(result_field).label;
+        for (self.program.row_shapes.recordShapeFields(source_shape)) |source_field| {
+            if (self.program.row_shapes.recordField(source_field).label == result_label) return source_field;
+        }
+        executableInvariant("executable record-rest projection referenced a field absent from source record");
+    }
+
+    fn recordTypeForPattern(self: *BodyBuilder, ty: Type.TypeId) Type.RecordType {
+        return switch (self.program.types.getType(ty)) {
+            .record => |record| record,
+            .nominal => |nominal| self.recordTypeForPattern(nominal.backing),
+            else => executableInvariant("executable record-rest pattern binding did not have a record type"),
+        };
+    }
+
+    fn recordFieldType(self: *BodyBuilder, record: Type.RecordType, field_id: MonoRow.RecordFieldId) Type.TypeId {
+        _ = self;
+        for (record.fields) |field| {
+            if (field.field == field_id) return field.ty;
+        }
+        executableInvariant("executable record-rest projection field was absent from result record type");
+    }
+
+    fn payloadRecordTypeForPattern(
+        self: *BodyBuilder,
+        tag_union_ty: Type.TypeId,
+        tag_id: MonoRow.TagId,
+    ) Allocator.Error!Type.TypeId {
+        const payloads = self.program.row_shapes.tagPayloads(tag_id);
+        if (payloads.len == 0) executableInvariant("executable tag payload record requested for zero-payload tag");
+        if (payloads.len == 1) {
+            return self.tagPayloadTypeForPattern(tag_union_ty, payloads[0]);
+        }
+
+        const fields = try self.allocator.alloc(Type.TypeId, payloads.len);
+        errdefer self.allocator.free(fields);
+        for (payloads, 0..) |payload, i| {
+            fields[i] = self.tagPayloadTypeForPattern(tag_union_ty, payload);
+        }
+        return try self.type_lowerer.output.addType(.{ .tuple = fields });
+    }
+
+    fn tagPayloadTypeForPattern(
+        self: *BodyBuilder,
+        tag_union_ty: Type.TypeId,
+        payload_id: MonoRow.TagPayloadId,
+    ) Type.TypeId {
+        const payload_info = self.program.row_shapes.tagPayload(payload_id);
+        const tag_union = switch (self.program.types.getType(tag_union_ty)) {
+            .tag_union => |tag_union| tag_union,
+            .nominal => |nominal| return self.tagPayloadTypeForPattern(nominal.backing, payload_id),
+            else => executableInvariant("executable tag pattern payload did not have a tag-union type"),
+        };
+        for (tag_union.tags) |tag| {
+            if (tag.tag != payload_info.tag) continue;
+            for (tag.payloads) |payload| {
+                if (payload.payload == payload_id) return payload.ty;
+            }
+        }
+        executableInvariant("executable tag pattern payload was absent from tag-union type");
     }
 
     const SavedBinding = struct {
