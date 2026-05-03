@@ -6396,7 +6396,7 @@ Private capture graph materialization is deterministic:
 - a finite `callable_leaf` materializes as
   `proc_value { template = leaf.proc_value.template, captures = [], fn_ty = leaf.proc_value.source_fn_ty }`
 - an erased boxed `callable_leaf` materializes from the explicit
-  `ErasedCallableValueRef`; it may be emitted only through the named
+  `ErasedCallableLeafInstance`; it may be emitted only through the named
   `ErasedFnSigKey`, erased code ref, capture materialization plan, and non-empty
   `BoxBoundaryId` provenance. The `ErasedFnAbiKey` is reached only through
   `ErasedFnSigKey`.
@@ -7075,7 +7075,7 @@ const CallableLeafTemplate = union(enum) {
 
 const CallableLeafInstance = union(enum) {
     finite: FiniteCallableLeafInstance,
-    erased_boxed_callable: ErasedCallableValueRef,
+    erased_boxed_callable: ErasedCallableLeafInstance,
 };
 
 const FiniteCallableLeafTemplate = struct {
@@ -7103,13 +7103,27 @@ const ErasedCallableTemplate = struct {
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 
-const ErasedCallableValueRef = struct {
+const ErasedCallableLeafInstance = struct {
+    source_fn_ty: CanonicalTypeKey,
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 ```
+
+An `ErasedCallableTemplate` is a pre-interpretation recipe.
+`ErasedCallableLeafInstance` is post-interpretation, post-reification data and
+must be executable-ready. Its `capture` field is therefore an
+`ErasedCaptureExecutableMaterializationPlan`, not an
+`ErasedCaptureReificationPlan`, not a `CaptureSlotReificationPlanId`, not a
+`CallableResultPlanId`, and not a pointer into the interpreter's returned
+closure bytes. The physical hidden capture exists only while reifying the LIR
+interpreter result. Reification must consume that physical hidden capture
+immediately and store the complete executable materialization graph in the
+checked artifact. Later MIR, IR, LIR, ARC, backend, interpreter, and imported
+artifact consumers must not rerun the interpreter or recover erased captures
+from runtime packed-function bytes.
 
 The exact Zig names may differ, but the contract must not. A finite callable
 leaf template is exactly a target-independent `proc_value` template with an
@@ -7374,7 +7388,7 @@ const FiniteCallableMaterialization = union(enum) {
 };
 
 const ErasedCallableMaterialization = struct {
-    leaf: ErasedCallableValueRef,
+    leaf: ErasedCallableLeafInstance,
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeMaterializationPlan,
     capture: ErasedCaptureExecutableMaterializationPlan,
@@ -7398,6 +7412,59 @@ value. If target-specific materialization is cached, that cache is keyed by the
 checked artifact key, `ConstInstantiationKey`, and target/layout inputs, not by a
 separate compile-time value sidecar.
 
+`ConstMaterializationPlan` and `ErasedCaptureExecutableMaterializationPlan`
+must use one shared materialization node discipline, even if the implementation
+keeps separate Zig type names for clarity. Both graph families must be able to
+represent scalar, string, list, record, tuple, tag, box, nominal, finite
+callable, erased callable, and recursive-ref nodes directly. A node that points
+at a sealed `ConstInstanceRef` is an optional sharing representation for a
+serializable subtree whose checked artifact proves it has no reachable callable
+slots; it is not the only legal representation for serializable data.
+
+This is required for constant-owned erased captures. In a public constant such
+as:
+
+```roc
+make_adder : I64 -> Box(I64 -> I64)
+make_adder = |n| Box.box(|x| x + n)
+
+table : { f : Box(I64 -> I64) }
+table = { f: make_adder(41) }
+```
+
+the erased callable leaf for `table.f` captures `41`, but that `41` is not a
+source-visible top-level constant and is not private-to-a-promoted-procedure
+capture data. Reification must therefore be able to store the hidden capture as
+an executable-ready materialization graph directly. It must not invent a
+runtime thunk, allocate a runtime top-level closure object, create a fake
+`ConstOwner.promoted_capture`, or require a promoted-procedure owner merely to
+store serializable bytes. If the implementation chooses to factor out the `41`
+as a sealed `ConstInstanceRef`, it must use an explicit constant-owner form for
+constant-materialization private leaves, with a parent `ConstInstanceRef` plus a
+stable `ComptimeValuePathKey`; it must not overload `promoted_capture`.
+
+`const_instance` is a MIR-family handle, not an IR/LIR value form. The
+`Executable MIR -> IR` boundary must eliminate every `const_instance` by building
+and lowering a `ConstMaterializationPlan` from:
+
+- the `ConstInstanceRef`
+- the expected executable result type for this occurrence
+- the target layout graph produced while lowering executable types
+- read-only checked artifact views for the owning artifact and all imported or
+  relation artifacts that may own the referenced constant
+
+The executable program handed to IR lowering must therefore carry zero-copy,
+read-only artifact views for `CompileTimeValueStore`,
+`ConstInstantiationStoreView`, `CompileTimePlanStore`, callable-set
+descriptors, and procedure identity data needed by callable leaves. IR lowering
+must not deserialize an imported module, rerun compile-time evaluation, inspect
+source declarations, or ask the LIR interpreter for imported-module data.
+
+After IR lowering, there must be no `const_instance` expression left. LIR,
+ARC, backends, and interpreters only see ordinary literal, aggregate, callable,
+box, list, tag, and RC statements. A `const_instance` reaching LIR is a compiler
+bug: debug assertion in debug builds and `unreachable` in release builds.
+
 Every materialization node is built from three inputs: the logical constant
 node, the requested `CanonicalExecValueTypeKey`, and the finalized layout graph
 for that target. Records use `RecordShapeId` and `RecordFieldId`; tag unions
@@ -7408,6 +7475,15 @@ The node graph must preserve source evaluation order separately from logical
 assembly order when those differ. Later stages must not recover field order,
 tag selection, callable identity, erasedness, or nominal wrapping from runtime
 bytes or physical layout order.
+
+The logical `CompileTimeValueStore` is deliberately insufficient by itself.
+Lowering must not try to reverse-engineer callable materialization from only a
+stored `ComptimeValue.callable` plus the requested executable type. For example,
+a finite callable leaf requested at an erased `Box(T)` boundary requires the
+exact solved `ProcValueErasePlan` or finite-set adapter selected for that
+boundary. That selection is produced by representation solving and must be
+recorded in `ConstMaterializationPlan`; it must not be rediscovered from the
+erased function ABI, source syntax, descriptor scans, or a fallback search.
 
 Callable leaves are ordinary constant contents. A non-function top-level
 constant such as `{ f: |x| x + 1 }` materializes as a record whose field is a
@@ -13863,6 +13939,31 @@ Compile-time constants:
   nominals. Non-`Box(T)` containers must not introduce erased representation. A
   `Box(I64 -> I64)` constant graph may erase only the boxed callable payload
   named by an explicit `BoxBoundaryId`.
+- public callable-containing constants may contain erased boxed callable leaves
+  with non-empty captures. For example:
+
+  ```roc
+  make_adder : I64 -> Box(I64 -> I64)
+  make_adder = |n| Box.box(|x| x + n)
+
+  table : { f : Box(I64 -> I64) }
+  table = { f: make_adder(41) }
+
+  main : I64
+  main = Box.unbox(table.f)(1)
+  ```
+
+  Reifying `table` must consume the interpreter result for `make_adder(41)`
+  while the hidden erased capture is still physically available. The stored
+  callable leaf in `CompileTimeValueStore` must be an
+  `ErasedCallableLeafInstance` whose capture is a complete
+  `ErasedCaptureExecutableMaterializationPlan` for the captured `41`. It must
+  not store an `ErasedCaptureReificationPlan`, `CaptureSlotReificationPlanId`,
+  `CallableResultPlanId`, runtime closure pointer, runtime packed-function
+  bytes, or a request to re-run compile-time evaluation later. Importing modules
+  must materialize the boxed callable from the exported checked artifact's
+  zero-copy views and must not deserialize a separate runtime constant payload,
+  execute the exporting module's LIR, or request any source/module reanalysis.
 - constant materialization tests must prove `ConstMaterializationPlan` is a
   recursive target-specific graph, not flat storage. A nested constant such as
   `{ xs: [{ f: inc }], boxed: Box.box(|x| x + 1) }` must materialize records,

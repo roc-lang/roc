@@ -112,6 +112,10 @@ pub fn lowerArtifactsToLir(
     var executable = try mir.Executable.Build.run(
         allocator,
         solved,
+        .{
+            .root = artifacts.root,
+            .imports = artifacts.imports,
+        },
         artifacts.root.artifact.callable_set_descriptors.descriptors,
     );
     errdefer executable.deinit();

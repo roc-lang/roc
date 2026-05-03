@@ -3007,6 +3007,12 @@ pub const PureConstInstanceRef = struct {
     no_reachable_callable_slots: NoReachableCallableSlotsProof,
 };
 
+pub const PureComptimeValueRef = struct {
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+    no_reachable_callable_slots: NoReachableCallableSlotsProof,
+};
+
 pub const ErasedCaptureExecutableMaterializationRecordField = struct {
     field: canonical.RecordFieldLabelId,
     value: ErasedCaptureExecutableMaterializationPlan,
@@ -3040,6 +3046,7 @@ pub const MaterializedErasedCallableValue = struct {
 pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
     pending,
     pure_const: PureConstInstanceRef,
+    pure_value: PureComptimeValueRef,
     finite_callable_set: MaterializedFiniteCallableSetValue,
     erased_callable: MaterializedErasedCallableValue,
     record: []const ErasedCaptureExecutableMaterializationRecordField,
@@ -5475,7 +5482,7 @@ pub const ErasedCallableLeafInstance = struct {
     sig_key: canonical.ErasedFnSigKey,
     provenance: []const canonical.BoxBoundaryId,
     code: canonical.ErasedCallableCodeRef,
-    capture: ErasedCaptureReificationPlan,
+    capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
 pub const CallableLeafInstance = union(enum) {
@@ -5905,11 +5912,11 @@ pub const CompileTimePlanStore = struct {
     ) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
+        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, callable_set_descriptors, plan);
         for (self.callable_results.items) |plan| verifyCallableResultPlan(self, plan);
         for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
         for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, plan);
-        for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, node);
+        for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, callable_set_descriptors, node);
         for (self.erased_capture_executable_materialization_nodes.items) |node| verifyErasedCaptureExecutableMaterializationNode(self, callable_set_descriptors, node);
     }
 };
@@ -6000,7 +6007,7 @@ fn deinitCallableLeafInstance(allocator: Allocator, leaf: *CallableLeafInstance)
         .finite => {},
         .erased_boxed => |erased| {
             allocator.free(erased.provenance);
-            deinitErasedCaptureReificationPlan(allocator, erased.capture);
+            deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
         },
     }
 }
@@ -6045,6 +6052,7 @@ fn deinitErasedCaptureExecutableMaterializationNode(allocator: Allocator, node: 
     switch (node.*) {
         .pending,
         .pure_const,
+        .pure_value,
         .box,
         .nominal,
         .recursive_ref,
@@ -6254,7 +6262,11 @@ fn verifyErasedCaptureSlotReificationRef(store: *const CompileTimePlanStore, ref
     verifyCaptureSlotRef(store, ref.plan);
 }
 
-fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: ConstGraphReificationPlan) void {
+fn verifyConstGraphReificationPlan(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    plan: ConstGraphReificationPlan,
+) void {
     switch (plan) {
         .pending => std.debug.panic("checked artifact invariant violated: published const graph plan is pending", .{}),
         .scalar,
@@ -6273,7 +6285,7 @@ fn verifyConstGraphReificationPlan(store: *const CompileTimePlanStore, plan: Con
             .finite,
             .erased_boxed,
             => |result| verifyCallableResultRef(store, result),
-            .already_resolved => |resolved| verifyCallableLeafInstance(store, resolved),
+            .already_resolved => |resolved| verifyCallableLeafInstance(store, callable_set_descriptors, resolved),
         },
         .callable_schema => {},
         .recursive_ref => |ref| verifyConstGraphRef(store, ref),
@@ -6348,11 +6360,15 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
     }
 }
 
-fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCaptureNode) void {
+fn verifyPrivateCaptureNode(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    node: PrivateCaptureNode,
+) void {
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
         .serializable_leaf => {},
-        .callable_leaf => |leaf| verifyCallableLeafInstance(store, leaf),
+        .callable_leaf => |leaf| verifyCallableLeafInstance(store, callable_set_descriptors, leaf),
         .record => |fields| for (fields) |field| verifyPrivateCaptureRef(store, field.value),
         .tuple => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
         .tag_union => |tag| {
@@ -6365,21 +6381,18 @@ fn verifyPrivateCaptureNode(store: *const CompileTimePlanStore, node: PrivateCap
     }
 }
 
-fn verifyCallableLeafInstance(store: *const CompileTimePlanStore, leaf: CallableLeafInstance) void {
+fn verifyCallableLeafInstance(
+    store: *const CompileTimePlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    leaf: CallableLeafInstance,
+) void {
     switch (leaf) {
         .finite => {},
         .erased_boxed => |erased| {
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased callable leaf has no Box(T) provenance", .{});
             }
-            switch (erased.capture) {
-                .none,
-                .zero_sized_typed,
-                => {},
-                .whole_hidden_capture_value => |value| verifyErasedCaptureSlotReificationRef(store, value),
-                .proc_capture_tuple => |values| for (values) |value| verifyErasedCaptureSlotReificationRef(store, value),
-                .finite_callable_set_value => |result| verifyCallableResultRef(store, result),
-            }
+            verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
         },
     }
 }
@@ -6448,6 +6461,9 @@ fn verifyErasedCaptureExecutableMaterializationNode(
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published erased capture materialization node is pending", .{}),
         .pure_const => {},
+        .pure_value => |pure| {
+            _ = pure.no_reachable_callable_slots;
+        },
         .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetValue(store, callable_set_descriptors, finite),
         .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, callable_set_descriptors, erased),
         .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, field.value),

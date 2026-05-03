@@ -237,6 +237,7 @@ const CheckedTemplateLookup = struct {
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
     executable_payload_transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,
+    comptime_values: *const checked_artifact.CompileTimeValueStore,
     entry_wrappers: ?*const checked_artifact.EntryWrapperTable,
     template: checked_artifact.CheckedProcedureTemplate,
 };
@@ -258,6 +259,7 @@ fn checkedTemplateForKey(
             .executable_type_payloads = &input.root.artifact.executable_type_payloads,
             .executable_payload_transforms = &input.root.artifact.executable_payload_transforms,
             .comptime_plans = &input.root.artifact.comptime_plans,
+            .comptime_values = &input.root.artifact.comptime_values,
             .entry_wrappers = &input.root.artifact.entry_wrappers,
             .template = input.root.artifact.checked_procedure_templates.get(template_ref.template),
         };
@@ -281,6 +283,7 @@ fn checkedTemplateForKey(
                     .executable_type_payloads = imported.executable_type_payloads,
                     .executable_payload_transforms = imported.executable_payload_transforms,
                     .comptime_plans = imported.comptime_plans,
+                    .comptime_values = imported.comptime_values,
                     .entry_wrappers = null,
                     .template = exported.template_data,
                 };
@@ -308,6 +311,7 @@ fn checkedTemplateForKey(
                     .executable_type_payloads = related.executable_type_payloads,
                     .executable_payload_transforms = related.executable_payload_transforms,
                     .comptime_plans = related.comptime_plans,
+                    .comptime_values = related.comptime_values,
                     .entry_wrappers = null,
                     .template = exported.template_data,
                 };
@@ -341,6 +345,7 @@ fn executableSyntheticProcForReserved(
                         .executable_type_payloads = template_lookup.executable_type_payloads,
                         .executable_payload_transforms = template_lookup.executable_payload_transforms,
                         .comptime_plans = template_lookup.comptime_plans,
+                        .comptime_values = template_lookup.comptime_values,
                         .body = .{ .erased_promoted_wrapper = erased },
                     };
                 },
@@ -468,7 +473,9 @@ fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
 
     switch (plans.erasedCaptureExecutableMaterializationNode(node_id)) {
         .pending => invariantViolation("mono dependency reservation reached pending erased capture materialization node"),
-        .pure_const => {},
+        .pure_const,
+        .pure_value,
+        => {},
         .finite_callable_set => |finite| {
             const descriptor = callableSetDescriptorForKey(input, finite.callable_set_key) orelse {
                 invariantViolation("mono dependency reservation reached materialized finite callable set with no descriptor");

@@ -50,6 +50,7 @@ pub const ExecutableSyntheticProc = struct {
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
     executable_payload_transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,
+    comptime_values: *const checked_artifact.CompileTimeValueStore,
     body: ExecutableSyntheticProcBody,
 };
 

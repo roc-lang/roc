@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
+const types = @import("types");
 const symbol_mod = @import("symbol");
 const LambdaSolved = @import("../lambda_solved/mod.zig");
 const MonoRow = @import("../mono_row/mod.zig");
@@ -17,6 +18,16 @@ const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 const repr = LambdaSolved.Representation;
+
+pub const ArtifactViews = struct {
+    root: ?checked_artifact.LoweringModuleView = null,
+    imports: []const checked_artifact.ImportedModuleView = &.{},
+};
+
+const MaterializationStores = struct {
+    plans: *const checked_artifact.CompileTimePlanStore,
+    values: *const checked_artifact.CompileTimeValueStore,
+};
 
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
@@ -42,6 +53,7 @@ pub const Program = struct {
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
+    artifact_views: ArtifactViews = .{},
     layouts: ?Layouts.Layouts = null,
 
     pub fn init(allocator: Allocator) Program {
@@ -79,6 +91,7 @@ pub const Program = struct {
 pub fn run(
     allocator: Allocator,
     solved: LambdaSolved.Solve.Program,
+    artifact_views: ArtifactViews,
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
 ) Allocator.Error!Program {
     var input = solved;
@@ -87,6 +100,7 @@ pub fn run(
     var program = Program.init(allocator);
     errdefer program.deinit();
     program.callable_set_descriptors = callable_set_descriptors;
+    program.artifact_views = artifact_views;
     program.canonical_names = input.canonical_names;
     input.canonical_names = canonical.CanonicalNameStore.init(allocator);
     program.literal_pool = input.literal_pool;
@@ -634,7 +648,10 @@ fn lowerErasedPromotedWrapperProc(
     const body = try lowerErasedPromotedWrapperBody(
         allocator,
         program,
-        synthetic.comptime_plans,
+        .{
+            .plans = synthetic.comptime_plans,
+            .values = synthetic.comptime_values,
+        },
         synthetic.executable_payload_transforms,
         &published_types,
         args,
@@ -674,7 +691,7 @@ fn lowerErasedPromotedWrapperParams(
 fn lowerErasedPromotedWrapperBody(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     published_types: *PublishedTypeLowerer,
     args: Ast.Span(Ast.TypedValue),
@@ -703,7 +720,7 @@ fn lowerErasedPromotedWrapperBody(
     const capture = try lowerErasedPromotedCapture(
         allocator,
         program,
-        plans,
+        materialization,
         capture_ty,
         erased.capture,
         erased.hidden_capture_arg,
@@ -742,7 +759,7 @@ fn lowerErasedPromotedWrapperBody(
         _ = erased_arg_key;
         call_args[i] = try applyPublishedExecutablePayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             &stmts,
@@ -769,7 +786,7 @@ fn lowerErasedPromotedWrapperBody(
             } }));
             const result_value = try applyPublishedExecutablePayloadTransform(
                 program,
-                plans,
+                materialization,
                 published_types,
                 transforms,
                 &stmts,
@@ -788,7 +805,7 @@ fn lowerErasedPromotedWrapperBody(
 
 fn applyPublishedExecutablePayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -825,7 +842,7 @@ fn applyPublishedExecutablePayloadTransform(
         },
         .record => |fields| try applyRecordPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -835,7 +852,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .tuple => |items| try applyTuplePayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -845,7 +862,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .nominal => |nominal| try applyNominalPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -855,7 +872,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .tag_union => |cases| try applyTagUnionPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -865,7 +882,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .list => |list| try applyListPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -875,7 +892,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .box_payload => |box| try applyBoxPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -885,7 +902,7 @@ fn applyPublishedExecutablePayloadTransform(
         ),
         .callable_to_erased => |callable| try applyCallableToErasedPayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             stmts,
             plan,
@@ -905,7 +922,7 @@ fn applyPublishedExecutablePayloadTransform(
 
 fn applyRecordPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -951,7 +968,7 @@ fn applyRecordPayloadTransform(
         } }));
         const transformed = try applyPublishedExecutablePayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -995,7 +1012,7 @@ fn findPayloadTransformRecordField(
 
 fn applyNominalPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -1027,7 +1044,7 @@ fn applyNominalPayloadTransform(
 
     const transformed_backing = try applyPublishedExecutablePayloadTransform(
         program,
-        plans,
+        materialization,
         published_types,
         transforms,
         stmts,
@@ -1046,7 +1063,7 @@ fn applyNominalPayloadTransform(
 
 fn applyTuplePayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -1090,7 +1107,7 @@ fn applyTuplePayloadTransform(
         } }));
         const transformed = try applyPublishedExecutablePayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             stmts,
@@ -1126,7 +1143,7 @@ fn findPayloadTransformTupleElem(
 
 fn applyListPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -1145,7 +1162,7 @@ fn applyListPayloadTransform(
 
     const transformed_elem = try applyPublishedExecutablePayloadTransform(
         program,
-        plans,
+        materialization,
         published_types,
         transforms,
         &body_stmts,
@@ -1190,7 +1207,7 @@ fn listElementTypeForTransform(
 
 fn applyTagUnionPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -1229,7 +1246,7 @@ fn applyTagUnionPayloadTransform(
         defer branch_stmts.deinit(program.allocator);
         const branch_body = try tagUnionPayloadTransformBranchBody(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             &branch_stmts,
@@ -1263,7 +1280,7 @@ fn applyTagUnionPayloadTransform(
 
 fn tagUnionPayloadTransformBranchBody(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     branch_stmts: *std.ArrayList(Ast.StmtId),
@@ -1308,7 +1325,7 @@ fn tagUnionPayloadTransformBranchBody(
 
         const transformed = try applyPublishedExecutablePayloadTransform(
             program,
-            plans,
+            materialization,
             published_types,
             transforms,
             branch_stmts,
@@ -1378,7 +1395,7 @@ fn tagTypeForLabel(
 
 fn applyBoxPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutablePayloadTransformPlanStore,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -1394,7 +1411,7 @@ fn applyBoxPayloadTransform(
             _ = boxPayloadType(program, to_ty);
             const transformed = try applyPublishedExecutablePayloadTransform(
                 program,
-                plans,
+                materialization,
                 published_types,
                 transforms,
                 stmts,
@@ -1408,7 +1425,7 @@ fn applyBoxPayloadTransform(
             const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
             return try applyPublishedExecutablePayloadTransform(
                 program,
-                plans,
+                materialization,
                 published_types,
                 transforms,
                 stmts,
@@ -1422,7 +1439,7 @@ fn applyBoxPayloadTransform(
             const unboxed = try unboxPayloadForTransform(program, stmts, from_ty, value);
             const transformed = try applyPublishedExecutablePayloadTransform(
                 program,
-                plans,
+                materialization,
                 published_types,
                 transforms,
                 stmts,
@@ -1487,7 +1504,7 @@ fn boxPayloadType(program: *const Program, ty: Type.TypeId) Type.TypeId {
 
 fn applyCallableToErasedPayloadTransform(
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     stmts: *std.ArrayList(Ast.StmtId),
     plan: checked_artifact.ExecutablePayloadTransformPlan,
@@ -1531,7 +1548,7 @@ fn applyCallableToErasedPayloadTransform(
             const erased_expr = try lowerMaterializedErasedCallableValue(
                 program.allocator,
                 program,
-                plans,
+                materialization,
                 result_ty,
                 .{
                     .source_fn_ty = proc.proc_value.source_fn_ty,
@@ -1665,7 +1682,7 @@ const ErasedPromotedCaptureLowering = struct {
 fn lowerErasedPromotedCapture(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     capture_ty: ?Type.TypeId,
     capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
     hidden_arg: checked_artifact.ErasedHiddenCaptureArgPlan,
@@ -1691,7 +1708,7 @@ fn lowerErasedPromotedCapture(
         .zero_sized_typed => |key| {
             _ = key;
         },
-        .node => |node| return try lowerErasedCaptureExecutableMaterializationNode(allocator, program, plans, ty, node),
+        .node => |node| return try lowerErasedCaptureExecutableMaterializationNode(allocator, program, materialization, ty, node),
     }
     const value = program.ast.freshValueRef();
     const expr = try program.ast.addExpr(ty, value, .unit);
@@ -1707,11 +1724,11 @@ fn lowerErasedPromotedCapture(
 fn lowerErasedCaptureExecutableMaterializationNode(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!ErasedPromotedCaptureLowering {
-    const expr = try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, node_id);
+    const expr = try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, materialization, expected_ty, node_id);
     const value = program.ast.getExpr(expr).value;
     return .{
         .value = value,
@@ -1725,7 +1742,7 @@ fn lowerErasedCaptureExecutableMaterializationNode(
 fn lowerErasedCaptureExecutableMaterializationPlanExpr(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     plan: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
@@ -1736,40 +1753,563 @@ fn lowerErasedCaptureExecutableMaterializationPlanExpr(
             const value = program.ast.freshValueRef();
             break :blk try program.ast.addExpr(expected_ty, value, .unit);
         },
-        .node => |node| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, node),
+        .node => |node| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, materialization, expected_ty, node),
     };
 }
 
 fn lowerErasedCaptureExecutableMaterializationNodeExpr(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!Ast.ExprId {
-    const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
+    const node = materialization.plans.erasedCaptureExecutableMaterializationNode(node_id);
     return switch (node) {
         .pending => executableInvariant("executable erased capture materialization reached pending node"),
-        .pure_const => |pure_const| blk: {
-            const value = program.ast.freshValueRef();
-            break :blk try program.ast.addExpr(expected_ty, value, .{ .const_instance = pure_const.const_instance });
+        .pure_const => |pure_const| try lowerPureConstInstanceExpr(allocator, program, expected_ty, pure_const.const_instance),
+        .pure_value => |pure_value| try lowerPureComptimeValueExpr(
+            allocator,
+            program,
+            materialization.values,
+            expected_ty,
+            pure_value.schema,
+            pure_value.value,
+        ),
+        .finite_callable_set => |finite| try lowerMaterializedFiniteCallableSetValue(allocator, program, materialization, expected_ty, finite),
+        .erased_callable => |erased| try lowerMaterializedErasedCallableValue(allocator, program, materialization, expected_ty, erased),
+        .tuple => |items| try lowerErasedCaptureTupleMaterialization(allocator, program, materialization, expected_ty, items),
+        .record => |fields| try lowerErasedCaptureRecordMaterialization(allocator, program, materialization, expected_ty, fields),
+        .tag_union => |tag| try lowerErasedCaptureTagMaterialization(allocator, program, materialization, expected_ty, tag),
+        .list => |items| try lowerErasedCaptureListMaterialization(allocator, program, materialization, expected_ty, items),
+        .box => |payload| try lowerErasedCaptureBoxMaterialization(allocator, program, materialization, expected_ty, payload),
+        .nominal => |nominal| try lowerErasedCaptureNominalMaterialization(allocator, program, materialization, expected_ty, nominal),
+        .recursive_ref => |ref| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, materialization, expected_ty, ref),
+    };
+}
+
+const ResolvedConstInstance = struct {
+    values: *const checked_artifact.CompileTimeValueStore,
+    instance: checked_artifact.ConstInstance,
+};
+
+fn lowerPureConstInstanceExpr(
+    allocator: Allocator,
+    program: *Program,
+    expected_ty: Type.TypeId,
+    const_instance: checked_artifact.ConstInstanceRef,
+) Allocator.Error!Ast.ExprId {
+    const resolved = resolveConstInstanceForExecutable(program, const_instance);
+    return try lowerPureComptimeValueExpr(
+        allocator,
+        program,
+        resolved.values,
+        expected_ty,
+        resolved.instance.schema,
+        resolved.instance.value,
+    );
+}
+
+fn resolveConstInstanceForExecutable(
+    program: *const Program,
+    ref: checked_artifact.ConstInstanceRef,
+) ResolvedConstInstance {
+    if (program.artifact_views.root) |root| {
+        if (artifactKeyEql(root.artifact.key, ref.owner)) {
+            return resolveConstInstanceInView(
+                &root.artifact.comptime_values,
+                root.artifact.const_instances.view(),
+                ref,
+            );
+        }
+        for (root.relation_artifacts) |related| {
+            if (!artifactKeyEql(related.key, ref.owner)) continue;
+            return resolveConstInstanceInView(related.comptime_values, related.const_instances, ref);
+        }
+    }
+    for (program.artifact_views.imports) |imported| {
+        if (!artifactKeyEql(imported.key, ref.owner)) continue;
+        return resolveConstInstanceInView(imported.comptime_values, imported.const_instances, ref);
+    }
+    executableInvariant("executable constant materialization referenced an artifact that was not published to executable MIR");
+}
+
+fn resolveConstInstanceInView(
+    values: *const checked_artifact.CompileTimeValueStore,
+    instances: checked_artifact.ConstInstantiationStoreView,
+    ref: checked_artifact.ConstInstanceRef,
+) ResolvedConstInstance {
+    if (!artifactKeyEql(instances.owner, ref.owner)) {
+        executableInvariant("executable constant materialization view has wrong owning artifact");
+    }
+    const index: usize = @intFromEnum(ref.instance);
+    if (index >= instances.instances.len) {
+        executableInvariant("executable constant materialization referenced an out-of-range constant instance");
+    }
+    const record = instances.instances[index];
+    if (!constInstantiationKeyEql(record.key, ref.key)) {
+        executableInvariant("executable constant materialization instance key does not match published row");
+    }
+    const instance = switch (record.state) {
+        .evaluated => |evaluated| evaluated,
+        .reserved,
+        .evaluating,
+        => executableInvariant("executable constant materialization consumed an unsealed constant instance"),
+    };
+    return .{
+        .values = values,
+        .instance = instance,
+    };
+}
+
+fn lowerPureComptimeValueExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    schema_id: checked_artifact.ComptimeSchemaId,
+    value_id: checked_artifact.ComptimeValueId,
+) Allocator.Error!Ast.ExprId {
+    const schema = comptimeSchema(values, schema_id);
+    const value = comptimeValue(values, value_id);
+    return switch (schema) {
+        .pending => executableInvariant("executable pure compile-time materialization reached pending schema"),
+        .zst => blk: {
+            switch (value) {
+                .zst => {},
+                else => executableInvariant("executable pure compile-time zst materialization value mismatch"),
+            }
+            const out = program.ast.freshValueRef();
+            break :blk try program.ast.addExpr(expected_ty, out, .unit);
         },
-        .finite_callable_set => |finite| try lowerMaterializedFiniteCallableSetValue(allocator, program, plans, expected_ty, finite),
-        .erased_callable => |erased| try lowerMaterializedErasedCallableValue(allocator, program, plans, expected_ty, erased),
-        .tuple => |items| try lowerErasedCaptureTupleMaterialization(allocator, program, plans, expected_ty, items),
-        .record => |fields| try lowerErasedCaptureRecordMaterialization(allocator, program, plans, expected_ty, fields),
-        .tag_union => |tag| try lowerErasedCaptureTagMaterialization(allocator, program, plans, expected_ty, tag),
-        .list => |items| try lowerErasedCaptureListMaterialization(allocator, program, plans, expected_ty, items),
-        .box => |payload| try lowerErasedCaptureBoxMaterialization(allocator, program, plans, expected_ty, payload),
-        .nominal => |nominal| try lowerErasedCaptureNominalMaterialization(allocator, program, plans, expected_ty, nominal),
-        .recursive_ref => |ref| try lowerErasedCaptureExecutableMaterializationNodeExpr(allocator, program, plans, expected_ty, ref),
+        .int => |precision| blk: {
+            const bytes = switch (value) {
+                .int_bytes => |bytes| bytes,
+                else => executableInvariant("executable pure compile-time int materialization value mismatch"),
+            };
+            verifyExpectedIntType(program, expected_ty, precision);
+            const out = program.ast.freshValueRef();
+            break :blk try program.ast.addExpr(expected_ty, out, .{ .int_lit = intLiteralFromBytes(bytes, precision) });
+        },
+        .frac => |precision| switch (precision) {
+            .f32 => blk: {
+                const literal = switch (value) {
+                    .f32 => |literal| literal,
+                    else => executableInvariant("executable pure compile-time f32 materialization value mismatch"),
+                };
+                verifyExpectedPrimitive(program, expected_ty, .f32);
+                const out = program.ast.freshValueRef();
+                break :blk try program.ast.addExpr(expected_ty, out, .{ .frac_f32_lit = literal });
+            },
+            .f64 => blk: {
+                const literal = switch (value) {
+                    .f64 => |literal| literal,
+                    else => executableInvariant("executable pure compile-time f64 materialization value mismatch"),
+                };
+                verifyExpectedPrimitive(program, expected_ty, .f64);
+                const out = program.ast.freshValueRef();
+                break :blk try program.ast.addExpr(expected_ty, out, .{ .frac_f64_lit = literal });
+            },
+            .dec => blk: {
+                const bytes = switch (value) {
+                    .dec => |bytes| bytes,
+                    else => executableInvariant("executable pure compile-time decimal materialization value mismatch"),
+                };
+                verifyExpectedPrimitive(program, expected_ty, .dec);
+                const out = program.ast.freshValueRef();
+                break :blk try program.ast.addExpr(expected_ty, out, .{ .dec_lit = @as(i128, @bitCast(std.mem.readInt(u128, &bytes, .little))) });
+            },
+        },
+        .str => blk: {
+            const bytes = switch (value) {
+                .str => |bytes| bytes,
+                else => executableInvariant("executable pure compile-time string materialization value mismatch"),
+            };
+            verifyExpectedPrimitive(program, expected_ty, .str);
+            const literal = try program.literal_pool.intern(bytes);
+            const out = program.ast.freshValueRef();
+            break :blk try program.ast.addExpr(expected_ty, out, .{ .str_lit = literal });
+        },
+        .list => |elem_schema| try lowerPureComptimeListExpr(allocator, program, values, expected_ty, elem_schema, value),
+        .box => |payload_schema| try lowerPureComptimeBoxExpr(allocator, program, values, expected_ty, payload_schema, value),
+        .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, values, expected_ty, items, value),
+        .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, values, expected_ty, fields, value),
+        .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, values, expected_ty, variants, value),
+        .alias => |alias| try lowerPureComptimeWrappedExpr(allocator, program, values, expected_ty, alias.type_name, alias.backing, value, .alias),
+        .nominal => |nominal| try lowerPureComptimeWrappedExpr(allocator, program, values, expected_ty, nominal.type_name, nominal.backing, value, .nominal),
+        .callable => executableInvariant("executable pure compile-time materialization contained a callable slot"),
+    };
+}
+
+fn lowerPureComptimeListExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    elem_schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValue,
+) Allocator.Error!Ast.ExprId {
+    const elem_ty = switch (program.types.getType(expected_ty)) {
+        .list => |elem| elem,
+        else => executableInvariant("executable pure compile-time list materialization expected List(T) type"),
+    };
+    const items = switch (value) {
+        .list => |items| items,
+        else => executableInvariant("executable pure compile-time list materialization value mismatch"),
+    };
+    const exprs = try allocator.alloc(Ast.ExprId, items.len);
+    defer allocator.free(exprs);
+    for (items, 0..) |item, i| {
+        exprs[i] = try lowerPureComptimeValueExpr(allocator, program, values, elem_ty, elem_schema, item);
+    }
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .list = try program.ast.addExprSpan(exprs) });
+}
+
+fn lowerPureComptimeBoxExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    payload_schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValue,
+) Allocator.Error!Ast.ExprId {
+    const payload_ty = switch (program.types.getType(expected_ty)) {
+        .box => |payload| payload,
+        else => executableInvariant("executable pure compile-time box materialization expected Box(T) type"),
+    };
+    const payload_value = switch (value) {
+        .box => |payload| payload,
+        else => executableInvariant("executable pure compile-time box materialization value mismatch"),
+    };
+    const payload_expr = try lowerPureComptimeValueExpr(allocator, program, values, payload_ty, payload_schema, payload_value);
+    const exprs = [_]Ast.ExprId{payload_expr};
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .low_level = .{
+        .op = .box_box,
+        .args = try program.ast.addExprSpan(&exprs),
+    } });
+}
+
+fn lowerPureComptimeTupleExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    schemas: []const checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValue,
+) Allocator.Error!Ast.ExprId {
+    const item_tys = switch (program.types.getType(expected_ty)) {
+        .tuple => |tuple| tuple,
+        else => executableInvariant("executable pure compile-time tuple materialization expected tuple type"),
+    };
+    const items = switch (value) {
+        .tuple => |items| items,
+        else => executableInvariant("executable pure compile-time tuple materialization value mismatch"),
+    };
+    if (item_tys.len != schemas.len or item_tys.len != items.len) {
+        executableInvariant("executable pure compile-time tuple materialization arity mismatch");
+    }
+    const exprs = try allocator.alloc(Ast.ExprId, items.len);
+    defer allocator.free(exprs);
+    for (items, schemas, 0..) |item, schema, i| {
+        exprs[i] = try lowerPureComptimeValueExpr(allocator, program, values, item_tys[i], schema, item);
+    }
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .tuple = try program.ast.addExprSpan(exprs) });
+}
+
+fn lowerPureComptimeRecordExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    schema_fields: []const checked_artifact.ComptimeFieldSchema,
+    value: checked_artifact.ComptimeValue,
+) Allocator.Error!Ast.ExprId {
+    const record_ty = switch (program.types.getType(expected_ty)) {
+        .record => |record| record,
+        else => executableInvariant("executable pure compile-time record materialization expected record type"),
+    };
+    const value_fields = switch (value) {
+        .record => |fields| fields,
+        else => executableInvariant("executable pure compile-time record materialization value mismatch"),
+    };
+    if (schema_fields.len != value_fields.len or record_ty.fields.len != value_fields.len) {
+        executableInvariant("executable pure compile-time record materialization field count mismatch");
+    }
+    const seen = try allocator.alloc(bool, schema_fields.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+    const output_fields = try allocator.alloc(Ast.RecordFieldExpr, record_ty.fields.len);
+    defer allocator.free(output_fields);
+    for (record_ty.fields, 0..) |expected_field, expected_i| {
+        const expected_label = program.row_shapes.recordField(expected_field.field).label;
+        const materialized = findPureComptimeRecordField(schema_fields, value_fields, expected_label, seen) orelse {
+            executableInvariant("executable pure compile-time record materialization missing expected field");
+        };
+        const lowered = try lowerPureComptimeValueExpr(
+            allocator,
+            program,
+            values,
+            expected_field.ty,
+            materialized.schema,
+            materialized.value,
+        );
+        output_fields[expected_i] = .{
+            .field = expected_field.field,
+            .expr = lowered,
+            .ty = expected_field.ty,
+            .value = program.ast.getExpr(lowered).value,
+        };
+    }
+    verifyAllSeen(seen, "executable pure compile-time record materialization had extra field");
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .record = .{
+        .shape = record_ty.shape,
+        .fields = try program.ast.addRecordFieldExprSpan(output_fields),
+    } });
+}
+
+const PureComptimeField = struct {
+    schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValueId,
+};
+
+fn findPureComptimeRecordField(
+    schemas: []const checked_artifact.ComptimeFieldSchema,
+    values: []const checked_artifact.ComptimeValueId,
+    label: canonical.RecordFieldLabelId,
+    seen: []bool,
+) ?PureComptimeField {
+    for (schemas, 0..) |schema, i| {
+        if (schema.name != label) continue;
+        if (seen[i]) executableInvariant("executable pure compile-time record materialization duplicated field");
+        seen[i] = true;
+        return .{
+            .schema = schema.schema,
+            .value = values[i],
+        };
+    }
+    return null;
+}
+
+fn lowerPureComptimeTagExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    schema_variants: []const checked_artifact.ComptimeVariantSchema,
+    value: checked_artifact.ComptimeValue,
+) Allocator.Error!Ast.ExprId {
+    const tag_union_ty = switch (program.types.getType(expected_ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => executableInvariant("executable pure compile-time tag materialization expected tag-union type"),
+    };
+    const variant_value = switch (value) {
+        .tag_union => |tag| tag,
+        else => executableInvariant("executable pure compile-time tag materialization value mismatch"),
+    };
+    const variant_index: usize = @intCast(variant_value.variant_index);
+    if (variant_index >= schema_variants.len) {
+        executableInvariant("executable pure compile-time tag materialization variant index exceeded schema arity");
+    }
+    const schema_variant = schema_variants[variant_index];
+    if (schema_variant.payloads.len != variant_value.payloads.len) {
+        executableInvariant("executable pure compile-time tag materialization payload count mismatch");
+    }
+    const selected = findPureComptimeTagType(program, tag_union_ty, schema_variant.name) orelse {
+        executableInvariant("executable pure compile-time tag materialization selected tag missing from expected type");
+    };
+    if (selected.payloads.len != schema_variant.payloads.len) {
+        executableInvariant("executable pure compile-time tag materialization expected payload arity mismatch");
+    }
+    const output_payloads = try allocator.alloc(Ast.TagPayloadExpr, selected.payloads.len);
+    defer allocator.free(output_payloads);
+    for (selected.payloads, 0..) |expected_payload, expected_i| {
+        const payload_info = program.row_shapes.tagPayload(expected_payload.payload);
+        const payload_index: usize = @intCast(payload_info.logical_index);
+        if (payload_index >= variant_value.payloads.len) {
+            executableInvariant("executable pure compile-time tag materialization payload index exceeded stored arity");
+        }
+        const lowered = try lowerPureComptimeValueExpr(
+            allocator,
+            program,
+            values,
+            expected_payload.ty,
+            schema_variant.payloads[payload_index],
+            variant_value.payloads[payload_index],
+        );
+        output_payloads[expected_i] = .{
+            .payload = expected_payload.payload,
+            .expr = lowered,
+            .ty = expected_payload.ty,
+            .value = program.ast.getExpr(lowered).value,
+        };
+    }
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .tag = .{
+        .union_shape = tag_union_ty.shape,
+        .tag = selected.tag,
+        .payloads = try program.ast.addTagPayloadExprSpan(output_payloads),
+    } });
+}
+
+fn findPureComptimeTagType(
+    program: *const Program,
+    tag_union_ty: Type.TagUnionType,
+    label: canonical.TagLabelId,
+) ?Type.TagType {
+    for (tag_union_ty.tags) |tag| {
+        if (program.row_shapes.tag(tag.tag).label == label) return tag;
+    }
+    return null;
+}
+
+fn lowerPureComptimeWrappedExpr(
+    allocator: Allocator,
+    program: *Program,
+    values: *const checked_artifact.CompileTimeValueStore,
+    expected_ty: Type.TypeId,
+    nominal: canonical.NominalTypeKey,
+    backing_schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValue,
+    comptime wrapper: enum { alias, nominal },
+) Allocator.Error!Ast.ExprId {
+    const expected_nominal = switch (program.types.getType(expected_ty)) {
+        .nominal => |expected| expected,
+        else => executableInvariant("executable pure compile-time wrapped materialization expected nominal type"),
+    };
+    if (!nominalTypeKeyEql(expected_nominal.nominal, nominal)) {
+        executableInvariant("executable pure compile-time wrapped materialization nominal key mismatch");
+    }
+    const backing_value = switch (wrapper) {
+        .alias => switch (value) {
+            .alias => |backing| backing,
+            else => executableInvariant("executable pure compile-time alias materialization value mismatch"),
+        },
+        .nominal => switch (value) {
+            .nominal => |backing| backing,
+            else => executableInvariant("executable pure compile-time nominal materialization value mismatch"),
+        },
+    };
+    const backing = try lowerPureComptimeValueExpr(
+        allocator,
+        program,
+        values,
+        expected_nominal.backing,
+        backing_schema,
+        backing_value,
+    );
+    const out = program.ast.freshValueRef();
+    return try program.ast.addExpr(expected_ty, out, .{ .nominal_reinterpret = backing });
+}
+
+fn comptimeSchema(
+    values: *const checked_artifact.CompileTimeValueStore,
+    id: checked_artifact.ComptimeSchemaId,
+) checked_artifact.ComptimeSchema {
+    const index: usize = @intFromEnum(id);
+    if (index >= values.schemas.items.len) {
+        executableInvariant("executable pure compile-time materialization schema id out of range");
+    }
+    return values.schemas.items[index];
+}
+
+fn comptimeValue(
+    values: *const checked_artifact.CompileTimeValueStore,
+    id: checked_artifact.ComptimeValueId,
+) checked_artifact.ComptimeValue {
+    const index: usize = @intFromEnum(id);
+    if (index >= values.values.items.len) {
+        executableInvariant("executable pure compile-time materialization value id out of range");
+    }
+    return values.values.items[index];
+}
+
+fn verifyExpectedIntType(
+    program: *const Program,
+    expected_ty: Type.TypeId,
+    precision: types.Int.Precision,
+) void {
+    verifyExpectedPrimitive(program, expected_ty, switch (precision) {
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+    });
+}
+
+fn verifyExpectedPrimitive(program: *const Program, expected_ty: Type.TypeId, expected: Type.Prim) void {
+    const actual = switch (program.types.getType(expected_ty)) {
+        .primitive => |prim| prim,
+        else => executableInvariant("executable pure compile-time scalar materialization expected primitive type"),
+    };
+    if (actual != expected) {
+        executableInvariant("executable pure compile-time scalar materialization primitive mismatch");
+    }
+}
+
+fn intLiteralFromBytes(bytes: [16]u8, precision: types.Int.Precision) i128 {
+    return switch (precision) {
+        .u8 => @as(i128, @intCast(bytes[0])),
+        .i8 => @as(i128, @intCast(@as(i8, @bitCast(bytes[0])))),
+        .u16 => @as(i128, @intCast(std.mem.readInt(u16, bytes[0..2], .little))),
+        .i16 => @as(i128, @intCast(@as(i16, @bitCast(std.mem.readInt(u16, bytes[0..2], .little))))),
+        .u32 => @as(i128, @intCast(std.mem.readInt(u32, bytes[0..4], .little))),
+        .i32 => @as(i128, @intCast(@as(i32, @bitCast(std.mem.readInt(u32, bytes[0..4], .little))))),
+        .u64 => @as(i128, @intCast(std.mem.readInt(u64, bytes[0..8], .little))),
+        .i64 => @as(i128, @intCast(@as(i64, @bitCast(std.mem.readInt(u64, bytes[0..8], .little))))),
+        .u128 => @as(i128, @bitCast(std.mem.readInt(u128, &bytes, .little))),
+        .i128 => @as(i128, @bitCast(std.mem.readInt(u128, &bytes, .little))),
+    };
+}
+
+fn artifactKeyEql(a: checked_artifact.CheckedModuleArtifactKey, b: checked_artifact.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn constInstantiationKeyEql(
+    a: checked_artifact.ConstInstantiationKey,
+    b: checked_artifact.ConstInstantiationKey,
+) bool {
+    return constRefEql(a.const_ref, b.const_ref) and
+        std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
+}
+
+fn constRefEql(a: checked_artifact.ConstRef, b: checked_artifact.ConstRef) bool {
+    return artifactKeyEql(a.artifact, b.artifact) and
+        constOwnerEql(a.owner, b.owner) and
+        a.template == b.template and
+        std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
+}
+
+fn constOwnerEql(a: checked_artifact.ConstOwner, b: checked_artifact.ConstOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level_binding => |left| blk: {
+            const right = b.top_level_binding;
+            break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
+        },
+        .promoted_capture => |left| blk: {
+            const right = b.promoted_capture;
+            break :blk left.capture_index == right.capture_index and
+                left.promoted_proc.module_idx == right.promoted_proc.module_idx and
+                canonical.procedureValueRefEql(left.promoted_proc.proc, right.promoted_proc.proc);
+        },
     };
 }
 
 fn lowerErasedCaptureRecordMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     fields: []const checked_artifact.ErasedCaptureExecutableMaterializationRecordField,
 ) Allocator.Error!Ast.ExprId {
@@ -1795,7 +2335,7 @@ fn lowerErasedCaptureRecordMaterialization(
         const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
             allocator,
             program,
-            plans,
+            materialization,
             expected_field.ty,
             materialized.value,
         );
@@ -1832,7 +2372,7 @@ fn findErasedCaptureRecordField(
 fn lowerErasedCaptureTupleMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     items: []const checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
@@ -1846,7 +2386,7 @@ fn lowerErasedCaptureTupleMaterialization(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, 0..) |item, i| {
-        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, tuple_tys[i], item);
+        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, tuple_tys[i], item);
     }
     const value = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, value, .{ .tuple = try program.ast.addExprSpan(exprs) });
@@ -1855,7 +2395,7 @@ fn lowerErasedCaptureTupleMaterialization(
 fn lowerErasedCaptureTagMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     tag: checked_artifact.ErasedCaptureExecutableMaterializationTagNode,
 ) Allocator.Error!Ast.ExprId {
@@ -1884,7 +2424,7 @@ fn lowerErasedCaptureTagMaterialization(
         const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
             allocator,
             program,
-            plans,
+            materialization,
             expected_payload.ty,
             materialized.value,
         );
@@ -1933,7 +2473,7 @@ fn findErasedCaptureTagPayload(
 fn lowerErasedCaptureListMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     items: []const checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
@@ -1944,7 +2484,7 @@ fn lowerErasedCaptureListMaterialization(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, 0..) |item, i| {
-        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, elem_ty, item);
+        exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, elem_ty, item);
     }
     const value = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, value, .{ .list = try program.ast.addExprSpan(exprs) });
@@ -1953,7 +2493,7 @@ fn lowerErasedCaptureListMaterialization(
 fn lowerErasedCaptureBoxMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     payload: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!Ast.ExprId {
@@ -1961,7 +2501,7 @@ fn lowerErasedCaptureBoxMaterialization(
         .box => |payload_ty| payload_ty,
         else => executableInvariant("executable erased capture box materialization expected Box(T) type"),
     };
-    const payload_expr = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, payload_ty, payload);
+    const payload_expr = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, payload_ty, payload);
     const exprs = [_]Ast.ExprId{payload_expr};
     const value = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, value, .{ .low_level = .{
@@ -1973,7 +2513,7 @@ fn lowerErasedCaptureBoxMaterialization(
 fn lowerErasedCaptureNominalMaterialization(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     nominal: anytype,
 ) Allocator.Error!Ast.ExprId {
@@ -1987,7 +2527,7 @@ fn lowerErasedCaptureNominalMaterialization(
     const backing = try lowerErasedCaptureExecutableMaterializationPlanExpr(
         allocator,
         program,
-        plans,
+        materialization,
         expected_nominal.backing,
         nominal.backing,
     );
@@ -2008,7 +2548,7 @@ fn verifyAllSeen(seen: []const bool, comptime message: []const u8) void {
 fn lowerMaterializedFiniteCallableSetValue(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     finite: checked_artifact.MaterializedFiniteCallableSetValue,
 ) Allocator.Error!Ast.ExprId {
@@ -2060,7 +2600,7 @@ fn lowerMaterializedFiniteCallableSetValue(
             const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
                 allocator,
                 program,
-                plans,
+                materialization,
                 capture_tys[i],
                 capture,
             );
@@ -2101,7 +2641,7 @@ fn lowerMaterializedFiniteCallableSetValue(
 fn lowerMaterializedErasedCallableValue(
     allocator: Allocator,
     program: *Program,
-    plans: *const checked_artifact.CompileTimePlanStore,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     erased: checked_artifact.MaterializedErasedCallableValue,
 ) Allocator.Error!Ast.ExprId {
@@ -2116,7 +2656,7 @@ fn lowerMaterializedErasedCallableValue(
         const capture_ty = erased_ty.capture_ty orelse {
             executableInvariant("executable erased callable materialization expected type has no capture type");
         };
-        break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, plans, capture_ty, erased.capture);
+        break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, capture_ty, erased.capture);
     } else null;
 
     const stmt_count: usize = if (capture_expr == null) 0 else 1;

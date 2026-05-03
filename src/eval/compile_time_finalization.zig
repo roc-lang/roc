@@ -828,19 +828,6 @@ fn cloneBoxBoundarySpan(
     return try allocator.dupe(canonical.BoxBoundaryId, provenance);
 }
 
-fn cloneErasedCapturePlan(
-    allocator: Allocator,
-    capture: checked_artifact.ErasedCaptureReificationPlan,
-) Allocator.Error!checked_artifact.ErasedCaptureReificationPlan {
-    return switch (capture) {
-        .none => .none,
-        .zero_sized_typed => |ty| .{ .zero_sized_typed = ty },
-        .whole_hidden_capture_value => |value| .{ .whole_hidden_capture_value = value },
-        .finite_callable_set_value => |result| .{ .finite_callable_set_value = result },
-        .proc_capture_tuple => |values| .{ .proc_capture_tuple = try allocator.dupe(checked_artifact.ErasedCaptureSlotReificationRef, values) },
-    };
-}
-
 fn promotedWrapperParamsForFnRoot(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
@@ -897,8 +884,8 @@ const PrivateCaptureBuilder = struct {
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     layouts: *const layout_mod.Store,
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
-    owner: checked_artifact.PromotedProcedureRef,
-    source_binding: CIR.Pattern.Idx,
+    owner: ?checked_artifact.PromotedProcedureRef,
+    source_binding: ?CIR.Pattern.Idx,
     next_private_const: u32 = 0,
     active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
     erased_active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId),
@@ -919,10 +906,11 @@ const PrivateCaptureBuilder = struct {
             compileTimeFinalizationInvariant("private capture source type was not published in checked type store");
         };
         const source_scheme = try self.artifact.checked_types.ensureSchemeForRoot(self.allocator, checked_root);
+        const owner = self.owner orelse compileTimeFinalizationInvariant("private capture ref construction requires a promoted procedure owner");
         return .{
             .artifact = self.artifact.key,
             .owner = .{
-                .promoted_proc = self.owner,
+                .promoted_proc = owner,
                 .capture_index = capture_index,
             },
             .node = try self.captureNode(plan_id, physical),
@@ -1007,13 +995,7 @@ const PrivateCaptureBuilder = struct {
         const plan = self.artifact.comptime_plans.captureSlot(plan_id);
         return switch (plan) {
             .pending => compileTimeFinalizationInvariant("erased capture executable materialization reached pending capture plan"),
-            .serializable_leaf => |leaf| blk: {
-                const serializable = try self.serializableLeaf(leaf, physical);
-                break :blk .{ .pure_const = .{
-                    .const_instance = serializable.const_instance,
-                    .no_reachable_callable_slots = .checked_artifact_verified,
-                } };
-            },
+            .serializable_leaf => |leaf| try self.executableSerializableLeaf(leaf, physical),
             .callable_leaf => |result_plan| try self.executableCallableLeaf(result_plan, physical),
             .record => |fields| .{ .record = try self.executableRecord(fields, physical) },
             .tuple => |items| .{ .tuple = try self.executableTuple(items, physical) },
@@ -1058,11 +1040,12 @@ const PrivateCaptureBuilder = struct {
     ) Allocator.Error!checked_artifact.PrivateSerializableCaptureLeaf {
         const capture_index = self.next_private_const;
         self.next_private_const += 1;
+        const owner = self.owner orelse compileTimeFinalizationInvariant("private serializable capture leaf requires a promoted procedure owner");
 
         const const_ref = try self.artifact.const_templates.reservePromotedCapture(
             self.allocator,
             self.artifact.key,
-            self.owner,
+            owner,
             capture_index,
             leaf.source_scheme,
         );
@@ -1103,6 +1086,30 @@ const PrivateCaptureBuilder = struct {
         };
     }
 
+    fn executableSerializableLeaf(
+        self: *PrivateCaptureBuilder,
+        leaf: checked_artifact.SerializableCaptureLeafPlan,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
+        var reifier = ComptimeReifier{
+            .allocator = self.allocator,
+            .artifact = self.artifact,
+            .values = &self.artifact.comptime_values,
+            .plans = &self.artifact.comptime_plans,
+            .checked_types = &self.artifact.checked_types,
+            .layouts = self.layouts,
+            .lowered = self.lowered,
+            .callable_set_descriptors = self.callable_set_descriptors,
+            .source_binding = self.source_binding,
+        };
+        const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
+        return .{ .pure_value = .{
+            .schema = reified.schema,
+            .value = reified.value,
+            .no_reachable_callable_slots = .checked_artifact_verified,
+        } };
+    }
+
     fn callableLeaf(
         self: *PrivateCaptureBuilder,
         result_plan: checked_artifact.CallableResultPlanId,
@@ -1119,11 +1126,12 @@ const PrivateCaptureBuilder = struct {
         const checked_fn_root = self.artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
             compileTimeFinalizationInvariant("captured callable leaf source function type was not published in checked type store");
         };
+        const source_binding = self.source_binding orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires source binding provenance");
         const published = try publishCallableResult(
             self.allocator,
             self.artifact,
             self.lowered,
-            self.source_binding,
+            source_binding,
             checked_fn_root,
             result_plan,
             selected,
@@ -1660,7 +1668,7 @@ const ComptimeReifier = struct {
                     .sig_key = erased.sig_key,
                     .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
                     .code = erased.code,
-                    .capture = try cloneErasedCapturePlan(self.allocator, erased.capture),
+                    .capture = try self.materializeErasedCallableLeafCapture(erased, layout_idx, value),
                 } };
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = erased.source_fn_ty }),
@@ -1668,6 +1676,37 @@ const ComptimeReifier = struct {
                 };
             },
         };
+    }
+
+    fn materializeErasedCallableLeafCapture(
+        self: *ComptimeReifier,
+        erased: checked_artifact.ErasedCallableResultPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        const artifact = self.artifact orelse reifierInvariant("erased boxed callable leaf reification requires mutable checked artifact");
+        const lowered = self.lowered orelse reifierInvariant("erased boxed callable leaf reification requires lowered LIR context");
+        var capture_builder = PrivateCaptureBuilder{
+            .allocator = self.allocator,
+            .artifact = artifact,
+            .lowered = lowered,
+            .layouts = self.layouts,
+            .callable_set_descriptors = self.callable_set_descriptors,
+            .owner = null,
+            .source_binding = self.source_binding,
+            .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(self.allocator),
+            .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(self.allocator),
+        };
+        defer capture_builder.deinit();
+        return try materializeErasedPromotedCapture(
+            self.allocator,
+            artifact,
+            lowered,
+            &capture_builder,
+            erased,
+            layout_idx,
+            value,
+        );
     }
 
     fn schemaForCallableLeaf(
