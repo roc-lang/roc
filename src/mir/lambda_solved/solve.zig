@@ -225,7 +225,7 @@ const ValueTransformFinalizer = struct {
             for (inputs, 0..) |input, i| {
                 const from = try self.localEndpoint(input.value);
                 const kind = self.joinBoundaryKind(join_id, input.source);
-                const transform = try self.appendIdentityTransform(kind, from, result_to);
+                const transform = try self.appendExistingValueTransform(kind, from, result_to);
                 boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
                     .kind = kind,
                     .from_value = input.value,
@@ -250,7 +250,7 @@ const ValueTransformFinalizer = struct {
             const from = try self.localEndpoint(ret.value);
             const to = try self.targetReturnEndpoint(self.instance_id, self.instance);
             const kind: repr.ValueTransformBoundaryKind = .{ .return_value = @enumFromInt(@as(u32, @intCast(raw_return))) };
-            const transform = try self.appendIdentityTransform(kind, from, to);
+            const transform = try self.appendExistingValueTransform(kind, from, to);
             ret.transform = try self.representationStore().appendValueTransformBoundary(.{
                 .kind = kind,
                 .from_value = ret.value,
@@ -307,7 +307,7 @@ const ValueTransformFinalizer = struct {
                 .call = call_site_id,
                 .arg_index = @intCast(i),
             } };
-            const transform = try self.appendIdentityTransform(kind, from, to);
+            const transform = try self.appendExistingValueTransform(kind, from, to);
             arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
                 .kind = kind,
                 .from_value = arg,
@@ -321,7 +321,7 @@ const ValueTransformFinalizer = struct {
         const result_from = try self.targetReturnEndpoint(target_id, target_instance);
         const result_to = try self.localEndpoint(call_site.result);
         const result_kind: repr.ValueTransformBoundaryKind = .{ .call_result = call_site_id };
-        const result_transform = try self.appendIdentityTransform(result_kind, result_from, result_to);
+        const result_transform = try self.appendExistingValueTransform(result_kind, result_from, result_to);
         const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
             .kind = result_kind,
             .from_value = target_instance.public_roots.ret,
@@ -364,7 +364,7 @@ const ValueTransformFinalizer = struct {
                     .member_index = member.member,
                 },
             } };
-            const result_transform = try self.appendIdentityTransform(kind, result_from, result_to);
+            const result_transform = try self.appendExistingValueTransform(kind, result_from, result_to);
             branch_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
                 .kind = kind,
                 .from_value = target_instance.public_roots.ret,
@@ -403,7 +403,7 @@ const ValueTransformFinalizer = struct {
                 .call = call_site_id,
                 .arg_index = @intCast(i),
             } };
-            const transform = try self.appendIdentityTransform(kind, from, to);
+            const transform = try self.appendExistingValueTransform(kind, from, to);
             arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
                 .kind = kind,
                 .from_value = arg,
@@ -417,7 +417,7 @@ const ValueTransformFinalizer = struct {
         const result_to = try self.localEndpoint(call_site.result);
         const result_from = self.rawResultEndpoint(call_site_id, result_to.logical_ty, abi.ret_exec_key);
         const result_kind: repr.ValueTransformBoundaryKind = .{ .call_result = call_site_id };
-        const result_transform = try self.appendIdentityTransform(result_kind, result_from, result_to);
+        const result_transform = try self.appendExistingValueTransform(result_kind, result_from, result_to);
         const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
             .kind = result_kind,
             .from_value = call_site.result,
@@ -444,28 +444,699 @@ const ValueTransformFinalizer = struct {
         }
     }
 
-    fn appendIdentityTransform(
+    fn appendExistingValueTransform(
         self: *ValueTransformFinalizer,
         kind: repr.ValueTransformBoundaryKind,
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, to.exec_ty.key)) {
-            lambdaInvariant("lambda-solved value transform finalization reached mismatched executable endpoint keys without an explicit transform plan");
-        }
         const scope = try self.representationStore().appendTransformEndpointScope(.{
             .root_kind = kind,
             .root_from = from,
             .root_to = to,
         });
+        return try self.planValueTransform(scope, from, to, &.{});
+    }
+
+    fn planValueTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, to.exec_ty.key)) {
+            return try self.planNonIdentityValueTransform(scope, from, to, provenance);
+        }
+        return try self.appendSessionValueTransform(scope, from, to, .none, .identity);
+    }
+
+    fn planNonIdentityValueTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        const from_payload = self.sessionPayload(from.exec_ty.ty);
+        const to_payload = self.sessionPayload(to.exec_ty.ty);
+        return switch (from_payload) {
+            .record => |source| switch (to_payload) {
+                .record => |target| try self.planRecordTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved record value transform target is not a record"),
+            },
+            .tuple => |source| switch (to_payload) {
+                .tuple => |target| try self.planTupleTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved tuple value transform target is not a tuple"),
+            },
+            .tag_union => |source| switch (to_payload) {
+                .tag_union => |target| try self.planTagUnionTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved tag-union value transform target is not a tag union"),
+            },
+            .nominal => |source| switch (to_payload) {
+                .nominal => |target| try self.planNominalTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved nominal value transform target is not nominal"),
+            },
+            .list => |source| switch (to_payload) {
+                .list => |target| try self.planListTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved list value transform target is not a list"),
+            },
+            .box => |source| switch (to_payload) {
+                .box => |target| try self.planBoxTransform(scope, from, to, source, target, .box_to_box, provenance),
+                else => self.transformInvariant("lambda-solved box value transform target is not a box"),
+            },
+            .callable_set => |source| switch (to_payload) {
+                .erased_fn => |target| try self.planFiniteCallableToErasedTransform(scope, from, to, source, target, provenance),
+                else => self.transformInvariant("lambda-solved finite callable value transform target is not erased callable"),
+            },
+            .erased_fn => |source| switch (to_payload) {
+                .erased_fn => |target| try self.planAlreadyErasedCallableTransform(scope, from, to, source, target),
+                else => self.transformInvariant("lambda-solved erased callable value transform target is not erased callable"),
+            },
+            .primitive,
+            .recursive_ref,
+            .pending,
+            => self.transformInvariant("lambda-solved value transform has incompatible executable payloads"),
+        };
+    }
+
+    fn appendSessionValueTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        provenance: checked_artifact.ValueTransformProvenance,
+        op: repr.SessionExecutableValueTransformOp,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const id = try self.representationStore().appendSessionExecutableValueTransform(.{
             .scope = scope,
             .from = from,
             .to = to,
-            .provenance = .none,
-            .op = .identity,
+            .provenance = provenance,
+            .op = op,
         });
         return .{ .session = id };
+    }
+
+    fn sessionPayload(
+        self: *ValueTransformFinalizer,
+        ref: repr.SessionExecutableTypePayloadRef,
+    ) repr.SessionExecutableTypePayload {
+        return self.representationStore().session_executable_type_payloads.get(ref.payload);
+    }
+
+    fn transformInvariant(
+        self: *ValueTransformFinalizer,
+        comptime message: []const u8,
+    ) noreturn {
+        _ = self;
+        lambdaInvariant(message);
+    }
+
+    fn planRecordTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableRecordPayload,
+        target: repr.SessionExecutableRecordPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        const fields = try self.allocator.alloc(repr.SessionValueTransformRecordField, target.fields.len);
+        defer self.allocator.free(fields);
+
+        for (target.fields, 0..) |target_field, i| {
+            const label = self.program.row_shapes.recordField(target_field.field).label;
+            const source_field = self.recordFieldPayloadByLabel(source, label) orelse {
+                lambdaInvariant("lambda-solved record transform target field has no source field");
+            };
+            if (source_field.field != target_field.field) {
+                lambdaInvariant("lambda-solved record transform reached distinct source/target field ids");
+            }
+
+            const from_child = try self.transformChildEndpoint(
+                scope,
+                from,
+                .from,
+                .{ .record_field = source_field.field },
+                try self.recordFieldLogicalType(from.logical_ty, source_field.field),
+                source_field.ty,
+                source_field.key,
+            );
+            const to_child = try self.transformChildEndpoint(
+                scope,
+                to,
+                .to,
+                .{ .record_field = target_field.field },
+                try self.recordFieldLogicalType(to.logical_ty, target_field.field),
+                target_field.ty,
+                target_field.key,
+            );
+            fields[i] = .{
+                .field = target_field.field,
+                .transform = try self.planValueTransform(scope, from_child, to_child, provenance),
+            };
+        }
+
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
+            .record = fields,
+        });
+    }
+
+    fn planTupleTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: []const repr.SessionExecutableTupleElemPayload,
+        target: []const repr.SessionExecutableTupleElemPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (source.len != target.len) {
+            lambdaInvariant("lambda-solved tuple transform arity mismatch");
+        }
+        const elems = try self.allocator.alloc(repr.SessionValueTransformTupleElem, target.len);
+        defer self.allocator.free(elems);
+
+        for (target, 0..) |target_elem, i| {
+            const source_elem = source[i];
+            if (source_elem.index != target_elem.index) {
+                lambdaInvariant("lambda-solved tuple transform source/target element index mismatch");
+            }
+            const from_child = try self.transformChildEndpoint(
+                scope,
+                from,
+                .from,
+                .{ .tuple_elem = source_elem.index },
+                try self.tupleElemLogicalType(from.logical_ty, source_elem.index),
+                source_elem.ty,
+                source_elem.key,
+            );
+            const to_child = try self.transformChildEndpoint(
+                scope,
+                to,
+                .to,
+                .{ .tuple_elem = target_elem.index },
+                try self.tupleElemLogicalType(to.logical_ty, target_elem.index),
+                target_elem.ty,
+                target_elem.key,
+            );
+            elems[i] = .{
+                .index = target_elem.index,
+                .transform = try self.planValueTransform(scope, from_child, to_child, provenance),
+            };
+        }
+
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
+            .tuple = elems,
+        });
+    }
+
+    fn planTagUnionTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableTagUnionPayload,
+        target: repr.SessionExecutableTagUnionPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        const cases = try self.allocator.alloc(repr.SessionValueTransformTagCase, source.variants.len);
+        @memset(cases, .{
+            .source_tag = @enumFromInt(0),
+            .target_tag = @enumFromInt(0),
+            .payloads = &.{},
+        });
+        defer {
+            for (cases) |case| {
+                if (case.payloads.len > 0) self.allocator.free(case.payloads);
+            }
+            self.allocator.free(cases);
+        }
+
+        for (source.variants, 0..) |source_variant, i| {
+            const source_label = self.program.row_shapes.tag(source_variant.tag).label;
+            const target_variant = self.tagVariantPayloadByLabel(target, source_label) orelse {
+                lambdaInvariant("lambda-solved tag transform source tag has no target tag");
+            };
+            if (source_variant.payloads.len != target_variant.payloads.len) {
+                lambdaInvariant("lambda-solved tag transform payload arity mismatch");
+            }
+
+            const payloads = try self.allocator.alloc(repr.SessionValueTransformTagPayloadEdge, target_variant.payloads.len);
+            errdefer self.allocator.free(payloads);
+            for (target_variant.payloads, 0..) |target_payload, payload_i| {
+                const source_payload = source_variant.payloads[payload_i];
+                const source_index = self.program.row_shapes.tagPayload(source_payload.payload).logical_index;
+                const target_index = self.program.row_shapes.tagPayload(target_payload.payload).logical_index;
+                if (source_index != target_index) {
+                    lambdaInvariant("lambda-solved tag transform source/target payload index mismatch");
+                }
+
+                const from_child = try self.transformChildEndpoint(
+                    scope,
+                    from,
+                    .from,
+                    .{ .tag_payload = .{ .tag = source_variant.tag, .payload_index = source_index } },
+                    try self.tagPayloadLogicalType(from.logical_ty, source_variant.tag, source_index),
+                    source_payload.ty,
+                    source_payload.key,
+                );
+                const to_child = try self.transformChildEndpoint(
+                    scope,
+                    to,
+                    .to,
+                    .{ .tag_payload = .{ .tag = target_variant.tag, .payload_index = target_index } },
+                    try self.tagPayloadLogicalType(to.logical_ty, target_variant.tag, target_index),
+                    target_payload.ty,
+                    target_payload.key,
+                );
+                payloads[payload_i] = .{
+                    .source_payload_index = source_index,
+                    .target_payload_index = target_index,
+                    .transform = try self.planValueTransform(scope, from_child, to_child, provenance),
+                };
+            }
+
+            cases[i] = .{
+                .source_tag = source_variant.tag,
+                .target_tag = target_variant.tag,
+                .payloads = payloads,
+            };
+        }
+
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
+            .tag_union = cases,
+        });
+    }
+
+    fn planNominalTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableNominalPayload,
+        target: repr.SessionExecutableNominalPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (source.nominal.module_name != target.nominal.module_name or
+            source.nominal.type_name != target.nominal.type_name)
+        {
+            lambdaInvariant("lambda-solved nominal transform source/target nominal mismatch");
+        }
+        const from_child = try self.transformChildEndpoint(
+            scope,
+            from,
+            .from,
+            .{ .nominal_backing = source.nominal },
+            try self.nominalBackingLogicalType(from.logical_ty, source.nominal),
+            source.backing,
+            source.backing_key,
+        );
+        const to_child = try self.transformChildEndpoint(
+            scope,
+            to,
+            .to,
+            .{ .nominal_backing = target.nominal },
+            try self.nominalBackingLogicalType(to.logical_ty, target.nominal),
+            target.backing,
+            target.backing_key,
+        );
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{ .nominal = .{
+            .nominal = target.nominal,
+            .backing = try self.planValueTransform(scope, from_child, to_child, provenance),
+        } });
+    }
+
+    fn planListTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableTypePayloadChild,
+        target: repr.SessionExecutableTypePayloadChild,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        const from_child = try self.transformChildEndpoint(
+            scope,
+            from,
+            .from,
+            .list_elem,
+            try self.listElemLogicalType(from.logical_ty),
+            source.ty,
+            source.key,
+        );
+        const to_child = try self.transformChildEndpoint(
+            scope,
+            to,
+            .to,
+            .list_elem,
+            try self.listElemLogicalType(to.logical_ty),
+            target.ty,
+            target.key,
+        );
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{ .list = .{
+            .elem = try self.planValueTransform(scope, from_child, to_child, provenance),
+        } });
+    }
+
+    fn planBoxTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableTypePayloadChild,
+        target: repr.SessionExecutableTypePayloadChild,
+        kind: checked_artifact.BoxPayloadTransformKind,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        const boundary = self.boxBoundaryForEndpoints(from, to) orelse blk: {
+            if (provenance.len == 0) {
+                lambdaInvariant("lambda-solved box transform has no explicit Box boundary provenance");
+            }
+            break :blk provenance[provenance.len - 1];
+        };
+        const child_provenance = try self.extendBoxProvenance(provenance, boundary);
+        const child_provenance_owned = child_provenance.len != provenance.len;
+        defer if (child_provenance_owned) self.allocator.free(child_provenance);
+
+        const from_child = try self.transformChildEndpoint(
+            scope,
+            from,
+            .from,
+            .box_payload,
+            try self.boxPayloadLogicalType(from.logical_ty),
+            source.ty,
+            source.key,
+        );
+        const to_child = try self.transformChildEndpoint(
+            scope,
+            to,
+            .to,
+            .box_payload,
+            try self.boxPayloadLogicalType(to.logical_ty),
+            target.ty,
+            target.key,
+        );
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(child_provenance), .{ .box_payload = .{
+            .boundary = boundary,
+            .kind = kind,
+            .payload = try self.planValueTransform(scope, from_child, to_child, child_provenance),
+        } });
+    }
+
+    fn planFiniteCallableToErasedTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableCallableSetPayload,
+        target: repr.SessionExecutableErasedFnPayload,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (provenance.len == 0) {
+            lambdaInvariant("lambda-solved finite callable erasure has no Box boundary provenance");
+        }
+        const source_fn_ty = self.callableSetSourceFnTy(source.key);
+        const plan = repr.FiniteSetErasePlan{
+            .adapter = .{
+                .source_fn_ty = source_fn_ty,
+                .callable_set_key = source.key,
+                .erased_fn_sig_key = target.sig_key,
+                .capture_shape_key = target.capture_shape_key,
+            },
+            .result_ty = to.exec_ty.key,
+            .provenance = provenance,
+        };
+        return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
+            .callable_to_erased = .{ .finite_value = plan },
+        });
+    }
+
+    fn planAlreadyErasedCallableTransform(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        source: repr.SessionExecutableErasedFnPayload,
+        target: repr.SessionExecutableErasedFnPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (!repr.erasedFnSigKeyEql(source.sig_key, target.sig_key)) {
+            lambdaInvariant("lambda-solved already-erased callable transform changed erased signature");
+        }
+        return try self.appendSessionValueTransform(scope, from, to, .none, .{
+            .already_erased_callable = .{ .sig_key = target.sig_key },
+        });
+    }
+
+    fn provenanceFor(
+        self: *ValueTransformFinalizer,
+        provenance: []const repr.BoxBoundaryId,
+    ) checked_artifact.ValueTransformProvenance {
+        _ = self;
+        return if (provenance.len == 0) .none else .{ .box_erasure = provenance };
+    }
+
+    fn extendBoxProvenance(
+        self: *ValueTransformFinalizer,
+        provenance: []const repr.BoxBoundaryId,
+        boundary: repr.BoxBoundaryId,
+    ) Allocator.Error![]const repr.BoxBoundaryId {
+        for (provenance) |existing| {
+            if (existing == boundary) return provenance;
+        }
+        const out = try self.allocator.alloc(repr.BoxBoundaryId, provenance.len + 1);
+        @memcpy(out[0..provenance.len], provenance);
+        out[provenance.len] = boundary;
+        return out;
+    }
+
+    fn transformChildEndpoint(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        parent: repr.SessionExecutableValueEndpoint,
+        side: repr.TransformEndpointSide,
+        step: repr.TransformEndpointPathStep,
+        logical_ty: Type.TypeVarId,
+        payload: repr.SessionExecutableTypePayloadRef,
+        key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const path = try self.transformChildPath(scope, parent, side, step);
+        return .{
+            .owner = .{ .transform_child = .{
+                .scope = scope,
+                .side = side,
+                .path = path,
+            } },
+            .logical_ty = logical_ty,
+            .exec_ty = .{
+                .ty = payload,
+                .key = key,
+            },
+        };
+    }
+
+    fn transformChildPath(
+        self: *ValueTransformFinalizer,
+        scope: repr.TransformEndpointScopeId,
+        parent: repr.SessionExecutableValueEndpoint,
+        side: repr.TransformEndpointSide,
+        step: repr.TransformEndpointPathStep,
+    ) Allocator.Error!repr.TransformEndpointPathId {
+        const existing = switch (parent.owner) {
+            .transform_child => |child| blk: {
+                if (child.scope != scope or child.side != side) {
+                    lambdaInvariant("lambda-solved transform child endpoint scope mismatch");
+                }
+                break :blk self.representationStore().transformEndpointPath(child.path);
+            },
+            else => &.{},
+        };
+        const steps = try self.allocator.alloc(repr.TransformEndpointPathStep, existing.len + 1);
+        defer self.allocator.free(steps);
+        @memcpy(steps[0..existing.len], existing);
+        steps[existing.len] = step;
+        return try self.representationStore().appendTransformEndpointPath(steps);
+    }
+
+    fn recordFieldPayloadByLabel(
+        self: *ValueTransformFinalizer,
+        record: repr.SessionExecutableRecordPayload,
+        label: canonical.RecordFieldLabelId,
+    ) ?repr.SessionExecutableRecordFieldPayload {
+        for (record.fields) |field| {
+            if (self.program.row_shapes.recordField(field.field).label == label) return field;
+        }
+        return null;
+    }
+
+    fn tagVariantPayloadByLabel(
+        self: *ValueTransformFinalizer,
+        tag_union: repr.SessionExecutableTagUnionPayload,
+        label: canonical.TagLabelId,
+    ) ?repr.SessionExecutableTagVariantPayload {
+        for (tag_union.variants) |variant| {
+            if (self.program.row_shapes.tag(variant.tag).label == label) return variant;
+        }
+        return null;
+    }
+
+    fn recordFieldLogicalType(
+        self: *ValueTransformFinalizer,
+        record_ty: Type.TypeVarId,
+        field: MonoRow.RecordFieldId,
+    ) Allocator.Error!Type.TypeVarId {
+        const label = self.program.row_shapes.recordField(field).label;
+        const root = self.program.types.unlinkConst(record_ty);
+        const content = switch (self.program.types.getNode(root)) {
+            .content => |content| content,
+            else => lambdaInvariant("lambda-solved record transform endpoint has non-record logical type"),
+        };
+        const record = switch (content) {
+            .record => |record| record,
+            else => lambdaInvariant("lambda-solved record transform endpoint has non-record content"),
+        };
+        const fields = self.program.types.sliceFields(record.fields);
+        for (fields) |candidate| {
+            if (candidate.name == label) return candidate.ty;
+        }
+        lambdaInvariant("lambda-solved record transform field missing from logical type");
+    }
+
+    fn tupleElemLogicalType(
+        self: *ValueTransformFinalizer,
+        tuple_ty: Type.TypeVarId,
+        elem: u32,
+    ) Allocator.Error!Type.TypeVarId {
+        const root = self.program.types.unlinkConst(tuple_ty);
+        const content = switch (self.program.types.getNode(root)) {
+            .content => |content| content,
+            else => lambdaInvariant("lambda-solved tuple transform endpoint has non-tuple logical type"),
+        };
+        const tuple = switch (content) {
+            .tuple => |tuple| self.program.types.sliceTypeVarSpan(tuple),
+            else => lambdaInvariant("lambda-solved tuple transform endpoint has non-tuple content"),
+        };
+        const index: usize = @intCast(elem);
+        if (index >= tuple.len) lambdaInvariant("lambda-solved tuple transform element index out of range");
+        return tuple[index];
+    }
+
+    fn tagPayloadLogicalType(
+        self: *ValueTransformFinalizer,
+        tag_union_ty: Type.TypeVarId,
+        tag: MonoRow.TagId,
+        payload_index: u32,
+    ) Allocator.Error!Type.TypeVarId {
+        const label = self.program.row_shapes.tag(tag).label;
+        const root = self.program.types.unlinkConst(tag_union_ty);
+        const content = switch (self.program.types.getNode(root)) {
+            .content => |content| content,
+            else => lambdaInvariant("lambda-solved tag transform endpoint has non-tag logical type"),
+        };
+        const tag_union = switch (content) {
+            .tag_union => |tag_union| tag_union,
+            else => lambdaInvariant("lambda-solved tag transform endpoint has non-tag content"),
+        };
+        const tags = self.program.types.sliceTags(tag_union.tags);
+        for (tags) |candidate| {
+            if (candidate.name != label) continue;
+            const args = self.program.types.sliceTypeVarSpan(candidate.args);
+            const index: usize = @intCast(payload_index);
+            if (index >= args.len) lambdaInvariant("lambda-solved tag transform payload index out of range");
+            return args[index];
+        }
+        lambdaInvariant("lambda-solved tag transform tag missing from logical type");
+    }
+
+    fn nominalBackingLogicalType(
+        self: *ValueTransformFinalizer,
+        nominal_ty: Type.TypeVarId,
+        nominal_key: canonical.NominalTypeKey,
+    ) Allocator.Error!Type.TypeVarId {
+        const root = self.program.types.unlinkConst(nominal_ty);
+        return switch (self.program.types.getNode(root)) {
+            .nominal => |nominal| blk: {
+                if (nominal.nominal.module_name != nominal_key.module_name or
+                    nominal.nominal.type_name != nominal_key.type_name)
+                {
+                    lambdaInvariant("lambda-solved nominal transform logical nominal mismatch");
+                }
+                break :blk nominal.backing;
+            },
+            else => lambdaInvariant("lambda-solved nominal transform endpoint has non-nominal logical type"),
+        };
+    }
+
+    fn listElemLogicalType(
+        self: *ValueTransformFinalizer,
+        list_ty: Type.TypeVarId,
+    ) Allocator.Error!Type.TypeVarId {
+        const root = self.program.types.unlinkConst(list_ty);
+        const content = switch (self.program.types.getNode(root)) {
+            .content => |content| content,
+            else => lambdaInvariant("lambda-solved list transform endpoint has non-list logical type"),
+        };
+        return switch (content) {
+            .list => |elem| elem,
+            else => lambdaInvariant("lambda-solved list transform endpoint has non-list content"),
+        };
+    }
+
+    fn boxPayloadLogicalType(
+        self: *ValueTransformFinalizer,
+        box_ty: Type.TypeVarId,
+    ) Allocator.Error!Type.TypeVarId {
+        const root = self.program.types.unlinkConst(box_ty);
+        const content = switch (self.program.types.getNode(root)) {
+            .content => |content| content,
+            else => lambdaInvariant("lambda-solved box transform endpoint has non-box logical type"),
+        };
+        return switch (content) {
+            .box => |payload| payload,
+            else => lambdaInvariant("lambda-solved box transform endpoint has non-box content"),
+        };
+    }
+
+    fn callableSetSourceFnTy(
+        self: *ValueTransformFinalizer,
+        key: repr.CanonicalCallableSetKey,
+    ) canonical.CanonicalTypeKey {
+        const descriptor = self.representationStore().callableSetDescriptor(key) orelse {
+            lambdaInvariant("lambda-solved callable transform has no callable-set descriptor");
+        };
+        if (descriptor.members.len == 0) {
+            lambdaInvariant("lambda-solved callable transform reached empty callable-set descriptor");
+        }
+        const source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
+        for (descriptor.members[1..]) |member| {
+            if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, source_fn_ty)) {
+                lambdaInvariant("lambda-solved callable transform descriptor has mixed source function types");
+            }
+        }
+        return source_fn_ty;
+    }
+
+    fn boxBoundaryForEndpoints(
+        self: *ValueTransformFinalizer,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+    ) ?repr.BoxBoundaryId {
+        if (self.boxBoundaryForEndpoint(from)) |boundary| return boundary;
+        return self.boxBoundaryForEndpoint(to);
+    }
+
+    fn boxBoundaryForEndpoint(
+        self: *ValueTransformFinalizer,
+        endpoint: repr.SessionExecutableValueEndpoint,
+    ) ?repr.BoxBoundaryId {
+        return switch (endpoint.owner) {
+            .local_value => |value| blk: {
+                const info = self.valueStore().values.items[@intFromEnum(value)];
+                break :blk if (info.boxed) |boxed| boxed.boundary else null;
+            },
+            else => null,
+        };
     }
 
     fn localEndpoint(

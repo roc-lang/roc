@@ -572,7 +572,7 @@ pub const SessionExecutableValueTransformOp = union(enum) {
     },
     box_payload: SessionBoxPayloadTransformPlan,
     callable_to_erased: SessionCallableToErasedTransformPlan,
-    already_erased_callable: AlreadyErasedCallablePlan,
+    already_erased_callable: checked_artifact.AlreadyErasedCallableTransformPlan,
 };
 
 pub const SessionExecutableValueTransformPlan = struct {
@@ -672,9 +672,7 @@ fn cloneSessionExecutableValueTransformOp(
         .callable_to_erased => |callable| .{
             .callable_to_erased = try cloneSessionCallableToErasedTransformPlan(allocator, callable),
         },
-        .already_erased_callable => |erased| .{
-            .already_erased_callable = try cloneAlreadyErasedCallablePlan(allocator, erased),
-        },
+        .already_erased_callable => |erased| .{ .already_erased_callable = erased },
     };
 }
 
@@ -796,9 +794,7 @@ fn deinitSessionExecutableValueTransformPlan(
             var owned = callable;
             deinitSessionCallableToErasedTransformPlan(allocator, &owned);
         },
-        .already_erased_callable => |erased| {
-            if (erased.provenance.len > 0) allocator.free(erased.provenance);
-        },
+        .already_erased_callable => {},
     }
     plan.* = undefined;
 }

@@ -278,6 +278,15 @@ fn collectErasedAdapterKeys(
                 => {},
             }
         }
+        for (session.representation_store.session_value_transforms.plans.items) |plan| {
+            try collectSessionValueTransformAdapters(
+                allocator,
+                &adapters,
+                artifact_views,
+                &session.representation_store,
+                plan,
+            );
+        }
     }
 
     for (input.ast.exprs.items) |expr| {
@@ -331,6 +340,149 @@ fn collectErasedCodeRefAdapter(
     switch (code) {
         .direct_proc_value => {},
         .finite_set_adapter => |adapter| try appendErasedAdapterKey(allocator, adapters, adapter),
+    }
+}
+
+fn collectSessionValueTransformAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    store: *const repr.RepresentationStore,
+    plan: repr.SessionExecutableValueTransformPlan,
+) Allocator.Error!void {
+    switch (plan.op) {
+        .identity,
+        .already_erased_callable,
+        => {},
+        .callable_to_erased => |callable| switch (callable) {
+            .finite_value => |finite| try appendErasedAdapterKey(allocator, adapters, finite.adapter),
+            .proc_value => {},
+        },
+        .record => |fields| for (fields) |field| {
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, field.transform);
+        },
+        .tuple => |items| for (items) |item| {
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, item.transform);
+        },
+        .tag_union => |cases| for (cases) |case| {
+            for (case.payloads) |payload| {
+                try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload.transform);
+            }
+        },
+        .nominal => |nominal| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, nominal.backing),
+        .list => |list| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, list.elem),
+        .box_payload => |box| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, box.payload),
+        .structural_bridge => |bridge| try collectSessionStructuralBridgeAdapters(allocator, adapters, artifact_views, store, bridge),
+    }
+}
+
+fn collectExecutableValueTransformRefAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    store: *const repr.RepresentationStore,
+    transform: checked_artifact.ExecutableValueTransformRef,
+) Allocator.Error!void {
+    switch (transform) {
+        .session => |id| try collectSessionValueTransformAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            store,
+            store.sessionExecutableValueTransform(id),
+        ),
+        .published => |published| {
+            const context = resolvePublishedTransformContextInArtifactViews(artifact_views, published.artifact);
+            try collectPublishedValueTransformAdapters(
+                allocator,
+                adapters,
+                artifact_views,
+                context.executable_value_transforms,
+                published.transform,
+            );
+        },
+    }
+}
+
+fn collectSessionStructuralBridgeAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    store: *const repr.RepresentationStore,
+    bridge: repr.SessionExecutableStructuralBridgePlan,
+) Allocator.Error!void {
+    switch (bridge) {
+        .direct,
+        .zst,
+        .list_reinterpret,
+        .nominal_reinterpret,
+        => {},
+        .box_unbox => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child),
+        .box_box => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child),
+        .singleton_to_tag_union => |singleton| if (singleton.value_transform) |child| {
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child);
+        },
+        .tag_union_to_singleton => |singleton| if (singleton.value_transform) |child| {
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child);
+        },
+    }
+}
+
+fn collectPublishedValueTransformAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    transform_id: checked_artifact.ExecutableValueTransformPlanId,
+) Allocator.Error!void {
+    const plan = transforms.get(transform_id);
+    switch (plan.op) {
+        .identity,
+        .already_erased_callable,
+        => {},
+        .callable_to_erased => |callable| switch (callable) {
+            .finite_value => |finite| try appendErasedAdapterKey(allocator, adapters, finite.adapter_key),
+            .proc_value => {},
+        },
+        .record => |fields| for (fields) |field| {
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, field.transform);
+        },
+        .tuple => |items| for (items) |item| {
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, item.transform);
+        },
+        .tag_union => |cases| for (cases) |case| {
+            for (case.payloads) |payload| {
+                try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, payload.transform);
+            }
+        },
+        .nominal => |nominal| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, nominal.backing),
+        .list => |list| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, list.elem),
+        .box_payload => |box| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, box.payload),
+        .structural_bridge => |bridge| try collectPublishedStructuralBridgeAdapters(allocator, adapters, artifact_views, transforms, bridge),
+    }
+}
+
+fn collectPublishedStructuralBridgeAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    artifact_views: ArtifactViews,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    bridge: checked_artifact.ExecutableStructuralBridgePlan,
+) Allocator.Error!void {
+    switch (bridge) {
+        .direct,
+        .zst,
+        .list_reinterpret,
+        .nominal_reinterpret,
+        => {},
+        .box_unbox => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child),
+        .box_box => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child),
+        .singleton_to_tag_union => |singleton| if (singleton.value_transform) |child| {
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child);
+        },
+        .tag_union_to_singleton => |singleton| if (singleton.value_transform) |child| {
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child);
+        },
     }
 }
 
