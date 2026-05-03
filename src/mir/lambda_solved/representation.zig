@@ -8,6 +8,7 @@ const debug = @import("../debug_verify.zig");
 const type_mod = @import("type.zig");
 
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 
 pub const CallableVarId = type_mod.CallableVarId;
 pub const RepRootId = enum(u32) { _ };
@@ -20,6 +21,16 @@ pub const BoxBoundaryId = canonical.BoxBoundaryId;
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
+pub const ValueTransformBoundaryId = enum(u32) { _ };
+pub const SourceMatchId = enum(u32) { _ };
+pub const SourceMatchBranchId = enum(u32) { _ };
+pub const SourceMatchAlternativeId = enum(u32) { _ };
+pub const IfExprId = enum(u32) { _ };
+pub const ProcedureBoundaryId = enum(u32) { _ };
+pub const CaptureBoundaryId = enum(u32) { _ };
+pub const MutableJoinId = enum(u32) { _ };
+pub const LoopPhiId = enum(u32) { _ };
+pub const AggregateBoundaryId = enum(u32) { _ };
 pub const RepresentationClassId = enum(u32) { _ };
 pub const ProcRepresentationInstanceId = enum(u32) { _ };
 pub const RepresentationSolveSessionId = enum(u32) { _ };
@@ -277,6 +288,8 @@ pub const CallSiteInfo = struct {
     requested_fn_root: RepRootId,
     requested_source_fn_ty: canonical.CanonicalTypeKey,
     dispatch: ?CallSiteDispatch = null,
+    arg_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
+    result_transform: ?ValueTransformBoundaryId = null,
 };
 
 pub const JoinKind = enum {
@@ -299,6 +312,46 @@ pub const ProcPublicValueRoots = struct {
     function_root: RepRootId,
 };
 
+pub const IfBranch = enum {
+    then_,
+    else_,
+};
+
+pub const ValueTransformBoundaryKind = union(enum) {
+    call_arg: struct {
+        call: CallSiteInfoId,
+        arg_index: u32,
+    },
+    call_result: CallSiteInfoId,
+    callable_match_branch_result: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+    source_match_branch_result: struct {
+        match: SourceMatchId,
+        branch: SourceMatchBranchId,
+        alternative: SourceMatchAlternativeId,
+    },
+    if_branch_result: struct {
+        if_expr: IfExprId,
+        branch: IfBranch,
+    },
+    return_value: ProcedureBoundaryId,
+    capture_value: CaptureBoundaryId,
+    mutable_join: MutableJoinId,
+    loop_phi: LoopPhiId,
+    aggregate_existing_value: AggregateBoundaryId,
+};
+
+pub const ValueTransformBoundary = struct {
+    kind: ValueTransformBoundaryKind,
+    from_value: ValueInfoId,
+    to_value: ValueInfoId,
+    from_endpoint: checked_artifact.ExecutableValueEndpoint,
+    to_endpoint: checked_artifact.ExecutableValueEndpoint,
+    transform: checked_artifact.ExecutableValueTransformRef,
+};
+
 pub const RepresentationSolveState = enum {
     reserved,
     building,
@@ -314,6 +367,7 @@ pub const RepresentationStore = struct {
     callable_construction_plans: []const CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
     box_boundaries: []const BoxBoundary = &.{},
+    value_transform_boundaries: []const ValueTransformBoundary = &.{},
 
     pub fn init(allocator: std.mem.Allocator) RepresentationStore {
         return .{
@@ -352,6 +406,7 @@ pub const RepresentationStore = struct {
         }
         if (self.callable_set_descriptors.len > 0) self.allocator.free(self.callable_set_descriptors);
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
+        if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
         self.* = RepresentationStore.init(self.allocator);
     }
 
@@ -382,6 +437,20 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn appendValueTransformBoundary(
+        self: *RepresentationStore,
+        boundary: ValueTransformBoundary,
+    ) std.mem.Allocator.Error!ValueTransformBoundaryId {
+        const id: ValueTransformBoundaryId = @enumFromInt(@as(u32, @intCast(self.value_transform_boundaries.len)));
+        const old = self.value_transform_boundaries;
+        const next = try self.allocator.alloc(ValueTransformBoundary, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = boundary;
+        if (old.len > 0) self.allocator.free(old);
+        self.value_transform_boundaries = next;
+        return id;
+    }
+
     pub fn callableEmissionPlan(
         self: *const RepresentationStore,
         id: CallableValueEmissionPlanId,
@@ -394,6 +463,13 @@ pub const RepresentationStore = struct {
         id: CallableSetConstructionPlanId,
     ) CallableSetConstructionPlan {
         return self.callable_construction_plans[@intFromEnum(id)];
+    }
+
+    pub fn valueTransformBoundary(
+        self: *const RepresentationStore,
+        id: ValueTransformBoundaryId,
+    ) ValueTransformBoundary {
+        return self.value_transform_boundaries[@intFromEnum(id)];
     }
 
     pub fn callableSetDescriptor(
@@ -619,6 +695,7 @@ pub const ValueInfoStore = struct {
     call_sites: std.ArrayList(CallSiteInfo),
     joins: std.ArrayList(JoinInfo),
     value_ids: std.ArrayList(ValueInfoId),
+    value_transform_boundary_ids: std.ArrayList(ValueTransformBoundaryId),
 
     pub fn init(allocator: std.mem.Allocator) ValueInfoStore {
         return .{
@@ -629,6 +706,7 @@ pub const ValueInfoStore = struct {
             .call_sites = .empty,
             .joins = .empty,
             .value_ids = .empty,
+            .value_transform_boundary_ids = .empty,
         };
     }
 
@@ -644,6 +722,7 @@ pub const ValueInfoStore = struct {
             }
         }
         self.value_ids.deinit(self.allocator);
+        self.value_transform_boundary_ids.deinit(self.allocator);
         self.joins.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
@@ -692,6 +771,24 @@ pub const ValueInfoStore = struct {
     pub fn sliceValueSpan(self: *const ValueInfoStore, span: Span(ValueInfoId)) []const ValueInfoId {
         if (span.len == 0) return &.{};
         return self.value_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn addValueTransformBoundarySpan(
+        self: *ValueInfoStore,
+        boundaries: []const ValueTransformBoundaryId,
+    ) std.mem.Allocator.Error!Span(ValueTransformBoundaryId) {
+        if (boundaries.len == 0) return Span(ValueTransformBoundaryId).empty();
+        const start: u32 = @intCast(self.value_transform_boundary_ids.items.len);
+        try self.value_transform_boundary_ids.appendSlice(self.allocator, boundaries);
+        return .{ .start = start, .len = @intCast(boundaries.len) };
+    }
+
+    pub fn sliceValueTransformBoundarySpan(
+        self: *const ValueInfoStore,
+        span: Span(ValueTransformBoundaryId),
+    ) []const ValueTransformBoundaryId {
+        if (span.len == 0) return &.{};
+        return self.value_transform_boundary_ids.items[span.start..][0..span.len];
     }
 };
 
