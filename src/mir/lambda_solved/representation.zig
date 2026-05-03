@@ -240,6 +240,10 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
         index: u32,
     },
     procedure_return: ProcRepresentationInstanceId,
+    call_raw_arg: struct {
+        call: CallSiteInfoId,
+        index: u32,
+    },
     call_raw_result: CallSiteInfoId,
     callable_match_branch_raw_result: struct {
         call: CallSiteInfoId,
