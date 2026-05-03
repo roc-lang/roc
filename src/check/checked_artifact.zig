@@ -2512,14 +2512,28 @@ pub const PayloadTransformTupleElem = struct {
     transform: ExecutablePayloadTransformPlanId,
 };
 
-pub const PayloadTransformTagPayload = struct {
-    index: u32,
+pub const PayloadTransformTagPayloadEdge = struct {
+    source_payload_index: u32,
+    target_payload_index: u32,
     transform: ExecutablePayloadTransformPlanId,
 };
 
-pub const PayloadTransformTag = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const PayloadTransformTagPayload = &.{},
+pub const PayloadTransformTagCase = struct {
+    source_tag: canonical.TagLabelId,
+    target_tag: canonical.TagLabelId,
+    payloads: []const PayloadTransformTagPayloadEdge = &.{},
+};
+
+pub const BoxPayloadTransformKind = enum {
+    payload_to_box,
+    box_to_payload,
+    box_to_box,
+};
+
+pub const BoxPayloadTransformPlan = struct {
+    boundary: canonical.BoxBoundaryId,
+    kind: BoxPayloadTransformKind,
+    payload: ExecutablePayloadTransformPlanId,
 };
 
 pub const ExecutablePayloadTransformOp = union(enum) {
@@ -2527,7 +2541,7 @@ pub const ExecutablePayloadTransformOp = union(enum) {
     structural_bridge: ExecutableStructuralBridgePlan,
     record: []const PayloadTransformRecordField,
     tuple: []const PayloadTransformTupleElem,
-    tag_union: []const PayloadTransformTag,
+    tag_union: []const PayloadTransformTagCase,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
         backing: ExecutablePayloadTransformPlanId,
@@ -2535,10 +2549,7 @@ pub const ExecutablePayloadTransformOp = union(enum) {
     list: struct {
         elem: ExecutablePayloadTransformPlanId,
     },
-    box_payload: struct {
-        boundary: canonical.BoxBoundaryId,
-        payload: ExecutablePayloadTransformPlanId,
-    },
+    box_payload: BoxPayloadTransformPlan,
     callable_to_erased: CallableToErasedTransformPlan,
     already_erased_callable: AlreadyErasedCallableTransformPlan,
 };
