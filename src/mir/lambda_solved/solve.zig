@@ -563,6 +563,9 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
         }
     }
     for (program.solve_sessions.items) |session| {
+        if (session.representation_store.root_classes.len != @as(usize, @intCast(session.representation_store.roots_len))) {
+            lambdaInvariant("lambda-solved sealed program contains a solve session without a complete root class table");
+        }
         for (session.representation_store.box_boundaries) |boundary| {
             verifyConcreteSourcePayload(program, boundary.box_ty, boundary.box_ty_payload, "lambda-solved BoxBoundary box type");
             verifyConcreteSourcePayload(program, boundary.payload_source_ty, boundary.payload_source_ty_payload, "lambda-solved BoxBoundary payload source type");
@@ -1180,12 +1183,22 @@ const RepresentationClassSolver = struct {
     }
 
     fn assignValueClasses(self: *RepresentationClassSolver) Allocator.Error!void {
-        self.session.representation_store.classes_len = 0;
+        self.session.representation_store.resetSolvedClasses();
+        const root_count: usize = @intCast(self.session.representation_store.roots_len);
+        const root_classes = try self.allocator.alloc(repr.RepresentationClassId, root_count);
+        errdefer self.allocator.free(root_classes);
+
+        for (root_classes, 0..) |*class, raw_root| {
+            const root: repr.RepRootId = @enumFromInt(@as(u32, @intCast(raw_root)));
+            class.* = try self.classForRoot(root);
+        }
+        self.session.representation_store.publishRootClasses(root_classes);
+
         for (self.session.members) |member| {
             const record = self.recordForInstance(member);
             const value_store = &self.program.value_stores.items[@intFromEnum(record.value_store)];
             for (value_store.values.items) |*value| {
-                value.solved_class = try self.classForRoot(value.root);
+                value.solved_class = self.session.representation_store.classForRoot(value.root);
             }
         }
     }
@@ -1703,14 +1716,8 @@ const CallableEmissionAssigner = struct {
     }
 
     fn classForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationClassId {
-        for (self.session.members) |instance| {
-            const record = self.recordForInstance(instance);
-            const value_store = self.valueStoreFor(record);
-            for (value_store.values.items) |value| {
-                if (value.root == root) return value.solved_class;
-            }
-        }
-        return null;
+        if (@intFromEnum(root) >= self.representationStore().roots_len) return null;
+        return self.representationStore().classForRoot(root);
     }
 
     fn endpointRootInSession(

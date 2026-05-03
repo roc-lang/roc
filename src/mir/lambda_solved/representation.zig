@@ -1179,6 +1179,7 @@ pub const RepresentationStore = struct {
     allocator: std.mem.Allocator,
     roots_len: u32 = 0,
     classes_len: u32 = 0,
+    root_classes: []RepresentationClassId = &.{},
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     representation_edges: std.ArrayList(RepresentationEdge) = .empty,
     representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
@@ -1248,6 +1249,7 @@ pub const RepresentationStore = struct {
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
+        if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
         self.root_kinds.deinit();
@@ -1328,6 +1330,40 @@ pub const RepresentationStore = struct {
         const id: RepresentationClassId = @enumFromInt(self.classes_len);
         self.classes_len += 1;
         return id;
+    }
+
+    pub fn resetSolvedClasses(self: *RepresentationStore) void {
+        self.classes_len = 0;
+        if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
+        self.root_classes = &.{};
+    }
+
+    pub fn publishRootClasses(
+        self: *RepresentationStore,
+        root_classes: []RepresentationClassId,
+    ) void {
+        if (root_classes.len != @as(usize, @intCast(self.roots_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root class table length differs from root count");
+            unreachable;
+        }
+        if (self.root_classes.len > 0) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root classes were published twice");
+            unreachable;
+        }
+        self.root_classes = root_classes;
+    }
+
+    pub fn classForRoot(self: *const RepresentationStore, root: RepRootId) RepresentationClassId {
+        const root_index = @intFromEnum(root);
+        if (root_index >= self.roots_len) {
+            debug.invariant(false, "lambda-solved invariant violated: solved class lookup referenced an unreserved root");
+            unreachable;
+        }
+        if (self.root_classes.len != @as(usize, @intCast(self.roots_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root classes are not published");
+            unreachable;
+        }
+        return self.root_classes[root_index];
     }
 
     pub fn appendBoxBoundary(
