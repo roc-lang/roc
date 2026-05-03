@@ -622,6 +622,88 @@ const ExecutableValueTransformRef = union(enum) {
     published: PublishedExecutableValueTransformRef,
 };
 
+const SessionExecutableValueEndpoint = struct {
+    value: ValueInfoId,
+    logical_ty: LambdaSolvedTypeId,
+    key: CanonicalExecValueTypeKey,
+};
+
+const SessionValueTransformRecordField = struct {
+    field: RecordFieldId,
+    transform: ExecutableValueTransformRef,
+};
+
+const SessionValueTransformTupleElem = struct {
+    index: u32,
+    transform: ExecutableValueTransformRef,
+};
+
+const SessionValueTransformTagPayloadEdge = struct {
+    source_payload_index: u32,
+    target_payload_index: u32,
+    transform: ExecutableValueTransformRef,
+};
+
+const SessionValueTransformTagCase = struct {
+    source_tag: TagId,
+    target_tag: TagId,
+    payloads: Span(SessionValueTransformTagPayloadEdge),
+};
+
+const SessionBoxPayloadTransformPlan = struct {
+    boundary: BoxBoundaryId,
+    kind: BoxPayloadTransformKind,
+    payload: ExecutableValueTransformRef,
+};
+
+const SessionExecutableStructuralBridgePlan = union(enum) {
+    direct,
+    zst,
+    list_reinterpret,
+    nominal_reinterpret,
+    box_unbox: ExecutableValueTransformRef,
+    box_box: ExecutableValueTransformRef,
+    singleton_to_tag_union: struct {
+        source_tag: TagId,
+        target_tag: TagId,
+        value_transform: ?ExecutableValueTransformRef,
+    },
+    tag_union_to_singleton: struct {
+        source_tag: TagId,
+        target_tag: TagId,
+        value_transform: ?ExecutableValueTransformRef,
+    },
+};
+
+const SessionExecutableValueTransformOp = union(enum) {
+    identity,
+    structural_bridge: SessionExecutableStructuralBridgePlan,
+    record: Span(SessionValueTransformRecordField),
+    tuple: Span(SessionValueTransformTupleElem),
+    tag_union: Span(SessionValueTransformTagCase),
+    nominal: struct {
+        nominal: NominalTypeKey,
+        backing: ExecutableValueTransformRef,
+    },
+    list: struct {
+        elem: ExecutableValueTransformRef,
+    },
+    box_payload: SessionBoxPayloadTransformPlan,
+    callable_to_erased: CallableToErasedTransformPlan,
+    already_erased_callable: AlreadyErasedCallableTransformPlan,
+};
+
+const SessionExecutableValueTransformPlan = struct {
+    from: SessionExecutableValueEndpoint,
+    to: SessionExecutableValueEndpoint,
+    provenance: ValueTransformProvenance,
+    op: SessionExecutableValueTransformOp,
+};
+
+const SessionExecutableValueTransformStore = struct {
+    plans: Store(SessionExecutableValueTransformPlan),
+};
+
 const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
@@ -938,16 +1020,46 @@ MIR field id, or a run-local type id. The owner is explicit:
   joins, loop phis, and aggregate existing-value edges inside one executable
   specialization session.
 
-The checked artifact must publish an `ExecutableValueTransformPlanStore` next to
-the promoted wrapper body plans and executable type payload store. Every
-`arg_transforms` entry and the mandatory `result_transform` in a published
-erased wrapper point into that store through a published transform ref.
-Executable MIR lowers a value transform by first lowering the transform endpoint
-`ExecutableTypePayloadRef`s into the current executable type store, then
-lowering the explicit transform operation. Executable MIR may use the endpoint
-`key` fields only for debug-only verification that the endpoint payloads match
-the expected canonical executable types. It must not derive a transform by
+The two owners intentionally have different endpoint representations.
+
+Published transforms are artifact data. The checked artifact must publish an
+`ExecutableValueTransformPlanStore` next to the promoted wrapper body plans and
+executable type payload store. Every `arg_transforms` entry and the mandatory
+`result_transform` in a published erased wrapper point into that store through a
+published transform ref. Published transform endpoints are
+`ExecutableTypePayloadRef` plus `CanonicalExecValueTypeKey`, because the
+published transform must be usable by another module without owning the
+publisher's lambda-solved value store.
+
+Session transforms are specialization data. They must live in a
+`SessionExecutableValueTransformStore` owned by the current lambda-solved solve
+session, not in the checked-artifact cache and not in any cross-module cache.
+This store is a linear arena for explicit transform plans selected during
+representation solving; it is not a memoizing cache and it must not be consulted
+by other specializations. Session transform endpoints are
+`SessionExecutableValueEndpoint` values: the source/target `ValueInfoId`, the
+lambda-solved logical type id for that value, and the canonical executable type
+key selected for that value. They do not contain
+`ExecutableTypePayloadRef`, because ordinary run-local values do not have
+artifact-published executable type payloads.
+
+Executable MIR lowers a published transform by first lowering the published
+endpoint `ExecutableTypePayloadRef`s into the current executable type store,
+then lowering the explicit transform operation. Executable MIR lowers a session
+transform by lowering the endpoint `ValueInfoId` through the current
+lambda-solved `ValueInfoStore` and `RepresentationStore`, then lowering the
+explicit transform operation. In both modes, executable MIR may use endpoint
+`key` fields only for debug-only verification that the lowered endpoint payloads
+match the expected canonical executable types. It must not derive a transform by
 comparing source and target shapes.
+
+Published transform children are `ExecutableValueTransformPlanId` values local
+to the same published artifact store. Session transform children are
+`ExecutableValueTransformRef` values. A session transform may point at another
+session transform from the same solve session or at an already-published
+transform from an imported/current artifact boundary. A published transform must
+never point at a session transform, because checked artifacts are immutable and
+must not depend on one specialization run.
 
 Executable value transforms are recursive value-conversion plans, not merely
 layout bridges. They are the only artifact-published mechanism that may describe
@@ -3047,8 +3159,8 @@ const ValueTransformBoundary = struct {
     kind: ValueTransformBoundaryKind,
     from_value: ValueInfoId,
     to_value: ValueInfoId,
-    from_endpoint: ExecutableValueEndpoint,
-    to_endpoint: ExecutableValueEndpoint,
+    from_endpoint: SessionExecutableValueEndpoint,
+    to_endpoint: SessionExecutableValueEndpoint,
     transform: ExecutableValueTransformRef,
 };
 ```
@@ -3062,6 +3174,15 @@ transform converts the sealed executable representation of `from_value` into
 the required executable representation of `to_value`. Later stages must not
 derive this conversion from equal `TypeId`s, row names, expression syntax,
 procedure names, or layout compatibility.
+
+For run-local boundaries, `transform` normally points at the current session
+transform store. It may point at a published transform only when the boundary is
+explicitly between a run-local value and a value whose representation was
+published by a checked artifact, such as a promoted constant/private capture
+boundary. The endpoint pair still remains session-local: executable lowering
+checks that applying the published operation to the session endpoint keys is
+valid, but it does not pretend the run-local value has an artifact-owned type
+payload ref.
 
 Branch joins use the same rule. Source `match`, `if`, mutable joins, and loop
 phis record the result value and each returning incoming value, then publish one
