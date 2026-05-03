@@ -5381,6 +5381,16 @@ const BodyBuilder = struct {
         if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, call_site.requested_source_fn_ty)) {
             executableInvariant("executable call_proc target specialization source type differs from call site");
         }
+        switch (call_site.dispatch) {
+            .call_proc => |target| {
+                if (target != target_instance_id) {
+                    executableInvariant("executable call_proc dispatch target differs from expression target");
+                }
+            },
+            .call_value_finite,
+            .call_value_erased,
+            => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
+        }
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
         const result_value = self.output.freshValueRef();
         const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_direct = .{
@@ -5742,9 +5752,10 @@ const BodyBuilder = struct {
         if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
             executableInvariant("executable call_value call-site requested source type differs from expression");
         }
-        const callable_set_key = switch (call_site.dispatch orelse executableInvariant("executable call_value reached call site without resolved dispatch")) {
-            .finite => |key| key,
-            .erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call_site, sig_key),
+        const callable_set_key = switch (call_site.dispatch) {
+            .call_value_finite => |key| key,
+            .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call_site, sig_key),
+            .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
         };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];

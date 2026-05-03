@@ -661,6 +661,7 @@ const BodySolver = struct {
                     .result = value,
                     .requested_fn_root = self.representation_store.reserveRoot(),
                     .requested_source_fn_ty = call.requested_source_fn_ty,
+                    .dispatch = .{ .call_proc = self.procRepresentationInstance(call.proc) },
                 });
                 break :blk .{ .call_proc = .{
                     .proc = call.proc,
@@ -1041,11 +1042,18 @@ const BodySolver = struct {
         const value_info = self.value_store.values.items[@intFromEnum(callee_value)];
         const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
         return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| .{ .finite = key },
-            .already_erased => |erased| .{ .erased = erased.sig_key },
-            .erase_finite_set => |erase| .{ .erased = erase.adapter.erased_fn_sig_key },
-            .erase_proc_value => |erase| .{ .erased = erase.erased_fn_sig_key },
+            .finite => |key| .{ .call_value_finite = key },
+            .already_erased => |erased| .{ .call_value_erased = erased.sig_key },
+            .erase_finite_set => |erase| .{ .call_value_erased = erase.adapter.erased_fn_sig_key },
+            .erase_proc_value => |erase| .{ .call_value_erased = erase.erased_fn_sig_key },
         };
+    }
+
+    fn procRepresentationInstance(
+        self: *const BodySolver,
+        proc: canonical.MirProcedureRef,
+    ) repr.ProcRepresentationInstanceId {
+        return self.proc_instance_map.get(proc) orelse lambdaInvariant("lambda-solved call_proc target was not reserved before body lowering");
     }
 
     fn lowerExprSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
