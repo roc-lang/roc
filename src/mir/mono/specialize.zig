@@ -546,8 +546,8 @@ fn reservePrivateCaptureNodeDependencies(
 
     switch (plans.privateCapture(node_id)) {
         .pending => invariantViolation("mono dependency reservation reached pending private capture node"),
-        .serializable_leaf => {},
-        .callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .private_capture_callable_leaf = node_id }),
+        .const_instance_leaf => {},
+        .finite_callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .private_capture_callable_leaf = node_id }),
         .record => |fields| for (fields) |field| {
             try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, field.value);
         },
@@ -570,13 +570,10 @@ fn reserveCallableLeafDependency(
     input: Input,
     program: *Program,
     queue: *Queue,
-    leaf: checked_artifact.CallableLeafInstance,
+    leaf: checked_artifact.FiniteCallableLeafInstance,
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
-    switch (leaf) {
-        .finite => |finite| _ = try reserveProcedureCallableDependency(input, program, queue, finite.proc_value, reason),
-        .erased_boxed => |erased| try reserveErasedCodeRefDependency(input, program, queue, erased.code, reason),
-    }
+    _ = try reserveProcedureCallableDependency(input, program, queue, leaf.proc_value, reason);
 }
 
 fn reserveProcedureCallableDependency(
@@ -1825,8 +1822,8 @@ const BodyLowerer = struct {
 
         const lowered = switch (node) {
             .pending => invariantViolation("mono body lowering reached pending private capture node"),
-            .serializable_leaf => |leaf| try self.lowerPrivateSerializableLeaf(artifact, ty, leaf),
-            .callable_leaf => |leaf| try self.lowerPrivateCallableLeaf(ty, source_ty, node_id, leaf),
+            .const_instance_leaf => |leaf| try self.lowerPrivateConstInstanceLeaf(artifact, ty, leaf),
+            .finite_callable_leaf => |leaf| try self.lowerPrivateCallableLeaf(ty, source_ty, node_id, leaf),
             .record => |fields| try self.lowerPrivateRecordCapture(artifact, ty, checked_ty, fields),
             .tuple => |items| try self.lowerPrivateTupleCapture(artifact, ty, checked_ty, items),
             .tag_union => |tag| try self.lowerPrivateTagCapture(artifact, ty, checked_ty, tag),
@@ -1840,11 +1837,11 @@ const BodyLowerer = struct {
         return lowered;
     }
 
-    fn lowerPrivateSerializableLeaf(
+    fn lowerPrivateConstInstanceLeaf(
         self: *BodyLowerer,
         artifact: checked_artifact.CheckedModuleArtifactKey,
         ty: Type.TypeId,
-        leaf: checked_artifact.PrivateSerializableCaptureLeaf,
+        leaf: checked_artifact.PrivateCaptureConstLeaf,
     ) Allocator.Error!Ast.ExprId {
         const key = checked_artifact.ConstInstantiationKey{
             .const_ref = leaf.const_ref,
@@ -1862,28 +1859,23 @@ const BodyLowerer = struct {
         ty: Type.TypeId,
         source_ty: canonical.CanonicalTypeKey,
         node_id: checked_artifact.PrivateCaptureNodeId,
-        leaf: checked_artifact.CallableLeafInstance,
+        leaf: checked_artifact.FiniteCallableLeafInstance,
     ) Allocator.Error!Ast.ExprId {
-        return switch (leaf) {
-            .finite => |finite| blk: {
-                if (!std.mem.eql(u8, &finite.proc_value.source_fn_ty.bytes, &source_ty.bytes)) {
-                    invariantViolation("private finite callable leaf source function type disagrees with materialization type");
-                }
-                const template = checkedTemplateFromCallableTemplate(finite.proc_value.template);
-                const concrete = try self.concreteSourceTypeForCheckedKey(template.artifact, source_ty);
-                const proc = try self.reserveCallableProcedure(
-                    finite.proc_value,
-                    concrete,
-                    .{ .private_capture_callable_leaf = node_id },
-                );
-                break :blk try self.program.ast.addExprWithSource(ty, source_ty, .{ .proc_value = .{
-                    .proc = proc,
-                    .captures = Ast.Span(Ast.CaptureArg).empty(),
-                    .fn_ty = ty,
-                } });
-            },
-            .erased_boxed => invariantViolation("mono body lowering reached erased private callable leaf before erased capture materialization was implemented"),
-        };
+        if (!std.mem.eql(u8, &leaf.proc_value.source_fn_ty.bytes, &source_ty.bytes)) {
+            invariantViolation("private finite callable leaf source function type disagrees with materialization type");
+        }
+        const template = checkedTemplateFromCallableTemplate(leaf.proc_value.template);
+        const concrete = try self.concreteSourceTypeForCheckedKey(template.artifact, source_ty);
+        const proc = try self.reserveCallableProcedure(
+            leaf.proc_value,
+            concrete,
+            .{ .private_capture_callable_leaf = node_id },
+        );
+        return try self.program.ast.addExprWithSource(ty, source_ty, .{ .proc_value = .{
+            .proc = proc,
+            .captures = Ast.Span(Ast.CaptureArg).empty(),
+            .fn_ty = ty,
+        } });
     }
 
     fn lowerPrivateRecordCapture(

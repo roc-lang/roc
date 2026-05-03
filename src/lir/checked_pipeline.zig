@@ -1604,7 +1604,10 @@ const CaptureSlotPlanBuilder = struct {
                 .list => .{ .list = .{
                     .elem = try self.listElemPlan(nominalArg(nominal, 0), value_info_id),
                 } },
-                .box => .{ .box = try self.boxPayloadPlan(nominalArg(nominal, 0), value_info_id) },
+                .box => if (self.boxPayloadNeedsExecutableMaterialization(value_info_id))
+                    try self.serializableLeafPlan(checked_ty, source_ty, value_info_id)
+                else
+                    .{ .box = try self.boxPayloadPlan(nominalArg(nominal, 0), value_info_id) },
                 .bool => try self.planFor(
                     self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
                     value_info_id,
@@ -1712,6 +1715,26 @@ const CaptureSlotPlanBuilder = struct {
             self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key,
             payload_value,
         );
+    }
+
+    fn boxPayloadNeedsExecutableMaterialization(
+        self: *const CaptureSlotPlanBuilder,
+        value_info_id: repr.ValueInfoId,
+    ) bool {
+        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
+        const boundary_id = boxed.boundary orelse return false;
+        const boundary = self.value_context.representation_store.box_boundaries[@intFromEnum(boundary_id)];
+        return switch (boundary.payload_plan) {
+            .unchanged => false,
+            .function_erased,
+            .record,
+            .tag_union,
+            .tuple,
+            .list,
+            .nominal,
+            => true,
+        };
     }
 
     fn valueForRoot(

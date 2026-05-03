@@ -286,6 +286,61 @@ const PublishedCallableResult = struct {
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
 };
 
+fn constGraphContainsCallableSlots(
+    allocator: Allocator,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    root: checked_artifact.ConstGraphReificationPlanId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void).init(allocator);
+    defer active.deinit();
+    return try constGraphContainsCallableSlotsInner(plans, &active, root);
+}
+
+fn constGraphContainsCallableSlotsInner(
+    plans: *const checked_artifact.CompileTimePlanStore,
+    active: *std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void),
+    root: checked_artifact.ConstGraphReificationPlanId,
+) Allocator.Error!bool {
+    if (active.contains(root)) return false;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    return switch (plans.constGraph(root)) {
+        .pending => compileTimeFinalizationInvariant("callable-slot scan reached pending const graph plan"),
+        .callable_leaf,
+        .callable_schema,
+        => true,
+        .scalar,
+        .string,
+        => false,
+        .list => |list| try constGraphContainsCallableSlotsInner(plans, active, list.elem),
+        .box => |box| try constGraphContainsCallableSlotsInner(plans, active, box.payload),
+        .tuple => |items| blk: {
+            for (items) |item| {
+                if (try constGraphContainsCallableSlotsInner(plans, active, item.value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |fields| blk: {
+            for (fields) |field| {
+                if (try constGraphContainsCallableSlotsInner(plans, active, field.value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => |variants| blk: {
+            for (variants) |variant| {
+                for (variant.payloads) |payload| {
+                    if (try constGraphContainsCallableSlotsInner(plans, active, payload.value)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .transparent_alias => |alias| try constGraphContainsCallableSlotsInner(plans, active, alias.backing),
+        .nominal => |nominal| try constGraphContainsCallableSlotsInner(plans, active, nominal.backing),
+        .recursive_ref => |ref| try constGraphContainsCallableSlotsInner(plans, active, ref),
+    };
+}
+
 fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
     descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
@@ -945,8 +1000,8 @@ const PrivateCaptureBuilder = struct {
         const plan = self.artifact.comptime_plans.captureSlot(plan_id);
         return switch (plan) {
             .pending => compileTimeFinalizationInvariant("private capture reification reached pending capture plan"),
-            .serializable_leaf => |leaf| .{ .serializable_leaf = try self.serializableLeaf(leaf, physical) },
-            .callable_leaf => |result_plan| .{ .callable_leaf = try self.callableLeaf(result_plan, physical) },
+            .serializable_leaf => |leaf| .{ .const_instance_leaf = try self.serializableLeaf(leaf, physical) },
+            .callable_leaf => |result_plan| .{ .finite_callable_leaf = try self.callableLeaf(result_plan, physical) },
             .record => |fields| .{ .record = try self.record(fields, physical) },
             .tuple => |items| .{ .tuple = try self.tuple(items, physical) },
             .tag_union => |variants| .{ .tag_union = try self.tagUnion(variants, physical) },
@@ -1037,7 +1092,7 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
-    ) Allocator.Error!checked_artifact.PrivateSerializableCaptureLeaf {
+    ) Allocator.Error!checked_artifact.PrivateCaptureConstLeaf {
         const capture_index = self.next_private_const;
         self.next_private_const += 1;
         const owner = self.owner orelse compileTimeFinalizationInvariant("private serializable capture leaf requires a promoted procedure owner");
@@ -1083,6 +1138,14 @@ const PrivateCaptureBuilder = struct {
             .const_instance = instance_ref,
             .requested_source_ty = leaf.requested_source_ty,
             .schema = reified.schema,
+            .mode = if (try constGraphContainsCallableSlots(
+                self.allocator,
+                &self.artifact.comptime_plans,
+                leaf.reification_plan,
+            ))
+                .general_may_contain_callable_slots
+            else
+                .pure_no_callable_slots,
         };
     }
 
@@ -1103,6 +1166,32 @@ const PrivateCaptureBuilder = struct {
             .source_binding = self.source_binding,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
+        if (try constGraphContainsCallableSlots(self.allocator, &self.artifact.comptime_plans, leaf.reification_plan)) {
+            const capture_index = self.next_private_const;
+            self.next_private_const += 1;
+            const owner = self.owner orelse compileTimeFinalizationInvariant("callable-containing executable capture const leaf requires a promoted procedure owner");
+            const const_ref = try self.artifact.const_templates.reservePromotedCapture(
+                self.allocator,
+                self.artifact.key,
+                owner,
+                capture_index,
+                leaf.source_scheme,
+            );
+            self.artifact.const_templates.fillValueGraph(const_ref, .{
+                .schema = reified.schema,
+                .value = reified.value,
+            });
+            const instance_ref = try self.artifact.const_instances.reserve(self.allocator, .{
+                .const_ref = const_ref,
+                .requested_source_ty = leaf.requested_source_ty,
+            });
+            self.artifact.const_instances.fill(instance_ref, .{
+                .schema = reified.schema,
+                .value = reified.value,
+                .reification_plan = leaf.reification_plan,
+            });
+            return .{ .const_instance = instance_ref };
+        }
         return .{ .pure_value = .{
             .schema = reified.schema,
             .value = reified.value,
@@ -1114,29 +1203,49 @@ const PrivateCaptureBuilder = struct {
         self: *PrivateCaptureBuilder,
         result_plan: checked_artifact.CallableResultPlanId,
         physical: PhysicalValue,
-    ) Allocator.Error!checked_artifact.CallableLeafInstance {
-        const selected = selectFiniteCallableResult(
-            &self.artifact.comptime_plans,
-            self.callable_set_descriptors,
-            self.layouts,
-            result_plan,
-            physical.layout_idx,
-            physical.value,
-        );
-        const checked_fn_root = self.artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
-            compileTimeFinalizationInvariant("captured callable leaf source function type was not published in checked type store");
-        };
+    ) Allocator.Error!checked_artifact.FiniteCallableLeafInstance {
         const source_binding = self.source_binding orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires source binding provenance");
-        const published = try publishCallableResult(
-            self.allocator,
-            self.artifact,
-            self.lowered,
-            source_binding,
-            checked_fn_root,
-            result_plan,
-            selected,
-        );
-        return .{ .finite = .{ .proc_value = published.proc_value } };
+        const published = switch (self.artifact.comptime_plans.callableResult(result_plan)) {
+            .finite => blk: {
+                const selected = selectFiniteCallableResult(
+                    &self.artifact.comptime_plans,
+                    self.callable_set_descriptors,
+                    self.layouts,
+                    result_plan,
+                    physical.layout_idx,
+                    physical.value,
+                );
+                const checked_fn_root = self.artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
+                    compileTimeFinalizationInvariant("captured finite callable leaf source function type was not published in checked type store");
+                };
+                break :blk try publishCallableResult(
+                    self.allocator,
+                    self.artifact,
+                    self.lowered,
+                    source_binding,
+                    checked_fn_root,
+                    result_plan,
+                    selected,
+                );
+            },
+            .erased => |erased| blk: {
+                const checked_fn_root = self.artifact.checked_types.rootForKey(erased.source_fn_ty) orelse {
+                    compileTimeFinalizationInvariant("captured erased callable leaf source function type was not published in checked type store");
+                };
+                break :blk try publishErasedCallableResult(
+                    self.allocator,
+                    self.artifact,
+                    self.lowered,
+                    source_binding,
+                    checked_fn_root,
+                    physical.layout_idx,
+                    physical.value,
+                    result_plan,
+                    erased,
+                );
+            },
+        };
+        return .{ .proc_value = published.proc_value };
     }
 
     fn record(

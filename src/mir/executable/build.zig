@@ -313,7 +313,9 @@ fn collectErasedCaptureMaterializationNodeAdapters(
     const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
     switch (node) {
         .pending => executableInvariant("executable adapter collection reached pending erased capture materialization node"),
+        .const_instance,
         .pure_const,
+        .pure_value,
         .finite_callable_set,
         => {},
         .erased_callable => |erased| {
@@ -1769,6 +1771,7 @@ fn lowerErasedCaptureExecutableMaterializationNodeExpr(
     const node = materialization.plans.erasedCaptureExecutableMaterializationNode(node_id);
     return switch (node) {
         .pending => executableInvariant("executable erased capture materialization reached pending node"),
+        .const_instance => |const_instance| try lowerConstInstanceExpr(allocator, program, materialization, expected_ty, const_instance),
         .pure_const => |pure_const| try lowerPureConstInstanceExpr(allocator, program, expected_ty, pure_const.const_instance),
         .pure_value => |pure_value| try lowerPureComptimeValueExpr(
             allocator,
@@ -1809,6 +1812,26 @@ fn lowerPureConstInstanceExpr(
         expected_ty,
         resolved.instance.schema,
         resolved.instance.value,
+    );
+}
+
+fn lowerConstInstanceExpr(
+    allocator: Allocator,
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    const_instance: checked_artifact.ConstInstanceRef,
+) Allocator.Error!Ast.ExprId {
+    _ = materialization;
+    const resolved = resolveConstInstanceForExecutable(program, const_instance);
+    return try lowerComptimeValueExpr(
+        allocator,
+        program,
+        resolved.materialization,
+        expected_ty,
+        resolved.instance.schema,
+        resolved.instance.value,
+        true,
     );
 }
 

@@ -3045,6 +3045,7 @@ pub const MaterializedErasedCallableValue = struct {
 
 pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
     pending,
+    const_instance: ConstInstanceRef,
     pure_const: PureConstInstanceRef,
     pure_value: PureComptimeValueRef,
     finite_callable_set: MaterializedFiniteCallableSetValue,
@@ -5549,11 +5550,17 @@ pub const SerializableCaptureLeafPlan = struct {
     reification_plan: ConstGraphReificationPlanId,
 };
 
-pub const PrivateSerializableCaptureLeaf = struct {
+pub const PrivateCaptureConstMode = enum {
+    pure_no_callable_slots,
+    general_may_contain_callable_slots,
+};
+
+pub const PrivateCaptureConstLeaf = struct {
     const_ref: ConstRef,
     const_instance: ConstInstanceRef,
     requested_source_ty: canonical.CanonicalTypeKey,
     schema: ComptimeSchemaId,
+    mode: PrivateCaptureConstMode,
 };
 
 pub const CaptureRecordFieldPlan = struct {
@@ -5666,8 +5673,8 @@ pub const CallablePromotionPlan = union(enum) {
 
 pub const PrivateCaptureNode = union(enum) {
     pending,
-    serializable_leaf: PrivateSerializableCaptureLeaf,
-    callable_leaf: CallableLeafInstance,
+    const_instance_leaf: PrivateCaptureConstLeaf,
+    finite_callable_leaf: FiniteCallableLeafInstance,
     record: []const PrivateCaptureRecordField,
     tuple: []const PrivateCaptureNodeId,
     tag_union: PrivateCaptureTagNode,
@@ -5980,12 +5987,12 @@ fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReif
 fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) void {
     switch (node.*) {
         .pending,
-        .serializable_leaf,
+        .const_instance_leaf,
+        .finite_callable_leaf,
         .box,
         .nominal,
         .recursive_ref,
         => {},
-        .callable_leaf => |*leaf| deinitCallableLeafInstance(allocator, leaf),
         .record => |fields| allocator.free(fields),
         .tuple => |items| allocator.free(items),
         .tag_union => |tag| allocator.free(tag.payloads),
@@ -6051,6 +6058,7 @@ fn deinitMaterializedErasedCallableValue(allocator: Allocator, erased: *Material
 fn deinitErasedCaptureExecutableMaterializationNode(allocator: Allocator, node: *ErasedCaptureExecutableMaterializationNode) void {
     switch (node.*) {
         .pending,
+        .const_instance,
         .pure_const,
         .pure_value,
         .box,
@@ -6365,10 +6373,11 @@ fn verifyPrivateCaptureNode(
     callable_set_descriptors: *const CallableSetDescriptorStore,
     node: PrivateCaptureNode,
 ) void {
+    _ = callable_set_descriptors;
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
-        .serializable_leaf => {},
-        .callable_leaf => |leaf| verifyCallableLeafInstance(store, callable_set_descriptors, leaf),
+        .const_instance_leaf => {},
+        .finite_callable_leaf => {},
         .record => |fields| for (fields) |field| verifyPrivateCaptureRef(store, field.value),
         .tuple => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
         .tag_union => |tag| {
@@ -6460,6 +6469,7 @@ fn verifyErasedCaptureExecutableMaterializationNode(
 ) void {
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published erased capture materialization node is pending", .{}),
+        .const_instance => {},
         .pure_const => {},
         .pure_value => |pure| {
             _ = pure.no_reachable_callable_slots;
