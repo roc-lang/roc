@@ -472,7 +472,6 @@ pub const AlreadyErasedCapturePlan = union(enum) {
 pub const AlreadyErasedCallablePlan = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
-    code: canonical.ErasedCallableCodeRef,
     result_ty: CanonicalExecValueTypeKey,
     capture: AlreadyErasedCapturePlan = .none,
     provenance: []const BoxBoundaryId = &.{},
@@ -880,7 +879,6 @@ fn cloneAlreadyErasedCallablePlan(
     return .{
         .sig_key = erased.sig_key,
         .capture_shape_key = erased.capture_shape_key,
-        .code = erased.code,
         .result_ty = erased.result_ty,
         .capture = erased.capture,
         .provenance = if (erased.provenance.len == 0)
@@ -1629,6 +1627,13 @@ pub const RepresentationStore = struct {
         } });
     }
 
+    pub fn appendFiniteCallableEmissionPlan(
+        self: *RepresentationStore,
+        key: CanonicalCallableSetKey,
+    ) std.mem.Allocator.Error!CallableValueEmissionPlanId {
+        return try self.appendCallableEmissionPlan(.{ .finite = key });
+    }
+
     pub fn appendProcValueEraseEmissionPlan(
         self: *RepresentationStore,
         erase: ProcValueErasePlan,
@@ -1706,7 +1711,49 @@ pub const RepresentationStore = struct {
         self.callable_set_descriptors = next;
     }
 
-    fn captureSlotsForValues(
+    pub fn internCallableSetDescriptor(
+        self: *RepresentationStore,
+        members: []const CanonicalCallableSetMember,
+    ) std.mem.Allocator.Error!CanonicalCallableSetKey {
+        if (members.len == 0) representationInvariant("lambda-solved attempted to intern an empty callable-set descriptor");
+        const key = callableSetKeyForMembers(members);
+        if (self.callableSetDescriptor(key) != null) return key;
+
+        const owned_members = try self.allocator.alloc(CanonicalCallableSetMember, members.len);
+        for (owned_members) |*member| member.* = .{
+            .member = @enumFromInt(0),
+            .proc_value = members[0].proc_value,
+            .source_proc = members[0].source_proc,
+            .capture_slots = &.{},
+            .capture_shape_key = .{},
+        };
+        errdefer self.allocator.free(owned_members);
+        errdefer {
+            for (owned_members) |owned| {
+                if (owned.capture_slots.len > 0) self.allocator.free(owned.capture_slots);
+            }
+        }
+        for (members, 0..) |member, i| {
+            owned_members[i] = .{
+                .member = @enumFromInt(@as(u32, @intCast(i))),
+                .proc_value = member.proc_value,
+                .source_proc = member.source_proc,
+                .capture_slots = if (member.capture_slots.len == 0)
+                    &.{}
+                else
+                    try self.allocator.dupe(CallableSetCaptureSlot, member.capture_slots),
+                .capture_shape_key = member.capture_shape_key,
+            };
+        }
+
+        try self.appendCallableSetDescriptor(.{
+            .key = key,
+            .members = owned_members,
+        });
+        return key;
+    }
+
+    pub fn captureSlotsForValues(
         self: *RepresentationStore,
         names: *const canonical.CanonicalNameStore,
         types: *const type_mod.Store,
@@ -2116,6 +2163,47 @@ pub fn captureShapeKeyForValueSlice(
         const key = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, capture);
         hasher.update(&key.bytes);
     }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn captureShapeKeyForExecKeys(
+    keys: []const CanonicalExecValueTypeKey,
+) CaptureShapeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "capture_shape");
+    writeHashU32(&hasher, @intCast(keys.len));
+    for (keys, 0..) |key, i| {
+        writeHashU32(&hasher, @intCast(i));
+        hasher.update(&key.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn captureTupleExecKeyForSlots(
+    slots: []const CallableSetCaptureSlot,
+) CanonicalExecValueTypeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("capture_tuple");
+    for (slots, 0..) |slot, i| {
+        if (slot.slot != @as(u32, @intCast(i))) {
+            representationInvariant("lambda-solved capture tuple key requested for non-canonical capture slots");
+        }
+        hasher.update(&slot.exec_value_ty.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn finiteCallableSetExecValueTypeKey(key: CanonicalCallableSetKey) CanonicalExecValueTypeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "callable_set");
+    hasher.update(&key.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn erasedCallableExecValueTypeKey(sig_key: ErasedFnSigKey) CanonicalExecValueTypeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "erased_fn");
+    writeErasedFnSigKey(&hasher, sig_key);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -2637,8 +2725,6 @@ const SessionExecutableTypePayloadBuilder = struct {
 
         const items = try self.allocator.alloc(SessionExecutableTupleElemPayload, slots.len);
         errdefer self.allocator.free(items);
-        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        key_hasher.update("capture_tuple");
         for (slots, 0..) |slot, i| {
             if (slot.slot != @as(u32, @intCast(i))) {
                 representationInvariant("session proc-value erased payload capture slots are not canonical");
@@ -2646,14 +2732,13 @@ const SessionExecutableTypePayloadBuilder = struct {
             const child = self.payload_store.refForKey(slot.exec_value_ty) orelse {
                 representationInvariant("session proc-value erased payload target capture slot has no executable payload");
             };
-            key_hasher.update(&slot.exec_value_ty.bytes);
             items[i] = .{
                 .index = @intCast(i),
                 .ty = child,
                 .key = slot.exec_value_ty,
             };
         }
-        const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };
+        const key = expected_key orelse captureTupleExecKeyForSlots(slots);
         const id = try self.payload_store.append(self.allocator, key, .{ .tuple = items });
         return .{
             .ty = refFor(id),
@@ -2856,6 +2941,35 @@ pub fn singletonCallableSetKey(
         writeHashU32(&hasher, slot.slot);
         hasher.update(&slot.source_ty.bytes);
         hasher.update(&slot.exec_value_ty.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
+pub fn callableSetKeyForMembers(
+    members: []const CanonicalCallableSetMember,
+) CanonicalCallableSetKey {
+    if (members.len == 1) {
+        return singletonCallableSetKey(
+            members[0].proc_value,
+            members[0].capture_shape_key,
+            members[0].capture_slots,
+        );
+    }
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "finite_callable_set");
+    writeHashU32(&hasher, @intCast(members.len));
+    for (members) |member| {
+        writeHashU32(&hasher, @intFromEnum(member.member));
+        writeMirProcedureRef(&hasher, member.source_proc);
+        writeProcedureCallableRef(&hasher, member.proc_value);
+        hasher.update(&member.capture_shape_key.bytes);
+        writeHashU32(&hasher, @intCast(member.capture_slots.len));
+        for (member.capture_slots) |slot| {
+            writeHashU32(&hasher, slot.slot);
+            hasher.update(&slot.source_ty.bytes);
+            hasher.update(&slot.exec_value_ty.bytes);
+        }
     }
     return .{ .bytes = hasher.finalResult() };
 }
@@ -3132,14 +3246,7 @@ const ExecValueTypeKeyBuilder = struct {
     }
 
     fn writeErasedFnSigKey(self: *ExecValueTypeKeyBuilder, key: ErasedFnSigKey) void {
-        self.hasher.update(&key.source_fn_ty.bytes);
-        self.hasher.update(&key.abi.bytes);
-        if (key.capture_ty) |capture_ty| {
-            self.writeBool(true);
-            self.writeCanonicalExecValueTypeKey(capture_ty);
-        } else {
-            self.writeBool(false);
-        }
+        writeErasedFnSigKey(&self.hasher, key);
     }
 };
 
@@ -3153,6 +3260,29 @@ fn writeProcedureCallableRef(
 ) void {
     writeCallableProcedureTemplateRef(hasher, ref.template);
     hasher.update(&ref.source_fn_ty.bytes);
+}
+
+fn writeMirProcedureRef(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    ref: canonical.MirProcedureRef,
+) void {
+    hasher.update(&ref.proc.artifact.bytes);
+    writeHashU32(hasher, @intFromEnum(ref.proc.proc_base));
+    writeProcedureCallableRef(hasher, ref.callable);
+}
+
+fn writeErasedFnSigKey(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    key: ErasedFnSigKey,
+) void {
+    hasher.update(&key.source_fn_ty.bytes);
+    hasher.update(&key.abi.bytes);
+    if (key.capture_ty) |capture_ty| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&capture_ty.bytes);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
 }
 
 fn writeCallableProcedureTemplateRef(

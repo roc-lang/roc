@@ -7533,7 +7533,8 @@ variables, or if a callable leaf template is materialized without a concrete
 source function type, that is a compiler invariant violation. Debug builds assert
 at the first boundary that observes it; release builds use `unreachable`.
 
-Compile-time callable roots produce `ComptimeCallable` values:
+After LIR interpretation and result reification, compile-time callable roots
+produce `ComptimeCallable` values:
 
 ```zig
 const ComptimeCallable = union(enum) {
@@ -7576,15 +7577,20 @@ const CaptureValue = union(enum) {
 };
 ```
 
-The exact Zig names may differ, but the meaning must not. A compile-time
-callable value is a compiler-owned description of either a selected finite
-callable-set member with evaluated captures or an erased callable with an
-explicit `ErasedFnSigKey`, erased callable code ref, compiler-owned capture
-value, and non-empty `BoxBoundaryId` provenance. It is not a runtime function
-pointer, not a heap closure object, not a global initializer, and not a thunk.
-The erased code ref is either a direct erased procedure code ref with capture
-shape or a finite-set adapter ref. It must not be a bare symbol and must not be a
-finite callable leaf.
+The exact Zig names may differ, but the meaning must not. A reified
+compile-time callable value is a compiler-owned description of either a selected
+finite callable-set member with evaluated captures or an erased callable with an
+explicit `ErasedFnSigKey`, concrete erased callable code ref, compiler-owned
+capture value, and non-empty `BoxBoundaryId` provenance. It is not a runtime
+function pointer, not a heap closure object, not a global initializer, and not a
+thunk. The erased code ref is either a direct erased procedure code ref with
+capture shape or a finite-set adapter ref. It must not be a bare symbol and must
+not be a finite callable leaf. The pre-interpretation
+`ErasedCallableResultPlan` is separate: it may say that the concrete code ref
+must be read from the interpreted erased function value under the explicit rules
+below. Once the result is reified, every stored `ComptimeErasedCallable`,
+`MaterializedErasedCallableValue`, `ErasedCallableLeafInstance`, and
+`ErasedPromotedWrapperBodyPlan` must contain a concrete `ErasedCallableCodeRef`.
 
 `FiniteComptimeCallable` must store exactly the selected finite callable value:
 `source_fn_ty`, `callable_set_key`, `member`, and evaluated `captures` in the
@@ -7639,9 +7645,13 @@ provenance.
 Erased compile-time callable results are allowed only when their
 `ErasedFnSigKey` and callable provenance came from explicit `Box(T)` boundaries.
 Promotion of an erased compile-time callable creates a closed ordinary procedure
-symbol whose body performs the known erased call using the known erased capture.
-It must not publish a top-level packed erased callable object, runtime closure
-object, global callable object, or runtime thunk.
+symbol whose body performs the exact erased call using the exact reified erased
+capture. The concrete erased code may be known before interpretation, or it may
+be selected by the LIR interpreter result when the callable result is already an
+erased function value from `Box.unbox`. In both cases the published promoted
+procedure body stores a concrete `ErasedCallableCodeRef`. It must not publish a
+top-level packed erased callable object, runtime closure object, global callable
+object, or runtime thunk.
 
 For example:
 
@@ -7654,10 +7664,11 @@ add1 = Box.unbox(make_boxed({}))
 ```
 
 `add1` is a function-valued top-level binding. Checking finalization must
-promote it to a closed procedure that calls the known erased callable. The
-erased callable is valid only because the erased representation came from the
-explicit `Box(I64 -> I64)` boundary. The implementation must not leave a
-runtime top-level erased callable object behind.
+promote it to a closed procedure that calls the erased callable selected by
+evaluating `make_boxed({})` through LIR. The erased callable is valid only
+because the erased representation came from the explicit `Box(I64 -> I64)`
+boundary. The implementation must not leave a runtime top-level erased callable
+object behind.
 
 Callable promotion turns each `ComptimeCallable` that is the result of a
 top-level binding into a closed top-level procedure value before artifact
@@ -7684,11 +7695,22 @@ publication. Promotion must:
   top-level binding and callable expression
 
 Callable result reification consumes a precomputed result plan. The interpreter
-may read the runtime callable tag and capture payload only according to this
-plan, in the same way constant-graph reification reads runtime bytes and
-callable leaves only according to `ConstGraphReificationPlan`. It must not
-inspect runtime memory to discover callable members, capture fields, source
-names, dependencies, or callable identity.
+may read finite callable tags, erased callable code fields, and capture payloads
+only according to this plan, in the same way constant-graph reification reads
+runtime bytes and callable leaves only according to `ConstGraphReificationPlan`.
+It must not inspect runtime memory to discover callable members, capture fields,
+source names, dependencies, or callable identity. The only permitted code-identity
+read is `ErasedCallableResultCodePlan.read_from_interpreted_erased_value`: in
+that case the plan already states that the root result is an already-erased
+function value with a fixed `ErasedFnSigKey`, fixed source function type, fixed
+`BoxBoundaryId` provenance, and fixed capture reification plan. Finalization reads
+field 0 of that erased function value, decodes the interpreter's `LirProcSpecId`,
+looks it up in the explicit `LoweredErasedCallableCodeMap`, validates the decoded
+code against the result plan, and then publishes the concrete
+`ErasedCallableCodeRef`. Missing map entries, signature mismatches, source
+function type mismatches, capture-shape mismatches, or non-erased closure layouts
+are compiler invariant violations: debug builds assert immediately and release
+builds use `unreachable`.
 
 Conceptual shape:
 
@@ -7706,12 +7728,19 @@ const FiniteCallableResultPlan = struct {
     members: Span(CallableResultMemberPlan),
 };
 
+const ErasedCallableResultCodePlan = union(enum) {
+    materialized_by_lowering: ErasedCallableCodeRef,
+    read_from_interpreted_erased_value,
+};
+
 const ErasedCallableResultPlan = struct {
     source_fn_ty: CanonicalTypeKey,
     sig_key: ErasedFnSigKey,
     provenance: NonEmptySpan(BoxBoundaryId),
-    code: ErasedCallableCodeRef,
+    code_plan: ErasedCallableResultCodePlan,
     capture: ErasedCaptureReificationPlan,
+    result_ty: CanonicalExecValueTypeKey,
+    executable_signature_payloads: ErasedPromotedProcedureExecutableSignaturePayloads,
 };
 
 const ErasedCaptureReificationPlan = union(enum) {
@@ -7770,16 +7799,33 @@ exactly where those leaves live inside a private promoted-capture value. A
 transparent alias records source/debug provenance only and reifies the
 underlying payload; it is not a runtime wrapper. A nominal records the nominal
 representation capability used to materialize the payload. For an erased
-callable result, the plan carries the exact `ErasedFnSigKey`, erased code
-ref, capture reification plan, and non-empty `BoxBoundaryId` provenance. The
-code ref has the same exact two-case shape everywhere: direct erased procedure
-code with procedure value occurrence plus capture shape, or finite-set adapter
-ref with the full `ErasedAdapterKey { source_fn_ty, callable_set_key,
-erased_fn_sig_key, capture_shape_key }`. No erased callable result may be
-reified or promoted without explicit `Box(T)` provenance, and no erased callable
-result may record only a code symbol, only an erased signature, only a finite
-callable leaf, only `source_fn_ty + callable_set_key`, or only an executable
-specialization key.
+callable result, the plan carries the exact `ErasedFnSigKey`, erased
+code-selection plan, capture reification plan, executable result type, promoted
+wrapper executable signature payloads, and non-empty `BoxBoundaryId` provenance.
+A result whose code is `materialized_by_lowering` stores the same exact concrete
+two-case `ErasedCallableCodeRef` used everywhere after reification: direct
+erased procedure code with procedure value occurrence plus capture shape, or
+finite-set adapter ref with the full `ErasedAdapterKey { source_fn_ty,
+callable_set_key, erased_fn_sig_key, capture_shape_key }`. A result whose code
+is `read_from_interpreted_erased_value` stores no concrete code ref until after
+the LIR interpreter returns the erased function value; finalization obtains the
+concrete code through the explicit `LoweredErasedCallableCodeMap` described in
+the public pipeline section. No erased callable result may be reified or
+promoted without explicit `Box(T)` provenance, and no erased callable result may
+record only a code symbol, only an erased signature, only a finite callable
+leaf, only `source_fn_ty + callable_set_key`, only a runtime pointer, or only an
+executable specialization key.
+
+The promoted wrapper executable signature payloads are part of the result plan
+because they cannot be derived from the selected erased code in the
+`read_from_interpreted_erased_value` case. They are built before interpretation
+from the top-level binding's exact source function type and the erased ABI named
+by `sig_key`: wrapper parameter/result payloads describe the public procedure
+binding, erased-call argument/result payloads describe the erased call ABI, and
+the hidden capture payload describes `sig_key.capture_ty` when present. Value
+transforms for wrapper arguments and results are published from those payloads.
+This is independent of whether the eventual code ref is a direct proc value or a
+finite-set adapter.
 
 Promotion consumes a precomputed promotion plan:
 
@@ -10506,11 +10552,64 @@ pub fn lowerArtifactsToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram;
+
+const LoweredProgram = struct {
+    lir: LirProgram,
+    compile_time_metadata: CompileTimeLoweringMetadata,
+};
+
+const CompileTimeLoweringMetadata = struct {
+    erased_callable_code_map: LoweredErasedCallableCodeMap,
+};
+
+const LoweredErasedCallableCodeMap = struct {
+    entries: Span(LoweredErasedCallableCodeEntry),
+};
+
+const LoweredErasedCallableCodeEntry = struct {
+    lir_proc: LirProcSpecId,
+    code: ErasedCallableCodeRef,
+    source_fn_ty: CanonicalTypeKey,
+    exec_arg_tys: Span(CanonicalExecValueTypeKey),
+    exec_ret_ty: CanonicalExecValueTypeKey,
+    capture_shape_key: CaptureShapeKey,
+};
 ```
 
 The exact name may differ, but the contract must not. Public callers provide
 published checked artifacts, explicit roots, and target configuration. They get
 lowered output or resource failure. They do not get semantic failure variants.
+
+`CompileTimeLoweringMetadata` is local lowering metadata for checking
+finalization. It is not a checked-artifact cache, not a serialized transport, not
+a side channel for missing semantic information, and not a backend policy input.
+The lowering pipeline builds `LoweredErasedCallableCodeMap` while executable MIR
+procedures are assigned LIR procedure ids. For a source procedure origin, the map
+entry is `ErasedCallableCodeRef.direct_proc_value` with the exact
+`ProcedureCallableRef` and `CaptureShapeKey` from that executable
+specialization. For an erased finite-set adapter origin, the map entry is
+`ErasedCallableCodeRef.finite_set_adapter` with the exact adapter key. Every
+entry also stores the source function type, executable argument type keys,
+executable return type key, and capture shape from the executable specialization
+that produced the LIR proc. These fields are required because
+`ErasedCallableCodeRef.direct_proc_value` intentionally does not duplicate the
+erased ABI; finalization validates the entry's executable argument/result keys
+against the `ErasedFnSigKey` ABI before publishing a direct erased code ref.
+Debug builds assert that every `packed_erased_fn.code` reachable from
+compile-time roots has a map entry and that every map entry agrees with the
+executable procedure origin, erased signature, source function type, and capture
+shape. Release builds use `unreachable` for violations.
+
+The map exists so compile-time finalization can reify
+`ErasedCallableResultCodePlan.read_from_interpreted_erased_value` without
+recovering from CIR or source syntax. The LIR interpreter encodes erased function
+code fields as `LirProcSpecId` values. Finalization decodes that proc id, looks
+it up in this map, validates it against the already-published
+`ErasedCallableResultPlan`, and then publishes a concrete
+`ErasedCallableCodeRef`. Imported checked artifacts must never ask another
+module's interpreter to rerun just to rediscover this map; any exported
+compile-time callable result is published with concrete code before the exporter
+artifact is sealed.
 
 The following clients must call this pipeline instead of hand-assembling old
 stage chains:
@@ -13922,18 +14021,23 @@ and leave erased callable materialization to executable MIR's const
 materialization path; it must not put an erased boxed callable leaf in
 `PrivateCaptureRef`.
 
-`ComptimeCallable` has finite and erased cases. The finite case names the
-procedure, lifted lambda, or callable-set member plus compiler-owned captures.
-The erased case names the `ErasedFnSigKey`, exact erased callable code ref, and
-compiler-owned erased capture value. Erased callable promotion is allowed only
-when the erased callable carries explicit `BoxBoundaryId` provenance. Promotion
-must produce a closed ordinary procedure identity whose body is owned by
-executable MIR and performs the known erased call from the sealed
-`ErasedPromotedWrapperBodyPlan`. Mono, row-finalized mono, lifted MIR, and
-lambda-solved MIR carry that procedure identity opaquely at its source function
-type; they must not lower the erased body or read the erased ABI fields. It must
-not publish a runtime packed erased callable object, runtime top-level closure
-object, runtime global callable-value object, or runtime thunk.
+Reified `ComptimeCallable` has finite and erased cases. The finite case names
+the procedure, lifted lambda, or callable-set member plus compiler-owned
+captures. The erased case names the `ErasedFnSigKey`, exact erased callable code
+ref, and compiler-owned erased capture value. The pre-interpretation
+`CallableResultPlan.erased` may instead name
+`read_from_interpreted_erased_value`; that case must be resolved to a concrete
+`ErasedCallableCodeRef` during checking finalization before any
+`ComptimeCallable`, promoted wrapper, or erased callable leaf is sealed. Erased
+callable promotion is allowed only when the erased callable carries explicit
+`BoxBoundaryId` provenance. Promotion must produce a closed ordinary procedure
+identity whose body is owned by executable MIR and performs the exact erased call
+from the sealed `ErasedPromotedWrapperBodyPlan`. Mono, row-finalized mono,
+lifted MIR, and lambda-solved MIR carry that procedure identity opaquely at its
+source function type; they must not lower the erased body or read the erased ABI
+fields. It must not publish a runtime packed erased callable object, runtime
+top-level closure object, runtime global callable-value object, or runtime
+thunk.
 
 Promotion consumes `CallablePromotionPlan` records produced before evaluation.
 The plan names the root, source function type, dependency summary, and
@@ -15547,12 +15651,17 @@ Compile-time constants:
   `procedure_binding` whose promoted procedure has a sealed erased promoted
   procedure plan with `ErasedPromotedProcedureExecutableSignature`. The expected
   executable MIR contains the compiler-created procedure body that performs the
-  known erased call. Mono, row-finalized mono, lifted MIR, and lambda-solved MIR
-  must carry only the opaque procedure identity/source function type for `add1`;
-  they must not lower the erased body, build a runtime thunk, allocate a runtime
-  top-level closure object, publish a runtime erased callable object, or use a
-  canonical executable key as a substitute for an explicit executable type
-  payload.
+  exact erased call selected from the interpreted erased function value. The
+  pre-interpretation `ErasedCallableResultPlan` for `add1` uses
+  `read_from_interpreted_erased_value`; compile-time finalization decodes the
+  returned erased function value's LIR procedure id through
+  `LoweredErasedCallableCodeMap`, validates it against the plan, and seals the
+  promoted wrapper with a concrete `ErasedCallableCodeRef`. Mono, row-finalized
+  mono, lifted MIR, and lambda-solved MIR must carry only the opaque procedure
+  identity/source function type for `add1`; they must not lower the erased body,
+  build a runtime thunk, allocate a runtime top-level closure object, publish a
+  runtime erased callable object, or use a canonical executable key as a
+  substitute for an explicit executable type payload.
 - top-level function-valued declarations that evaluate to erased callable values
   must include the captured finite-callable adapter case:
 
@@ -15572,14 +15681,18 @@ Compile-time constants:
   `ErasedCaptureExecutableMaterializationPlan`. The hidden capture materializes
   a finite callable-set value whose selected member is the lambda created by
   `|x| x + n`, and whose single capture is the executable-ready materialization
-  of `5`. The sealed erased wrapper body must not contain `PrivateCaptureRef`,
+  of `5`. This value is reached by executing LIR; the pre-interpretation result
+  plan still uses `read_from_interpreted_erased_value` for the code field, and
+  the capture plan may use `finite_callable_set_value` for the hidden capture
+  payload because that structure is explicit in the result plan. The sealed
+  erased wrapper body must not contain `PrivateCaptureRef`,
   `CallableLeafInstance`, `CaptureSlotReificationPlanId`, `CallableResultPlanId`,
   or any runtime closure object. Executable MIR packs that finite callable-set
   value as the erased hidden capture, reserves the adapter using the full
   `ErasedAdapterKey`, and the adapter body dispatches with `callable_match`,
   even though the callable set is a singleton.
-- erased compile-time callable values and erased callable leaves must store
-  exact erased code refs. Direct erased code refs carry
+- reified erased compile-time callable values and erased callable leaves must
+  store exact erased code refs. Direct erased code refs carry
   `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`. Finite-set
   adapter refs embedded in erased callable leaves must lower through the exact
   `ErasedAdapterKey { source_fn_ty, callable_set_key, erased_fn_sig_key,
@@ -15593,6 +15706,36 @@ Compile-time constants:
   `source_fn_ty + callable_set_key` but different `erased_fn_sig_key`, and two
   adapters with the same `source_fn_ty + callable_set_key + erased_fn_sig_key`
   but different `capture_shape_key`.
+- pre-interpretation erased callable result plans must cover both concrete and
+  interpreted-code cases. Tests must include `add1 = Box.unbox(make_boxed({}))`
+  and a branch-selected erased callable:
+
+  ```roc
+  choose_boxed : Bool -> Box(I64 -> I64)
+  choose_boxed = |pick|
+      if pick {
+          Box.box(|x| x + 1)
+      } else {
+          Box.box(|x| x + 10)
+      }
+
+  add : I64 -> I64
+  add = Box.unbox(choose_boxed(Bool.True))
+
+  main : I64
+  main = add(41)
+  ```
+
+  The `add` result plan uses
+  `ErasedCallableResultCodePlan.read_from_interpreted_erased_value`. The test
+  must prove that finalization selects the concrete erased code from the
+  interpreted LIR value through `LoweredErasedCallableCodeMap`, publishes `add`
+  as an ordinary procedure binding, and leaves no runtime top-level thunk,
+  runtime global initializer, runtime closure object, or top-level erased
+  callable object. Debug verifier tests must corrupt the map by removing the
+  selected `LirProcSpecId`, changing the decoded code ref's source function type,
+  changing the erased signature, or changing the capture shape; each corruption
+  must panic in debug builds and be `unreachable` in release builds.
 - sealed erased promoted wrapper materialization must be executable-ready. Tests
   must corrupt an erased promoted wrapper by inserting a `PrivateCaptureRef`,
   `CallableLeafInstance`, `CaptureSlotReificationPlanId`, or

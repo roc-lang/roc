@@ -482,6 +482,7 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     }
     try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
     try solveRepresentationSessions(&program, proc_build_records.items);
+    try assignCallableEmissionPlans(&program, proc_build_records.items);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
     try finalizeValueTransformBoundaries(&program);
     verifySealedLambdaSolvedProgram(&program);
@@ -895,6 +896,613 @@ const RepresentationClassSolver = struct {
         return class;
     }
 };
+
+fn assignCallableEmissionPlans(
+    program: *Program,
+    records: []const ProcBuildRecord,
+) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        var assigner = CallableEmissionAssigner{
+            .allocator = program.allocator,
+            .program = program,
+            .records = records,
+            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+            .session = session,
+            .class_sets = .empty,
+            .class_set_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .erased_classes = .empty,
+            .erased_class_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+        };
+        defer assigner.deinit();
+        try assigner.assign();
+    }
+}
+
+const CallableClassSet = struct {
+    class: repr.RepresentationClassId,
+    members: std.ArrayList(repr.CanonicalCallableSetMember),
+    key: ?repr.CanonicalCallableSetKey = null,
+};
+
+const ErasedClassProvenance = struct {
+    class: repr.RepresentationClassId,
+    boundaries: std.ArrayList(repr.BoxBoundaryId),
+};
+
+const CallableEmissionAssigner = struct {
+    allocator: Allocator,
+    program: *Program,
+    records: []const ProcBuildRecord,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+    class_sets: std.ArrayList(CallableClassSet),
+    class_set_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+    erased_classes: std.ArrayList(ErasedClassProvenance),
+    erased_class_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+
+    fn deinit(self: *CallableEmissionAssigner) void {
+        for (self.erased_classes.items) |*entry| entry.boundaries.deinit(self.allocator);
+        self.erased_class_index.deinit();
+        self.erased_classes.deinit(self.allocator);
+        for (self.class_sets.items) |*entry| entry.members.deinit(self.allocator);
+        self.class_set_index.deinit();
+        self.class_sets.deinit(self.allocator);
+    }
+
+    fn assign(self: *CallableEmissionAssigner) Allocator.Error!void {
+        try self.collectFiniteCallableContributions();
+        try self.internClassCallableSets();
+        try self.collectBoxErasureRequirements();
+        try self.assignValueEmissionPlans();
+    }
+
+    fn representationStore(self: *CallableEmissionAssigner) *repr.RepresentationStore {
+        return &self.session.representation_store;
+    }
+
+    fn collectFiniteCallableContributions(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items) |value_info| {
+                const callable = value_info.callable orelse continue;
+                const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
+                const key = switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+                    .finite => |finite| finite,
+                    .already_erased,
+                    .erase_proc_value,
+                    .erase_finite_set,
+                    => continue,
+                };
+                const descriptor = self.representationStore().callableSetDescriptor(key) orelse {
+                    lambdaInvariant("lambda-solved finite callable emission referenced a missing callable-set descriptor");
+                };
+                for (descriptor.members) |member| {
+                    try self.addClassCallableMember(class, member);
+                }
+            }
+        }
+    }
+
+    fn addClassCallableMember(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!void {
+        const set = try self.classSetFor(class);
+        for (set.members.items) |existing| {
+            if (callableSetMemberEquivalent(existing, member)) return;
+        }
+        try set.members.append(self.allocator, member);
+    }
+
+    fn classSetFor(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+    ) Allocator.Error!*CallableClassSet {
+        if (self.class_set_index.get(class)) |index| return &self.class_sets.items[index];
+        const index = self.class_sets.items.len;
+        try self.class_sets.append(self.allocator, .{
+            .class = class,
+            .members = .empty,
+        });
+        try self.class_set_index.put(class, index);
+        return &self.class_sets.items[index];
+    }
+
+    fn internClassCallableSets(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.class_sets.items) |*set| {
+            if (set.members.items.len == 0) lambdaInvariant("lambda-solved callable class set has no members");
+            for (set.members.items, 0..) |*member, raw_member| {
+                member.member = @enumFromInt(@as(u32, @intCast(raw_member)));
+            }
+            set.key = try self.representationStore().internCallableSetDescriptor(set.members.items);
+        }
+    }
+
+    fn collectBoxErasureRequirements(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.representationStore().representation_requirements.items) |requirement| {
+            switch (requirement) {
+                .require_box_erased => |boundary_id| {
+                    const boundary = self.boxBoundary(boundary_id);
+                    const payload_root = switch (boundary.direction) {
+                        .box => boundary.source_root,
+                        .unbox => boundary.boundary_root,
+                    };
+                    try self.markErasedPayloadRoot(payload_root, boundary_id);
+                },
+            }
+        }
+    }
+
+    fn markErasedPayloadRoot(
+        self: *CallableEmissionAssigner,
+        root: repr.RepRootId,
+        boundary: repr.BoxBoundaryId,
+    ) Allocator.Error!void {
+        var visited = std.AutoHashMap(repr.RepRootId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(repr.RepRootId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            if (self.classForRoot(current)) |class| {
+                try self.addErasedClassBoundary(class, boundary);
+            }
+            for (self.representationStore().representation_edges.items) |edge| {
+                if (!edgePropagatesBoxErasure(edge.kind)) continue;
+                const from = self.endpointRootInSession(edge.from) orelse continue;
+                if (from != current) continue;
+                const to = self.endpointRootInSession(edge.to) orelse continue;
+                try stack.append(self.allocator, to);
+            }
+        }
+    }
+
+    fn addErasedClassBoundary(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+        boundary: repr.BoxBoundaryId,
+    ) Allocator.Error!void {
+        const entry = try self.erasedClassFor(class);
+        for (entry.boundaries.items) |existing| {
+            if (existing == boundary) return;
+        }
+        try entry.boundaries.append(self.allocator, boundary);
+    }
+
+    fn erasedClassFor(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+    ) Allocator.Error!*ErasedClassProvenance {
+        if (self.erased_class_index.get(class)) |index| return &self.erased_classes.items[index];
+        const index = self.erased_classes.items.len;
+        try self.erased_classes.append(self.allocator, .{
+            .class = class,
+            .boundaries = .empty,
+        });
+        try self.erased_class_index.put(class, index);
+        return &self.erased_classes.items[index];
+    }
+
+    fn assignValueEmissionPlans(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items, 0..) |*value_info, raw_value| {
+                const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
+                const class_set = self.callableClassSet(class) orelse {
+                    if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
+                    lambdaInvariant("lambda-solved function-typed value solved to a class with no finite callable members");
+                };
+                const class_key = class_set.key orelse lambdaInvariant("lambda-solved callable class set was not interned before emission assignment");
+                const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, class_key);
+                switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+                    .finite => {},
+                    .already_erased,
+                    .erase_proc_value,
+                    .erase_finite_set,
+                    => continue,
+                }
+                try self.rewriteCallableConstructionPlan(&callable, value_id, class_set, class_key);
+
+                const provenance = self.erasedProvenance(class);
+                if (provenance == null) {
+                    self.representationStore().callableEmissionPlanPtr(callable.emission_plan).* = .{ .finite = class_key };
+                    value_info.callable = callable;
+                    continue;
+                }
+
+                callable.emission_plan = try self.erasedEmissionPlanForValue(record, value_id, callable, class_set, class_key, provenance.?);
+                value_info.callable = callable;
+            }
+        }
+    }
+
+    fn synthesizeCallableInfo(
+        self: *CallableEmissionAssigner,
+        value_info: repr.ValueInfo,
+        class_key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!repr.CallableValueInfo {
+        if (!self.valueHasFunctionType(value_info.logical_ty)) {
+            lambdaInvariant("lambda-solved attempted to synthesize callable metadata for a non-function value");
+        }
+        return .{
+            .whole_function_root = value_info.root,
+            .callable_root = value_info.root,
+            .source = .{ .finite_set = class_key },
+            .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(class_key),
+            .construction_plan = null,
+        };
+    }
+
+    fn valueHasFunctionType(
+        self: *CallableEmissionAssigner,
+        ty: Type.TypeVarId,
+    ) bool {
+        const root = self.program.types.unlinkConst(ty);
+        return switch (self.program.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            .nominal => |nominal| self.valueHasFunctionType(nominal.backing),
+            else => false,
+        };
+    }
+
+    fn rewriteCallableConstructionPlan(
+        self: *CallableEmissionAssigner,
+        callable: *const repr.CallableValueInfo,
+        value_id: repr.ValueInfoId,
+        class_set: *const CallableClassSet,
+        class_key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!void {
+        const construction_id = callable.construction_plan orelse return;
+        const construction = self.representationStore().callableConstructionPlanPtr(construction_id);
+        if (construction.result != value_id) {
+            lambdaInvariant("lambda-solved callable construction plan is attached to a different value during emission assignment");
+        }
+        const selected = self.currentSelectedMember(callable.*, construction.*);
+        construction.callable_set_key = class_key;
+        construction.selected_member = self.memberIdInClassSet(class_set, selected);
+    }
+
+    fn currentSelectedMember(
+        self: *CallableEmissionAssigner,
+        callable: repr.CallableValueInfo,
+        construction: repr.CallableSetConstructionPlan,
+    ) repr.CanonicalCallableSetMember {
+        const current_key = switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| key,
+            .erase_finite_set => |erase| erase.adapter.callable_set_key,
+            .erase_proc_value,
+            .already_erased,
+            => lambdaInvariant("lambda-solved callable construction reached non-finite emission before assignment"),
+        };
+        const member = self.representationStore().callableSetMember(current_key, construction.selected_member) orelse {
+            lambdaInvariant("lambda-solved callable construction selected a missing current callable-set member");
+        };
+        return member.*;
+    }
+
+    fn memberIdInClassSet(
+        self: *CallableEmissionAssigner,
+        class_set: *const CallableClassSet,
+        selected: repr.CanonicalCallableSetMember,
+    ) repr.CallableSetMemberId {
+        _ = self;
+        for (class_set.members.items) |member| {
+            if (callableSetMemberEquivalent(member, selected)) return member.member;
+        }
+        lambdaInvariant("lambda-solved callable construction selected member missing from solved class callable set");
+    }
+
+    fn erasedEmissionPlanForValue(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+        value_id: repr.ValueInfoId,
+        callable: repr.CallableValueInfo,
+        class_set: *const CallableClassSet,
+        class_key: repr.CanonicalCallableSetKey,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!repr.CallableValueEmissionPlanId {
+        if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty BoxBoundaryId provenance");
+        if (class_set.members.items.len == 1) {
+            switch (callable.source) {
+                .proc_value => |source| return try self.appendDirectProcValueErasePlan(record, value_id, source, provenance),
+                else => {},
+            }
+        }
+        return try self.appendFiniteSetErasePlan(record, class_set, class_key, provenance);
+    }
+
+    fn appendDirectProcValueErasePlan(
+        self: *CallableEmissionAssigner,
+        owner_record: *const ProcBuildRecord,
+        value_id: repr.ValueInfoId,
+        source: anytype,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!repr.CallableValueEmissionPlanId {
+        _ = owner_record;
+        const target_id = self.procInstanceForSource(source.proc);
+        const target_record = self.recordForInstance(target_id);
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+
+        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
+        defer if (capture_slots.len > 0) self.allocator.free(capture_slots);
+        const capture_shape_key = try repr.captureShapeKeyForValueSlice(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.types,
+            self.representationStoreFor(target_record),
+            target_value_store,
+            target_captures,
+        );
+        const capture_ty = if (capture_slots.len == 0) null else repr.captureTupleExecKeyForSlots(capture_slots);
+        const sig_key = try self.erasedSignatureForTargetProc(source.fn_ty, target_record, capture_ty);
+        const executable_key = try repr.executableSpecializationKeyForProc(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.types,
+            self.representationStoreFor(target_record),
+            target_value_store,
+            source.proc,
+            target_record.public_roots,
+        );
+        errdefer {
+            var key = executable_key;
+            repr.deinitExecutableSpecializationKey(self.allocator, &key);
+        }
+
+        return try self.representationStore().appendProcValueEraseEmissionPlan(.{
+            .source_value = value_id,
+            .proc_value = source.proc.callable,
+            .target_instance = target_id,
+            .erased_fn_sig_key = sig_key,
+            .executable_specialization_key = executable_key,
+            .capture_shape_key = capture_shape_key,
+            .capture_slots = capture_slots,
+            .provenance = provenance,
+        });
+    }
+
+    fn appendFiniteSetErasePlan(
+        self: *CallableEmissionAssigner,
+        owner_record: *const ProcBuildRecord,
+        class_set: *const CallableClassSet,
+        class_key: repr.CanonicalCallableSetKey,
+        provenance: []const repr.BoxBoundaryId,
+    ) Allocator.Error!repr.CallableValueEmissionPlanId {
+        _ = owner_record;
+        const first_member = class_set.members.items[0];
+        const hidden_capture_key = repr.finiteCallableSetExecValueTypeKey(class_key);
+        const hidden_capture_keys = [_]repr.CanonicalExecValueTypeKey{hidden_capture_key};
+        const capture_shape_key = repr.captureShapeKeyForExecKeys(&hidden_capture_keys);
+        const sig_key = try self.erasedSignatureForTargetProc(
+            first_member.proc_value.source_fn_ty,
+            self.recordForInstance(self.procInstanceForSource(first_member.source_proc)),
+            hidden_capture_key,
+        );
+        const adapter = repr.ErasedAdapterKey{
+            .source_fn_ty = first_member.proc_value.source_fn_ty,
+            .callable_set_key = class_key,
+            .erased_fn_sig_key = sig_key,
+            .capture_shape_key = capture_shape_key,
+        };
+        return try self.representationStore().appendFiniteSetEraseEmissionPlan(.{
+            .adapter = adapter,
+            .result_ty = repr.erasedCallableExecValueTypeKey(sig_key),
+            .provenance = provenance,
+        });
+    }
+
+    fn erasedSignatureForTargetProc(
+        self: *CallableEmissionAssigner,
+        source_fn_ty: canonical.CanonicalTypeKey,
+        target_record: *const ProcBuildRecord,
+        capture_ty: ?repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!repr.ErasedFnSigKey {
+        const target_value_store = self.valueStoreFor(target_record);
+        const params = target_value_store.sliceValueSpan(target_record.public_roots.params);
+        const arg_keys: []repr.CanonicalExecValueTypeKey = if (params.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(repr.CanonicalExecValueTypeKey, params.len);
+        defer if (arg_keys.len > 0) self.allocator.free(arg_keys);
+        const arg_abis: []canonical.ErasedValueAbi = if (params.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(canonical.ErasedValueAbi, params.len);
+        defer if (arg_abis.len > 0) self.allocator.free(arg_abis);
+
+        for (params, 0..) |param, i| {
+            const endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, param);
+            arg_keys[i] = endpoint.key;
+            arg_abis[i] = .ordinary_roc_value;
+        }
+        const ret_endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, target_record.public_roots.ret);
+        const abi_key = try self.representationStore().erased_fn_abis.append(self.allocator, .{
+            .fixed_arity = @intCast(params.len),
+            .arg_exec_keys = arg_keys,
+            .ret_exec_key = ret_endpoint.key,
+            .arg_abis = arg_abis,
+            .capture_arg = if (capture_ty == null) null else .ordinary_roc_value,
+        });
+        return .{
+            .source_fn_ty = source_fn_ty,
+            .abi = abi_key,
+            .capture_ty = capture_ty,
+        };
+    }
+
+    fn publishTargetExecutableEndpoint(
+        self: *CallableEmissionAssigner,
+        target_record: *const ProcBuildRecord,
+        target_value_store: *const repr.ValueInfoStore,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
+        return try repr.sessionExecutableTypeEndpointForValueIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStoreFor(target_record),
+            &self.representationStore().session_executable_type_payloads,
+            target_value_store,
+            value,
+        );
+    }
+
+    fn captureSlotsForTargetValues(
+        self: *CallableEmissionAssigner,
+        target_record: *const ProcBuildRecord,
+        values: []const repr.ValueInfoId,
+    ) Allocator.Error![]const repr.CallableSetCaptureSlot {
+        const target_store = self.representationStoreFor(target_record);
+        const target_value_store = self.valueStoreFor(target_record);
+        for (values) |value| {
+            _ = try self.publishTargetExecutableEndpoint(target_record, target_value_store, value);
+        }
+        return try target_store.captureSlotsForValues(
+            &self.program.canonical_names,
+            &self.program.types,
+            target_value_store,
+            values,
+        );
+    }
+
+    fn callableClassSet(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+    ) ?*CallableClassSet {
+        const index = self.class_set_index.get(class) orelse return null;
+        return &self.class_sets.items[index];
+    }
+
+    fn erasedProvenance(
+        self: *CallableEmissionAssigner,
+        class: repr.RepresentationClassId,
+    ) ?[]const repr.BoxBoundaryId {
+        const index = self.erased_class_index.get(class) orelse return null;
+        return self.erased_classes.items[index].boundaries.items;
+    }
+
+    fn classForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationClassId {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items) |value| {
+                if (value.root == root) return value.solved_class;
+            }
+        }
+        return null;
+    }
+
+    fn endpointRootInSession(
+        self: *CallableEmissionAssigner,
+        endpoint: repr.RepresentationEndpoint,
+    ) ?repr.RepRootId {
+        return switch (endpoint) {
+            .local => |root| root,
+            .procedure_public => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
+        };
+    }
+
+    fn boxBoundary(
+        self: *CallableEmissionAssigner,
+        boundary: repr.BoxBoundaryId,
+    ) repr.BoxBoundary {
+        const index = @intFromEnum(boundary);
+        if (index >= self.representationStore().box_boundaries.len) {
+            lambdaInvariant("lambda-solved erased requirement referenced missing BoxBoundary");
+        }
+        return self.representationStore().box_boundaries[index];
+    }
+
+    fn procInstanceForSource(
+        self: *CallableEmissionAssigner,
+        proc: canonical.MirProcedureRef,
+    ) repr.ProcRepresentationInstanceId {
+        for (self.records, 0..) |record, raw| {
+            if (canonical.mirProcedureRefEql(record.proc, proc)) {
+                return @enumFromInt(@as(u32, @intCast(raw)));
+            }
+        }
+        lambdaInvariant("lambda-solved callable emission assignment referenced missing procedure instance");
+    }
+
+    fn recordForInstance(
+        self: *CallableEmissionAssigner,
+        id: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(id);
+        if (index >= self.records.len) {
+            lambdaInvariant("lambda-solved callable emission assignment referenced out-of-range procedure instance");
+        }
+        return &self.records[index];
+    }
+
+    fn valueStoreFor(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+    ) *repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(record.value_store)];
+    }
+
+    fn representationStoreFor(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+    ) *repr.RepresentationStore {
+        return &self.program.solve_sessions.items[@intFromEnum(record.solve_session)].representation_store;
+    }
+};
+
+fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
+    return switch (kind) {
+        .record_field,
+        .tuple_elem,
+        .tag_payload,
+        .list_elem,
+        .box_payload,
+        .nominal_backing,
+        .function_arg,
+        .function_return,
+        => true,
+        .value_alias,
+        .value_move,
+        .branch_join,
+        .loop_phi,
+        .mutable_version,
+        .function_callable,
+        => false,
+    };
+}
+
+fn callableSetMemberEquivalent(
+    a: repr.CanonicalCallableSetMember,
+    b: repr.CanonicalCallableSetMember,
+) bool {
+    if (!canonical.mirProcedureRefEql(a.source_proc, b.source_proc)) return false;
+    if (!canonical.procedureCallableRefEql(a.proc_value, b.proc_value)) return false;
+    if (!repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return false;
+    if (a.capture_slots.len != b.capture_slots.len) return false;
+    for (a.capture_slots, b.capture_slots) |left, right| {
+        if (left.slot != right.slot) return false;
+        if (!repr.canonicalTypeKeyEql(left.source_ty, right.source_ty)) return false;
+        if (!repr.canonicalExecValueTypeKeyEql(left.exec_value_ty, right.exec_value_ty)) return false;
+    }
+    return true;
+}
 
 fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
     for (program.proc_instances.items, 0..) |*instance, raw_instance| {

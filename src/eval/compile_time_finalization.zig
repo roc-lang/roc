@@ -21,6 +21,7 @@ const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
+const repr = mir.LambdaSolved.Representation;
 const CIR = can.CIR;
 
 pub fn finalizer() checked_artifact.CompileTimeFinalizer {
@@ -541,6 +542,13 @@ fn publishErasedCallableResult(
         .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
     };
     defer capture_builder.deinit();
+    const code = resolveErasedCallableResultCode(
+        artifact,
+        lowered,
+        erased,
+        ret_layout,
+        ret_value,
+    );
     const capture = try materializeErasedPromotedCapture(
         allocator,
         artifact,
@@ -566,7 +574,7 @@ fn publishErasedCallableResult(
         .params = params,
         .executable_signature = executable_signature,
         .sig_key = erased.sig_key,
-        .code = erased.code,
+        .code = code,
         .capture = capture,
         .arg_transforms = transforms.args,
         .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
@@ -715,10 +723,17 @@ fn materializedErasedCallableValue(
     layout_idx: layout_mod.Idx,
     value: Value,
 ) Allocator.Error!checked_artifact.MaterializedErasedCallableValue {
+    const code = resolveErasedCallableResultCode(
+        capture_builder.artifact,
+        capture_builder.lowered,
+        erased,
+        layout_idx,
+        value,
+    );
     return .{
         .source_fn_ty = erased.source_fn_ty,
         .sig_key = erased.sig_key,
-        .code = erased.code,
+        .code = code,
         .capture = try materializeErasedPromotedCapture(
             capture_builder.allocator,
             capture_builder.artifact,
@@ -730,6 +745,112 @@ fn materializedErasedCallableValue(
         ),
         .provenance = try cloneBoxBoundarySpan(capture_builder.allocator, erased.provenance),
     };
+}
+
+fn resolveErasedCallableResultCode(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+) canonical.ErasedCallableCodeRef {
+    return switch (erased.code_plan) {
+        .materialized_by_lowering => |code| code,
+        .read_from_interpreted_erased_value => blk: {
+            const lir_proc = erasedClosureCodeProc(lowered, layout_idx, value);
+            const entry = loweredErasedCallableCodeEntry(lowered, lir_proc) orelse {
+                compileTimeFinalizationInvariant("interpreted erased callable code was not published in lowered code map");
+            };
+            validateLoweredErasedCallableCodeEntry(artifact, erased, entry);
+            break :blk entry.code;
+        },
+    };
+}
+
+fn loweredErasedCallableCodeEntry(
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    lir_proc: lir.LIR.LirProcSpecId,
+) ?lir.CheckedPipeline.LoweredErasedCallableCodeEntry {
+    for (lowered.erased_callable_code_map) |entry| {
+        if (entry.lir_proc == lir_proc) return entry;
+    }
+    return null;
+}
+
+fn validateLoweredErasedCallableCodeEntry(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    entry: lir.CheckedPipeline.LoweredErasedCallableCodeEntry,
+) void {
+    if (!repr.canonicalTypeKeyEql(entry.source_fn_ty, erased.source_fn_ty)) {
+        compileTimeFinalizationInvariant("interpreted erased callable source function type differs from result plan");
+    }
+    if (!repr.captureShapeKeyEql(entry.capture_shape_key, erased.executable_signature_payloads.capture_shape_key)) {
+        compileTimeFinalizationInvariant("interpreted erased callable capture shape differs from result plan");
+    }
+
+    const abi = artifact.erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+        compileTimeFinalizationInvariant("interpreted erased callable result references missing erased ABI");
+    };
+    if (entry.exec_arg_tys.len != abi.arg_exec_keys.len) {
+        compileTimeFinalizationInvariant("interpreted erased callable argument ABI arity differs from result plan");
+    }
+    for (entry.exec_arg_tys, abi.arg_exec_keys) |entry_arg, expected_arg| {
+        if (!repr.canonicalExecValueTypeKeyEql(entry_arg, expected_arg)) {
+            compileTimeFinalizationInvariant("interpreted erased callable argument ABI differs from result plan");
+        }
+    }
+    if (!repr.canonicalExecValueTypeKeyEql(entry.exec_ret_ty, abi.ret_exec_key)) {
+        compileTimeFinalizationInvariant("interpreted erased callable return ABI differs from result plan");
+    }
+
+    switch (entry.code) {
+        .direct_proc_value => |direct| {
+            if (!repr.canonicalTypeKeyEql(direct.proc_value.source_fn_ty, erased.source_fn_ty)) {
+                compileTimeFinalizationInvariant("interpreted direct erased code source function type differs from result plan");
+            }
+            if (!repr.captureShapeKeyEql(direct.capture_shape_key, entry.capture_shape_key)) {
+                compileTimeFinalizationInvariant("interpreted direct erased code capture shape differs from lowered entry");
+            }
+        },
+        .finite_set_adapter => |adapter| {
+            if (!repr.canonicalTypeKeyEql(adapter.source_fn_ty, erased.source_fn_ty)) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter source function type differs from result plan");
+            }
+            if (!repr.erasedFnSigKeyEql(adapter.erased_fn_sig_key, erased.sig_key)) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter erased signature differs from result plan");
+            }
+            if (!repr.captureShapeKeyEql(adapter.capture_shape_key, entry.capture_shape_key)) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter capture shape differs from lowered entry");
+            }
+        },
+    }
+}
+
+fn erasedClosureCodeProc(
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    layout_idx: layout_mod.Idx,
+    value: Value,
+) lir.LIR.LirProcSpecId {
+    const layouts = &lowered.lir_result.layouts;
+    const layout = layouts.getLayout(layout_idx);
+    if (layout.tag != .struct_) {
+        compileTimeFinalizationInvariant("erased callable result did not lower to a struct layout");
+    }
+    const fn_field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, 0);
+    if (fn_field_layout_idx != .opaque_ptr) {
+        compileTimeFinalizationInvariant("erased callable result code field was not an opaque pointer");
+    }
+    const fn_field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, 0);
+    const encoded: usize = switch (lowered.target_usize.size()) {
+        4 => value.offset(fn_field_offset).read(u32),
+        8 => value.offset(fn_field_offset).read(usize),
+        else => unreachable,
+    };
+    if (encoded == 0) {
+        compileTimeFinalizationInvariant("erased callable result code field was null");
+    }
+    return @enumFromInt(@as(u32, @intCast(encoded - 1)));
 }
 
 fn erasedClosureHiddenCapturePhysical(
@@ -1776,11 +1897,19 @@ const ComptimeReifier = struct {
                     .finite => reifierInvariant("erased boxed callable leaf referenced a finite callable result plan"),
                     .erased => |erased| erased,
                 };
+                const artifact = self.artifact orelse reifierInvariant("erased boxed callable leaf reification requires mutable checked artifact");
+                const lowered = self.lowered orelse reifierInvariant("erased boxed callable leaf reification requires lowered LIR context");
                 const callable_leaf = checked_artifact.CallableLeafInstance{ .erased_boxed = .{
                     .source_fn_ty = erased.source_fn_ty,
                     .sig_key = erased.sig_key,
                     .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-                    .code = erased.code,
+                    .code = resolveErasedCallableResultCode(
+                        artifact,
+                        lowered,
+                        erased,
+                        layout_idx,
+                        value,
+                    ),
                     .capture = try self.materializeErasedCallableLeafCapture(erased, layout_idx, value),
                 } };
                 break :blk .{

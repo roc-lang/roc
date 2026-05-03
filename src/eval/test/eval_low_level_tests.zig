@@ -3170,6 +3170,51 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "70.0" },
     },
     .{
+        .name = "boxed lambda round trip: unboxed callable joins with original callable",
+        .source =
+        \\{
+        \\x = 3
+        \\id = |z| x + z
+        \\g = |y| id(x + y)
+        \\g_boxed = Box.box(g)
+        \\g_unboxed = Box.unbox(g_boxed)
+        \\choice = if Bool.True A else B
+        \\match choice {
+        \\    A => g_unboxed(2)
+        \\    B => g(2)
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "8.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: promoted callable from interpreted erased value",
+        .source =
+        \\{
+        \\make_boxed = |_| Box.box(|x| x + 1)
+        \\add1 = Box.unbox(make_boxed({}))
+        \\add1(41)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: branch-selected interpreted erased value",
+        .source =
+        \\{
+        \\choose_boxed = |pick|
+        \\    if pick {
+        \\        Box.box(|x| x + 1)
+        \\    } else {
+        \\        Box.box(|x| x + 10)
+        \\    }
+        \\add = Box.unbox(choose_boxed(Bool.True))
+        \\add(41)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
         .name = "boxed lambda round trip: pass boxed lambda through helpers",
         .source =
         \\{

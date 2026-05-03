@@ -5871,11 +5871,16 @@ pub const ErasedCaptureSlotReificationRef = struct {
     plan: CaptureSlotReificationPlanId,
 };
 
+pub const ErasedCallableResultCodePlan = union(enum) {
+    materialized_by_lowering: canonical.ErasedCallableCodeRef,
+    read_from_interpreted_erased_value,
+};
+
 pub const ErasedCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
     provenance: []const canonical.BoxBoundaryId,
-    code: canonical.ErasedCallableCodeRef,
+    code_plan: ErasedCallableResultCodePlan,
     capture: ErasedCaptureReificationPlan,
     result_ty: canonical.CanonicalExecValueTypeKey,
     executable_signature_payloads: ErasedPromotedProcedureExecutableSignaturePayloads,
@@ -6544,6 +6549,32 @@ fn verifyCallableResultPlan(store: *const CompileTimePlanStore, plan: CallableRe
         .erased => |erased| {
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased callable result plan has no Box(T) provenance", .{});
+            }
+            if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &erased.sig_key.source_fn_ty.bytes)) {
+                std.debug.panic("checked artifact invariant violated: erased callable result source type differs from signature source type", .{});
+            }
+            if (!std.mem.eql(u8, &erased.executable_signature_payloads.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+                std.debug.panic("checked artifact invariant violated: erased callable result signature payload source type differs from result source type", .{});
+            }
+            switch (erased.code_plan) {
+                .materialized_by_lowering => |code| switch (code) {
+                    .direct_proc_value => |direct| {
+                        if (!std.mem.eql(u8, &direct.proc_value.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+                            std.debug.panic("checked artifact invariant violated: direct erased result code source type differs from result source type", .{});
+                        }
+                    },
+                    .finite_set_adapter => |adapter| {
+                        if (!std.mem.eql(u8, &adapter.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code source type differs from result source type", .{});
+                        }
+                        if (!std.mem.eql(u8, &adapter.erased_fn_sig_key.source_fn_ty.bytes, &erased.sig_key.source_fn_ty.bytes) or
+                            !std.mem.eql(u8, &adapter.erased_fn_sig_key.abi.bytes, &erased.sig_key.abi.bytes))
+                        {
+                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code signature differs from result signature", .{});
+                        }
+                    },
+                },
+                .read_from_interpreted_erased_value => {},
             }
             switch (erased.capture) {
                 .none,

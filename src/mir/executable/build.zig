@@ -271,8 +271,8 @@ fn collectErasedAdapterKeys(
     for (input.solve_sessions.items) |*session| {
         for (session.representation_store.callable_emission_plans) |plan| {
             switch (plan) {
-                .already_erased => |erased| try collectErasedCodeRefAdapter(allocator, &adapters, erased.code),
                 .erase_finite_set => |erase| try appendErasedAdapterKey(allocator, &adapters, erase.adapter),
+                .already_erased,
                 .finite,
                 .erase_proc_value,
                 => {},

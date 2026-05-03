@@ -54,13 +54,40 @@ pub const LoweredProgram = struct {
     main_proc: LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
     compile_time_root_payloads: []checked_artifact.CompileTimeRootPayload = &.{},
+    erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
+        for (self.erased_callable_code_map) |entry| {
+            if (entry.exec_arg_tys.len > 0) {
+                self.lir_result.store.allocator.free(entry.exec_arg_tys);
+            }
+        }
+        if (self.erased_callable_code_map.len > 0) {
+            self.lir_result.store.allocator.free(self.erased_callable_code_map);
+        }
         if (self.compile_time_root_payloads.len > 0) {
             self.lir_result.store.allocator.free(self.compile_time_root_payloads);
         }
         self.lir_result.deinit();
     }
+};
+
+pub const LoweredErasedCallableCodeEntry = struct {
+    lir_proc: LIR.LirProcSpecId,
+    code: canonical.ErasedCallableCodeRef,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    exec_arg_tys: []const canonical.CanonicalExecValueTypeKey,
+    exec_ret_ty: canonical.CanonicalExecValueTypeKey,
+    capture_shape_key: canonical.CaptureShapeKey,
+};
+
+const ExecutableErasedCallableCodeOrigin = struct {
+    executable_proc: mir.Executable.Ast.ExecutableProcId,
+    code: canonical.ErasedCallableCodeRef,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    exec_arg_tys: []const canonical.CanonicalExecValueTypeKey,
+    exec_ret_ty: canonical.CanonicalExecValueTypeKey,
+    capture_shape_key: canonical.CaptureShapeKey,
 };
 
 pub fn lowerArtifactsToLir(
@@ -127,6 +154,9 @@ pub fn lowerArtifactsToLir(
     );
     errdefer executable.deinit();
 
+    var erased_code_origins = try collectExecutableErasedCallableCodeOrigins(allocator, &executable);
+    errdefer deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
+
     var executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
 
@@ -145,6 +175,11 @@ pub fn lowerArtifactsToLir(
     );
     errdefer lowered_lir.deinit();
 
+    const erased_callable_code_map = try buildLoweredErasedCallableCodeMap(allocator, erased_code_origins, &lowered_lir);
+    errdefer deinitLoweredErasedCallableCodeMap(allocator, erased_callable_code_map);
+    deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
+    erased_code_origins = &.{};
+
     try Arc.insert(&lowered_lir.store);
 
     if (lowered_lir.root_procs.items.len == 0) {
@@ -159,7 +194,111 @@ pub fn lowerArtifactsToLir(
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
         .compile_time_root_payloads = compile_time_root_payloads,
+        .erased_callable_code_map = erased_callable_code_map,
     };
+}
+
+fn collectExecutableErasedCallableCodeOrigins(
+    allocator: Allocator,
+    program: *const mir.Executable.Build.Program,
+) Allocator.Error![]ExecutableErasedCallableCodeOrigin {
+    const entries = try allocator.alloc(ExecutableErasedCallableCodeOrigin, program.procs.items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (entries[0..initialized]) |entry| {
+            if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+        }
+        if (entries.len > 0) allocator.free(entries);
+    }
+
+    for (program.procs.items, 0..) |proc, i| {
+        const def = program.ast.defs.items[@intFromEnum(proc.body)];
+        const exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, def.specialization_key.exec_arg_tys);
+        entries[i] = switch (proc.origin) {
+            .source => |source| .{
+                .executable_proc = proc.executable_proc,
+                .code = .{ .direct_proc_value = .{
+                    .proc_value = source.callable,
+                    .capture_shape_key = def.specialization_key.capture_shape_key,
+                } },
+                .source_fn_ty = source.callable.source_fn_ty,
+                .exec_arg_tys = exec_arg_tys,
+                .exec_ret_ty = def.specialization_key.exec_ret_ty,
+                .capture_shape_key = def.specialization_key.capture_shape_key,
+            },
+            .erased_adapter => |adapter| blk: {
+                if (!repr.canonicalTypeKeyEql(def.specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
+                    checkedPipelineInvariant("erased adapter executable code origin source function type differs from specialization key");
+                }
+                if (!repr.captureShapeKeyEql(def.specialization_key.capture_shape_key, adapter.capture_shape_key)) {
+                    checkedPipelineInvariant("erased adapter executable code origin capture shape differs from adapter key");
+                }
+                break :blk .{
+                    .executable_proc = proc.executable_proc,
+                    .code = .{ .finite_set_adapter = adapter },
+                    .source_fn_ty = adapter.source_fn_ty,
+                    .exec_arg_tys = exec_arg_tys,
+                    .exec_ret_ty = def.specialization_key.exec_ret_ty,
+                    .capture_shape_key = adapter.capture_shape_key,
+                };
+            },
+        };
+        initialized += 1;
+    }
+
+    return entries;
+}
+
+fn deinitExecutableErasedCallableCodeOrigins(
+    allocator: Allocator,
+    entries: []ExecutableErasedCallableCodeOrigin,
+) void {
+    for (entries) |entry| {
+        if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+    }
+    if (entries.len > 0) allocator.free(entries);
+}
+
+fn buildLoweredErasedCallableCodeMap(
+    allocator: Allocator,
+    origins: []const ExecutableErasedCallableCodeOrigin,
+    lowered_lir: *const LowerIr.Result,
+) Allocator.Error![]LoweredErasedCallableCodeEntry {
+    const entries = try allocator.alloc(LoweredErasedCallableCodeEntry, origins.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (entries[0..initialized]) |entry| {
+            if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+        }
+        if (entries.len > 0) allocator.free(entries);
+    }
+
+    for (origins, 0..) |origin, i| {
+        const lir_proc = lowered_lir.lirProcForExecutable(origin.executable_proc) orelse {
+            checkedPipelineInvariant("lowered erased callable code origin has no LIR procedure");
+        };
+        entries[i] = .{
+            .lir_proc = lir_proc,
+            .code = origin.code,
+            .source_fn_ty = origin.source_fn_ty,
+            .exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, origin.exec_arg_tys),
+            .exec_ret_ty = origin.exec_ret_ty,
+            .capture_shape_key = origin.capture_shape_key,
+        };
+        initialized += 1;
+    }
+
+    return entries;
+}
+
+fn deinitLoweredErasedCallableCodeMap(
+    allocator: Allocator,
+    entries: []LoweredErasedCallableCodeEntry,
+) void {
+    for (entries) |entry| {
+        if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+    }
+    if (entries.len > 0) allocator.free(entries);
 }
 
 fn publishCallableSetDescriptorsForLowering(
@@ -1275,28 +1414,66 @@ fn erasedPromotedSignaturePayloadsForAlreadyErased(
     var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
     defer builder.deinit();
 
-    const target_instance = switch (erased.code) {
-        .direct_proc_value => |direct| builder.procInstanceForCallable(direct.proc_value),
-        .finite_set_adapter => |adapter| blk: {
-            const descriptor = value_context.representation_store.callableSetDescriptor(adapter.callable_set_key) orelse {
-                checkedPipelineInvariant("already-erased promoted signature finite adapter has no callable-set descriptor");
-            };
-            if (descriptor.members.len == 0) {
-                checkedPipelineInvariant("already-erased promoted signature finite adapter descriptor has no members");
-            }
-            break :blk builder.procInstanceForMir(descriptor.members[0].source_proc);
-        },
+    const abi = value_context.representation_store.erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+        checkedPipelineInvariant("already-erased promoted signature references missing erased ABI payload");
     };
-    return try erasedPromotedSignaturePayloadsForProcInstance(
-        allocator,
-        &builder,
-        target_instance,
-        erased.sig_key,
-        erased.sig_key.source_fn_ty,
-        erased.result_ty,
-        erased.capture_shape_key,
-        try builder.hiddenCapturePayloadForAlreadyErased(erased),
-    );
+    if (abi.fixed_arity != @as(u32, @intCast(abi.arg_exec_keys.len))) {
+        checkedPipelineInvariant("already-erased promoted signature ABI arity differs from argument key count");
+    }
+
+    const param_exec_tys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
+    errdefer if (param_exec_tys.len > 0) allocator.free(param_exec_tys);
+    const erased_call_args = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
+    errdefer if (erased_call_args.len > 0) allocator.free(erased_call_args);
+    const arg_keys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
+    errdefer if (arg_keys.len > 0) allocator.free(arg_keys);
+    const erased_arg_keys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
+    errdefer if (erased_arg_keys.len > 0) allocator.free(erased_arg_keys);
+
+    for (abi.arg_exec_keys, 0..) |arg_key, i| {
+        const payload_ref = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), arg_key) orelse {
+            checkedPipelineInvariant("already-erased promoted signature ABI argument key has no published executable payload");
+        };
+        param_exec_tys[i] = payload_ref;
+        erased_call_args[i] = payload_ref;
+    }
+
+    const ret_payload = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), abi.ret_exec_key) orelse {
+        checkedPipelineInvariant("already-erased promoted signature ABI result key has no published executable payload");
+    };
+    const hidden_capture = try builder.hiddenCapturePayloadForAlreadyErased(erased);
+    if ((erased.sig_key.capture_ty == null) != (hidden_capture == null)) {
+        checkedPipelineInvariant("already-erased promoted signature hidden capture presence differs from erased signature key");
+    }
+
+    return .{
+        .source_fn_ty = erased.sig_key.source_fn_ty,
+        .param_exec_tys = param_exec_tys,
+        .param_exec_ty_keys = arg_keys,
+        .wrapper_ret = ret_payload,
+        .wrapper_ret_key = abi.ret_exec_key,
+        .erased_call_args = erased_call_args,
+        .erased_call_arg_keys = erased_arg_keys,
+        .erased_call_ret = ret_payload,
+        .erased_call_ret_key = abi.ret_exec_key,
+        .hidden_capture = if (hidden_capture) |capture| .{
+            .exec_ty = capture.ref,
+            .exec_ty_key = capture.key,
+        } else null,
+        .capture_shape_key = erased.capture_shape_key,
+    };
 }
 
 fn erasedPromotedSignaturePayloadsForProcInstance(
@@ -1423,10 +1600,10 @@ fn erasedProcValueResultPlan(
         .source_fn_ty = erase.erased_fn_sig_key.source_fn_ty,
         .sig_key = erase.erased_fn_sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
-        .code = .{ .direct_proc_value = .{
+        .code_plan = .{ .materialized_by_lowering = .{ .direct_proc_value = .{
             .proc_value = erase.proc_value,
             .capture_shape_key = erase.capture_shape_key,
-        } },
+        } } },
         .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, erase),
         .result_ty = erase.executable_specialization_key.exec_ret_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForProcValue(
@@ -1451,7 +1628,7 @@ fn erasedFiniteSetResultPlan(
         .source_fn_ty = erase.adapter.source_fn_ty,
         .sig_key = erase.adapter.erased_fn_sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
-        .code = .{ .finite_set_adapter = erase.adapter },
+        .code_plan = .{ .materialized_by_lowering = .{ .finite_set_adapter = erase.adapter } },
         .result_ty = erase.result_ty,
         .capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
             .none
@@ -1485,7 +1662,7 @@ fn alreadyErasedResultPlan(
         .source_fn_ty = erased.sig_key.source_fn_ty,
         .sig_key = erased.sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
-        .code = erased.code,
+        .code_plan = .read_from_interpreted_erased_value,
         .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, plans, value_context, erased),
         .result_ty = erased.result_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForAlreadyErased(
