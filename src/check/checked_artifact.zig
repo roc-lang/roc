@@ -308,9 +308,14 @@ pub const ProvidesEntry = struct {
     ffi_symbol: canonical.ExternalSymbolNameId,
 };
 
+pub const RequiresEntry = struct {
+    platform_name: canonical.ExportNameId,
+    declared_source_ty: canonical.CanonicalTypeSchemeKey,
+};
+
 pub const ProvidesRequiresMetadata = struct {
     provides: []ProvidesEntry = &.{},
-    requires: []ModuleEnv.RequiredType = &.{},
+    requires: []RequiresEntry = &.{},
 
     pub fn deinit(self: *ProvidesRequiresMetadata, allocator: Allocator) void {
         allocator.free(self.provides);
@@ -5568,6 +5573,30 @@ fn publishProvidesMetadata(
     return provides;
 }
 
+fn publishRequiresMetadata(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+) Allocator.Error![]RequiresEntry {
+    const source = module.requiresTypes();
+    const requires = try allocator.alloc(RequiresEntry, source.len);
+    errdefer allocator.free(requires);
+
+    for (source, 0..) |entry, i| {
+        requires[i] = .{
+            .platform_name = try names.internExportIdent(module.identStoreConst(), entry.ident),
+            .declared_source_ty = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                ModuleEnv.varFrom(entry.type_anno),
+            ),
+        };
+    }
+
+    return requires;
+}
+
 pub const ModuleInterfaceCapabilities = struct {
     exported_def_count: u32,
     method_count: u32,
@@ -9590,6 +9619,13 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
+        for (self.provides_requires.requires) |entry| {
+            _ = self.canonical_names.exportNameText(entry.platform_name);
+            _ = self.checked_types.schemeForKey(entry.declared_source_ty) orelse {
+                std.debug.panic("checked artifact invariant violated: require metadata source type was not published", .{});
+            };
+        }
+
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key, &self.erased_fn_abis);
         self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
@@ -10031,7 +10067,7 @@ pub fn publishFromTypedModule(
     const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
     errdefer allocator.free(provides);
 
-    const requires = try allocator.dupe(ModuleEnv.RequiredType, module_env.requires_types.items.items);
+    const requires = try publishRequiresMetadata(allocator, module, &canonical_names);
     errdefer allocator.free(requires);
 
     const owner_artifact = artifactRef(artifact_key);
