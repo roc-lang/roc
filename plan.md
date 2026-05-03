@@ -644,6 +644,11 @@ const SessionExecutableRecordFieldPayload = struct {
     key: CanonicalExecValueTypeKey,
 };
 
+const SessionExecutableRecordPayload = struct {
+    shape: RecordShapeId,
+    fields: Span(SessionExecutableRecordFieldPayload),
+};
+
 const SessionExecutableTupleElemPayload = struct {
     index: u32,
     ty: SessionExecutableTypePayloadRef,
@@ -659,6 +664,11 @@ const SessionExecutableTagPayload = struct {
 const SessionExecutableTagVariantPayload = struct {
     tag: TagId,
     payloads: Span(SessionExecutableTagPayload),
+};
+
+const SessionExecutableTagUnionPayload = struct {
+    shape: TagUnionShapeId,
+    variants: Span(SessionExecutableTagVariantPayload),
 };
 
 const SessionExecutableNominalPayload = struct {
@@ -688,9 +698,9 @@ const SessionExecutableErasedFnPayload = struct {
 const SessionExecutableTypePayload = union(enum) {
     pending,
     primitive: ExecutablePrimitive,
-    record: Span(SessionExecutableRecordFieldPayload),
+    record: SessionExecutableRecordPayload,
     tuple: Span(SessionExecutableTupleElemPayload),
-    tag_union: Span(SessionExecutableTagVariantPayload),
+    tag_union: SessionExecutableTagUnionPayload,
     list: SessionExecutableTypePayloadChild,
     box: SessionExecutableTypePayloadChild,
     nominal: SessionExecutableNominalPayload,
@@ -699,8 +709,14 @@ const SessionExecutableTypePayload = union(enum) {
     recursive_ref: SessionExecutableTypePayloadId,
 };
 
+const SessionExecutableTypePayloadEntry = struct {
+    key: CanonicalExecValueTypeKey,
+    payload: SessionExecutableTypePayload,
+};
+
 const SessionExecutableTypePayloadStore = struct {
-    payloads: Store(SessionExecutableTypePayload),
+    entries: Store(SessionExecutableTypePayloadEntry),
+    by_key: Map(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId),
 };
 
 const SessionExecutableValueEndpointOwner = union(enum) {
@@ -1172,6 +1188,14 @@ not use the key as a lookup into a global semantic cache or as permission to
 reconstruct the payload from source type, layout, callee body, runtime bytes, or
 syntax.
 
+The session payload store entries are keyed. The stored entry for
+`SessionExecutableTypePayloadRef.payload` must carry the same
+`CanonicalExecValueTypeKey` as the endpoint that references it. The `by_key`
+index is an integrity index over owned payload entries, not a semantic fallback:
+it may answer "which already-published payload entry has this key?" for
+debug-only verification and for ABI publication, but it must never synthesize a
+payload for a missing key. Missing key entries are compiler bugs.
+
 The endpoint owner is mandatory because not every session transform endpoint is
 a local expression value in the current procedure. Call transforms cross a real
 procedure boundary. A `call_proc` argument transforms from the caller's local
@@ -1408,6 +1432,13 @@ Executable MIR may maintain a local mechanical memo from payload ids to lowered
 not be queried by key alone. If executable MIR observes a key without a payload
 ref at a boundary that requires a type, the compiler is malformed: debug builds
 assert immediately and release builds use `unreachable`.
+
+Artifact payload entries are keyed for the same reason session payload entries
+are keyed. An `ExecutableTypePayloadRef` must point at an artifact entry whose
+stored key equals the endpoint key next to the ref. Erased ABI publication may
+look up already-published entries by key only to attach explicit refs to
+wrapper signatures or to verify completeness. A missing key is not recovered by
+rebuilding from source or layout; it is a compiler invariant violation.
 
 For an erased promoted procedure:
 

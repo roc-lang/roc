@@ -158,6 +158,7 @@ pub fn run(
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
         const value_store = &input.value_stores.items[@intFromEnum(proc.representation_instance)];
         const proc_instance = &input.proc_instances.items[@intFromEnum(proc.representation_instance)];
+        const representation_store = &input.solve_sessions.items[@intFromEnum(proc_instance.solve_session)].representation_store;
         var builder = BodyBuilder{
             .allocator = allocator,
             .program = &program,
@@ -165,8 +166,9 @@ pub fn run(
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
             .type_lowerer = &type_lowerer,
+            .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types),
             .value_store = value_store,
-            .representation_store = &input.solve_sessions.items[@intFromEnum(proc_instance.solve_session)].representation_store,
+            .representation_store = representation_store,
             .callable_set_descriptors = program.callable_set_descriptors,
             .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
             .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
@@ -676,6 +678,7 @@ fn lowerErasedFiniteSetAdapterProc(
         .output = &program.ast,
         .canonical_names = &program.canonical_names,
         .type_lowerer = type_lowerer,
+        .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types),
         .value_store = value_store,
         .representation_store = representation_store,
         .callable_set_descriptors = program.callable_set_descriptors,
@@ -3394,6 +3397,202 @@ const PublishedTypeLowerer = struct {
     }
 };
 
+const SessionTypeLowerer = struct {
+    allocator: Allocator,
+    payloads: *const repr.SessionExecutableTypePayloadStore,
+    output: *Type.Store,
+    active: std.AutoHashMap(repr.SessionExecutableTypePayloadId, Type.TypeId),
+
+    fn init(
+        allocator: Allocator,
+        payloads: *const repr.SessionExecutableTypePayloadStore,
+        output: *Type.Store,
+    ) SessionTypeLowerer {
+        return .{
+            .allocator = allocator,
+            .payloads = payloads,
+            .output = output,
+            .active = std.AutoHashMap(repr.SessionExecutableTypePayloadId, Type.TypeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *SessionTypeLowerer) void {
+        self.active.deinit();
+    }
+
+    fn lower(
+        self: *SessionTypeLowerer,
+        ref: repr.SessionExecutableTypePayloadRef,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!Type.TypeId {
+        if (@intFromEnum(ref.payload) >= self.payloads.entries.len) {
+            executableInvariant("executable session type payload ref is out of range");
+        }
+        const actual_key = self.payloads.keyFor(ref.payload);
+        if (!repr.canonicalExecValueTypeKeyEql(actual_key, expected_key)) {
+            executableInvariant("executable session type payload key differs from endpoint key");
+        }
+        return try self.lowerPayload(ref.payload);
+    }
+
+    fn lowerPayload(
+        self: *SessionTypeLowerer,
+        id: repr.SessionExecutableTypePayloadId,
+    ) Allocator.Error!Type.TypeId {
+        if (self.active.get(id)) |existing| return existing;
+
+        const ty = try self.output.addType(.placeholder);
+        try self.active.put(id, ty);
+        errdefer _ = self.active.remove(id);
+
+        const lowered = try self.lowerPayloadContent(self.payloads.get(id));
+        self.output.types.items[@intFromEnum(ty)] = lowered;
+        _ = self.active.remove(id);
+        return ty;
+    }
+
+    fn lowerPayloadContent(
+        self: *SessionTypeLowerer,
+        payload: repr.SessionExecutableTypePayload,
+    ) Allocator.Error!Type.Content {
+        return switch (payload) {
+            .pending => executableInvariant("executable session type payload was pending"),
+            .primitive => |prim| .{ .primitive = publishedPrimitive(prim) },
+            .record => |record| try self.lowerRecordPayload(record),
+            .tuple => |items| .{ .tuple = try self.lowerTuplePayload(items) },
+            .tag_union => |tag_union| try self.lowerTagUnionPayload(tag_union),
+            .list => |child| .{ .list = try self.lower(child.ty, child.key) },
+            .box => |child| .{ .box = try self.lower(child.ty, child.key) },
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.lower(nominal.backing, nominal.backing_key),
+            } },
+            .callable_set => |callable_set| try self.lowerCallableSetPayload(callable_set),
+            .erased_fn => |erased| .{ .erased_fn = .{
+                .sig_key = erased.sig_key,
+                .capture_shape = erased.capture_shape_key,
+                .capture_ty = if (erased.capture_ty) |capture| blk: {
+                    const capture_key = erased.capture_ty_key orelse executableInvariant("executable session erased payload capture ref has no key");
+                    break :blk try self.lower(capture, capture_key);
+                } else null,
+            } },
+            .recursive_ref => |ref_id| .{ .link = try self.lowerPayload(ref_id) },
+        };
+    }
+
+    fn lowerRecordPayload(
+        self: *SessionTypeLowerer,
+        record: repr.SessionExecutableRecordPayload,
+    ) Allocator.Error!Type.Content {
+        if (record.fields.len == 0) return .{ .record = .{
+            .shape = record.shape,
+            .fields = &.{},
+        } };
+        const out = try self.allocator.alloc(Type.RecordFieldType, record.fields.len);
+        errdefer self.allocator.free(out);
+        for (record.fields, 0..) |field, i| {
+            out[i] = .{
+                .field = field.field,
+                .ty = try self.lower(field.ty, field.key),
+            };
+        }
+        return .{ .record = .{
+            .shape = record.shape,
+            .fields = out,
+        } };
+    }
+
+    fn lowerTuplePayload(
+        self: *SessionTypeLowerer,
+        items: []const repr.SessionExecutableTupleElemPayload,
+    ) Allocator.Error![]const Type.TypeId {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TypeId, items.len);
+        errdefer self.allocator.free(out);
+        const seen = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (items) |item| {
+            const index: usize = @intCast(item.index);
+            if (index >= items.len) executableInvariant("executable session tuple payload index exceeded arity");
+            if (seen[index]) executableInvariant("executable session tuple payload index was duplicated");
+            out[index] = try self.lower(item.ty, item.key);
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) executableInvariant("executable session tuple payload was not dense");
+        }
+        return out;
+    }
+
+    fn lowerTagUnionPayload(
+        self: *SessionTypeLowerer,
+        tag_union: repr.SessionExecutableTagUnionPayload,
+    ) Allocator.Error!Type.Content {
+        if (tag_union.variants.len == 0) return .{ .tag_union = .{
+            .shape = tag_union.shape,
+            .tags = &.{},
+        } };
+        const out = try self.allocator.alloc(Type.TagType, tag_union.variants.len);
+        for (out) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.payloads);
+            self.allocator.free(out);
+        }
+        for (tag_union.variants, 0..) |variant, i| {
+            out[i] = .{
+                .tag = variant.tag,
+                .payloads = try self.lowerTagPayloads(variant.payloads),
+            };
+        }
+        return .{ .tag_union = .{
+            .shape = tag_union.shape,
+            .tags = out,
+        } };
+    }
+
+    fn lowerTagPayloads(
+        self: *SessionTypeLowerer,
+        payloads: []const repr.SessionExecutableTagPayload,
+    ) Allocator.Error![]const Type.TagPayloadType {
+        if (payloads.len == 0) return &.{};
+        const out = try self.allocator.alloc(Type.TagPayloadType, payloads.len);
+        errdefer self.allocator.free(out);
+        for (payloads, 0..) |payload, i| {
+            out[i] = .{
+                .payload = payload.payload,
+                .ty = try self.lower(payload.ty, payload.key),
+            };
+        }
+        return out;
+    }
+
+    fn lowerCallableSetPayload(
+        self: *SessionTypeLowerer,
+        callable_set: repr.SessionExecutableCallableSetPayload,
+    ) Allocator.Error!Type.Content {
+        if (callable_set.members.len == 0) return .{ .callable_set = .{
+            .key = callable_set.key,
+            .members = &.{},
+        } };
+        const members = try self.allocator.alloc(Type.CallableSetMemberType, callable_set.members.len);
+        errdefer self.allocator.free(members);
+        for (callable_set.members, 0..) |member, i| {
+            members[i] = .{
+                .member = member.member,
+                .payload_ty = if (member.payload_ty) |payload| blk: {
+                    const payload_key = member.payload_ty_key orelse executableInvariant("executable session callable-set member payload ref has no key");
+                    break :blk try self.lower(payload, payload_key);
+                } else null,
+            };
+        }
+        return .{ .callable_set = .{
+            .key = callable_set.key,
+            .members = members,
+        } };
+    }
+};
+
 fn publishedPrimitive(prim: checked_artifact.ExecutablePrimitive) Type.Prim {
     return switch (prim) {
         .bool => .bool,
@@ -3572,6 +3771,7 @@ const BodyBuilder = struct {
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
     type_lowerer: *TypeLowerer,
+    session_type_lowerer: SessionTypeLowerer,
     value_store: *const repr.ValueInfoStore,
     representation_store: *const repr.RepresentationStore,
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
@@ -3592,6 +3792,7 @@ const BodyBuilder = struct {
     capture_record_arg: ?Ast.TypedValue = null,
 
     fn deinit(self: *BodyBuilder) void {
+        self.session_type_lowerer.deinit();
         self.active_callable_sets.deinit(self.allocator);
         self.expr_map.deinit();
         self.env.deinit();
@@ -3697,6 +3898,13 @@ const BodyBuilder = struct {
             self.value_store,
             self.representation_store,
         );
+    }
+
+    fn lowerSessionExecutableEndpointType(
+        self: *BodyBuilder,
+        endpoint: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!Type.TypeId {
+        return try self.session_type_lowerer.lower(endpoint.exec_ty.ty, endpoint.exec_ty.key);
     }
 
     fn lowerExecutableValueTypeInStore(

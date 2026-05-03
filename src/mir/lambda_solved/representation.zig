@@ -67,6 +67,213 @@ pub const CallableSetMemberRef = canonical.CallableSetMemberRef;
 pub const CallableSetCaptureSlot = canonical.CallableSetCaptureSlot;
 pub const CanonicalCallableSetMember = canonical.CanonicalCallableSetMember;
 pub const CanonicalCallableSetDescriptor = canonical.CanonicalCallableSetDescriptor;
+pub const ExecutablePrimitive = checked_artifact.ExecutablePrimitive;
+
+pub const SessionExecutableTypePayloadId = enum(u32) { _ };
+
+pub const SessionExecutableTypePayloadRef = struct {
+    payload: SessionExecutableTypePayloadId,
+};
+
+pub const SessionExecutableTypeEndpoint = struct {
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableTypePayloadChild = struct {
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableRecordFieldPayload = struct {
+    field: row.RecordFieldId,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableRecordPayload = struct {
+    shape: row.RecordShapeId,
+    fields: []const SessionExecutableRecordFieldPayload = &.{},
+};
+
+pub const SessionExecutableTupleElemPayload = struct {
+    index: u32,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableTagPayload = struct {
+    payload: row.TagPayloadId,
+    ty: SessionExecutableTypePayloadRef,
+    key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableTagVariantPayload = struct {
+    tag: row.TagId,
+    payloads: []const SessionExecutableTagPayload = &.{},
+};
+
+pub const SessionExecutableTagUnionPayload = struct {
+    shape: row.TagUnionShapeId,
+    variants: []const SessionExecutableTagVariantPayload = &.{},
+};
+
+pub const SessionExecutableNominalPayload = struct {
+    nominal: canonical.NominalTypeKey,
+    backing: SessionExecutableTypePayloadRef,
+    backing_key: CanonicalExecValueTypeKey,
+};
+
+pub const SessionExecutableCallableSetMemberPayload = struct {
+    member: CallableSetMemberId,
+    payload_ty: ?SessionExecutableTypePayloadRef = null,
+    payload_ty_key: ?CanonicalExecValueTypeKey = null,
+};
+
+pub const SessionExecutableCallableSetPayload = struct {
+    key: CanonicalCallableSetKey,
+    members: []const SessionExecutableCallableSetMemberPayload = &.{},
+};
+
+pub const SessionExecutableErasedFnPayload = struct {
+    sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    capture_ty: ?SessionExecutableTypePayloadRef = null,
+    capture_ty_key: ?CanonicalExecValueTypeKey = null,
+};
+
+pub const SessionExecutableTypePayload = union(enum) {
+    pending,
+    primitive: ExecutablePrimitive,
+    record: SessionExecutableRecordPayload,
+    tuple: []const SessionExecutableTupleElemPayload,
+    tag_union: SessionExecutableTagUnionPayload,
+    list: SessionExecutableTypePayloadChild,
+    box: SessionExecutableTypePayloadChild,
+    nominal: SessionExecutableNominalPayload,
+    callable_set: SessionExecutableCallableSetPayload,
+    erased_fn: SessionExecutableErasedFnPayload,
+    recursive_ref: SessionExecutableTypePayloadId,
+};
+
+pub const SessionExecutableTypePayloadEntry = struct {
+    key: CanonicalExecValueTypeKey,
+    payload: SessionExecutableTypePayload,
+};
+
+pub const SessionExecutableTypePayloadStore = struct {
+    entries: []SessionExecutableTypePayloadEntry = &.{},
+    by_key: std.AutoHashMap(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId),
+
+    pub fn init(allocator: std.mem.Allocator) SessionExecutableTypePayloadStore {
+        return .{
+            .by_key = std.AutoHashMap(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId).init(allocator),
+        };
+    }
+
+    pub fn reserve(
+        self: *SessionExecutableTypePayloadStore,
+        allocator: std.mem.Allocator,
+        key: CanonicalExecValueTypeKey,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayloadId {
+        if (self.by_key.get(key) != null) representationInvariant("session executable type payload reserve saw duplicate key");
+        return try self.appendNew(allocator, key, .pending);
+    }
+
+    pub fn append(
+        self: *SessionExecutableTypePayloadStore,
+        allocator: std.mem.Allocator,
+        key: CanonicalExecValueTypeKey,
+        payload: SessionExecutableTypePayload,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayloadId {
+        if (self.by_key.get(key)) |existing| return existing;
+        return try self.appendNew(allocator, key, payload);
+    }
+
+    fn appendNew(
+        self: *SessionExecutableTypePayloadStore,
+        allocator: std.mem.Allocator,
+        key: CanonicalExecValueTypeKey,
+        payload: SessionExecutableTypePayload,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayloadId {
+        const id: SessionExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.entries.len)));
+        const old = self.entries;
+        const next = try allocator.alloc(SessionExecutableTypePayloadEntry, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = .{
+            .key = key,
+            .payload = payload,
+        };
+        try self.by_key.put(key, id);
+        allocator.free(old);
+        self.entries = next;
+        return id;
+    }
+
+    pub fn fill(
+        self: *SessionExecutableTypePayloadStore,
+        allocator: std.mem.Allocator,
+        id: SessionExecutableTypePayloadId,
+        payload: SessionExecutableTypePayload,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.entries.len) representationInvariant("session executable type payload id out of range");
+        deinitSessionExecutableTypePayload(allocator, &self.entries[index].payload);
+        self.entries[index].payload = payload;
+    }
+
+    pub fn get(self: *const SessionExecutableTypePayloadStore, id: SessionExecutableTypePayloadId) SessionExecutableTypePayload {
+        const index = @intFromEnum(id);
+        if (index >= self.entries.len) representationInvariant("session executable type payload id out of range");
+        return self.entries[index].payload;
+    }
+
+    pub fn keyFor(self: *const SessionExecutableTypePayloadStore, id: SessionExecutableTypePayloadId) CanonicalExecValueTypeKey {
+        const index = @intFromEnum(id);
+        if (index >= self.entries.len) representationInvariant("session executable type payload id out of range");
+        return self.entries[index].key;
+    }
+
+    pub fn refForKey(self: *const SessionExecutableTypePayloadStore, key: CanonicalExecValueTypeKey) ?SessionExecutableTypePayloadRef {
+        const id = self.by_key.get(key) orelse return null;
+        return .{ .payload = id };
+    }
+
+    pub fn deinit(self: *SessionExecutableTypePayloadStore, allocator: std.mem.Allocator) void {
+        for (self.entries) |*entry| deinitSessionExecutableTypePayload(allocator, &entry.payload);
+        allocator.free(self.entries);
+        self.by_key.deinit();
+        self.entries = &.{};
+    }
+};
+
+fn deinitSessionExecutableTypePayload(
+    allocator: std.mem.Allocator,
+    payload: *SessionExecutableTypePayload,
+) void {
+    switch (payload.*) {
+        .pending,
+        .primitive,
+        .list,
+        .box,
+        .nominal,
+        .erased_fn,
+        .recursive_ref,
+        => {},
+        .record => |record| if (record.fields.len > 0) allocator.free(record.fields),
+        .tuple => |items| if (items.len > 0) allocator.free(items),
+        .tag_union => |tag_union| {
+            for (tag_union.variants) |variant| {
+                if (variant.payloads.len > 0) allocator.free(variant.payloads);
+            }
+            if (tag_union.variants.len > 0) allocator.free(tag_union.variants);
+        },
+        .callable_set => |callable_set| {
+            if (callable_set.members.len > 0) allocator.free(callable_set.members);
+        },
+    }
+    payload.* = undefined;
+}
 
 pub const CallableMemberInstanceId = struct {
     proc_base: canonical.ProcBaseKeyRef,
@@ -256,7 +463,7 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
 pub const SessionExecutableValueEndpoint = struct {
     owner: SessionExecutableValueEndpointOwner,
     logical_ty: TypeVarId,
-    key: CanonicalExecValueTypeKey,
+    exec_ty: SessionExecutableTypeEndpoint,
 };
 
 pub const SessionValueTransformRecordField = struct {
@@ -708,6 +915,7 @@ pub const RepresentationStore = struct {
     callable_emission_plans: []const CallableValueEmissionPlan = &.{},
     callable_construction_plans: []const CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
+    session_executable_type_payloads: SessionExecutableTypePayloadStore,
     erased_fn_abis: ErasedFnAbiStore = .{},
     box_boundaries: []const BoxBoundary = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
@@ -716,11 +924,13 @@ pub const RepresentationStore = struct {
     pub fn init(allocator: std.mem.Allocator) RepresentationStore {
         return .{
             .allocator = allocator,
+            .session_executable_type_payloads = SessionExecutableTypePayloadStore.init(allocator),
         };
     }
 
     pub fn deinit(self: *RepresentationStore) void {
         self.session_value_transforms.deinit(self.allocator);
+        self.session_executable_type_payloads.deinit(self.allocator);
         self.erased_fn_abis.deinit(self.allocator);
         for (self.callable_emission_plans) |plan| {
             switch (plan) {
@@ -1337,6 +1547,620 @@ pub fn captureShapeKeyForValueSlice(
     return .{ .bytes = hasher.finalResult() };
 }
 
+pub fn sessionExecutableTypeEndpointForValue(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    representation_store: *RepresentationStore,
+    value_store: *const ValueInfoStore,
+    value: ValueInfoId,
+) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+    var builder = SessionExecutableTypePayloadBuilder.init(allocator, names, row_shapes, types, representation_store, value_store);
+    defer builder.deinit();
+    return try builder.endpointForValue(value);
+}
+
+pub fn sessionExecutableTypeEndpointForType(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    representation_store: *RepresentationStore,
+    ty: type_mod.TypeVarId,
+) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+    var builder = SessionExecutableTypePayloadBuilder.init(allocator, names, row_shapes, types, representation_store, null);
+    defer builder.deinit();
+    return try builder.endpointForType(ty);
+}
+
+const SessionExecutableTypePayloadBuilder = struct {
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    representation_store: *RepresentationStore,
+    value_store: ?*const ValueInfoStore,
+    active_types: std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId),
+    active_values: std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId),
+
+    fn init(
+        allocator: std.mem.Allocator,
+        names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
+        types: *const type_mod.Store,
+        representation_store: *RepresentationStore,
+        value_store: ?*const ValueInfoStore,
+    ) SessionExecutableTypePayloadBuilder {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .row_shapes = row_shapes,
+            .types = types,
+            .representation_store = representation_store,
+            .value_store = value_store,
+            .active_types = std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId).init(allocator),
+            .active_values = std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *SessionExecutableTypePayloadBuilder) void {
+        self.active_values.deinit();
+        self.active_types.deinit();
+    }
+
+    fn refFor(id: SessionExecutableTypePayloadId) SessionExecutableTypePayloadRef {
+        return .{ .payload = id };
+    }
+
+    fn endpointForValue(self: *SessionExecutableTypePayloadBuilder, value: ValueInfoId) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        const values = self.value_store orelse representationInvariant("session executable type endpoint for value has no value store");
+        const key = try execValueTypeKeyForValue(
+            self.allocator,
+            self.names,
+            self.types,
+            self.representation_store,
+            values,
+            value,
+        );
+        if (self.active_values.get(value)) |active| {
+            const recursive = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .recursive_ref = active });
+            return .{ .ty = refFor(recursive), .key = key };
+        }
+        if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+
+        const id = try self.representation_store.session_executable_type_payloads.reserve(self.allocator, key);
+        try self.active_values.put(value, id);
+        errdefer _ = self.active_values.remove(value);
+
+        const info = values.values.items[@intFromEnum(value)];
+        const payload = if (info.callable) |callable|
+            try self.callablePayload(callable)
+        else if (info.aggregate) |aggregate|
+            try self.aggregatePayload(info.logical_ty, aggregate)
+        else
+            try self.typePayload(info.logical_ty);
+
+        self.representation_store.session_executable_type_payloads.fill(self.allocator, id, payload);
+        _ = self.active_values.remove(value);
+        return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn endpointForType(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        const key = try execValueTypeKey(self.allocator, self.names, self.types, ty);
+        const root = self.types.unlinkConst(ty);
+        if (self.active_types.get(root)) |active| {
+            const recursive = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .recursive_ref = active });
+            return .{ .ty = refFor(recursive), .key = key };
+        }
+        if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+
+        const id = try self.representation_store.session_executable_type_payloads.reserve(self.allocator, key);
+        try self.active_types.put(root, id);
+        errdefer _ = self.active_types.remove(root);
+
+        const payload = try self.typePayload(root);
+        self.representation_store.session_executable_type_payloads.fill(self.allocator, id, payload);
+        _ = self.active_types.remove(root);
+        return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn childForType(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
+        const child = try self.endpointForType(ty);
+        return .{ .ty = child.ty, .key = child.key };
+    }
+
+    fn childForValue(self: *SessionExecutableTypePayloadBuilder, value: ValueInfoId) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
+        const child = try self.endpointForValue(value);
+        return .{ .ty = child.ty, .key = child.key };
+    }
+
+    fn typePayload(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        const root = self.types.unlinkConst(ty);
+        return switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("session executable type payload reached unresolved lambda-solved type"),
+            .nominal => |nominal| blk: {
+                const backing = try self.endpointForType(nominal.backing);
+                break :blk .{ .nominal = .{
+                    .nominal = nominal.nominal,
+                    .backing = backing.ty,
+                    .backing_key = backing.key,
+                } };
+            },
+            .content => |content| try self.contentPayload(content),
+        };
+    }
+
+    fn contentPayload(self: *SessionExecutableTypePayloadBuilder, content: type_mod.Content) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        return switch (content) {
+            .primitive => |prim| .{ .primitive = executablePrimitive(prim) },
+            .list => |elem| .{ .list = try self.childForType(elem) },
+            .box => |elem| .{ .box = try self.childForType(elem) },
+            .tuple => |span| .{ .tuple = try self.tuplePayloadForTypeSpan(span) },
+            .record => |record| .{ .record = try self.recordPayloadForTypeSpan(record.fields) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagUnionPayloadForTypeSpan(tag_union.tags) },
+            .func => representationInvariant("session executable type payload requires callable value metadata for function type"),
+        };
+    }
+
+    fn tuplePayloadForTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        span: type_mod.Span(type_mod.TypeVarId),
+    ) std.mem.Allocator.Error![]const SessionExecutableTupleElemPayload {
+        const items = self.types.sliceTypeVarSpan(span);
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(SessionExecutableTupleElemPayload, items.len);
+        errdefer self.allocator.free(out);
+        for (items, 0..) |item, i| {
+            const child = try self.endpointForType(item);
+            out[i] = .{
+                .index = @intCast(i),
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn recordPayloadForTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        span: type_mod.Span(type_mod.Field),
+    ) std.mem.Allocator.Error!SessionExecutableRecordPayload {
+        const fields = self.types.sliceFields(span);
+        if (fields.len == 0) {
+            const shape = try self.row_shapes.internRecordShapeFromLabels(&.{});
+            return .{ .shape = shape, .fields = &.{} };
+        }
+
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.name;
+
+        const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != fields.len) representationInvariant("session executable record payload shape arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            const child = try self.endpointForType(field.ty);
+            out[i] = .{
+                .field = shape_fields[i],
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return .{ .shape = shape, .fields = out };
+    }
+
+    fn tagUnionPayloadForTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        span: type_mod.Span(type_mod.Tag),
+    ) std.mem.Allocator.Error!SessionExecutableTagUnionPayload {
+        const tags = self.types.sliceTags(span);
+        if (tags.len == 0) {
+            const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(&.{});
+            return .{ .shape = shape, .variants = &.{} };
+        }
+
+        const descriptors = try self.allocator.alloc(row.Store.TagShapeDescriptor, tags.len);
+        defer self.allocator.free(descriptors);
+        for (tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = @intCast(self.types.sliceTypeVarSpan(tag.args).len),
+            };
+        }
+
+        const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+        const shape_tags = self.row_shapes.tagUnionTags(shape);
+        if (shape_tags.len != tags.len) representationInvariant("session executable tag payload shape arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, tags.len);
+        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |variant| {
+                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
+            }
+            self.allocator.free(out);
+        }
+
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .tag = shape_tags[i],
+                .payloads = try self.tagPayloadsForTypeSpan(shape_tags[i], tag.args),
+            };
+        }
+        return .{ .shape = shape, .variants = out };
+    }
+
+    fn tagPayloadsForTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        tag: row.TagId,
+        span: type_mod.Span(type_mod.TypeVarId),
+    ) std.mem.Allocator.Error![]const SessionExecutableTagPayload {
+        const args = self.types.sliceTypeVarSpan(span);
+        if (args.len == 0) return &.{};
+        const shape_payloads = self.row_shapes.tagPayloads(tag);
+        if (shape_payloads.len != args.len) representationInvariant("session executable tag payload arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableTagPayload, args.len);
+        errdefer self.allocator.free(out);
+        for (args, 0..) |arg, i| {
+            const child = try self.endpointForType(arg);
+            out[i] = .{
+                .payload = shape_payloads[i],
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn callablePayload(self: *SessionExecutableTypePayloadBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| .{ .callable_set = try self.callableSetPayload(key) },
+            .already_erased => |erased| .{ .erased_fn = try self.erasedFnPayloadForAlreadyErased(erased) },
+            .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(callable, erase) },
+            .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
+        };
+    }
+
+    fn callableSetPayload(self: *SessionExecutableTypePayloadBuilder, key: CanonicalCallableSetKey) std.mem.Allocator.Error!SessionExecutableCallableSetPayload {
+        const descriptor = self.representation_store.callableSetDescriptor(key) orelse {
+            representationInvariant("session callable-set executable payload has no descriptor");
+        };
+        if (descriptor.members.len == 0) representationInvariant("session callable-set executable payload descriptor is empty");
+        const members = try self.allocator.alloc(SessionExecutableCallableSetMemberPayload, descriptor.members.len);
+        errdefer self.allocator.free(members);
+        for (descriptor.members, 0..) |member, i| {
+            members[i] = .{ .member = member.member };
+        }
+        return .{
+            .key = key,
+            .members = members,
+        };
+    }
+
+    fn erasedFnPayloadForAlreadyErased(self: *SessionExecutableTypePayloadBuilder, erased: AlreadyErasedCallablePlan) std.mem.Allocator.Error!SessionExecutableErasedFnPayload {
+        const capture = try self.hiddenCapturePayloadForAlreadyErased(erased);
+        return .{
+            .sig_key = erased.sig_key,
+            .capture_shape_key = erased.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ty else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn erasedFnPayloadForProcValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        callable: CallableValueInfo,
+        erase: ProcValueErasePlan,
+    ) std.mem.Allocator.Error!SessionExecutableErasedFnPayload {
+        const capture = try self.hiddenCapturePayloadForProcValue(callable, erase.erased_fn_sig_key);
+        return .{
+            .sig_key = erase.erased_fn_sig_key,
+            .capture_shape_key = erase.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ty else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn erasedFnPayloadForFiniteSetAdapter(
+        self: *SessionExecutableTypePayloadBuilder,
+        erase: FiniteSetErasePlan,
+    ) std.mem.Allocator.Error!SessionExecutableErasedFnPayload {
+        const capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
+            null
+        else
+            try self.payloadForCallableSetType(erase.adapter.callable_set_key, erase.adapter.erased_fn_sig_key.capture_ty.?);
+        return .{
+            .sig_key = erase.adapter.erased_fn_sig_key,
+            .capture_shape_key = erase.adapter.capture_shape_key,
+            .capture_ty = if (capture) |item| item.ty else null,
+            .capture_ty_key = if (capture) |item| item.key else null,
+        };
+    }
+
+    fn hiddenCapturePayloadForAlreadyErased(
+        self: *SessionExecutableTypePayloadBuilder,
+        erased: AlreadyErasedCallablePlan,
+    ) std.mem.Allocator.Error!?SessionExecutableTypeEndpoint {
+        return switch (erased.capture) {
+            .none => blk: {
+                if (erased.sig_key.capture_ty != null) representationInvariant("already-erased session payload has no capture but signature has capture type");
+                break :blk null;
+            },
+            .zero_sized_ty => |ty| blk: {
+                const capture = try self.endpointForType(ty);
+                const expected = erased.sig_key.capture_ty orelse representationInvariant("already-erased session payload zero-sized capture has no signature capture type");
+                if (!canonicalExecValueTypeKeyEql(capture.key, expected)) {
+                    representationInvariant("already-erased session payload zero-sized capture key differs from signature");
+                }
+                break :blk capture;
+            },
+            .value => |value| blk: {
+                const capture = try self.endpointForValue(value);
+                const expected = erased.sig_key.capture_ty orelse representationInvariant("already-erased session payload capture value has no signature capture type");
+                if (!canonicalExecValueTypeKeyEql(capture.key, expected)) {
+                    representationInvariant("already-erased session payload capture key differs from signature");
+                }
+                break :blk capture;
+            },
+        };
+    }
+
+    fn hiddenCapturePayloadForProcValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        callable: CallableValueInfo,
+        sig_key: ErasedFnSigKey,
+    ) std.mem.Allocator.Error!?SessionExecutableTypeEndpoint {
+        if (sig_key.capture_ty == null) return null;
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => representationInvariant("session proc-value erased payload attached to non-proc callable source"),
+        };
+        return try self.tuplePayloadForCaptureValues(source.captures, sig_key.capture_ty);
+    }
+
+    fn payloadForCallableSetType(
+        self: *SessionExecutableTypePayloadBuilder,
+        key: CanonicalCallableSetKey,
+        expected_key: CanonicalExecValueTypeKey,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, expected_key, .{
+            .callable_set = try self.callableSetPayload(key),
+        });
+        return .{
+            .ty = refFor(id),
+            .key = expected_key,
+        };
+    }
+
+    fn tuplePayloadForCaptureValues(
+        self: *SessionExecutableTypePayloadBuilder,
+        captures: []const ValueInfoId,
+        expected_key: ?CanonicalExecValueTypeKey,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        if (captures.len == 0) {
+            const key = expected_key orelse .{};
+            const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .tuple = &.{} });
+            return .{
+                .ty = refFor(id),
+                .key = key,
+            };
+        }
+
+        const items = try self.allocator.alloc(SessionExecutableTupleElemPayload, captures.len);
+        errdefer self.allocator.free(items);
+        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        key_hasher.update("capture_tuple");
+        for (captures, 0..) |capture, i| {
+            const child = try self.endpointForValue(capture);
+            key_hasher.update(&child.key.bytes);
+            items[i] = .{
+                .index = @intCast(i),
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };
+        const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .tuple = items });
+        return .{
+            .ty = refFor(id),
+            .key = key,
+        };
+    }
+
+    fn aggregatePayload(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+        aggregate: AggregateValueInfo,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        return switch (aggregate) {
+            .record => |record| .{ .record = try self.recordPayloadForValue(record) },
+            .tuple => |tuple| .{ .tuple = try self.tuplePayloadForValue(tuple) },
+            .tag => |tag| .{ .tag_union = try self.tagUnionPayloadForValue(logical_ty, tag) },
+            .list => |list| .{ .list = try self.listPayloadForValue(logical_ty, list) },
+        };
+    }
+
+    fn recordPayloadForValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        record: anytype,
+    ) std.mem.Allocator.Error!SessionExecutableRecordPayload {
+        if (record.fields.len == 0) return .{ .shape = record.shape, .fields = &.{} };
+        const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, record.fields.len);
+        errdefer self.allocator.free(out);
+        for (record.fields, 0..) |field, i| {
+            const child = try self.childForValue(field.value);
+            out[i] = .{
+                .field = field.field,
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return .{ .shape = record.shape, .fields = out };
+    }
+
+    fn tuplePayloadForValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        tuple: []const ElemValueInfo,
+    ) std.mem.Allocator.Error![]const SessionExecutableTupleElemPayload {
+        if (tuple.len == 0) return &.{};
+        const out = try self.allocator.alloc(SessionExecutableTupleElemPayload, tuple.len);
+        errdefer self.allocator.free(out);
+        const seen = try self.allocator.alloc(bool, tuple.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (tuple) |elem| {
+            const index: usize = @intCast(elem.index);
+            if (index >= tuple.len) representationInvariant("session executable tuple payload index exceeded arity");
+            if (seen[index]) representationInvariant("session executable tuple payload had duplicate index");
+            const child = try self.childForValue(elem.value);
+            out[index] = .{
+                .index = elem.index,
+                .ty = child.ty,
+                .key = child.key,
+            };
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) representationInvariant("session executable tuple payload was not dense");
+        }
+        return out;
+    }
+
+    fn tagUnionPayloadForValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+        tag_value: anytype,
+    ) std.mem.Allocator.Error!SessionExecutableTagUnionPayload {
+        const source_tags = try self.logicalTagUnionTags(logical_ty);
+        const shape_tags = self.row_shapes.tagUnionTags(tag_value.union_shape);
+        if (shape_tags.len != source_tags.len) representationInvariant("session executable tag payload shape/logical arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, shape_tags.len);
+        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |variant| {
+                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
+            }
+            self.allocator.free(out);
+        }
+
+        const seen_tags = try self.allocator.alloc(bool, shape_tags.len);
+        defer self.allocator.free(seen_tags);
+        @memset(seen_tags, false);
+
+        for (shape_tags) |shape_tag| {
+            const shape_tag_info = self.row_shapes.tag(shape_tag);
+            const tag_index: usize = @intCast(shape_tag_info.logical_index);
+            if (tag_index >= source_tags.len) representationInvariant("session executable tag payload logical index exceeded arity");
+            if (seen_tags[tag_index]) representationInvariant("session executable tag payload saw duplicate logical index");
+            out[tag_index] = .{
+                .tag = shape_tag,
+                .payloads = if (shape_tag == tag_value.tag)
+                    try self.selectedTagPayloadsForValue(tag_value)
+                else
+                    try self.tagPayloadsForTypeSpan(shape_tag, source_tags[tag_index].args),
+            };
+            seen_tags[tag_index] = true;
+        }
+        for (seen_tags) |was_seen| {
+            if (!was_seen) representationInvariant("session executable tag payload omitted a logical tag");
+        }
+        return .{ .shape = tag_value.union_shape, .variants = out };
+    }
+
+    fn selectedTagPayloadsForValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        tag_value: anytype,
+    ) std.mem.Allocator.Error![]const SessionExecutableTagPayload {
+        const shape_payloads = self.row_shapes.tagPayloads(tag_value.tag);
+        if (shape_payloads.len == 0) return &.{};
+        const out = try self.allocator.alloc(SessionExecutableTagPayload, shape_payloads.len);
+        errdefer self.allocator.free(out);
+        const seen = try self.allocator.alloc(bool, shape_payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (tag_value.payloads) |payload| {
+            const payload_info = self.row_shapes.tagPayload(payload.payload);
+            if (payload_info.tag != tag_value.tag) representationInvariant("session executable selected payload belongs to another tag");
+            const index: usize = @intCast(payload_info.logical_index);
+            if (index >= shape_payloads.len) representationInvariant("session executable selected payload index exceeded tag arity");
+            if (seen[index]) representationInvariant("session executable selected payload was duplicated");
+            if (payload.payload != shape_payloads[index]) representationInvariant("session executable selected payload id differs from row shape slot");
+            const child = try self.childForValue(payload.value);
+            out[index] = .{
+                .payload = shape_payloads[index],
+                .ty = child.ty,
+                .key = child.key,
+            };
+            seen[index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) representationInvariant("session executable selected tag omitted a payload");
+        }
+        return out;
+    }
+
+    fn listPayloadForValue(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+        list: anytype,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
+        if (list.elems.len == 0) {
+            const elem_ty = try self.logicalListElemType(logical_ty);
+            return try self.childForType(elem_ty);
+        }
+        const first = try self.childForValue(list.elems[0]);
+        for (list.elems[1..]) |elem| {
+            const child = try self.childForValue(elem);
+            if (!canonicalExecValueTypeKeyEql(first.key, child.key)) {
+                representationInvariant("session executable list payload elements have different executable representations");
+            }
+        }
+        return first;
+    }
+
+    fn logicalListElemType(self: *SessionExecutableTypePayloadBuilder, logical_ty: type_mod.TypeVarId) std.mem.Allocator.Error!type_mod.TypeVarId {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalListElemType(nominal.backing),
+            .content => |content| switch (content) {
+                .list => |elem| elem,
+                else => representationInvariant("session executable list payload attached to non-list type"),
+            },
+            else => representationInvariant("session executable list payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalTagUnionTags(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error![]const type_mod.Tag {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalTagUnionTags(nominal.backing),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| self.types.sliceTags(tag_union.tags),
+                else => representationInvariant("session executable tag payload attached to non-tag-union type"),
+            },
+            else => representationInvariant("session executable tag payload attached to unresolved type"),
+        };
+    }
+};
+
 pub fn singletonCallableSetKey(
     proc_callable: canonical.ProcedureCallableRef,
     capture_shape_key: CaptureShapeKey,
@@ -1669,6 +2493,27 @@ fn writeCallableProcedureTemplateRef(
             writeProcedureTemplateRef(hasher, synthetic.template);
         },
     }
+}
+
+fn executablePrimitive(prim: type_mod.Prim) ExecutablePrimitive {
+    return switch (prim) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .erased => .erased,
+    };
 }
 
 fn writeMonoSpecializationKey(
