@@ -339,7 +339,9 @@ pub const SessionExecutableValueTransformStore = struct {
         plan: SessionExecutableValueTransformPlan,
     ) std.mem.Allocator.Error!SessionExecutableValueTransformId {
         const id: SessionExecutableValueTransformId = @enumFromInt(@as(u32, @intCast(self.plans.items.len)));
-        try self.plans.append(allocator, plan);
+        var cloned = try cloneSessionExecutableValueTransformPlan(allocator, plan);
+        errdefer deinitSessionExecutableValueTransformPlan(allocator, &cloned);
+        try self.plans.append(allocator, cloned);
         return id;
     }
 
@@ -358,6 +360,159 @@ pub const SessionExecutableValueTransformStore = struct {
         self.* = .{};
     }
 };
+
+fn cloneSessionExecutableValueTransformPlan(
+    allocator: std.mem.Allocator,
+    plan: SessionExecutableValueTransformPlan,
+) std.mem.Allocator.Error!SessionExecutableValueTransformPlan {
+    var cloned: SessionExecutableValueTransformPlan = .{
+        .from = plan.from,
+        .to = plan.to,
+        .provenance = try cloneValueTransformProvenance(allocator, plan.provenance),
+        .op = .identity,
+    };
+    errdefer deinitSessionExecutableValueTransformPlan(allocator, &cloned);
+
+    cloned.op = try cloneSessionExecutableValueTransformOp(allocator, plan.op);
+    return cloned;
+}
+
+fn cloneValueTransformProvenance(
+    allocator: std.mem.Allocator,
+    provenance: checked_artifact.ValueTransformProvenance,
+) std.mem.Allocator.Error!checked_artifact.ValueTransformProvenance {
+    return switch (provenance) {
+        .none => .none,
+        .box_erasure => |boundaries| .{
+            .box_erasure = if (boundaries.len == 0)
+                &.{}
+            else
+                try allocator.dupe(canonical.BoxBoundaryId, boundaries),
+        },
+    };
+}
+
+fn cloneSessionExecutableValueTransformOp(
+    allocator: std.mem.Allocator,
+    op: SessionExecutableValueTransformOp,
+) std.mem.Allocator.Error!SessionExecutableValueTransformOp {
+    return switch (op) {
+        .identity => .identity,
+        .structural_bridge => |bridge| .{ .structural_bridge = bridge },
+        .record => |fields| .{
+            .record = if (fields.len == 0)
+                &.{}
+            else
+                try allocator.dupe(SessionValueTransformRecordField, fields),
+        },
+        .tuple => |items| .{
+            .tuple = if (items.len == 0)
+                &.{}
+            else
+                try allocator.dupe(SessionValueTransformTupleElem, items),
+        },
+        .tag_union => |cases| .{ .tag_union = try cloneSessionValueTransformTagCases(allocator, cases) },
+        .nominal => |nominal| .{ .nominal = nominal },
+        .list => |list| .{ .list = list },
+        .box_payload => |box| .{ .box_payload = box },
+        .callable_to_erased => |callable| .{
+            .callable_to_erased = try cloneSessionCallableToErasedTransformPlan(allocator, callable),
+        },
+        .already_erased_callable => |erased| .{
+            .already_erased_callable = try cloneAlreadyErasedCallablePlan(allocator, erased),
+        },
+    };
+}
+
+fn cloneSessionValueTransformTagCases(
+    allocator: std.mem.Allocator,
+    cases: []const SessionValueTransformTagCase,
+) std.mem.Allocator.Error![]const SessionValueTransformTagCase {
+    if (cases.len == 0) return &.{};
+    const cloned = try allocator.alloc(SessionValueTransformTagCase, cases.len);
+    @memset(cloned, .{
+        .source_tag = @enumFromInt(0),
+        .target_tag = @enumFromInt(0),
+        .payloads = &.{},
+    });
+    errdefer {
+        for (cloned) |case| {
+            if (case.payloads.len > 0) allocator.free(case.payloads);
+        }
+        allocator.free(cloned);
+    }
+
+    for (cases, 0..) |case, i| {
+        cloned[i] = .{
+            .source_tag = case.source_tag,
+            .target_tag = case.target_tag,
+            .payloads = if (case.payloads.len == 0)
+                &.{}
+            else
+                try allocator.dupe(SessionValueTransformTagPayloadEdge, case.payloads),
+        };
+    }
+    return cloned;
+}
+
+fn cloneSessionCallableToErasedTransformPlan(
+    allocator: std.mem.Allocator,
+    plan: SessionCallableToErasedTransformPlan,
+) std.mem.Allocator.Error!SessionCallableToErasedTransformPlan {
+    return switch (plan) {
+        .finite_value => |finite| .{ .finite_value = .{
+            .adapter = finite.adapter,
+            .result_ty = finite.result_ty,
+            .provenance = if (finite.provenance.len == 0)
+                &.{}
+            else
+                try allocator.dupe(BoxBoundaryId, finite.provenance),
+        } },
+        .proc_value => |proc| blk: {
+            var key = try cloneExecutableSpecializationKey(allocator, proc.executable_specialization_key);
+            errdefer deinitExecutableSpecializationKey(allocator, &key);
+
+            const capture_slots = if (proc.capture_slots.len == 0)
+                &.{}
+            else
+                try allocator.dupe(CallableSetCaptureSlot, proc.capture_slots);
+            errdefer if (capture_slots.len > 0) allocator.free(capture_slots);
+
+            const provenance = if (proc.provenance.len == 0)
+                &.{}
+            else
+                try allocator.dupe(BoxBoundaryId, proc.provenance);
+            errdefer if (provenance.len > 0) allocator.free(provenance);
+
+            break :blk .{ .proc_value = .{
+                .source = proc.source,
+                .proc_value = proc.proc_value,
+                .erased_fn_sig_key = proc.erased_fn_sig_key,
+                .executable_specialization_key = key,
+                .capture_shape_key = proc.capture_shape_key,
+                .capture_slots = capture_slots,
+                .provenance = provenance,
+            } };
+        },
+    };
+}
+
+fn cloneAlreadyErasedCallablePlan(
+    allocator: std.mem.Allocator,
+    erased: AlreadyErasedCallablePlan,
+) std.mem.Allocator.Error!AlreadyErasedCallablePlan {
+    return .{
+        .sig_key = erased.sig_key,
+        .capture_shape_key = erased.capture_shape_key,
+        .code = erased.code,
+        .result_ty = erased.result_ty,
+        .capture = erased.capture,
+        .provenance = if (erased.provenance.len == 0)
+            &.{}
+        else
+            try allocator.dupe(BoxBoundaryId, erased.provenance),
+    };
+}
 
 fn deinitSessionExecutableValueTransformPlan(
     allocator: std.mem.Allocator,
