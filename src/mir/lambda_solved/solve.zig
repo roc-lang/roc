@@ -2088,6 +2088,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .match_expr,
                 });
+                try self.publishJoinRepresentationEdges(value, branch_inputs);
                 break :blk .{ .match_ = .{
                     .cond = cond,
                     .branches = lowered_branches,
@@ -2126,6 +2127,7 @@ const BodySolver = struct {
                     .root = self.valueRoot(value),
                     .kind = .if_expr,
                 });
+                try self.publishJoinRepresentationEdges(value, self.value_store.joins.items[@intFromEnum(join_info)].inputs);
                 break :blk .{ .if_ = .{
                     .cond = cond,
                     .then_body = then_body,
@@ -2458,6 +2460,12 @@ const BodySolver = struct {
                     .boundary_root = result_root,
                     .payload_plan = .unchanged,
                 });
+                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = result_root,
+                    .to = payload_root,
+                    .kind = .box_payload,
+                });
                 self.value_store.values.items[@intFromEnum(result_value)].boxed = .{
                     .box_root = result_root,
                     .payload_root = payload_root,
@@ -2469,7 +2477,7 @@ const BodySolver = struct {
                 if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.unbox reached non-unary low-level expression");
                 const boxed_value = arg_values[0];
                 const boxed_info = self.value_store.values.items[@intFromEnum(boxed_value)];
-                _ = try self.representation_store.appendBoxBoundary(self.allocator, .{
+                const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
                     .box_ty = boxed_info.source_ty,
                     .payload_source_ty = result_source_ty,
                     .payload_boundary_ty = result_source_ty,
@@ -2477,6 +2485,12 @@ const BodySolver = struct {
                     .source_root = self.valueRoot(boxed_value),
                     .boundary_root = self.valueRoot(result_value),
                     .payload_plan = .unchanged,
+                });
+                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = self.valueRoot(boxed_value),
+                    .to = self.valueRoot(result_value),
+                    .kind = .box_payload,
                 });
             },
             else => {},
@@ -2534,6 +2548,21 @@ const BodySolver = struct {
             input_len += 1;
         }
         return try self.value_store.addJoinInputSpan(inputs[0..input_len]);
+    }
+
+    fn publishJoinRepresentationEdges(
+        self: *BodySolver,
+        result: repr.ValueInfoId,
+        inputs: repr.Span(repr.JoinInputInfo),
+    ) Allocator.Error!void {
+        const result_root = self.valueRoot(result);
+        for (self.value_store.sliceJoinInputSpan(inputs)) |input| {
+            _ = try self.representation_store.appendRepresentationEdge(.{
+                .from = self.valueRoot(input.value),
+                .to = result_root,
+                .kind = .branch_join,
+            });
+        }
     }
 
     fn exprReturnsValue(self: *const BodySolver, expr_id: Ast.ExprId) bool {
@@ -2685,7 +2714,7 @@ const BodySolver = struct {
                 .value = self.exprValue(field.value),
             };
         }
-        self.publishAggregate(value, .{ .record = .{
+        try self.publishAggregate(value, .{ .record = .{
             .shape = shape,
             .fields = fields,
         } });
@@ -2706,7 +2735,7 @@ const BodySolver = struct {
                 .value = elem,
             };
         }
-        self.publishAggregate(value, .{ .tuple = infos });
+        try self.publishAggregate(value, .{ .tuple = infos });
     }
 
     fn publishTagAggregate(
@@ -2726,7 +2755,7 @@ const BodySolver = struct {
                 .value = self.exprValue(payload.value),
             };
         }
-        self.publishAggregate(value, .{ .tag = .{
+        try self.publishAggregate(value, .{ .tag = .{
             .union_shape = union_shape,
             .tag = tag_id,
             .payloads = payloads,
@@ -2742,7 +2771,7 @@ const BodySolver = struct {
         const owned_elems = try self.allocator.dupe(repr.ValueInfoId, elem_values);
         errdefer if (owned_elems.len > 0) self.allocator.free(owned_elems);
 
-        self.publishAggregate(value, .{ .list = .{
+        try self.publishAggregate(value, .{ .list = .{
             .elem_root = self.representation_store.reserveRoot(),
             .elems = owned_elems,
         } });
@@ -2752,10 +2781,57 @@ const BodySolver = struct {
         self: *BodySolver,
         value: repr.ValueInfoId,
         aggregate: repr.AggregateValueInfo,
-    ) void {
+    ) Allocator.Error!void {
         const value_info = &self.value_store.values.items[@intFromEnum(value)];
         if (value_info.aggregate != null) lambdaInvariant("lambda-solved value published aggregate metadata twice");
         value_info.aggregate = aggregate;
+        try self.publishAggregateRepresentationEdges(value, aggregate);
+    }
+
+    fn publishAggregateRepresentationEdges(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        aggregate: repr.AggregateValueInfo,
+    ) Allocator.Error!void {
+        const root = self.valueRoot(value);
+        switch (aggregate) {
+            .record => |record| {
+                for (record.fields) |field| {
+                    _ = try self.representation_store.appendRepresentationEdge(.{
+                        .from = root,
+                        .to = self.valueRoot(field.value),
+                        .kind = .{ .record_field = field.field },
+                    });
+                }
+            },
+            .tuple => |tuple| {
+                for (tuple) |elem| {
+                    _ = try self.representation_store.appendRepresentationEdge(.{
+                        .from = root,
+                        .to = self.valueRoot(elem.value),
+                        .kind = .{ .tuple_elem = elem.index },
+                    });
+                }
+            },
+            .tag => |tag| {
+                for (tag.payloads) |payload| {
+                    _ = try self.representation_store.appendRepresentationEdge(.{
+                        .from = root,
+                        .to = self.valueRoot(payload.value),
+                        .kind = .{ .tag_payload = payload.payload },
+                    });
+                }
+            },
+            .list => |list| {
+                for (list.elems) |elem| {
+                    _ = try self.representation_store.appendRepresentationEdge(.{
+                        .from = root,
+                        .to = self.valueRoot(elem),
+                        .kind = .list_elem,
+                    });
+                }
+            },
+        }
     }
 
     fn lowerTagPayloadPatternSpan(

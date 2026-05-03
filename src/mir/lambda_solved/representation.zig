@@ -24,6 +24,8 @@ pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
 pub const ValueTransformBoundaryId = enum(u32) { _ };
 pub const SessionExecutableValueTransformId = checked_artifact.SessionExecutableValueTransformId;
+pub const RepresentationEdgeId = enum(u32) { _ };
+pub const RepresentationRequirementId = enum(u32) { _ };
 pub const SourceMatchId = enum(u32) { _ };
 pub const SourceMatchBranchId = enum(u32) { _ };
 pub const SourceMatchAlternativeId = enum(u32) { _ };
@@ -66,6 +68,33 @@ pub const RepresentationRootKind = union(enum) {
         version: u32,
     },
     loop_phi: LoopPhiId,
+};
+
+pub const RepresentationEdgeKind = union(enum) {
+    value_alias,
+    value_move,
+    function_arg: u32,
+    function_return,
+    function_callable,
+    record_field: row.RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: row.TagPayloadId,
+    list_elem,
+    box_payload,
+    nominal_backing: canonical.NominalTypeKey,
+    branch_join,
+    loop_phi,
+    mutable_version,
+};
+
+pub const RepresentationEdge = struct {
+    from: RepRootId,
+    to: RepRootId,
+    kind: RepresentationEdgeKind,
+};
+
+pub const RepresentationRequirement = union(enum) {
+    require_box_erased: BoxBoundaryId,
 };
 
 pub const TransformEndpointSide = enum {
@@ -1036,6 +1065,8 @@ pub const RepresentationStore = struct {
     roots_len: u32 = 0,
     classes_len: u32 = 0,
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
+    representation_edges: std.ArrayList(RepresentationEdge) = .empty,
+    representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
     callable_construction_plans: []CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
@@ -1098,6 +1129,8 @@ pub const RepresentationStore = struct {
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
+        self.representation_requirements.deinit(self.allocator);
+        self.representation_edges.deinit(self.allocator);
         self.root_kinds.deinit();
         self.* = RepresentationStore.init(self.allocator);
     }
@@ -1132,6 +1165,33 @@ pub const RepresentationStore = struct {
             unreachable;
         }
         return self.root_kinds.get(root) orelse .unclassified;
+    }
+
+    pub fn appendRepresentationEdge(
+        self: *RepresentationStore,
+        edge: RepresentationEdge,
+    ) std.mem.Allocator.Error!RepresentationEdgeId {
+        self.verifyReservedRoot(edge.from, "representation edge source");
+        self.verifyReservedRoot(edge.to, "representation edge target");
+        const id: RepresentationEdgeId = @enumFromInt(@as(u32, @intCast(self.representation_edges.items.len)));
+        try self.representation_edges.append(self.allocator, edge);
+        return id;
+    }
+
+    pub fn appendRepresentationRequirement(
+        self: *RepresentationStore,
+        requirement: RepresentationRequirement,
+    ) std.mem.Allocator.Error!RepresentationRequirementId {
+        const id: RepresentationRequirementId = @enumFromInt(@as(u32, @intCast(self.representation_requirements.items.len)));
+        try self.representation_requirements.append(self.allocator, requirement);
+        return id;
+    }
+
+    fn verifyReservedRoot(self: *const RepresentationStore, root: RepRootId, comptime label: []const u8) void {
+        if (@intFromEnum(root) >= self.roots_len) {
+            debug.invariant(false, "lambda-solved invariant violated: " ++ label ++ " referenced an unreserved root");
+            unreachable;
+        }
     }
 
     pub fn reserveClass(self: *RepresentationStore) RepresentationClassId {
