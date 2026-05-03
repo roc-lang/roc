@@ -2921,6 +2921,40 @@ The lambda-solved construction algorithm is:
     procedures from syntax, look up functions by display name, infer branch
     result types from executable layouts, or synthesize local values to stand in
     for target parameters/returns.
+
+    For direct procedure calls, the finalization pass is responsible for
+    creating the complete executable value-transform boundary set before the
+    session is sealed:
+
+    - each source call argument gets one `call_arg` boundary from the caller's
+      local argument endpoint to the target procedure parameter endpoint
+    - the direct-call result gets one `call_result` boundary from the target
+      procedure return endpoint to the caller's local result endpoint
+    - the target parameter endpoint is built from the explicit target
+      `ProcRepresentationInstanceId`, the sealed target
+      `ProcPublicValueRoots.params[index]`, and
+      `executable_specialization_key.exec_arg_tys[index]`
+    - the target return endpoint is built from the explicit target
+      `ProcRepresentationInstanceId`, the sealed target
+      `ProcPublicValueRoots.ret`, and
+      `executable_specialization_key.exec_ret_ty`
+    - every target endpoint payload is copied or reused by canonical key in the
+      caller session's `SessionExecutableTypePayloadStore`; a boundary owned by
+      the caller session must never point at the callee session's payload ids
+    - every boundary stores a mandatory `ExecutableValueTransformRef`,
+      including identity; when the endpoint keys differ, the transform must be
+      the explicit structural/Box-erasure transform selected by representation
+      solving, never a compatibility-shape repair created in executable MIR
+    - finalization is allowed to compare canonical endpoint keys only to verify
+      that the explicit transform is well formed; key equality by itself is not
+      a substitute for publishing the transform record
+
+    This means executable MIR can lower `call_proc` without looking at the
+    callee's source syntax, names, or type store. It consumes the already
+    finalized `arg_transforms` span and mandatory `result_transform`, applies
+    the argument transforms before `call_direct`, emits the raw direct-call
+    result at the result boundary's `from_endpoint`, and then applies the result
+    transform to produce the caller-local result value.
 11. Seal the session and all member procedure representation instances together.
 12. Publish executable specialization keys, callable-set keys, capture-shape
     keys, erased function signature keys, erased adapter keys, and

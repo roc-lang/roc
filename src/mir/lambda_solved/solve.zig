@@ -13,6 +13,7 @@ const repr = @import("representation.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 
 pub const Proc = struct {
     proc: canonical.MirProcedureRef,
@@ -151,9 +152,6 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             proc.proc,
             roots,
         );
-        program.solve_sessions.items[i].representation_store.verifySealed();
-
-        program.solve_sessions.items[i].state = .sealed;
         program.proc_instances.appendAssumeCapacity(.{
             .proc = proc.proc,
             .executable_specialization_key = executable_key,
@@ -167,6 +165,11 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
             .representation_instance = instance,
         });
     }
+    try finalizeValueTransformBoundaries(&program);
+    for (program.solve_sessions.items) |*session| {
+        session.representation_store.verifySealed();
+        session.state = .sealed;
+    }
     try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
     try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
@@ -174,6 +177,212 @@ pub fn run(allocator: Allocator, lifted: Lifted.Lift.Program) Allocator.Error!Pr
     input.deinit();
     return program;
 }
+
+fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
+    for (program.proc_instances.items, 0..) |*instance, raw_instance| {
+        var finalizer = ValueTransformFinalizer{
+            .allocator = program.allocator,
+            .program = program,
+            .instance_id = @enumFromInt(@as(u32, @intCast(raw_instance))),
+            .instance = instance,
+        };
+        try finalizer.finalizeCallSites();
+    }
+}
+
+const ValueTransformFinalizer = struct {
+    allocator: Allocator,
+    program: *Program,
+    instance_id: repr.ProcRepresentationInstanceId,
+    instance: *const repr.ProcRepresentationInstance,
+
+    fn finalizeCallSites(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.call_sites.items, 0..) |*call_site, raw_call_site| {
+            const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
+            switch (call_site.dispatch) {
+                .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
+                .call_value_finite,
+                .call_value_erased,
+                => {},
+            }
+        }
+    }
+
+    fn finalizeCallProc(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        call_site: *repr.CallSiteInfo,
+        target_id: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!void {
+        const args = self.valueStore().sliceValueSpan(call_site.args);
+        const target_instance = self.procInstance(target_id);
+        const target_params = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.params);
+        if (args.len != target_params.len or args.len != target_instance.executable_specialization_key.exec_arg_tys.len) {
+            lambdaInvariant("lambda-solved call_proc boundary finalization saw target arity mismatch");
+        }
+
+        const arg_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, args.len);
+        defer self.allocator.free(arg_boundaries);
+
+        for (args, target_params, 0..) |arg, target_param, i| {
+            const from = try self.localEndpoint(arg);
+            const to = try self.targetParamEndpoint(target_id, target_instance, target_param, @intCast(i));
+            const transform = try self.appendIdentityTransform(from, to);
+            arg_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = .{ .call_arg = .{
+                    .call = call_site_id,
+                    .arg_index = @intCast(i),
+                } },
+                .from_value = arg,
+                .to_value = target_param,
+                .from_endpoint = from,
+                .to_endpoint = to,
+                .transform = transform,
+            });
+        }
+
+        const result_from = try self.targetReturnEndpoint(target_id, target_instance);
+        const result_to = try self.localEndpoint(call_site.result);
+        const result_transform = try self.appendIdentityTransform(result_from, result_to);
+        const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
+            .kind = .{ .call_result = call_site_id },
+            .from_value = target_instance.public_roots.ret,
+            .to_value = call_site.result,
+            .from_endpoint = result_from,
+            .to_endpoint = result_to,
+            .transform = result_transform,
+        });
+
+        call_site.arg_transforms = try self.valueStore().addValueTransformBoundarySpan(arg_boundaries);
+        call_site.result_transform = result_boundary;
+    }
+
+    fn appendIdentityTransform(
+        self: *ValueTransformFinalizer,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
+        if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, to.exec_ty.key)) {
+            lambdaInvariant("lambda-solved value transform finalization reached mismatched executable endpoint keys without an explicit transform plan");
+        }
+        const id = try self.representationStore().appendSessionExecutableValueTransform(.{
+            .from = from,
+            .to = to,
+            .provenance = .none,
+            .op = .identity,
+        });
+        return .{ .session = id };
+    }
+
+    fn localEndpoint(
+        self: *ValueTransformFinalizer,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const info = self.valueStore().values.items[@intFromEnum(value)];
+        return .{
+            .owner = .{ .local_value = value },
+            .logical_ty = info.logical_ty,
+            .exec_ty = try repr.sessionExecutableTypeEndpointForValue(
+                self.allocator,
+                &self.program.canonical_names,
+                &self.program.row_shapes,
+                &self.program.types,
+                self.representationStore(),
+                self.valueStore(),
+                value,
+            ),
+        };
+    }
+
+    fn targetParamEndpoint(
+        self: *ValueTransformFinalizer,
+        target_id: repr.ProcRepresentationInstanceId,
+        target_instance: *const repr.ProcRepresentationInstance,
+        target_value: repr.ValueInfoId,
+        index: u32,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const target_value_store = self.valueStoreFor(target_instance);
+        const target_info = target_value_store.values.items[@intFromEnum(target_value)];
+        const exec_ty = try repr.sessionExecutableTypeEndpointForValueIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStoreFor(target_instance),
+            &self.representationStore().session_executable_type_payloads,
+            target_value_store,
+            target_value,
+        );
+        const arg_index: usize = @intCast(index);
+        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+            lambdaInvariant("lambda-solved target procedure parameter endpoint key differs from target executable specialization");
+        }
+        return .{
+            .owner = .{ .procedure_param = .{
+                .instance = target_id,
+                .index = index,
+            } },
+            .logical_ty = target_info.logical_ty,
+            .exec_ty = exec_ty,
+        };
+    }
+
+    fn targetReturnEndpoint(
+        self: *ValueTransformFinalizer,
+        target_id: repr.ProcRepresentationInstanceId,
+        target_instance: *const repr.ProcRepresentationInstance,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const target_value_store = self.valueStoreFor(target_instance);
+        const target_value = target_instance.public_roots.ret;
+        const target_info = target_value_store.values.items[@intFromEnum(target_value)];
+        const exec_ty = try repr.sessionExecutableTypeEndpointForValueIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStoreFor(target_instance),
+            &self.representationStore().session_executable_type_payloads,
+            target_value_store,
+            target_value,
+        );
+        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+            lambdaInvariant("lambda-solved target procedure return endpoint key differs from target executable specialization");
+        }
+        return .{
+            .owner = .{ .procedure_return = target_id },
+            .logical_ty = target_info.logical_ty,
+            .exec_ty = exec_ty,
+        };
+    }
+
+    fn procInstance(
+        self: *ValueTransformFinalizer,
+        id: repr.ProcRepresentationInstanceId,
+    ) *const repr.ProcRepresentationInstance {
+        const index = @intFromEnum(id);
+        if (index >= self.program.proc_instances.items.len) {
+            lambdaInvariant("lambda-solved value transform finalization referenced missing procedure instance");
+        }
+        return &self.program.proc_instances.items[index];
+    }
+
+    fn valueStore(self: *ValueTransformFinalizer) *repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(self.instance.value_store)];
+    }
+
+    fn valueStoreFor(self: *ValueTransformFinalizer, instance: *const repr.ProcRepresentationInstance) *repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
+    }
+
+    fn representationStore(self: *ValueTransformFinalizer) *repr.RepresentationStore {
+        return &self.program.solve_sessions.items[@intFromEnum(self.instance.solve_session)].representation_store;
+    }
+
+    fn representationStoreFor(self: *ValueTransformFinalizer, instance: *const repr.ProcRepresentationInstance) *repr.RepresentationStore {
+        return &self.program.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+    }
+};
 
 const TypeImporter = struct {
     allocator: Allocator,
