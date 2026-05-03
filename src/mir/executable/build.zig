@@ -196,7 +196,6 @@ pub fn run(
             .proc_instance_map = &proc_instance_map,
             .proc_exec_map = &proc_exec_map,
             .erased_adapter_procs = program.erased_adapter_procs.items,
-            .active_callable_sets = std.ArrayList(ActiveCallableSetType).empty,
         };
         defer builder.deinit();
 
@@ -860,7 +859,6 @@ fn lowerErasedFiniteSetAdapterProc(
         .proc_instance_map = proc_instance_map,
         .proc_exec_map = proc_exec_map,
         .erased_adapter_procs = program.erased_adapter_procs.items,
-        .active_callable_sets = std.ArrayList(ActiveCallableSetType).empty,
     };
     defer builder.deinit();
 
@@ -943,7 +941,7 @@ fn lowerErasedFiniteSetAdapterBody(
         if (member.capture_slots.len != 0) {
             executableInvariant("executable erased finite-set adapter without hidden capture cannot synthesize captured callable set");
         }
-        const callable_set_ty = try builder.lowerFiniteCallableSetType(adapter.callable_set_key, builder.representation_store);
+        const callable_set_ty = try builder.lowerCallableSetType(adapter.callable_set_key);
         const value = program.ast.freshValueRef();
         const singleton = try program.ast.addExpr(callable_set_ty, value, .{ .callable_set_value = .{
             .construction_plan = null,
@@ -1022,7 +1020,7 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
             executableInvariant("executable erased finite-set adapter member target specialization source type differs from adapter key");
         }
 
-        const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(member);
+        const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(adapter.callable_set_key, member);
         const capture_payload = if (capture_payload_ty != null) program.ast.freshValueRef() else null;
         const capture_arg_len: usize = if (capture_payload == null) 0 else 1;
         const direct_args = try allocator.alloc(Ast.DirectCallArg, explicit_args.len + capture_arg_len);
@@ -4085,11 +4083,6 @@ const TypeLowerer = struct {
     }
 };
 
-const ActiveCallableSetType = struct {
-    key: repr.CanonicalCallableSetKey,
-    ty: Type.TypeId,
-};
-
 const BodyBuilder = struct {
     allocator: Allocator,
     program: *Program,
@@ -4114,12 +4107,10 @@ const BodyBuilder = struct {
     proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
     erased_adapter_procs: []const ErasedAdapterProcReservation,
-    active_callable_sets: std.ArrayList(ActiveCallableSetType),
     capture_record_arg: ?Ast.TypedValue = null,
 
     fn deinit(self: *BodyBuilder) void {
         self.session_type_lowerer.deinit();
-        self.active_callable_sets.deinit(self.allocator);
         self.expr_map.deinit();
         self.env.deinit();
     }
@@ -4237,10 +4228,36 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         key: repr.CanonicalExecValueTypeKey,
     ) Allocator.Error!Type.TypeId {
-        const ref = self.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+        return try self.lowerSessionExecutableTypeKeyInStore(key, self.representation_store);
+    }
+
+    fn lowerSessionExecutableTypeKeyInStore(
+        self: *BodyBuilder,
+        key: repr.CanonicalExecValueTypeKey,
+        representation_store: *const repr.RepresentationStore,
+    ) Allocator.Error!Type.TypeId {
+        const ref = representation_store.session_executable_type_payloads.refForKey(key) orelse {
             executableInvariant("executable session type key has no published payload");
         };
-        return try self.session_type_lowerer.lower(ref, key);
+        return try self.lowerSessionExecutableTypeInStore(.{ .ty = ref, .key = key }, representation_store);
+    }
+
+    fn lowerSessionExecutableTypeInStore(
+        self: *BodyBuilder,
+        endpoint: repr.SessionExecutableTypeEndpoint,
+        representation_store: *const repr.RepresentationStore,
+    ) Allocator.Error!Type.TypeId {
+        if (representation_store == self.representation_store) {
+            return try self.session_type_lowerer.lower(endpoint.ty, endpoint.key);
+        }
+
+        var lowerer = SessionTypeLowerer.init(
+            self.allocator,
+            &representation_store.session_executable_type_payloads,
+            &self.program.types,
+        );
+        defer lowerer.deinit();
+        return try lowerer.lower(endpoint.ty, endpoint.key);
     }
 
     fn lowerExecutableValueTypeInStore(
@@ -4250,628 +4267,79 @@ const BodyBuilder = struct {
         value_store: *const repr.ValueInfoStore,
         representation_store: *const repr.RepresentationStore,
     ) Allocator.Error!Type.TypeId {
-        const value_info = value_store.values.items[@intFromEnum(value_info_id)];
-        if (value_info.callable) |callable| {
-            const emission = representation_store.callableEmissionPlan(callable.emission_plan);
-            return switch (emission) {
-                .finite => |key| try self.lowerFiniteCallableSetType(key, representation_store),
-                .already_erased => |erased| try self.type_lowerer.output.addType(.{ .erased_fn = .{
-                    .sig_key = erased.sig_key,
-                    .capture_shape = erased.capture_shape_key,
-                    .capture_ty = try self.lowerAlreadyErasedCaptureType(erased, value_store, representation_store),
-                } }),
-                .erase_proc_value => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
-                    .sig_key = erase.erased_fn_sig_key,
-                    .capture_shape = erase.capture_shape_key,
-                    .capture_ty = try self.lowerProcValueErasedCaptureType(erase),
-                } }),
-                .erase_finite_set => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
-                    .sig_key = erase.adapter.erased_fn_sig_key,
-                    .capture_shape = erase.adapter.capture_shape_key,
-                    .capture_ty = try self.lowerFiniteSetAdapterCaptureType(erase.adapter),
-                } }),
-            };
-        }
-        if (value_info.aggregate) |aggregate| {
-            if (value_store != self.value_store or representation_store != self.representation_store) {
-                return try self.lowerForeignAggregateExecutableValueType(logical_ty, aggregate, value_store, representation_store);
-            }
-            return try self.lowerAggregateExecutableValueType(logical_ty, aggregate);
-        }
-        return try self.type_lowerer.lowerType(logical_ty);
-    }
-
-    fn lowerFiniteCallableSetType(
-        self: *BodyBuilder,
-        key: repr.CanonicalCallableSetKey,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!Type.TypeId {
-        for (self.active_callable_sets.items) |active| {
-            if (repr.callableSetKeyEql(active.key, key)) return active.ty;
-        }
-
-        _ = representation_store;
-        const descriptor = callableSetDescriptorFromSlice(self.callable_set_descriptors, key) orelse {
-            executableInvariant("executable callable-set type has no descriptor");
+        _ = logical_ty;
+        const key = try repr.execValueTypeKeyForValue(
+            self.allocator,
+            self.canonical_names,
+            self.type_lowerer.input,
+            representation_store,
+            value_store,
+            value_info_id,
+        );
+        const payload = representation_store.session_executable_type_payloads.refForKey(key) orelse {
+            executableInvariant("executable value type has no published session payload");
         };
-        const ty = try self.type_lowerer.output.addType(.placeholder);
-        try self.active_callable_sets.append(self.allocator, .{
-            .key = key,
-            .ty = ty,
-        });
-        errdefer _ = self.active_callable_sets.pop();
-
-        const members = try self.allocator.alloc(Type.CallableSetMemberType, descriptor.members.len);
-        errdefer self.allocator.free(members);
-        for (descriptor.members, 0..) |member, i| {
-            members[i] = .{
-                .member = member.member,
-                .payload_ty = try self.lowerCallableSetMemberPayloadType(member),
-            };
-        }
-
-        self.type_lowerer.output.types.items[@intFromEnum(ty)] = .{ .callable_set = .{
-            .key = key,
-            .members = members,
-        } };
-        _ = self.active_callable_sets.pop();
-        return ty;
+        return try self.lowerSessionExecutableTypeInStore(
+            .{ .ty = payload, .key = key },
+            representation_store,
+        );
     }
 
     fn lowerCallableSetMemberPayloadType(
         self: *BodyBuilder,
+        callable_set_key: repr.CanonicalCallableSetKey,
         member: repr.CanonicalCallableSetMember,
     ) Allocator.Error!?Type.TypeId {
-        if (member.capture_slots.len == 0) return null;
-
-        const target_instance_id = self.proc_instance_map.get(member.source_proc) orelse {
-            executableInvariant("executable callable-set member has no reserved representation instance");
+        const callable_set_payload_key = repr.finiteCallableSetExecValueTypeKey(callable_set_key);
+        const callable_set_ref = self.representation_store.session_executable_type_payloads.refForKey(callable_set_payload_key) orelse {
+            executableInvariant("executable callable-set member payload type has no published callable-set payload");
         };
-        const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
-        const target_value_store = &self.value_stores[@intFromEnum(target_instance.value_store)];
-        const target_representation_store = &self.solve_sessions[@intFromEnum(target_instance.solve_session)].representation_store;
-        const captures = target_value_store.sliceValueSpan(target_instance.public_roots.captures);
-        if (captures.len != member.capture_slots.len) {
-            executableInvariant("executable callable-set member capture count differs from target procedure captures");
+        const payload = self.representation_store.session_executable_type_payloads.get(callable_set_ref.payload);
+        const callable_set = switch (payload) {
+            .callable_set => |set| set,
+            else => executableInvariant("executable callable-set member payload key did not point at a callable-set payload"),
+        };
+        if (!repr.callableSetKeyEql(callable_set.key, callable_set_key)) {
+            executableInvariant("executable callable-set payload key disagrees with descriptor key");
         }
-
-        const items = try self.allocator.alloc(Type.TypeId, captures.len);
-        errdefer self.allocator.free(items);
-        const seen = try self.allocator.alloc(bool, captures.len);
-        defer self.allocator.free(seen);
-        @memset(seen, false);
-
-        for (member.capture_slots) |slot| {
-            const index: usize = @intCast(slot.slot);
-            if (index >= captures.len) executableInvariant("executable callable-set member capture slot exceeded target capture arity");
-            if (seen[index]) executableInvariant("executable callable-set member capture slot was duplicated");
-            const capture = captures[index];
-            const info = target_value_store.values.items[@intFromEnum(capture)];
-            if (builtin.mode == .Debug) {
-                const actual_key = try repr.execValueTypeKeyForValue(
-                    self.allocator,
-                    self.canonical_names,
-                    self.type_lowerer.input,
-                    target_representation_store,
-                    target_value_store,
-                    capture,
-                );
-                if (!repr.canonicalExecValueTypeKeyEql(slot.exec_value_ty, actual_key)) {
-                    executableInvariant("executable callable-set member capture slot executable type key differs from target capture value");
+        for (callable_set.members) |payload_member| {
+            if (payload_member.member != member.member) continue;
+            if (member.capture_slots.len == 0) {
+                if (payload_member.payload_ty != null or payload_member.payload_ty_key != null) {
+                    executableInvariant("executable callable-set member has no captures but published a capture payload");
                 }
+                return null;
             }
-            items[index] = try self.lowerExecutableValueTypeInStore(
-                info.logical_ty,
-                capture,
-                target_value_store,
-                target_representation_store,
+            const payload_ty = payload_member.payload_ty orelse {
+                executableInvariant("executable callable-set captured member has no published capture payload");
+            };
+            const payload_key = payload_member.payload_ty_key orelse {
+                executableInvariant("executable callable-set captured member payload has no key");
+            };
+            if (!repr.canonicalExecValueTypeKeyEql(payload_key, repr.captureTupleExecKeyForSlots(member.capture_slots))) {
+                executableInvariant("executable callable-set member payload key differs from member capture schema");
+            }
+            return try self.lowerSessionExecutableTypeInStore(
+                .{ .ty = payload_ty, .key = payload_key },
+                self.representation_store,
             );
-            seen[index] = true;
         }
-        for (seen) |was_seen| {
-            if (!was_seen) executableInvariant("executable callable-set member capture slots were not dense");
-        }
-
-        return try self.type_lowerer.output.addType(.{ .tuple = items });
-    }
-
-    fn lowerForeignAggregateExecutableValueType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        aggregate: repr.AggregateValueInfo,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!Type.TypeId {
-        return switch (aggregate) {
-            .record => |record| blk: {
-                const fields = try self.allocator.alloc(Type.RecordFieldType, record.fields.len);
-                errdefer if (fields.len > 0) self.allocator.free(fields);
-                for (record.fields, 0..) |field, i| {
-                    const child = value_store.values.items[@intFromEnum(field.value)];
-                    fields[i] = .{
-                        .field = field.field,
-                        .ty = try self.lowerExecutableValueTypeInStore(child.logical_ty, field.value, value_store, representation_store),
-                    };
-                }
-                break :blk try self.type_lowerer.output.addType(.{ .record = .{
-                    .shape = record.shape,
-                    .fields = fields,
-                } });
-            },
-            .tuple => |tuple| blk: {
-                const items = try self.allocator.alloc(Type.TypeId, tuple.len);
-                errdefer if (items.len > 0) self.allocator.free(items);
-                const seen = try self.allocator.alloc(bool, tuple.len);
-                defer self.allocator.free(seen);
-                @memset(seen, false);
-
-                for (tuple) |elem| {
-                    const index: usize = @intCast(elem.index);
-                    if (index >= tuple.len) executableInvariant("executable foreign aggregate tuple element index exceeded tuple arity");
-                    if (seen[index]) executableInvariant("executable foreign aggregate tuple had duplicate element index");
-                    const child = value_store.values.items[@intFromEnum(elem.value)];
-                    items[index] = try self.lowerExecutableValueTypeInStore(child.logical_ty, elem.value, value_store, representation_store);
-                    seen[index] = true;
-                }
-                for (seen) |was_seen| {
-                    if (!was_seen) executableInvariant("executable foreign aggregate tuple did not provide every element");
-                }
-
-                break :blk try self.type_lowerer.output.addType(.{ .tuple = items });
-            },
-            .tag => |tag| try self.lowerForeignTagAggregateExecutableValueType(logical_ty, tag, value_store, representation_store),
-            .list => |list| try self.lowerForeignListAggregateExecutableValueType(logical_ty, list, value_store, representation_store),
-        };
-    }
-
-    fn lowerForeignListAggregateExecutableValueType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        list: anytype,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!Type.TypeId {
-        if (list.elems.len == 0) {
-            const elem_ty = try self.lowerLogicalListElemType(logical_ty);
-            return try self.type_lowerer.output.addType(.{ .list = elem_ty });
-        }
-        const first = value_store.values.items[@intFromEnum(list.elems[0])];
-        const elem_ty = try self.lowerExecutableValueTypeInStore(first.logical_ty, list.elems[0], value_store, representation_store);
-        return try self.type_lowerer.output.addType(.{ .list = elem_ty });
-    }
-
-    fn lowerForeignTagAggregateExecutableValueType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        tag: anytype,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!Type.TypeId {
-        const source_tags = self.logicalTagUnionTags(logical_ty);
-        const shape_tags = self.type_lowerer.row_shapes.tagUnionTags(tag.union_shape);
-        if (shape_tags.len != source_tags.len) {
-            executableInvariant("executable foreign aggregate tag metadata shape does not match logical type arity");
-        }
-
-        const tags = try self.allocator.alloc(Type.TagType, shape_tags.len);
-        for (tags) |*item| item.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
-        errdefer {
-            for (tags) |item| {
-                if (item.payloads.len > 0) self.allocator.free(item.payloads);
-            }
-            self.allocator.free(tags);
-        }
-
-        const seen_tags = try self.allocator.alloc(bool, shape_tags.len);
-        defer self.allocator.free(seen_tags);
-        @memset(seen_tags, false);
-
-        for (shape_tags) |shape_tag| {
-            const shape_tag_info = self.type_lowerer.row_shapes.tag(shape_tag);
-            const tag_index: usize = @intCast(shape_tag_info.logical_index);
-            if (tag_index >= source_tags.len) {
-                executableInvariant("executable foreign aggregate tag logical index exceeded logical type arity");
-            }
-            if (seen_tags[tag_index]) {
-                executableInvariant("executable foreign aggregate tag metadata saw duplicate tag logical index");
-            }
-
-            const payloads = if (shape_tag == tag.tag)
-                try self.lowerForeignSelectedTagPayloadTypes(tag, value_store, representation_store)
-            else
-                try self.lowerLogicalTagPayloadTypes(shape_tag, source_tags[tag_index]);
-            tags[tag_index] = .{
-                .tag = shape_tag,
-                .payloads = payloads,
-            };
-            seen_tags[tag_index] = true;
-        }
-        for (seen_tags) |was_seen| {
-            if (!was_seen) executableInvariant("executable foreign aggregate tag metadata did not provide every logical tag");
-        }
-
-        return try self.type_lowerer.output.addType(.{ .tag_union = .{
-            .shape = tag.union_shape,
-            .tags = tags,
-        } });
-    }
-
-    fn lowerForeignSelectedTagPayloadTypes(
-        self: *BodyBuilder,
-        tag: anytype,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error![]const Type.TagPayloadType {
-        const shape_payloads = self.type_lowerer.row_shapes.tagPayloads(tag.tag);
-        if (shape_payloads.len == 0) return &.{};
-        const payloads = try self.allocator.alloc(Type.TagPayloadType, shape_payloads.len);
-        errdefer self.allocator.free(payloads);
-        const seen = try self.allocator.alloc(bool, shape_payloads.len);
-        defer self.allocator.free(seen);
-        @memset(seen, false);
-
-        for (tag.payloads) |payload| {
-            const payload_info = self.type_lowerer.row_shapes.tagPayload(payload.payload);
-            if (payload_info.tag != tag.tag) {
-                executableInvariant("executable foreign aggregate selected tag payload belongs to a different tag");
-            }
-            const payload_index: usize = @intCast(payload_info.logical_index);
-            if (payload_index >= shape_payloads.len) {
-                executableInvariant("executable foreign aggregate selected tag payload index exceeded tag arity");
-            }
-            if (seen[payload_index]) {
-                executableInvariant("executable foreign aggregate selected tag payload was duplicated");
-            }
-            if (payload.payload != shape_payloads[payload_index]) {
-                executableInvariant("executable foreign aggregate selected tag payload id differs from row shape logical slot");
-            }
-            const child = value_store.values.items[@intFromEnum(payload.value)];
-            payloads[payload_index] = .{
-                .payload = shape_payloads[payload_index],
-                .ty = try self.lowerExecutableValueTypeInStore(child.logical_ty, payload.value, value_store, representation_store),
-            };
-            seen[payload_index] = true;
-        }
-        for (seen) |was_seen| {
-            if (!was_seen) executableInvariant("executable foreign aggregate selected tag did not provide every payload");
-        }
-        return payloads;
-    }
-
-    fn lowerAlreadyErasedCaptureType(
-        self: *BodyBuilder,
-        erased: repr.AlreadyErasedCallablePlan,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error!?Type.TypeId {
-        return switch (erased.capture) {
-            .none => blk: {
-                if (erased.sig_key.capture_ty != null) {
-                    executableInvariant("executable already-erased capture plan is none but signature has hidden capture type");
-                }
-                break :blk null;
-            },
-            .zero_sized_ty => |logical_ty| blk: {
-                const capture_key = erased.sig_key.capture_ty orelse {
-                    executableInvariant("executable already-erased zero-sized capture has no hidden capture type key");
-                };
-                if (builtin.mode == .Debug) {
-                    const actual_key = try repr.execValueTypeKey(
-                        self.allocator,
-                        self.canonical_names,
-                        self.type_lowerer.input,
-                        logical_ty,
-                    );
-                    if (!repr.canonicalExecValueTypeKeyEql(actual_key, capture_key)) {
-                        executableInvariant("executable already-erased zero-sized capture type disagrees with signature key");
-                    }
-                }
-                break :blk try self.type_lowerer.lowerType(logical_ty);
-            },
-            .value => |capture_value| blk: {
-                const capture_key = erased.sig_key.capture_ty orelse {
-                    executableInvariant("executable already-erased capture value has no hidden capture type key");
-                };
-                const capture_info = value_store.values.items[@intFromEnum(capture_value)];
-                if (builtin.mode == .Debug) {
-                    const actual_key = try repr.execValueTypeKeyForValue(
-                        self.allocator,
-                        self.canonical_names,
-                        self.type_lowerer.input,
-                        representation_store,
-                        value_store,
-                        capture_value,
-                    );
-                    if (!repr.canonicalExecValueTypeKeyEql(actual_key, capture_key)) {
-                        executableInvariant("executable already-erased capture value type disagrees with signature key");
-                    }
-                }
-                break :blk try self.lowerExecutableValueTypeInStore(
-                    capture_info.logical_ty,
-                    capture_value,
-                    value_store,
-                    representation_store,
-                );
-            },
-        };
-    }
-
-    fn lowerProcValueErasedCaptureType(
-        self: *BodyBuilder,
-        erase: repr.ProcValueErasePlan,
-    ) Allocator.Error!?Type.TypeId {
-        if (erase.erased_fn_sig_key.capture_ty == null) {
-            if (erase.capture_slots.len != 0) executableInvariant("executable proc-value erase plan has captures but no hidden capture type");
-            return null;
-        }
-
-        const items: []Type.TypeId = if (erase.capture_slots.len == 0)
-            &.{}
-        else
-            try self.allocator.alloc(Type.TypeId, erase.capture_slots.len);
-        errdefer if (items.len > 0) self.allocator.free(items);
-
-        const seen: []bool = if (erase.capture_slots.len == 0)
-            &.{}
-        else
-            try self.allocator.alloc(bool, erase.capture_slots.len);
-        defer if (seen.len > 0) self.allocator.free(seen);
-        if (seen.len > 0) @memset(seen, false);
-
-        for (erase.capture_slots) |slot| {
-            const index: usize = @intCast(slot.slot);
-            if (index >= erase.capture_slots.len) executableInvariant("executable proc-value erase capture slot exceeds source capture arity");
-            if (seen[index]) executableInvariant("executable proc-value erase capture slot was duplicated");
-            items[index] = try self.lowerSessionExecutableTypeKey(slot.exec_value_ty);
-            seen[index] = true;
-        }
-        for (seen) |was_seen| {
-            if (!was_seen) executableInvariant("executable proc-value erase plan did not provide every hidden capture slot");
-        }
-
-        return try self.type_lowerer.output.addType(.{ .tuple = items });
+        executableInvariant("executable callable-set member had no published payload entry");
     }
 
     fn lowerFiniteSetAdapterCaptureType(
         self: *BodyBuilder,
         adapter: repr.ErasedAdapterKey,
     ) Allocator.Error!?Type.TypeId {
-        if (adapter.erased_fn_sig_key.capture_ty == null) return null;
-        return try self.lowerFiniteCallableSetType(adapter.callable_set_key, self.representation_store);
+        const capture_key = adapter.erased_fn_sig_key.capture_ty orelse return null;
+        return try self.lowerSessionExecutableTypeKey(capture_key);
     }
 
-    fn lowerAggregateExecutableValueType(
+    fn lowerCallableSetType(
         self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        aggregate: repr.AggregateValueInfo,
+        key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!Type.TypeId {
-        return switch (aggregate) {
-            .record => |record| blk: {
-                const fields = try self.allocator.alloc(Type.RecordFieldType, record.fields.len);
-                errdefer if (fields.len > 0) self.allocator.free(fields);
-                for (record.fields, 0..) |field, i| {
-                    const child = self.value_store.values.items[@intFromEnum(field.value)];
-                    fields[i] = .{
-                        .field = field.field,
-                        .ty = try self.lowerExecutableValueType(child.logical_ty, field.value),
-                    };
-                }
-                break :blk try self.type_lowerer.output.addType(.{ .record = .{
-                    .shape = record.shape,
-                    .fields = fields,
-                } });
-            },
-            .tuple => |tuple| blk: {
-                const items = try self.allocator.alloc(Type.TypeId, tuple.len);
-                errdefer if (items.len > 0) self.allocator.free(items);
-                const seen = try self.allocator.alloc(bool, tuple.len);
-                defer self.allocator.free(seen);
-                @memset(seen, false);
-
-                for (tuple) |elem| {
-                    const index: usize = @intCast(elem.index);
-                    if (index >= tuple.len) executableInvariant("executable aggregate tuple element index exceeded tuple arity");
-                    if (seen[index]) executableInvariant("executable aggregate tuple had duplicate element index");
-                    const child = self.value_store.values.items[@intFromEnum(elem.value)];
-                    items[index] = try self.lowerExecutableValueType(child.logical_ty, elem.value);
-                    seen[index] = true;
-                }
-                for (seen) |was_seen| {
-                    if (!was_seen) executableInvariant("executable aggregate tuple did not provide every element");
-                }
-
-                break :blk try self.type_lowerer.output.addType(.{ .tuple = items });
-            },
-            .tag => |tag| try self.lowerTagAggregateExecutableValueType(logical_ty, tag),
-            .list => |list| try self.lowerListAggregateExecutableValueType(logical_ty, list),
-        };
-    }
-
-    fn lowerListAggregateExecutableValueType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        list: anytype,
-    ) Allocator.Error!Type.TypeId {
-        if (list.elems.len == 0) {
-            const elem_ty = try self.lowerLogicalListElemType(logical_ty);
-            return try self.type_lowerer.output.addType(.{ .list = elem_ty });
-        }
-
-        const first = self.value_store.values.items[@intFromEnum(list.elems[0])];
-        if (builtin.mode == .Debug) {
-            const first_key = try repr.execValueTypeKeyForValue(
-                self.allocator,
-                self.canonical_names,
-                self.type_lowerer.input,
-                self.representation_store,
-                self.value_store,
-                list.elems[0],
-            );
-            for (list.elems[1..]) |elem| {
-                const elem_key = try repr.execValueTypeKeyForValue(
-                    self.allocator,
-                    self.canonical_names,
-                    self.type_lowerer.input,
-                    self.representation_store,
-                    self.value_store,
-                    elem,
-                );
-                if (!repr.canonicalExecValueTypeKeyEql(first_key, elem_key)) {
-                    executableInvariant("executable aggregate list elements have different executable representations");
-                }
-            }
-        }
-        const elem_ty = try self.lowerExecutableValueType(first.logical_ty, list.elems[0]);
-        return try self.type_lowerer.output.addType(.{ .list = elem_ty });
-    }
-
-    fn lowerLogicalListElemType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-    ) Allocator.Error!Type.TypeId {
-        const root = self.type_lowerer.input.unlinkConst(logical_ty);
-        return switch (self.type_lowerer.input.getNode(root)) {
-            .link => unreachable,
-            .nominal => |nominal| try self.lowerLogicalListElemType(nominal.backing),
-            .content => |content| switch (content) {
-                .list => |elem| try self.type_lowerer.lowerType(elem),
-                else => executableInvariant("executable aggregate list metadata attached to non-list logical type"),
-            },
-            else => executableInvariant("executable aggregate list metadata attached to unresolved logical type"),
-        };
-    }
-
-    fn lowerTagAggregateExecutableValueType(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-        tag: anytype,
-    ) Allocator.Error!Type.TypeId {
-        const source_tags = self.logicalTagUnionTags(logical_ty);
-        const shape_tags = self.type_lowerer.row_shapes.tagUnionTags(tag.union_shape);
-        if (shape_tags.len != source_tags.len) {
-            executableInvariant("executable aggregate tag metadata shape does not match logical type arity");
-        }
-
-        const tags = try self.allocator.alloc(Type.TagType, shape_tags.len);
-        for (tags) |*item| item.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
-        errdefer {
-            for (tags) |item| {
-                if (item.payloads.len > 0) self.allocator.free(item.payloads);
-            }
-            self.allocator.free(tags);
-        }
-
-        const seen_tags = try self.allocator.alloc(bool, shape_tags.len);
-        defer self.allocator.free(seen_tags);
-        @memset(seen_tags, false);
-
-        for (shape_tags) |shape_tag| {
-            const shape_tag_info = self.type_lowerer.row_shapes.tag(shape_tag);
-            const tag_index: usize = @intCast(shape_tag_info.logical_index);
-            if (tag_index >= source_tags.len) {
-                executableInvariant("executable aggregate tag logical index exceeded logical type arity");
-            }
-            if (seen_tags[tag_index]) {
-                executableInvariant("executable aggregate tag metadata saw duplicate tag logical index");
-            }
-
-            const payloads = if (shape_tag == tag.tag)
-                try self.lowerSelectedTagPayloadTypes(tag)
-            else
-                try self.lowerLogicalTagPayloadTypes(shape_tag, source_tags[tag_index]);
-            tags[tag_index] = .{
-                .tag = shape_tag,
-                .payloads = payloads,
-            };
-            seen_tags[tag_index] = true;
-        }
-        for (seen_tags) |was_seen| {
-            if (!was_seen) executableInvariant("executable aggregate tag metadata did not provide every logical tag");
-        }
-
-        return try self.type_lowerer.output.addType(.{ .tag_union = .{
-            .shape = tag.union_shape,
-            .tags = tags,
-        } });
-    }
-
-    fn logicalTagUnionTags(
-        self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
-    ) []const LambdaSolved.Type.Tag {
-        const root = self.type_lowerer.input.unlinkConst(logical_ty);
-        return switch (self.type_lowerer.input.getNode(root)) {
-            .link => unreachable,
-            .nominal => |nominal| self.logicalTagUnionTags(nominal.backing),
-            .content => |content| switch (content) {
-                .tag_union => |tag_union| self.type_lowerer.input.sliceTags(tag_union.tags),
-                else => executableInvariant("executable aggregate tag metadata attached to non-tag-union logical type"),
-            },
-            else => executableInvariant("executable aggregate tag metadata attached to unresolved logical type"),
-        };
-    }
-
-    fn lowerLogicalTagPayloadTypes(
-        self: *BodyBuilder,
-        tag_id: MonoRow.TagId,
-        source_tag: LambdaSolved.Type.Tag,
-    ) Allocator.Error![]const Type.TagPayloadType {
-        const source_payload_tys = self.type_lowerer.input.sliceTypeVarSpan(source_tag.args);
-        const shape_payloads = self.type_lowerer.row_shapes.tagPayloads(tag_id);
-        if (shape_payloads.len != source_payload_tys.len) {
-            executableInvariant("executable aggregate tag logical payload arity differs from row shape");
-        }
-        if (shape_payloads.len == 0) return &.{};
-
-        const payloads = try self.allocator.alloc(Type.TagPayloadType, shape_payloads.len);
-        errdefer self.allocator.free(payloads);
-        for (shape_payloads, 0..) |payload_id, i| {
-            payloads[i] = .{
-                .payload = payload_id,
-                .ty = try self.type_lowerer.lowerType(source_payload_tys[i]),
-            };
-        }
-        return payloads;
-    }
-
-    fn lowerSelectedTagPayloadTypes(
-        self: *BodyBuilder,
-        tag: anytype,
-    ) Allocator.Error![]const Type.TagPayloadType {
-        const shape_payloads = self.type_lowerer.row_shapes.tagPayloads(tag.tag);
-        if (shape_payloads.len == 0) return &.{};
-        const payloads = try self.allocator.alloc(Type.TagPayloadType, shape_payloads.len);
-        errdefer self.allocator.free(payloads);
-        const seen = try self.allocator.alloc(bool, shape_payloads.len);
-        defer self.allocator.free(seen);
-        @memset(seen, false);
-
-        for (tag.payloads) |payload| {
-            const payload_info = self.type_lowerer.row_shapes.tagPayload(payload.payload);
-            if (payload_info.tag != tag.tag) {
-                executableInvariant("executable aggregate selected tag payload belongs to a different tag");
-            }
-            const payload_index: usize = @intCast(payload_info.logical_index);
-            if (payload_index >= shape_payloads.len) {
-                executableInvariant("executable aggregate selected tag payload index exceeded tag arity");
-            }
-            if (seen[payload_index]) {
-                executableInvariant("executable aggregate selected tag payload was duplicated");
-            }
-            if (payload.payload != shape_payloads[payload_index]) {
-                executableInvariant("executable aggregate selected tag payload id differs from row shape logical slot");
-            }
-            const child = self.value_store.values.items[@intFromEnum(payload.value)];
-            payloads[payload_index] = .{
-                .payload = shape_payloads[payload_index],
-                .ty = try self.lowerExecutableValueType(child.logical_ty, payload.value),
-            };
-            seen[payload_index] = true;
-        }
-        for (seen) |was_seen| {
-            if (!was_seen) executableInvariant("executable aggregate selected tag did not provide every payload");
-        }
-        return payloads;
+        return try self.lowerSessionExecutableTypeKey(repr.finiteCallableSetExecValueTypeKey(key));
     }
 
     fn lowerFnArgSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
@@ -6696,7 +6164,7 @@ const BodyBuilder = struct {
                 executableInvariant("executable call_value member target specialization source type differs from call site");
             }
             const capture_arg_len: usize = if (member.capture_slots.len == 0) 0 else 1;
-            const capture_payload_ty = try self.lowerCallableSetMemberPayloadType(member);
+            const capture_payload_ty = try self.lowerCallableSetMemberPayloadType(callable_set_key, member);
             const capture_payload = if (capture_payload_ty != null) self.output.freshValueRef() else null;
             const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_values.len + capture_arg_len);
             defer self.allocator.free(direct_args);

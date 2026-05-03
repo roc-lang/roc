@@ -499,9 +499,11 @@ pub fn run(
     try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
     try solveRepresentationSessions(&program, proc_build_records.items);
     try assignCallableEmissionPlans(&program, proc_build_records.items);
-    try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
+    try publishSessionExecutableTypePayloads(&program);
+    try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try finalizeValueTransformBoundaries(&program);
+    try publishSessionExecutableTypePayloads(&program);
     verifySealedLambdaSolvedProgram(&program);
     for (program.solve_sessions.items) |*session| {
         session.representation_store.verifySealed();
@@ -582,6 +584,144 @@ fn verifyConcreteSourcePayload(
         lambdaInvariant(context ++ " concrete source type payload key disagrees with source type key");
     }
 }
+
+fn publishSessionExecutableTypePayloads(program: *Program) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        var publisher = SessionExecutablePayloadPublisher{
+            .program = program,
+            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+            .session = session,
+        };
+        try publisher.publish();
+    }
+}
+
+const SessionExecutablePayloadPublisher = struct {
+    program: *Program,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+
+    fn publish(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        try self.publishCallableSetMemberCaptures();
+        try self.publishLocalValues();
+    }
+
+    fn publishCallableSetMemberCaptures(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        for (self.representationStore().callable_set_descriptors) |descriptor| {
+            if (descriptor.members.len == 0) {
+                lambdaInvariant("lambda-solved executable payload publication reached empty callable-set descriptor");
+            }
+            for (descriptor.members) |member| {
+                if (member.capture_slots.len == 0) continue;
+                const target_instance = self.procInstanceForSource(member.source_proc);
+                const target_value_store = self.valueStoreFor(target_instance);
+                const target_captures = target_value_store.sliceValueSpan(target_instance.public_roots.captures);
+                if (target_captures.len != member.capture_slots.len) {
+                    lambdaInvariant("lambda-solved callable-set member capture payload publication saw mismatched capture arity");
+                }
+                const seen = try self.program.allocator.alloc(bool, target_captures.len);
+                defer self.program.allocator.free(seen);
+                @memset(seen, false);
+                for (member.capture_slots) |slot| {
+                    const index: usize = @intCast(slot.slot);
+                    if (index >= target_captures.len) {
+                        lambdaInvariant("lambda-solved callable-set member capture payload publication saw out-of-range capture slot");
+                    }
+                    if (seen[index]) {
+                        lambdaInvariant("lambda-solved callable-set member capture payload publication saw duplicate capture slot");
+                    }
+                    const endpoint = try self.publishTargetValue(target_instance, target_value_store, target_captures[index]);
+                    if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, slot.exec_value_ty)) {
+                        lambdaInvariant("lambda-solved callable-set member capture payload key differs from member schema");
+                    }
+                    seen[index] = true;
+                }
+                for (seen) |was_seen| {
+                    if (!was_seen) lambdaInvariant("lambda-solved callable-set member capture slots were not dense during payload publication");
+                }
+            }
+        }
+    }
+
+    fn publishLocalValues(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        for (self.session.members) |instance_id| {
+            const instance = self.procInstance(instance_id);
+            if (instance.solve_session != self.session_id) {
+                lambdaInvariant("lambda-solved executable payload publication session member pointed at another session");
+            }
+            const value_store = self.valueStoreFor(instance);
+            for (value_store.values.items, 0..) |_, raw_value| {
+                const value: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                _ = try repr.sessionExecutableTypeEndpointForValue(
+                    self.program.allocator,
+                    &self.program.canonical_names,
+                    &self.program.row_shapes,
+                    &self.program.types,
+                    self.representationStore(),
+                    value_store,
+                    value,
+                );
+            }
+        }
+    }
+
+    fn publishTargetValue(
+        self: *SessionExecutablePayloadPublisher,
+        target_instance: *const repr.ProcRepresentationInstance,
+        target_value_store: *const repr.ValueInfoStore,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
+        return try repr.sessionExecutableTypeEndpointForValueIntoStore(
+            self.program.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStoreFor(target_instance),
+            &self.representationStore().session_executable_type_payloads,
+            target_value_store,
+            value,
+        );
+    }
+
+    fn representationStore(self: *SessionExecutablePayloadPublisher) *repr.RepresentationStore {
+        return &self.session.representation_store;
+    }
+
+    fn representationStoreFor(
+        self: *SessionExecutablePayloadPublisher,
+        instance: *const repr.ProcRepresentationInstance,
+    ) *const repr.RepresentationStore {
+        return &self.program.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+    }
+
+    fn valueStoreFor(
+        self: *SessionExecutablePayloadPublisher,
+        instance: *const repr.ProcRepresentationInstance,
+    ) *const repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
+    }
+
+    fn procInstanceForSource(
+        self: *SessionExecutablePayloadPublisher,
+        proc: canonical.MirProcedureRef,
+    ) *const repr.ProcRepresentationInstance {
+        for (self.program.proc_instances.items) |*instance| {
+            if (canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
+        }
+        lambdaInvariant("lambda-solved executable payload publication referenced missing procedure instance");
+    }
+
+    fn procInstance(
+        self: *SessionExecutablePayloadPublisher,
+        id: repr.ProcRepresentationInstanceId,
+    ) *const repr.ProcRepresentationInstance {
+        const index = @intFromEnum(id);
+        if (index >= self.program.proc_instances.items.len) {
+            lambdaInvariant("lambda-solved executable payload publication referenced out-of-range procedure instance");
+        }
+        return &self.program.proc_instances.items[index];
+    }
+};
 
 fn sealProcRepresentationInstances(
     program: *Program,

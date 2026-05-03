@@ -2732,11 +2732,33 @@ const SessionExecutableTypePayloadBuilder = struct {
         const members = try self.allocator.alloc(SessionExecutableCallableSetMemberPayload, descriptor.members.len);
         errdefer self.allocator.free(members);
         for (descriptor.members, 0..) |member, i| {
-            members[i] = .{ .member = member.member };
+            members[i] = try self.callableSetMemberPayload(member);
         }
         return .{
             .key = key,
             .members = members,
+        };
+    }
+
+    fn callableSetMemberPayload(
+        self: *SessionExecutableTypePayloadBuilder,
+        member: CanonicalCallableSetMember,
+    ) std.mem.Allocator.Error!SessionExecutableCallableSetMemberPayload {
+        if (member.capture_slots.len == 0) {
+            return .{
+                .member = member.member,
+                .payload_ty = null,
+                .payload_ty_key = null,
+            };
+        }
+        const payload = try self.tuplePayloadForCaptureSlots(
+            member.capture_slots,
+            captureTupleExecKeyForSlots(member.capture_slots),
+        );
+        return .{
+            .member = member.member,
+            .payload_ty = payload.ty,
+            .payload_ty_key = payload.key,
         };
     }
 
