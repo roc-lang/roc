@@ -1823,10 +1823,11 @@ const CaptureSlotPlanBuilder = struct {
         source_ty: canonical.CanonicalTypeKey,
         value_info: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
+        const resolved_value = self.resolveValueInfoId(value_info);
         const key = CapturePlanKey{
             .source_ty = source_ty,
             .value_store_id = self.value_context.value_store_id,
-            .value_info = value_info,
+            .value_info = resolved_value,
         };
         if (self.active.get(key)) |active| {
             const recursive = try self.plans.reserveCaptureSlot(self.allocator);
@@ -1838,7 +1839,7 @@ const CaptureSlotPlanBuilder = struct {
         try self.active.put(key, id);
         errdefer _ = self.active.remove(key);
 
-        const plan = try self.buildPlan(source_ty, value_info);
+        const plan = try self.buildPlan(source_ty, resolved_value);
         self.plans.fillCaptureSlot(id, plan);
         _ = self.active.remove(key);
         return id;
@@ -1852,7 +1853,7 @@ const CaptureSlotPlanBuilder = struct {
         const checked_ty = self.artifact.checked_types.rootForKey(source_ty) orelse {
             checkedPipelineInvariant("capture slot source type was not published in checked type store");
         };
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         if (info.callable != null) {
             return .{ .callable_leaf = try self.callableLeafPlan(value_info_id) };
         }
@@ -1885,7 +1886,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         value_info_id: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CallableResultPlanId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const callable = info.callable orelse checkedPipelineInvariant("function-typed capture leaf has no callable metadata");
         const emission = self.value_context.representation_store.callableEmissionPlan(callable.emission_plan);
         return switch (emission) {
@@ -2080,7 +2081,7 @@ const CaptureSlotPlanBuilder = struct {
         payload_ty: checked_artifact.CheckedTypeId,
         value_info_id: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
         const payload_value = self.valueForRoot(boxed.payload_root) orelse {
             checkedPipelineInvariant("Box(T) capture payload root had no value-flow metadata");
@@ -2095,7 +2096,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *const CaptureSlotPlanBuilder,
         value_info_id: repr.ValueInfoId,
     ) bool {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
         const boundary_id = boxed.boundary orelse return false;
         const boundary = self.value_context.representation_store.box_boundaries[@intFromEnum(boundary_id)];
@@ -2127,7 +2128,7 @@ const CaptureSlotPlanBuilder = struct {
         value_info_id: repr.ValueInfoId,
         label: canonical.RecordFieldLabelId,
     ) repr.ValueInfoId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("record capture had no aggregate metadata");
         const record = switch (aggregate) {
             .record => |record| record,
@@ -2147,7 +2148,7 @@ const CaptureSlotPlanBuilder = struct {
         value_info_id: repr.ValueInfoId,
         index: u32,
     ) repr.ValueInfoId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("tuple capture had no aggregate metadata");
         const tuple = switch (aggregate) {
             .tuple => |tuple| tuple,
@@ -2165,7 +2166,7 @@ const CaptureSlotPlanBuilder = struct {
         tag_label: canonical.TagLabelId,
         payload_index: u32,
     ) repr.ValueInfoId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("tag capture had no aggregate metadata");
         const tag = switch (aggregate) {
             .tag => |tag| tag,
@@ -2190,7 +2191,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         value_info_id: repr.ValueInfoId,
     ) repr.ValueInfoId {
-        const info = self.value_context.value_store.values.items[@intFromEnum(value_info_id)];
+        const info = self.valueInfo(value_info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("List(T) capture had no aggregate metadata");
         const list = switch (aggregate) {
             .list => |list| list,
@@ -2200,6 +2201,20 @@ const CaptureSlotPlanBuilder = struct {
             checkedPipelineInvariant("List(T) capture slot planning needs a representative element plan");
         }
         return list.elems[0];
+    }
+
+    fn valueInfo(self: *const CaptureSlotPlanBuilder, value_info_id: repr.ValueInfoId) repr.ValueInfo {
+        return self.value_context.value_store.values.items[@intFromEnum(self.resolveValueInfoId(value_info_id))];
+    }
+
+    fn resolveValueInfoId(self: *const CaptureSlotPlanBuilder, value_info_id: repr.ValueInfoId) repr.ValueInfoId {
+        var current = value_info_id;
+        var remaining = self.value_context.value_store.values.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            const info = self.value_context.value_store.values.items[@intFromEnum(current)];
+            current = info.value_alias_source orelse return current;
+        }
+        checkedPipelineInvariant("capture slot value alias chain is cyclic");
     }
 };
 
@@ -2572,7 +2587,8 @@ const ConstGraphPlanBuilder = struct {
         value_info: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CallableLeafReificationPlan {
         const context = value_context orelse checkedPipelineInvariant("callable constant leaf requires value context");
-        const info_id = value_info orelse checkedPipelineInvariant("callable constant leaf requires lambda-solved value metadata");
+        const raw_info_id = value_info orelse checkedPipelineInvariant("callable constant leaf requires lambda-solved value metadata");
+        const info_id = self.resolveValueInfoId(context, raw_info_id);
         const info = context.value_store.values.items[@intFromEnum(info_id)];
         const callable = info.callable orelse checkedPipelineInvariant("function-typed constant leaf has no callable metadata");
         const emission = context.representation_store.callableEmissionPlan(callable.emission_plan);
@@ -2620,10 +2636,24 @@ const ConstGraphPlanBuilder = struct {
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
     ) ?repr.ValueInfo {
-        _ = self;
         const context = value_context orelse return null;
         const info_id = value_info orelse return null;
-        return context.value_store.values.items[@intFromEnum(info_id)];
+        return context.value_store.values.items[@intFromEnum(self.resolveValueInfoId(context, info_id))];
+    }
+
+    fn resolveValueInfoId(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        value_info: repr.ValueInfoId,
+    ) repr.ValueInfoId {
+        _ = self;
+        var current = value_info;
+        var remaining = context.value_store.values.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            const info = context.value_store.values.items[@intFromEnum(current)];
+            current = info.value_alias_source orelse return current;
+        }
+        checkedPipelineInvariant("const graph value alias chain is cyclic");
     }
 
     fn recordFieldValue(
