@@ -3025,6 +3025,16 @@ pub const ExecutableTypePayloadStore = struct {
             }
             verifyExecutableTypePayload(self, artifact_key, erased_fn_abis, entry.payload);
         }
+        for (erased_fn_abis.abis) |abi| {
+            if (self.by_key.get(abi.ret_exec_key) == null) {
+                std.debug.panic("checked artifact invariant violated: erased ABI result key has no executable type payload", .{});
+            }
+            for (abi.arg_exec_keys) |arg_key| {
+                if (self.by_key.get(arg_key) == null) {
+                    std.debug.panic("checked artifact invariant violated: erased ABI argument key has no executable type payload", .{});
+                }
+            }
+        }
     }
 
     pub fn deinit(self: *ExecutableTypePayloadStore, allocator: Allocator) void {

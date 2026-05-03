@@ -1566,6 +1566,29 @@ pub fn sessionExecutableTypeEndpointForValue(
     return try builder.endpointForValue(value);
 }
 
+pub fn sessionExecutableTypeEndpointForValueIntoStore(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    source_representation_store: *const RepresentationStore,
+    owner_payload_store: *SessionExecutableTypePayloadStore,
+    value_store: *const ValueInfoStore,
+    value: ValueInfoId,
+) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+    var builder = SessionExecutableTypePayloadBuilder.initWithPayloadStore(
+        allocator,
+        names,
+        row_shapes,
+        types,
+        source_representation_store,
+        owner_payload_store,
+        value_store,
+    );
+    defer builder.deinit();
+    return try builder.endpointForValue(value);
+}
+
 pub fn sessionExecutableTypeEndpointForType(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -1584,7 +1607,8 @@ const SessionExecutableTypePayloadBuilder = struct {
     names: *const canonical.CanonicalNameStore,
     row_shapes: *row.Store,
     types: *const type_mod.Store,
-    representation_store: *RepresentationStore,
+    representation_store: *const RepresentationStore,
+    payload_store: *SessionExecutableTypePayloadStore,
     value_store: ?*const ValueInfoStore,
     active_types: std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId),
     active_values: std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId),
@@ -1597,12 +1621,33 @@ const SessionExecutableTypePayloadBuilder = struct {
         representation_store: *RepresentationStore,
         value_store: ?*const ValueInfoStore,
     ) SessionExecutableTypePayloadBuilder {
+        return initWithPayloadStore(
+            allocator,
+            names,
+            row_shapes,
+            types,
+            representation_store,
+            &representation_store.session_executable_type_payloads,
+            value_store,
+        );
+    }
+
+    fn initWithPayloadStore(
+        allocator: std.mem.Allocator,
+        names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
+        types: *const type_mod.Store,
+        representation_store: *const RepresentationStore,
+        payload_store: *SessionExecutableTypePayloadStore,
+        value_store: ?*const ValueInfoStore,
+    ) SessionExecutableTypePayloadBuilder {
         return .{
             .allocator = allocator,
             .names = names,
             .row_shapes = row_shapes,
             .types = types,
             .representation_store = representation_store,
+            .payload_store = payload_store,
             .value_store = value_store,
             .active_types = std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId).init(allocator),
             .active_values = std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId).init(allocator),
@@ -1631,11 +1676,11 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.active_values.get(value)) |active| {
             return .{ .ty = refFor(active), .key = key };
         }
-        if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
+        if (self.payload_store.refForKey(key)) |existing| {
             return .{ .ty = existing, .key = key };
         }
 
-        const id = try self.representation_store.session_executable_type_payloads.reserve(self.allocator, key);
+        const id = try self.payload_store.reserve(self.allocator, key);
         try self.active_values.put(value, id);
         errdefer _ = self.active_values.remove(value);
 
@@ -1647,7 +1692,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         else
             try self.typePayload(info.logical_ty);
 
-        self.representation_store.session_executable_type_payloads.fill(self.allocator, id, payload);
+        self.payload_store.fill(self.allocator, id, payload);
         _ = self.active_values.remove(value);
         return .{ .ty = refFor(id), .key = key };
     }
@@ -1658,16 +1703,16 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.active_types.get(root)) |active| {
             return .{ .ty = refFor(active), .key = key };
         }
-        if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
+        if (self.payload_store.refForKey(key)) |existing| {
             return .{ .ty = existing, .key = key };
         }
 
-        const id = try self.representation_store.session_executable_type_payloads.reserve(self.allocator, key);
+        const id = try self.payload_store.reserve(self.allocator, key);
         try self.active_types.put(root, id);
         errdefer _ = self.active_types.remove(root);
 
         const payload = try self.typePayload(root);
-        self.representation_store.session_executable_type_payloads.fill(self.allocator, id, payload);
+        self.payload_store.fill(self.allocator, id, payload);
         _ = self.active_types.remove(root);
         return .{ .ty = refFor(id), .key = key };
     }
@@ -1939,7 +1984,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         key: CanonicalCallableSetKey,
         expected_key: CanonicalExecValueTypeKey,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, expected_key, .{
+        const id = try self.payload_store.append(self.allocator, expected_key, .{
             .callable_set = try self.callableSetPayload(key),
         });
         return .{
@@ -1959,7 +2004,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 key_hasher.update("capture_tuple");
                 break :blk CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
             };
-            const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .tuple = &.{} });
+            const id = try self.payload_store.append(self.allocator, key, .{ .tuple = &.{} });
             return .{
                 .ty = refFor(id),
                 .key = key,
@@ -1980,7 +2025,7 @@ const SessionExecutableTypePayloadBuilder = struct {
             };
         }
         const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };
-        const id = try self.representation_store.session_executable_type_payloads.append(self.allocator, key, .{ .tuple = items });
+        const id = try self.payload_store.append(self.allocator, key, .{ .tuple = items });
         return .{
             .ty = refFor(id),
             .key = key,

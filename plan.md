@@ -2888,6 +2888,31 @@ The lambda-solved construction algorithm is:
     session executable type payload refs, not dummy `ValueInfoId`s and not bare
     canonical keys.
 
+    A `ValueTransformBoundary` is owned by exactly one final
+    `RepresentationSolveSession`. Every `SessionExecutableTypePayloadRef`
+    reachable from `from_endpoint`, `to_endpoint`, or child transforms in that
+    boundary must point into that same owning session's
+    `SessionExecutableTypePayloadStore`. This remains true when the endpoint
+    owner names a target procedure in another non-recursive SCC. The caller
+    session finalizer must publish a local endpoint payload for the target
+    procedure parameter or return by consuming the target's sealed
+    `ProcRepresentationInstance.public_roots`, target `ValueInfoStore`, target
+    representation store, and target executable specialization key. It may copy
+    the explicit structural payload into the caller session store and verify
+    that the copied payload key equals the target executable specialization key.
+    It must not store a foreign session payload ref in the caller's boundary,
+    and it must not recover the target endpoint from source syntax, symbol
+    lookup, layouts, or display names.
+
+    The same ownership rule applies to raw erased-call endpoints. The erased
+    ABI store names the raw argument/result keys. The call-site finalizer must
+    publish local session payload entries for those raw ABI keys before creating
+    `call_raw_arg` or `call_raw_result` endpoints. It may reuse an existing
+    local session entry by key only when that entry was already explicitly
+    published in the same solve session. Missing raw ABI payloads are compiler
+    bugs, not a reason to reconstruct types from `ErasedFnSigKey`, source
+    function type, or backend ABI lowering.
+
     Body lowering must therefore store enough explicit data to finalize these
     boundaries later: `call_proc` target procedure instance id or target
     reservation key, `call_value` callable-set member refs, argument value ids,
