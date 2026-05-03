@@ -603,66 +603,112 @@ const ErasedPromotedWrapperBodyPlan = struct {
     sig_key: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    arg_bridges: Span(PromotedWrapperBridgeId),
+    arg_transforms: Span(ExecutablePayloadTransformPlanId),
     hidden_capture_arg: ?ErasedHiddenCaptureArgPlan,
-    result_bridge: ?PromotedWrapperBridgeId,
-    result_ty: CanonicalExecValueTypeKey,
+    result_transform: ExecutablePayloadTransformPlanId,
     provenance: NonEmptySpan(BoxBoundaryId),
 };
 
-const PromotedWrapperBridgeId = enum(u32) { _ };
+const ExecutablePayloadTransformPlanId = enum(u32) { _ };
 
-const PromotedWrapperBridgeEndpoint = struct {
+const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
-const PromotedWrapperRecordFieldBridge = struct {
+const PayloadTransformRecordField = struct {
     field: RecordFieldLabelId,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-const PromotedWrapperTupleElemBridge = struct {
+const PayloadTransformTupleElem = struct {
     index: u32,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-const PromotedWrapperTagPayloadBridge = struct {
+const PayloadTransformTagPayload = struct {
     index: u32,
-    bridge: PromotedWrapperBridgeId,
+    transform: ExecutablePayloadTransformPlanId,
 };
 
-const PromotedWrapperTagBridge = struct {
+const PayloadTransformTag = struct {
     tag: TagLabelId,
-    payloads: Span(PromotedWrapperTagPayloadBridge),
+    payloads: Span(PayloadTransformTagPayload),
 };
 
-const PromotedWrapperBridgeOp = union(enum) {
+const ExecutablePayloadTransformOp = union(enum) {
+    identity,
+    structural_bridge: ExecutableStructuralBridgePlan,
+    record: Span(PayloadTransformRecordField),
+    tuple: Span(PayloadTransformTupleElem),
+    tag_union: Span(PayloadTransformTag),
+    nominal: struct {
+        nominal: NominalTypeKey,
+        backing: ExecutablePayloadTransformPlanId,
+    },
+    list: struct {
+        elem: ExecutablePayloadTransformPlanId,
+    },
+    box_payload: struct {
+        boundary: BoxBoundaryId,
+        payload: ExecutablePayloadTransformPlanId,
+    },
+    callable_to_erased: CallableToErasedTransformPlan,
+    already_erased_callable: AlreadyErasedCallableTransformPlan,
+};
+
+const ExecutableStructuralBridgePlan = union(enum) {
     direct,
     zst,
     list_reinterpret,
     nominal_reinterpret,
-    box_unbox: PromotedWrapperBridgeId,
-    box_box: PromotedWrapperBridgeId,
-    record: Span(PromotedWrapperRecordFieldBridge),
-    tuple: Span(PromotedWrapperTupleElemBridge),
-    tag_union: Span(PromotedWrapperTagBridge),
+    box_unbox: ExecutablePayloadTransformPlanId,
+    box_box: ExecutablePayloadTransformPlanId,
     singleton_to_tag_union: struct {
         source_tag: TagLabelId,
         target_tag: TagLabelId,
-        payload_bridge: ?PromotedWrapperBridgeId,
+        payload_transform: ?ExecutablePayloadTransformPlanId,
     },
     tag_union_to_singleton: struct {
         source_tag: TagLabelId,
         target_tag: TagLabelId,
-        payload_bridge: ?PromotedWrapperBridgeId,
+        payload_transform: ?ExecutablePayloadTransformPlanId,
     },
 };
 
-const PromotedWrapperBridgePlan = struct {
-    from: PromotedWrapperBridgeEndpoint,
-    to: PromotedWrapperBridgeEndpoint,
-    op: PromotedWrapperBridgeOp,
+const CallableToErasedTransformPlan = union(enum) {
+    finite_value: FiniteCallableValueToErasedPlan,
+    proc_value: ProcValueToErasedPlan,
+};
+
+const FiniteCallableValueToErasedPlan = struct {
+    source_fn_ty: CanonicalTypeKey,
+    callable_set_key: CanonicalCallableSetKey,
+    adapter_key: ErasedAdapterKey,
+};
+
+const ProcValueToErasedPlan = struct {
+    proc_value: ProcedureCallableRef,
+    erased_fn_sig_key: ErasedFnSigKey,
+    capture_shape_key: CaptureShapeKey,
+    executable_specialization_key: ExecutableSpecializationKey,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+};
+
+const AlreadyErasedCallableTransformPlan = struct {
+    sig_key: ErasedFnSigKey,
+};
+
+const ExecutablePayloadTransformPlan = struct {
+    from: ExecutableValueEndpoint,
+    to: ExecutableValueEndpoint,
+    provenance: PayloadTransformProvenance,
+    op: ExecutablePayloadTransformOp,
+};
+
+const PayloadTransformProvenance = union(enum) {
+    none,
+    box_erasure: NonEmptySpan(BoxBoundaryId),
 };
 
 const ErasedPromotedProcedureExecutableSignature = struct {
@@ -735,8 +781,9 @@ is mandatory:
   by executable MIR. Checking finalization still publishes their stable
   `ProcedureValueRef`, `ProcBaseKeyRef`, source function type, and complete
   `ErasedPromotedWrapperBodyPlan`, but mono MIR must not lower their body and
-  must not import `ErasedFnSigKey`, `CanonicalExecValueTypeKey`, erased bridges,
-  hidden erased capture arguments, or any other executable call signature data.
+  must not import `ErasedFnSigKey`, `CanonicalExecValueTypeKey`, executable
+  payload transforms, hidden erased capture arguments, or any other executable
+  call signature data.
 
 This is not a runtime thunk or a runtime closure object. For example:
 
@@ -766,18 +813,19 @@ add1 = Box.unbox(make_boxed({}))
 `add1` is an erased promoted callable. The erased representation exists only
 because the result flowed through the explicit `Box(I64 -> I64)` boundary.
 Checking finalization evaluates the function-valued root, reifies the exact
-erased code ref, `ErasedFnSigKey`, erased capture materialization plan, bridges,
-the full `ErasedPromotedProcedureExecutableSignature`, and non-empty
-`BoxBoundaryId` provenance, then reserves a promoted procedure identity. Mono
+erased code ref, `ErasedFnSigKey`, erased capture materialization plan,
+executable payload transforms, the full
+`ErasedPromotedProcedureExecutableSignature`, and non-empty `BoxBoundaryId`
+provenance, then reserves a promoted procedure identity. Mono
 may call or pass that procedure identity as an opaque `ProcedureValueRef` at the
 source function type `I64 -> I64`, but mono does not lower the body. Executable
 MIR later emits the synthetic procedure body from the published erased plan by
 lowering the explicit executable type payloads in
 `ErasedPromotedProcedureExecutableSignature`, materializing the explicit capture,
-applying the argument bridges, issuing `call_erased`, and applying the result
-bridge. No runtime thunk, runtime initializer procedure, runtime top-level
-erased callable object, runtime closure object, source-shape recovery, or
-canonical-key-to-TypeId cache is allowed.
+applying the argument payload transforms, issuing `call_erased`, and applying
+the result payload transform. No runtime thunk, runtime initializer procedure,
+runtime top-level erased callable object, runtime closure object,
+source-shape recovery, or canonical-key-to-TypeId cache is allowed.
 
 `MonoSpecializationKey` is keyed by a checked `ProcedureTemplateRef` and the
 requested monomorphic source function type. `MonoSpecializedProcRef` is the
@@ -837,54 +885,86 @@ the same body shape in different branches must still have different site ids.
 
 The erased promoted wrapper plan must be complete enough to emit the wrapper
 without inspecting the callable expression again. `params` are the ordinary
-fixed-arity Roc parameters in source order. `arg_bridges` describe how each
-ordinary parameter is converted into the erased ABI described by `sig_key`.
-`ErasedFnSigKey` already contains the exact `ErasedFnAbiKey`; there must not be
-a second standalone ABI field that can diverge from it. `capture` is a sealed
-post-evaluation `ErasedCaptureExecutableMaterializationPlan`, not a
-pre-evaluation `ErasedCaptureReificationPlan`, source-level private capture
-graph, or callable leaf. `hidden_capture_arg` records whether that exact
-materialized capture value is passed to the erased call. `result_bridge`
-converts the erased-call result back to the wrapper's required result
-representation. `provenance` is non-empty and contains only explicit
-`BoxBoundaryId` values. A promoted erased wrapper must not rediscover any of
-these decisions from the code ref, source syntax, runtime bytes, layout shape,
-or shape comparison.
+fixed-arity Roc parameters in source order. `arg_transforms` contains exactly
+one `ExecutablePayloadTransformPlanId` per ordinary parameter, including
+identity transforms. Each transform converts the wrapper parameter endpoint to
+the erased-call argument endpoint described by `sig_key` and
+`ErasedPromotedProcedureExecutableSignature`. `result_transform` converts the
+erased-call result endpoint to the wrapper result endpoint, including the
+identity case. `ErasedFnSigKey` already contains the exact `ErasedFnAbiKey`;
+there must not be a second standalone ABI field that can diverge from it.
+`capture` is a sealed post-evaluation
+`ErasedCaptureExecutableMaterializationPlan`, not a pre-evaluation
+`ErasedCaptureReificationPlan`, source-level private capture graph, or callable
+leaf. `hidden_capture_arg` records whether that exact materialized capture value
+is passed to the erased call. `provenance` is non-empty and contains only
+explicit `BoxBoundaryId` values. A promoted erased wrapper must not rediscover
+any of these decisions from the code ref, source syntax, runtime bytes, layout
+shape, or shape comparison.
 
-`PromotedWrapperBridgeId` is an artifact-owned bridge-plan id. It is not an
-executable-MIR `BridgeId`, an IR `BridgePlanId`, a layout id, a row-finalized
-MIR field id, or a run-local type id. The checked artifact must publish a
-`PromotedWrapperBridgePlanStore` next to the promoted wrapper body plans. Every
-`arg_bridges` entry and every `result_bridge` points into that store. Executable
-MIR lowers a promoted-wrapper bridge by first lowering the bridge endpoint
+`ExecutablePayloadTransformPlanId` is an artifact-owned value-transform plan id.
+It is not an executable-MIR `BridgeId`, an IR `BridgePlanId`, a layout id, a
+row-finalized MIR field id, or a run-local type id. The checked artifact must
+publish an `ExecutablePayloadTransformPlanStore` next to the promoted wrapper
+body plans and executable type payload store. Every `arg_transforms` entry and
+the mandatory `result_transform` point into that store. Executable MIR lowers a
+payload transform by first lowering the transform endpoint
 `ExecutableTypePayloadRef`s into the current executable type store, then
-translating the published bridge op to executable MIR's local `BridgePlan`.
-Executable MIR may use the `key` fields only for debug-only verification that
-the published endpoint payloads match the expected canonical executable types.
-It must not derive the bridge by comparing source and target shapes.
+lowering the already-published transform operation. Executable MIR may use the
+endpoint `key` fields only for debug-only verification that the endpoint
+payloads match the expected canonical executable types. It must not derive a
+transform by comparing source and target shapes.
 
-Bridge plans must carry stable semantic labels for structural children. Record
-bridges name fields with `RecordFieldLabelId`; tuple bridges name element
-indexes; tag bridges name `TagLabelId` plus payload indexes. Executable MIR maps
-those labels to the local lowered row ids and discriminants after lowering the
-endpoint payloads. If a published label or payload index is absent, duplicated,
-out of order for the canonical endpoint payload, or has a child endpoint that
-does not match the enclosing source/target child types, that is a compiler
-invariant violation: debug builds assert at the bridge-publication or
-bridge-lowering boundary and release builds use `unreachable`.
+Executable payload transforms are recursive value-conversion plans, not merely
+layout bridges. They are the only artifact-published mechanism that may describe
+finite-callable-to-erased-callable packing at an explicit `Box(T)` boundary.
+When a transform reaches a callable leaf whose target endpoint is erased, the
+operation must be `callable_to_erased` and its `provenance` must be
+`box_erasure` with a non-empty `BoxBoundaryId` span. The `finite_value` case
+packs the already-evaluated finite callable-set value as the hidden capture for
+the erased adapter named by the full `ErasedAdapterKey`; the adapter body must
+dispatch with `callable_match`, including singleton sets. The `proc_value` case
+packs an already-resolved procedure value and its sealed executable capture
+materialization for direct erased calls. The `already_erased_callable` case is
+pass-through verification for an input value already represented by exactly the
+published `ErasedFnSigKey`. No transform may introduce erased callable
+representation without explicit `BoxBoundaryId` provenance.
+
+Structural bridges still exist, but only as a sub-operation of executable
+payload transforms. `ExecutableStructuralBridgePlan` covers representation
+preserving or purely structural conversions such as `direct`, `zst`,
+`nominal_reinterpret`, `box_unbox`, `box_box`, and singleton/tag reshaping.
+It must not pack finite callable sets, synthesize erased adapters, materialize
+captures, inspect source syntax, or recover callable representation from shape
+comparison. Records, tuples, tag unions, nominals, lists, and boxes that contain
+callable children must use recursive `ExecutablePayloadTransformPlanId` children
+so that callable leaves are transformed by explicit callable operations.
+`list_reinterpret` is allowed only when the element endpoint representation is
+identical; if a list element transform changes callable representation, the plan
+must be a recursive list transform that rebuilds or maps the list explicitly.
+
+Transform plans must carry stable semantic labels for structural children.
+Record transforms name fields with `RecordFieldLabelId`; tuple transforms name
+element indexes; tag transforms name `TagLabelId` plus payload indexes.
+Executable MIR maps those labels to local lowered row ids and discriminants
+after lowering the endpoint payloads. If a published label or payload index is
+absent, duplicated, out of order for the canonical endpoint payload, or has a
+child endpoint that does not match the enclosing source/target child types, that
+is a compiler invariant violation: debug builds assert at the transform
+publication or transform-lowering boundary and release builds use
+`unreachable`.
 
 Checking finalization and lambda-solved representation solving are responsible
-for publishing promoted-wrapper bridge plans. They must publish a bridge
-whenever an erased promoted wrapper ordinary argument or erased promoted wrapper
-result crosses different executable representations. Finite promoted wrappers
-do not publish or consume these bridge plans because they are mono-MIR bodies,
-not executable-MIR bodies. If an erased endpoint's keys are equal, the bridge may
-be `direct` or the wrapper may omit the optional bridge only when the
-surrounding signature already proves the value is consumed at exactly the same
-executable type. If the endpoint keys differ and no bridge plan exists, the
-erased promoted wrapper is invalid; later stages must not repair that by
-re-running representation solving, comparing compatible shapes, reading the
-source expression, or synthesizing an adapter from the erased code ref.
+for publishing executable payload transform plans. They must publish a transform
+for every erased promoted wrapper ordinary argument and for every erased
+promoted wrapper result, including identity transforms. Finite promoted wrappers
+do not publish or consume executable payload transforms for their wrapper bodies
+because they are mono-MIR bodies, not executable-MIR bodies. If an endpoint's
+keys differ and the transform is `identity`, or if a transform's endpoint keys
+do not match the wrapper signature, the erased promoted wrapper is invalid;
+later stages must not repair that by re-running representation solving,
+comparing compatible shapes, reading the source expression, or synthesizing an
+adapter from the erased code ref.
 
 `ErasedCaptureReificationPlan`, source-level private capture graphs, and
 `ErasedCaptureExecutableMaterializationPlan` are different type states.
@@ -931,14 +1011,14 @@ For an erased promoted procedure:
   carries the source `PromotedWrapperParam`, the executable type payload ref for
   the parameter value, and the canonical executable key for debug verification.
 - `wrapper_ret` and `wrapper_ret_key` describe the value returned by the
-  promoted procedure after applying `result_bridge`, not merely the erased-call
+  promoted procedure after applying `result_transform`, not merely the erased-call
   ABI return.
 - `erased_call_args` and `erased_call_arg_keys` describe the exact ABI argument
-  values passed to `call_erased` after applying `arg_bridges`. Their arity must
-  exactly match the fixed arity encoded by `sig_key`.
+  values passed to `call_erased` after applying `arg_transforms`. Their arity
+  must exactly match the fixed arity encoded by `sig_key`.
 - `erased_call_ret` and `erased_call_ret_key` describe the raw erased-call result
-  before applying `result_bridge`. `erased_call_ret_key` must exactly match the
-  return key encoded by `sig_key`.
+  before applying `result_transform`. `erased_call_ret_key` must exactly match
+  the return key encoded by `sig_key`.
 - `hidden_capture` is present exactly when `sig_key.capture_ty` is non-null. Its
   `exec_ty_key` must equal `sig_key.capture_ty`. If `sig_key.capture_ty` is null,
   `hidden_capture` must be null. Runtime pointer nullness, runtime capture byte
@@ -950,9 +1030,10 @@ first boundary that observes the mismatch and release builds use `unreachable`.
 An erased promoted wrapper plan is consumed by executable MIR, not by mono MIR.
 The checked artifact publishes it early so that all later stages have explicit
 procedure identity and dependency information, but executable MIR is the first
-stage allowed to read `sig_key`, `hidden_capture_arg`, `result_ty`, erased
-bridges, or erased capture materialization. Mono, row-finalized mono, lifted
-MIR, and lambda-solved MIR may carry the erased promoted wrapper's opaque
+stage allowed to read `sig_key`, `hidden_capture_arg`,
+`ErasedPromotedProcedureExecutableSignature`, erased payload transforms, or
+erased capture materialization. Mono, row-finalized mono, lifted MIR, and
+lambda-solved MIR may carry the erased promoted wrapper's opaque
 procedure identity and source function type through `call_proc`, `proc_value`,
 and `call_value` operands, but they must not lower or inspect its body. If mono
 specialization attempts to lower an erased promoted wrapper body, that is a
@@ -4077,8 +4158,8 @@ const CallProcExecutablePlan = struct {
     representation_root: RepClassId,
     executable_specialization_key: ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
-    arg_bridges: Span(BridgeId),
-    result_bridge: ?BridgeId,
+    arg_transforms: Span(ExecutableValueTransformId),
+    result_transform: ExecutableValueTransformId,
     result_ty: ExecTypeId,
 };
 ```
@@ -4090,15 +4171,19 @@ canonical fixed-arity function type requested by this call.
 only the callable child. `executable_specialization_key` is the canonical key
 used to reserve `executable_proc`. `executable_proc` is an executable-MIR
 procedure id allocated by that reservation, not a generated symbol used as a
-semantic key. `arg_bridges` and `result_bridge` are explicit bridge obligations
-between the caller's executable values and the target specialization signature.
+semantic key. `arg_transforms` and `result_transform` are explicit value
+transform obligations between the caller's executable values and the target
+specialization signature. They use the same operation family as artifact-owned
+`ExecutablePayloadTransformPlan` records, but may be stored in the current
+executable lowering run when the call is not a promoted-wrapper artifact
+boundary.
 
 A `call_proc` target identity never authorizes executable MIR to skip erased
 callable representation inside an explicit `Box(T)` payload. Direct target
 identity answers which procedure is called. It does not answer which
 representation every argument, result, capture, or boxed payload must use. Those
 come from the specialization-local lambda-solved representation store and the
-explicit bridge plan above.
+explicit value-transform plan above.
 
 Finite callable-set calls are mandatory lowering, not an optimization.
 
@@ -11490,9 +11575,9 @@ executable MIR without source-expression side tables.
 Lower every `call_proc` through an explicit `CallProcExecutablePlan` that names
 the source/MIR procedure value occurrence, solved whole-function representation
 root, executable specialization key, reserved `ExecutableProcId`, argument
-bridges, result bridge, and executable result type. Do not treat direct
+value transforms, result value transform, and executable result type. Do not treat direct
 procedure target identity as permission to skip boxed payload representation or
-argument/result bridge planning.
+argument/result value-transform planning.
 
 Define packed erased function values with explicit `ErasedFnValue` fields:
 code pointer, `ErasedFnSigKey`, and typed capture metadata. The capture metadata
@@ -13127,6 +13212,68 @@ objects.
   expected lambda-solved output must show `BoxPayloadRepresentationPlan.function`
   recursively transforming function arguments and returns before rewriting the
   callable child to erased representation.
+- add an explicit promoted-wrapper argument-transform test where a finite
+  callable value is passed through an erased function argument position:
+
+  ```roc
+  make_boxed : {} -> Box((I64 -> I64) -> I64)
+  make_boxed = |_| Box.box(|f| f(41))
+
+  apply_boxed : (I64 -> I64) -> I64
+  apply_boxed = Box.unbox(make_boxed({}))
+
+  main : I64
+  main = apply_boxed(|x| x + 1)
+  ```
+
+  The expected checked artifact publishes an erased promoted wrapper whose
+  ordinary argument has an explicit `ExecutablePayloadTransformPlan` from the
+  finite callable-set endpoint to the erased-call argument endpoint. Executable
+  MIR must lower that transform by emitting `packed_erased_fn` with the finite
+  callable-set value as the hidden capture and an adapter keyed by the full
+  `ErasedAdapterKey`. A structural bridge is insufficient and forbidden for
+  this conversion.
+- add an explicit promoted-wrapper result-transform test where a boxed erased
+  callable returns another callable:
+
+  ```roc
+  make_boxed : {} -> Box(I64 -> (I64 -> I64))
+  make_boxed = |_| Box.box(|n| |x| x + n)
+
+  make_adder : I64 -> (I64 -> I64)
+  make_adder = Box.unbox(make_boxed({}))
+
+  main : I64
+  main = make_adder(5)(10)
+  ```
+
+  The expected representation after unboxing keeps the returned callable in
+  erased representation. Executable MIR must not attempt to recover a finite
+  callable set from the erased return value.
+- add explicit aggregate payload-transform tests where the erased boundary
+  reaches callable leaves inside records and lists:
+
+  ```roc
+  make_boxed : {} -> Box({ f : I64 -> I64 } -> I64)
+  make_boxed = |_| Box.box(|r| r.f(1))
+
+  apply_record : { f : I64 -> I64 } -> I64
+  apply_record = Box.unbox(make_boxed({}))
+  ```
+
+  ```roc
+  make_boxed : {} -> Box(List(I64 -> I64) -> I64)
+  make_boxed = |_| Box.box(|fs| List.len(fs))
+
+  apply_list : List(I64 -> I64) -> I64
+  apply_list = Box.unbox(make_boxed({}))
+  ```
+
+  The expected transform recursively rebuilds or maps only the aggregate slots
+  whose executable representation changes. The record field `f` and the list
+  element value are packed through explicit callable transforms with
+  `BoxBoundaryId` provenance. `list_reinterpret` is forbidden when the element
+  representation changes.
 - add a Box-adapted `test/erased/erased-function-call.roc`: a closure capturing
   another callable plus ordinary data must cross an explicit
   `Box(I64 -> I64)` boundary, be unboxed, and later join with the original
@@ -13302,8 +13449,8 @@ Compile-time constants:
   procedure identities whose bodies are emitted by executable MIR from sealed
   `ErasedPromotedWrapperBodyPlan` records. Mono may call or pass those procedure
   identities at their source function type, but mono must not lower their bodies
-  and must not carry `ErasedFnSigKey`, erased bridges, hidden capture arguments,
-  executable result type keys, or erased capture ABI data.
+  and must not carry `ErasedFnSigKey`, executable payload transforms, hidden
+  capture arguments, executable result type keys, or erased capture ABI data.
 - top-level function-valued declarations that evaluate to erased callable values
   must include the direct promoted-procedure case:
 
