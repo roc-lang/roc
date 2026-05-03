@@ -187,6 +187,8 @@ fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
             .instance = instance,
         };
         try finalizer.finalizeCallSites();
+        try finalizer.finalizeCallableConstructions();
+        try finalizer.finalizeProcValueErasePlans();
         try finalizer.finalizeJoins();
         try finalizer.finalizeReturns();
     }
@@ -429,6 +431,168 @@ const ValueTransformFinalizer = struct {
 
         call_site.arg_transforms = try self.valueStore().addValueTransformBoundarySpan(arg_boundaries);
         call_site.result_transform = result_boundary;
+    }
+
+    fn finalizeCallableConstructions(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.values.items, 0..) |value_info, raw_value| {
+            const callable = value_info.callable orelse continue;
+            const construction_id = callable.construction_plan orelse continue;
+            const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+            try self.finalizeCallableConstruction(value_id, construction_id);
+        }
+    }
+
+    fn finalizeCallableConstruction(
+        self: *ValueTransformFinalizer,
+        value_id: repr.ValueInfoId,
+        construction_id: repr.CallableSetConstructionPlanId,
+    ) Allocator.Error!void {
+        const construction_snapshot = self.representationStore().callableConstructionPlan(construction_id);
+        if (construction_snapshot.result != value_id) {
+            lambdaInvariant("lambda-solved callable construction finalization reached a construction attached to a different value");
+        }
+        if (construction_snapshot.capture_transforms.len != 0) {
+            lambdaInvariant("lambda-solved callable construction finalization reached already-finalized capture transforms");
+        }
+
+        const member = self.representationStore().callableSetMember(construction_snapshot.callable_set_key, construction_snapshot.selected_member) orelse {
+            lambdaInvariant("lambda-solved callable construction finalization selected a missing callable-set member");
+        };
+        const target_id = self.procInstanceForSource(member.source_proc);
+        const target_instance = self.procInstance(target_id);
+        const target_captures = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.captures);
+        const source_captures = construction_snapshot.capture_values;
+        if (source_captures.len != target_captures.len or source_captures.len != member.capture_slots.len) {
+            lambdaInvariant("lambda-solved callable construction finalization saw capture arity mismatch");
+        }
+
+        const boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, source_captures.len);
+        defer self.allocator.free(boundaries);
+
+        for (source_captures, target_captures, 0..) |source_capture, target_capture, i| {
+            const slot = member.capture_slots[i];
+            if (slot.slot != @as(u32, @intCast(i))) {
+                lambdaInvariant("lambda-solved callable construction finalization saw non-canonical capture slot");
+            }
+            const from = try self.localEndpoint(source_capture);
+            const to = try self.targetCaptureEndpoint(target_id, target_instance, target_capture, slot.slot, slot.exec_value_ty);
+            const capture_boundary = try self.representationStore().reserveCaptureBoundary(.{
+                .owner = .{ .callable_set_construction = .{
+                    .construction = construction_id,
+                    .selected_member = .{
+                        .callable_set_key = construction_snapshot.callable_set_key,
+                        .member_index = construction_snapshot.selected_member,
+                    },
+                } },
+                .target_instance = target_id,
+                .slot = slot.slot,
+                .source_capture_value = source_capture,
+                .target_capture_value = target_capture,
+                .boundary = @enumFromInt(std.math.maxInt(u32)),
+            });
+            const kind: repr.ValueTransformBoundaryKind = .{ .capture_value = capture_boundary };
+            const transform = try self.appendExistingValueTransform(kind, from, to);
+            const boundary = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = kind,
+                .from_value = source_capture,
+                .to_value = target_capture,
+                .from_endpoint = from,
+                .to_endpoint = to,
+                .transform = transform,
+            });
+            self.representationStore().fillCaptureBoundary(capture_boundary, boundary);
+            boundaries[i] = boundary;
+        }
+
+        try self.representationStore().setCallableConstructionCaptureTransforms(construction_id, boundaries);
+    }
+
+    fn finalizeProcValueErasePlans(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.values.items, 0..) |value_info, raw_value| {
+            const callable = value_info.callable orelse continue;
+            const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
+            const erase = switch (emission) {
+                .erase_proc_value => |erase| erase,
+                else => continue,
+            };
+            const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+            try self.finalizeProcValueErasePlan(value_id, callable, callable.emission_plan, erase);
+        }
+    }
+
+    fn finalizeProcValueErasePlan(
+        self: *ValueTransformFinalizer,
+        value_id: repr.ValueInfoId,
+        callable: repr.CallableValueInfo,
+        emission_plan_id: repr.CallableValueEmissionPlanId,
+        erase: repr.ProcValueErasePlan,
+    ) Allocator.Error!void {
+        if (erase.source_value != value_id) {
+            lambdaInvariant("lambda-solved proc-value erase finalization reached a plan attached to a different value");
+        }
+        if (erase.capture_transforms.len != 0) {
+            lambdaInvariant("lambda-solved proc-value erase finalization reached already-finalized capture transforms");
+        }
+
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => lambdaInvariant("lambda-solved proc-value erase finalization reached a non-proc callable source"),
+        };
+        if (!canonical.procedureCallableRefEql(source.proc.callable, erase.proc_value)) {
+            lambdaInvariant("lambda-solved proc-value erase finalization source procedure differs from erase plan");
+        }
+        if (!repr.canonicalTypeKeyEql(source.fn_ty, erase.proc_value.source_fn_ty)) {
+            lambdaInvariant("lambda-solved proc-value erase finalization source function type differs from erase plan");
+        }
+
+        const target_instance = self.procInstance(erase.target_instance);
+        const target_captures = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.captures);
+        const source_captures = source.captures;
+        if (source_captures.len != target_captures.len or source_captures.len != erase.capture_slots.len) {
+            lambdaInvariant("lambda-solved proc-value erase finalization saw capture arity mismatch");
+        }
+
+        const boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, source_captures.len);
+        defer self.allocator.free(boundaries);
+
+        for (source_captures, target_captures, 0..) |source_capture, target_capture, i| {
+            const slot = erase.capture_slots[i];
+            if (slot.slot != @as(u32, @intCast(i))) {
+                lambdaInvariant("lambda-solved proc-value erase finalization saw non-canonical capture slot");
+            }
+            const from = try self.localEndpoint(source_capture);
+            const to = try self.targetCaptureEndpoint(erase.target_instance, target_instance, target_capture, slot.slot, slot.exec_value_ty);
+            const capture_boundary = try self.representationStore().reserveCaptureBoundary(.{
+                .owner = .{ .proc_value_erase = .{
+                    .emission_plan = emission_plan_id,
+                    .source_value = value_id,
+                    .proc_value = erase.proc_value,
+                    .erased_fn_sig_key = erase.erased_fn_sig_key,
+                },
+                } },
+                .target_instance = erase.target_instance,
+                .slot = slot.slot,
+                .source_capture_value = source_capture,
+                .target_capture_value = target_capture,
+                .boundary = @enumFromInt(std.math.maxInt(u32)),
+            });
+            const kind: repr.ValueTransformBoundaryKind = .{ .capture_value = capture_boundary };
+            const transform = try self.appendExistingValueTransform(kind, from, to);
+            const boundary = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = kind,
+                .from_value = source_capture,
+                .to_value = target_capture,
+                .from_endpoint = from,
+                .to_endpoint = to,
+                .transform = transform,
+            });
+            self.representationStore().fillCaptureBoundary(capture_boundary, boundary);
+            boundaries[i] = boundary;
+        }
+
+        try self.representationStore().setProcValueEraseCaptureTransforms(emission_plan_id, boundaries);
     }
 
     fn verifyCallSiteUnfinalized(
@@ -1215,6 +1379,39 @@ const ValueTransformFinalizer = struct {
         }
         return .{
             .owner = .{ .procedure_return = target_id },
+            .logical_ty = target_info.logical_ty,
+            .exec_ty = exec_ty,
+        };
+    }
+
+    fn targetCaptureEndpoint(
+        self: *ValueTransformFinalizer,
+        target_id: repr.ProcRepresentationInstanceId,
+        target_instance: *const repr.ProcRepresentationInstance,
+        target_value: repr.ValueInfoId,
+        slot: u32,
+        expected_key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const target_value_store = self.valueStoreFor(target_instance);
+        const target_info = target_value_store.values.items[@intFromEnum(target_value)];
+        const exec_ty = try repr.sessionExecutableTypeEndpointForValueIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStoreFor(target_instance),
+            &self.representationStore().session_executable_type_payloads,
+            target_value_store,
+            target_value,
+        );
+        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, expected_key)) {
+            lambdaInvariant("lambda-solved target procedure capture endpoint key differs from callable-set member schema");
+        }
+        return .{
+            .owner = .{ .procedure_capture = .{
+                .instance = target_id,
+                .slot = slot,
+            } },
             .logical_ty = target_info.logical_ty,
             .exec_ty = exec_ty,
         };

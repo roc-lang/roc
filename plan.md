@@ -1313,19 +1313,21 @@ payload must be read from the checked artifact or lambda-solved solve session
 that owns the erased-call site. It must not be reconstructed from the source
 function type, physical layout, callee body, runtime packed value, backend
 calling convention, or by comparing compatible shapes.
-A finite `proc_value` construction transform crosses a real procedure boundary
-too. Each explicit capture argument transforms from the construction site's
+A `proc_value` capture transform crosses a real procedure boundary too. This is
+true for finite callable-set construction and for direct erased proc-value
+packing. Each explicit capture argument transforms from the occurrence site's
 local capture value to the selected target procedure instance's
 `procedure_capture` endpoint. The target endpoint is built from the selected
 `ProcRepresentationInstanceId`, the sealed target
 `ProcPublicValueRoots.captures[slot]`, and the canonical capture executable key
-stored in the selected callable-set descriptor member. The construction site's
-capture value may have a different executable representation from the target
-capture slot; lambda-solved MIR must publish the explicit `capture_value`
-boundary that converts it. Executable MIR must not assume the capture expression
-already has the target slot representation, and must not recover the target
-capture type from the procedure body, source syntax, capture names, or layout
-compatibility.
+stored in the selected callable-set descriptor member or direct
+`ProcValueErasePlan.capture_slots[slot]`. The occurrence site's capture value
+may have a different executable representation from the target capture slot;
+lambda-solved MIR must publish the explicit `capture_value` boundary that
+converts it. Executable MIR must not assume the capture expression already has
+the target slot representation, and must not recover the target capture type
+from the procedure body, source syntax, capture names, hidden capture tuple
+shape, or layout compatibility.
 A finite callable-set `callable_match` branch transforms from its
 `callable_match_branch_raw_result` endpoint to the shared call result endpoint.
 Branch joins, captures, mutable joins, loop phis, aggregate existing-value
@@ -2047,8 +2049,13 @@ must distinguish at least these recipe shapes:
 
 - `whole_hidden_capture_value`: one source value whose executable
   representation is exactly `sig_key.capture_ty`
-- `proc_capture_tuple`: ordered procedure capture slots that must be assembled
-  into the erased hidden capture tuple for a direct erased proc-value code ref
+- `proc_capture_tuple`: ordered transformed procedure capture-slot values that
+  must be assembled into the erased hidden capture tuple for a direct erased
+  proc-value code ref. When the producer is the current module, each slot
+  originates from a `CaptureBoundaryOwner.proc_value_erase` boundary targeting
+  `procedure_capture { target_instance, slot }`; imported artifacts publish only
+  sealed executable materialization plans, not reconstructable source capture
+  recipes.
 - `finite_callable_set_value`: a callable-result plan whose interpreted value
   selects a finite callable-set member for a finite-set erased adapter
 
@@ -3149,9 +3156,10 @@ The lambda-solved construction algorithm is:
     - each source capture value gets one `capture_value` boundary from the local
       source endpoint to a `procedure_capture` endpoint for that target instance
       and slot
-    - each `CaptureBoundaryInfo` stores the construction id, selected member,
-      target instance, slot, source capture value, target public capture value,
-      and final `ValueTransformBoundaryId`
+    - each `CaptureBoundaryInfo` stores
+      `CaptureBoundaryOwner.callable_set_construction` with the construction id
+      and selected member, plus the target instance, slot, source capture value,
+      target public capture value, and final `ValueTransformBoundaryId`
     - every target procedure capture endpoint payload is copied or reused by
       canonical key in the construction site's solve session store; the boundary
       must never point at a foreign solve session payload id
@@ -3159,6 +3167,25 @@ The lambda-solved construction algorithm is:
       including identity; when endpoint keys differ, the transform is selected
       by representation solving and Box-only erasure rules, never by executable
       MIR compatible-shape repair
+
+    For direct erased proc-value packing, the same finalization rule applies
+    with a different owner:
+
+    - the `ProcValueErasePlan` names the exact proc-value occurrence through
+      `source_value`, the resolved `proc_value`, the selected `target_instance`,
+      and the complete `capture_slots` schema in canonical `CaptureSlot.index`
+      order
+    - each source capture value gets one `capture_value` boundary from the local
+      source endpoint to `procedure_capture { target_instance, slot }`
+    - each `CaptureBoundaryInfo` stores `CaptureBoundaryOwner.proc_value_erase`
+      with the owning `CallableValueEmissionPlanId`, source value, procedure
+      value, and erased signature key, plus the target instance, slot, source
+      capture value, target public capture value, and final
+      `ValueTransformBoundaryId`
+    - the hidden capture tuple type named by `erased_fn_sig_key.capture_ty` is
+      assembled from the transformed target capture-slot executable keys; it is
+      not a semantic endpoint and must never be used as the target owner for a
+      `capture_value` boundary
 
     The construction site's capture executable key does not have to equal the
     target capture-slot executable key. The explicit `capture_value` transform
@@ -3523,9 +3550,21 @@ const CallableSetConstructionPlan = struct {
     capture_transforms: Span(ValueTransformBoundaryId),
 };
 
+const CaptureBoundaryOwner = union(enum) {
+    callable_set_construction: struct {
+        construction: CallableSetConstructionPlanId,
+        selected_member: CallableSetMemberRef,
+    },
+    proc_value_erase: struct {
+        emission_plan: CallableValueEmissionPlanId,
+        source_value: ValueInfoId,
+        proc_value: ProcedureCallableRef,
+        erased_fn_sig_key: ErasedFnSigKey,
+    },
+};
+
 const CaptureBoundaryInfo = struct {
-    construction: CallableSetConstructionPlanId,
-    selected_member: CallableSetMemberRef,
+    owner: CaptureBoundaryOwner,
     target_instance: ProcRepresentationInstanceId,
     slot: u32,
     source_capture_value: ValueInfoId,
@@ -3649,11 +3688,14 @@ for every i:
         == descriptor(...).capture_slots[i].source_ty
     capture_boundary(construction.capture_transforms[i])
         .kind == capture_value(boundary_info.id)
-    capture_boundary_info(boundary_info.id).construction
-        == this construction id
-    capture_boundary_info(boundary_info.id).selected_member
-        == CallableSetMemberRef { construction.callable_set_key,
-                                  construction.selected_member }
+    capture_boundary_info(boundary_info.id).owner
+        == callable_set_construction {
+               construction: this construction id,
+               selected_member: CallableSetMemberRef {
+                   construction.callable_set_key,
+                   construction.selected_member,
+               },
+           }
     capture_boundary_info(boundary_info.id).target_instance
         == proc_instance_for_member(descriptor(...).member(...))
     capture_boundary_info(boundary_info.id).slot == i
@@ -3812,9 +3854,21 @@ const ValueTransformBoundaryKind = union(enum) {
     aggregate_existing_value: AggregateBoundaryId,
 };
 
+const CaptureBoundaryOwner = union(enum) {
+    callable_set_construction: struct {
+        construction: CallableSetConstructionPlanId,
+        selected_member: CallableSetMemberRef,
+    },
+    proc_value_erase: struct {
+        emission_plan: CallableValueEmissionPlanId,
+        source_value: ValueInfoId,
+        proc_value: ProcedureCallableRef,
+        erased_fn_sig_key: ErasedFnSigKey,
+    },
+};
+
 const CaptureBoundaryInfo = struct {
-    construction: CallableSetConstructionPlanId,
-    selected_member: CallableSetMemberRef,
+    owner: CaptureBoundaryOwner,
     target_instance: ProcRepresentationInstanceId,
     slot: u32,
     source_capture_value: ValueInfoId,
@@ -4730,12 +4784,15 @@ const CallableBoxPlan = union(enum) {
 };
 
 const ProcValueErasePlan = struct {
-    source: ProcedureCallableRef,
+    source_value: ValueInfoId,
+    proc_value: ProcedureCallableRef,
+    target_instance: ProcRepresentationInstanceId,
     erased_fn_sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
     executable_specialization_key: ExecutableSpecializationKey,
-    capture_slots: Span(CaptureSlot.Index),
+    capture_slots: Span(CallableSetCaptureSlot),
     capture_transforms: Span(ValueTransformBoundaryId),
+    provenance: Span(BoxBoundaryId),
 };
 ```
 
@@ -4750,13 +4807,16 @@ not have to be syntactically enclosed by a `Box(T)` expression.
 
 `ProcValueErasePlan.capture_transforms` is mandatory when the erased
 procedure-value occurrence has captures. It contains one transform in canonical
-capture-slot order from the construction site's local source capture value to
-the selected erased specialization's hidden capture tuple element. Executable
-MIR lowers each capture expression exactly once, applies the corresponding
-transform, and then assembles the hidden capture tuple from the transformed
-values. It must not place raw source captures directly in the hidden capture
-tuple unless the published transform is identity, and even identity must be
-represented explicitly.
+capture-slot order from the occurrence site's local source capture value to the
+selected erased specialization's `procedure_capture { target_instance, slot }`
+endpoint. The hidden capture tuple is runtime packaging of those transformed
+procedure-capture values; it is not a separate semantic endpoint and must not
+be used as the target of a `capture_value` boundary. Executable MIR lowers each
+capture expression exactly once, applies the corresponding transform, and then
+assembles the hidden capture tuple from the transformed values. It must not
+place raw source captures directly in the hidden capture tuple unless the
+published transform is identity, and even identity must be represented
+explicitly.
 
 For example:
 
@@ -4790,19 +4850,63 @@ and whose callable child is described by `CallableBoxPlan`.
 
 `ProcValueErasePlan` is a boundary-local lowering obligation for an explicit
 `proc_value` occurrence. It is not a global procedure summary and not a runtime
-conversion. `source` identifies the lambda-solved procedure value occurrence
-being packed: the resolved procedure handle plus the exact canonical source
-function type at which that value occurs. `erased_fn_sig_key` identifies the
-erased callable ABI and hidden capture type required by the boxed boundary.
-`capture_shape_key` is the canonical hidden capture record shape for this erased
-procedure value occurrence.
+conversion. `source_value` identifies the exact lambda-solved value occurrence
+being packed. `proc_value` identifies the resolved procedure handle plus the
+exact canonical source function type at which that value occurs.
+`target_instance` is the sealed procedure representation instance whose public
+capture roots define the target `procedure_capture` endpoints. `erased_fn_sig_key`
+identifies the erased callable ABI and hidden capture type required by the boxed
+boundary. `capture_shape_key` is the canonical hidden capture record shape for
+this erased procedure value occurrence.
 `executable_specialization_key` is the erased executable specialization that
 must be reserved before the packed value is emitted. `capture_slots` is the
-logical slot order that executable MIR must use to read the occurrence's
-`proc_value.captures` and build the hidden capture value. `capture_transforms`
-is the mandatory transform list in the same logical slot order. Each transform
-converts the occurrence's local source capture value into the hidden capture
-tuple element representation required by the erased specialization.
+complete target capture-slot schema, in canonical `CaptureSlot.index` order.
+Each slot carries the source capture type and the executable target key required
+by the selected erased specialization. `capture_transforms` is the mandatory
+transform list in the same logical slot order. Each transform converts the
+occurrence's local source capture value into the selected target procedure
+instance's capture-slot representation before executable MIR assembles the
+hidden capture tuple.
+
+For every capture slot in `ProcValueErasePlan`:
+
+```text
+capture_slots.len == source_value.callable.proc_value.captures.len
+capture_slots.len == capture_transforms.len
+
+for every i:
+    capture_slots[i].slot.index == i
+    canonical(value_info(source_capture_values[i]).logical_ty)
+        == capture_slots[i].source_ty
+    capture_boundary(capture_transforms[i])
+        .kind == capture_value(boundary_info.id)
+    capture_boundary_info(boundary_info.id).owner
+        == proc_value_erase {
+               emission_plan: value_info(source_value).callable.emission_plan,
+               source_value,
+               proc_value,
+               erased_fn_sig_key,
+           }
+    capture_boundary_info(boundary_info.id).target_instance
+        == target_instance
+    capture_boundary_info(boundary_info.id).slot == i
+    capture_boundary_info(boundary_info.id).source_capture_value
+        == source_capture_values[i]
+    capture_boundary_info(boundary_info.id).target_capture_value
+        == proc_instance(target_instance).public_roots.captures[i]
+    capture_boundary(capture_transforms[i]).from_endpoint.owner
+        == local_value(source_capture_values[i])
+    capture_boundary(capture_transforms[i]).to_endpoint.owner
+        == procedure_capture { target_instance, i }
+    capture_boundary(capture_transforms[i]).to_endpoint.exec_ty.key
+        == capture_slots[i].exec_value_ty
+```
+
+`erased_fn_sig_key.capture_ty` must equal the canonical hidden capture tuple or
+record type built from `capture_slots[i].exec_value_ty` in canonical slot order,
+or be null only when there are no runtime hidden capture values. The hidden
+capture type is derived from the transformed target slot executable keys, never
+from the raw source capture expressions.
 
 `ProcValueErasePlan` must not contain expression ids, generated symbol text,
 layout ids, LIR temporaries, runtime function pointers, runtime capture pointers,
@@ -4819,7 +4923,9 @@ For boxing, executable MIR lowers the payload expression under
   capture payloads by consuming `ProcValueErasePlan`, reserving its
   `executable_specialization_key`, applying every `capture_transforms[i]` before
   hidden capture tuple assembly, and emitting an `ErasedFnValue` whose `sig_key`
-  is exactly `erased_fn_sig_key`.
+  is exactly `erased_fn_sig_key`. The capture transforms target
+  `procedure_capture { target_instance, i }`; executable MIR then packages those
+  transformed values as the erased hidden capture argument.
 - `finite callable-set value -> erased` synthesizes an erased adapter procedure
   by consuming `CallableBoxPlan.finite_set_to_erased_adapter`. That plan names
   the full `ErasedAdapterKey { source_fn_ty, callable_set_key,
@@ -5277,12 +5383,16 @@ capture record in `CaptureSlot.index` order and stores that record as the member
 payload. Runtime byte size is not the source of truth for payload presence; a
 zero-sized capture still follows the explicit capture-slot metadata.
 
-The capture operands must match the selected descriptor member exactly. The
-number of operands must equal the number of `CallableSetCaptureSlot` entries,
-the slot indexes must be dense and canonical, and each operand's executable
-value type must equal the slot's `exec_value_ty` after canonical executable type
-lowering. A mismatch is a compiler invariant violation, not a cue to reorder
-captures, look up names, or synthesize a different capture record.
+The transformed capture operands must match the selected descriptor member
+exactly. The number of operands must equal the number of
+`CallableSetCaptureSlot` entries, the slot indexes must be dense and canonical,
+and each operand's executable value type after applying
+`construction.capture_transforms[i]` must equal the slot's `exec_value_ty` after
+canonical executable type lowering. The raw source capture operand is allowed to
+have a different executable representation. A mismatch after the published
+transform is a compiler invariant violation, not a cue to reorder captures,
+look up names, inspect the target body, compare shapes, or synthesize a
+different capture record.
 
 Capture operands are evaluated when the callable-set value is constructed, not
 when it is later called. `callable_match` destructures the stored member payload;
@@ -14513,11 +14623,25 @@ Executable MIR:
   local captured value endpoint to the selected target procedure instance's
   `procedure_capture` endpoint
 - every `capture_value` boundary stores `CaptureBoundaryInfo` that names the
-  construction plan, selected member, target procedure instance, slot index,
-  source capture value, target public capture value, and boundary id
+  owning capture-boundary case, target procedure instance, slot index, source
+  capture value, target public capture value, and boundary id. Finite
+  callable-set construction boundaries must use
+  `CaptureBoundaryOwner.callable_set_construction`; direct erased proc-value
+  packing boundaries must use `CaptureBoundaryOwner.proc_value_erase`.
 - a callable-set construction site's source capture executable key may differ
   from the selected target procedure capture executable key; executable MIR must
   apply the published transform and must not require key equality
+- every `ProcValueErasePlan` with captures has exactly one `capture_value`
+  transform per capture slot, in `CaptureSlot.index` order, from the direct
+  proc-value occurrence's local captured value endpoint to
+  `procedure_capture { target_instance, slot }`
+- every `ProcValueErasePlan.capture_slots[i]` is a complete
+  `CallableSetCaptureSlot`, and `erased_fn_sig_key.capture_ty` is the canonical
+  hidden capture type assembled from the transformed target slot executable
+  keys, not from the raw source capture expressions
+- executable MIR applies direct erased proc-value capture transforms before
+  assembling the hidden capture tuple and must never target a `capture_value`
+  boundary at an abstract hidden tuple element
 - every `CallableSetConstructionPlan.source_fn_ty` exactly equals the selected
   descriptor member's `ProcedureCallableRef.source_fn_ty` after canonical type
   normalization
@@ -14973,6 +15097,36 @@ objects.
   an explicit `Box(T)` boundary. The expected executable MIR must contain
   `ProcValueErasePlan`, reserve the erased executable specialization before
   packing, and emit `ErasedFnValue` with the exact `ErasedFnSigKey`.
+- add a direct erased proc-value capture-transform test where the erased value's
+  hidden capture tuple must be assembled from transformed target procedure
+  capture-slot values, not raw source captures:
+
+  ```roc
+  make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
+  make_boxed_runner = |f|
+      Box.box(|x|
+          boxed = Box.box(f)
+          run = Box.unbox(boxed)
+          run(x)
+      )
+
+  main : I64
+  main =
+      boxed = make_boxed_runner(|n| n + 1)
+      run = Box.unbox(boxed)
+      run(41)
+  ```
+
+  The expected lambda-solved output must publish a `ProcValueErasePlan` whose
+  `capture_slots` are full `CallableSetCaptureSlot` records, whose
+  `target_instance` is the erased target procedure instance, and whose
+  `capture_transforms` are `CaptureBoundaryOwner.proc_value_erase` boundaries
+  from the occurrence site's local capture values to
+  `procedure_capture { target_instance, slot }`. Executable MIR must apply those
+  transforms before assembling the erased hidden capture tuple. It must not
+  model the hidden tuple element as a semantic endpoint, infer the hidden tuple
+  type from raw source capture expressions, or recover target capture
+  representation from the target procedure body.
 - add a proc-value capture transform test where a closure captures a callable
   value whose representation differs inside the lifted procedure body:
 

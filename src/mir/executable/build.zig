@@ -4221,6 +4221,16 @@ const BodyBuilder = struct {
         return try self.session_type_lowerer.lower(endpoint.exec_ty.ty, endpoint.exec_ty.key);
     }
 
+    fn lowerSessionExecutableTypeKey(
+        self: *BodyBuilder,
+        key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!Type.TypeId {
+        const ref = self.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+            executableInvariant("executable session type key has no published payload");
+        };
+        return try self.session_type_lowerer.lower(ref, key);
+    }
+
     fn lowerExecutableValueTypeInStore(
         self: *BodyBuilder,
         logical_ty: LambdaSolved.Type.TypeVarId,
@@ -4241,7 +4251,7 @@ const BodyBuilder = struct {
                 .erase_proc_value => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erase.erased_fn_sig_key,
                     .capture_shape = erase.capture_shape_key,
-                    .capture_ty = try self.lowerProcValueErasedCaptureType(callable, erase, value_store, representation_store),
+                    .capture_ty = try self.lowerProcValueErasedCaptureType(erase),
                 } }),
                 .erase_finite_set => |erase| try self.type_lowerer.output.addType(.{ .erased_fn = .{
                     .sig_key = erase.adapter.erased_fn_sig_key,
@@ -4576,22 +4586,11 @@ const BodyBuilder = struct {
 
     fn lowerProcValueErasedCaptureType(
         self: *BodyBuilder,
-        callable: repr.CallableValueInfo,
         erase: repr.ProcValueErasePlan,
-        value_store: *const repr.ValueInfoStore,
-        representation_store: *const repr.RepresentationStore,
     ) Allocator.Error!?Type.TypeId {
         if (erase.erased_fn_sig_key.capture_ty == null) {
             if (erase.capture_slots.len != 0) executableInvariant("executable proc-value erase plan has captures but no hidden capture type");
             return null;
-        }
-
-        const source = switch (callable.source) {
-            .proc_value => |source| source,
-            else => executableInvariant("executable proc-value erase plan is attached to a non-proc callable source"),
-        };
-        if (source.captures.len != erase.capture_slots.len) {
-            executableInvariant("executable proc-value erase plan capture slots disagree with callable source captures");
         }
 
         const items: []Type.TypeId = if (erase.capture_slots.len == 0)
@@ -4609,16 +4608,9 @@ const BodyBuilder = struct {
 
         for (erase.capture_slots) |slot| {
             const index: usize = @intCast(slot.slot);
-            if (index >= source.captures.len) executableInvariant("executable proc-value erase capture slot exceeds source capture arity");
+            if (index >= erase.capture_slots.len) executableInvariant("executable proc-value erase capture slot exceeds source capture arity");
             if (seen[index]) executableInvariant("executable proc-value erase capture slot was duplicated");
-            const capture = source.captures[index];
-            const capture_info = value_store.values.items[@intFromEnum(capture)];
-            items[index] = try self.lowerExecutableValueTypeInStore(
-                capture_info.logical_ty,
-                capture,
-                value_store,
-                representation_store,
-            );
+            items[index] = try self.lowerSessionExecutableTypeKey(slot.exec_value_ty);
             seen[index] = true;
         }
         for (seen) |was_seen| {
@@ -6317,8 +6309,8 @@ const BodyBuilder = struct {
         }
         const capture_refs = try self.allocator.alloc(Ast.CaptureValueRef, capture_items.len);
         defer self.allocator.free(capture_refs);
-        const stmt_ids = try self.allocator.alloc(Ast.StmtId, capture_items.len);
-        defer self.allocator.free(stmt_ids);
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
 
         for (capture_items, 0..) |capture, i| {
             if (member.capture_slots[i].slot != capture.slot) {
@@ -6327,17 +6319,23 @@ const BodyBuilder = struct {
             if (capture.value_info != construction.capture_values[i]) {
                 executableInvariant("executable proc_value capture value differs from construction plan");
             }
+            if (i >= construction.capture_transforms.len) {
+                executableInvariant("executable proc_value construction omitted a capture transform");
+            }
+            const boundary = self.representation_store.valueTransformBoundary(construction.capture_transforms[i]);
+            self.verifyCallableConstructionCaptureBoundary(boundary, construction_id, construction, member, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const value = self.exprValue(lowered);
+            const raw_value = self.exprValue(lowered);
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = raw_value,
+                .body = lowered,
+            } }));
+            const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
             capture_refs[i] = .{
                 .slot = capture.slot,
                 .value = value,
-                .exec_ty = self.output.getExpr(lowered).ty,
+                .exec_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint),
             };
-            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = lowered,
-            } });
         }
 
         const result_ty = try self.lowerExecutableValueType(source_ty, value_info_id);
@@ -6356,10 +6354,10 @@ const BodyBuilder = struct {
             },
         } });
 
-        if (stmt_ids.len == 0) return final_value;
+        if (stmt_ids.items.len == 0) return final_value;
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_value,
         } });
     }
@@ -6423,13 +6421,8 @@ const BodyBuilder = struct {
         else
             try self.allocator.alloc(Ast.CaptureValueRef, capture_items.len);
         defer if (capture_refs.len > 0) self.allocator.free(capture_refs);
-        const hidden_capture_stmt_count: usize = if (hidden_capture_ty == null) 0 else 1;
-        const stmt_count = capture_items.len + hidden_capture_stmt_count;
-        const stmt_ids: []Ast.StmtId = if (stmt_count == 0)
-            &.{}
-        else
-            try self.allocator.alloc(Ast.StmtId, stmt_count);
-        defer if (stmt_ids.len > 0) self.allocator.free(stmt_ids);
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
 
         for (capture_items, 0..) |capture, i| {
             if (capture.slot != @as(u32, @intCast(i))) {
@@ -6441,17 +6434,23 @@ const BodyBuilder = struct {
             if (member.capture_slots[i].slot != capture.slot) {
                 executableInvariant("executable finite-set erase capture slot differs from descriptor member");
             }
+            if (i >= construction.capture_transforms.len) {
+                executableInvariant("executable finite-set erase construction omitted a capture transform");
+            }
+            const boundary = self.representation_store.valueTransformBoundary(construction.capture_transforms[i]);
+            self.verifyCallableConstructionCaptureBoundary(boundary, construction_id, construction, member, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const value = self.exprValue(lowered);
+            const raw_value = self.exprValue(lowered);
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = raw_value,
+                .body = lowered,
+            } }));
+            const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
             capture_refs[i] = .{
                 .slot = capture.slot,
                 .value = value,
-                .exec_ty = self.output.getExpr(lowered).ty,
+                .exec_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint),
             };
-            stmt_ids[i] = try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = lowered,
-            } });
         }
 
         const hidden_capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_ty) |capture_ty| blk: {
@@ -6469,10 +6468,10 @@ const BodyBuilder = struct {
                     .record_tmp = self.output.freshValueRef(),
                 },
             } });
-            stmt_ids[capture_items.len] = try self.output.addStmt(.{ .decl = .{
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
                 .value = value,
                 .body = capture_expr,
-            } });
+            } }));
             break :blk value;
         } else null;
 
@@ -6485,9 +6484,9 @@ const BodyBuilder = struct {
             .capture_shape = erase.adapter.capture_shape_key,
         } });
 
-        if (stmt_ids.len == 0) return final_value;
+        if (stmt_ids.items.len == 0) return final_value;
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_value,
         } });
     }
@@ -6500,7 +6499,7 @@ const BodyBuilder = struct {
         proc_value: anytype,
         erase: repr.ProcValueErasePlan,
     ) Allocator.Error!Ast.ExprId {
-        if (erase.source != value_info_id) {
+        if (erase.source_value != value_info_id) {
             executableInvariant("executable proc-value erase plan is attached to the wrong value");
         }
         if (!canonical.procedureCallableRefEql(erase.proc_value, proc_value.proc.callable)) {
@@ -6548,12 +6547,8 @@ const BodyBuilder = struct {
         defer if (seen.len > 0) self.allocator.free(seen);
         if (seen.len > 0) @memset(seen, false);
 
-        const stmt_count = capture_items.len + (if (capture_ty != null) @as(usize, 1) else @as(usize, 0));
-        const stmt_ids: []Ast.StmtId = if (stmt_count == 0)
-            &.{}
-        else
-            try self.allocator.alloc(Ast.StmtId, stmt_count);
-        defer if (stmt_ids.len > 0) self.allocator.free(stmt_ids);
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
 
         for (capture_items) |capture| {
             const slot_index: usize = @intCast(capture.slot);
@@ -6565,13 +6560,20 @@ const BodyBuilder = struct {
             if (capture.value_info != source.captures[slot_index]) {
                 executableInvariant("executable proc-value erase capture value differs from callable source");
             }
+            if (slot_index >= erase.capture_transforms.len) {
+                executableInvariant("executable proc-value erase omitted a capture transform");
+            }
+            const boundary = self.representation_store.valueTransformBoundary(erase.capture_transforms[slot_index]);
+            self.verifyProcValueEraseCaptureBoundary(boundary, callable.emission_plan, erase, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const value = self.exprValue(lowered);
-            lowered_captures[slot_index] = lowered;
-            stmt_ids[slot_index] = try self.output.addStmt(.{ .decl = .{
-                .value = value,
+            const raw_value = self.exprValue(lowered);
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = raw_value,
                 .body = lowered,
-            } });
+            } }));
+            const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
+            const transformed_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
+            lowered_captures[slot_index] = try self.output.addExpr(transformed_ty, value, .{ .value_ref = value });
             seen[slot_index] = true;
         }
         for (seen) |was_seen| {
@@ -6584,10 +6586,10 @@ const BodyBuilder = struct {
             else
                 try self.output.addExpr(ty, self.output.freshValueRef(), .{ .tuple = try self.output.addExprSpan(lowered_captures) });
             const value = self.exprValue(capture_expr);
-            stmt_ids[capture_items.len] = try self.output.addStmt(.{ .decl = .{
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
                 .value = value,
                 .body = capture_expr,
-            } });
+            } }));
             break :blk value;
         } else null;
 
@@ -6600,9 +6602,9 @@ const BodyBuilder = struct {
             .capture_shape = erase.capture_shape_key,
         } });
 
-        if (stmt_ids.len == 0) return final_value;
+        if (stmt_ids.items.len == 0) return final_value;
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids),
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_value,
         } });
     }
@@ -6904,6 +6906,121 @@ const BodyBuilder = struct {
             executableInvariant("executable callable_match result boundary source key differs from branch specialization");
         }
         _ = self;
+    }
+
+    fn verifyCallableConstructionCaptureBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        construction_id: repr.CallableSetConstructionPlanId,
+        construction: repr.CallableSetConstructionPlan,
+        member: *const repr.CanonicalCallableSetMember,
+        slot: u32,
+        source_capture: repr.ValueInfoId,
+    ) void {
+        const capture_id = switch (boundary.kind) {
+            .capture_value => |id| id,
+            else => executableInvariant("executable callable construction capture transform has non-capture kind"),
+        };
+        const capture_info = self.representation_store.captureBoundary(capture_id);
+        switch (capture_info.owner) {
+            .callable_set_construction => |owner| {
+                if (owner.construction != construction_id) {
+                    executableInvariant("executable callable construction capture boundary points at a different construction plan");
+                }
+                if (!repr.callableSetKeyEql(owner.selected_member.callable_set_key, construction.callable_set_key) or
+                    owner.selected_member.member_index != construction.selected_member)
+                {
+                    executableInvariant("executable callable construction capture boundary points at a different member");
+                }
+            },
+            else => executableInvariant("executable callable construction capture boundary has wrong owner"),
+        }
+        if (capture_info.slot != slot) {
+            executableInvariant("executable callable construction capture boundary slot differs from capture arg");
+        }
+        if (capture_info.source_capture_value != source_capture) {
+            executableInvariant("executable callable construction capture boundary source differs from capture arg");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable callable construction capture boundary source is not local_value"),
+        };
+        if (from != source_capture) {
+            executableInvariant("executable callable construction capture boundary source endpoint differs from capture arg");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_capture => |capture| capture,
+            else => executableInvariant("executable callable construction capture boundary target is not procedure_capture"),
+        };
+        if (to.instance != capture_info.target_instance or to.slot != slot) {
+            executableInvariant("executable callable construction capture boundary target endpoint differs from capture metadata");
+        }
+        const slot_index: usize = @intCast(slot);
+        if (slot_index >= member.capture_slots.len) {
+            executableInvariant("executable callable construction capture boundary slot exceeds member schema");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, member.capture_slots[slot_index].exec_value_ty)) {
+            executableInvariant("executable callable construction capture boundary target key differs from member schema");
+        }
+    }
+
+    fn verifyProcValueEraseCaptureBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        emission_plan: repr.CallableValueEmissionPlanId,
+        erase: repr.ProcValueErasePlan,
+        slot: u32,
+        source_capture: repr.ValueInfoId,
+    ) void {
+        const capture_id = switch (boundary.kind) {
+            .capture_value => |id| id,
+            else => executableInvariant("executable proc-value erase capture transform has non-capture kind"),
+        };
+        const capture_info = self.representation_store.captureBoundary(capture_id);
+        switch (capture_info.owner) {
+            .proc_value_erase => |owner| {
+                if (owner.emission_plan != emission_plan or owner.source_value != erase.source_value) {
+                    executableInvariant("executable proc-value erase capture boundary points at a different emission plan");
+                }
+                if (!canonical.procedureCallableRefEql(owner.proc_value, erase.proc_value)) {
+                    executableInvariant("executable proc-value erase capture boundary procedure differs from erase plan");
+                }
+                if (!repr.erasedFnSigKeyEql(owner.erased_fn_sig_key, erase.erased_fn_sig_key)) {
+                    executableInvariant("executable proc-value erase capture boundary signature differs from erase plan");
+                }
+            },
+            else => executableInvariant("executable proc-value erase capture boundary has wrong owner"),
+        }
+        if (capture_info.target_instance != erase.target_instance) {
+            executableInvariant("executable proc-value erase capture boundary target instance differs from erase plan");
+        }
+        if (capture_info.slot != slot) {
+            executableInvariant("executable proc-value erase capture boundary slot differs from capture arg");
+        }
+        if (capture_info.source_capture_value != source_capture) {
+            executableInvariant("executable proc-value erase capture boundary source differs from capture arg");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable proc-value erase capture boundary source is not local_value"),
+        };
+        if (from != source_capture) {
+            executableInvariant("executable proc-value erase capture boundary source endpoint differs from capture arg");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_capture => |capture| capture,
+            else => executableInvariant("executable proc-value erase capture boundary target is not procedure_capture"),
+        };
+        if (to.instance != erase.target_instance or to.slot != slot) {
+            executableInvariant("executable proc-value erase capture boundary target endpoint differs from capture metadata");
+        }
+        const slot_index: usize = @intCast(slot);
+        if (slot_index >= erase.capture_slots.len) {
+            executableInvariant("executable proc-value erase capture boundary slot exceeds erase plan schema");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, erase.capture_slots[slot_index].exec_value_ty)) {
+            executableInvariant("executable proc-value erase capture boundary target key differs from erase plan schema");
+        }
     }
 
     fn verifyErasedCallRawArgBoundary(
@@ -7652,6 +7769,10 @@ fn sessionExecutableValueEndpointOwnerEql(
         },
         .procedure_return => |proc| switch (b) {
             .procedure_return => |other| proc == other,
+            else => false,
+        },
+        .procedure_capture => |capture| switch (b) {
+            .procedure_capture => |other| capture.instance == other.instance and capture.slot == other.slot,
             else => false,
         },
         .call_raw_arg => |arg| switch (b) {

@@ -366,12 +366,14 @@ pub const BoxBoundary = struct {
 };
 
 pub const ProcValueErasePlan = struct {
-    source: ValueInfoId,
+    source_value: ValueInfoId,
     proc_value: canonical.ProcedureCallableRef,
+    target_instance: ProcRepresentationInstanceId,
     erased_fn_sig_key: ErasedFnSigKey,
     executable_specialization_key: ExecutableSpecializationKey,
     capture_shape_key: CaptureShapeKey,
     capture_slots: []const CallableSetCaptureSlot = &.{},
+    capture_transforms: []const ValueTransformBoundaryId = &.{},
     provenance: []const BoxBoundaryId,
 };
 
@@ -422,6 +424,29 @@ pub const CallableSetConstructionPlan = struct {
     callable_set_key: CanonicalCallableSetKey,
     selected_member: CallableSetMemberId,
     capture_values: []const ValueInfoId,
+    capture_transforms: []const ValueTransformBoundaryId = &.{},
+};
+
+pub const CaptureBoundaryOwner = union(enum) {
+    callable_set_construction: struct {
+        construction: CallableSetConstructionPlanId,
+        selected_member: CallableSetMemberRef,
+    },
+    proc_value_erase: struct {
+        emission_plan: CallableValueEmissionPlanId,
+        source_value: ValueInfoId,
+        proc_value: canonical.ProcedureCallableRef,
+        erased_fn_sig_key: ErasedFnSigKey,
+    },
+};
+
+pub const CaptureBoundaryInfo = struct {
+    owner: CaptureBoundaryOwner,
+    target_instance: ProcRepresentationInstanceId,
+    slot: u32,
+    source_capture_value: ValueInfoId,
+    target_capture_value: ValueInfoId,
+    boundary: ValueTransformBoundaryId,
 };
 
 pub const CallableValueInfo = struct {
@@ -481,6 +506,10 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
         index: u32,
     },
     procedure_return: ProcRepresentationInstanceId,
+    procedure_capture: struct {
+        instance: ProcRepresentationInstanceId,
+        slot: u32,
+    },
     call_raw_arg: struct {
         call: CallSiteInfoId,
         index: u32,
@@ -730,6 +759,12 @@ fn cloneSessionCallableToErasedTransformPlan(
                 try allocator.dupe(CallableSetCaptureSlot, proc.capture_slots);
             errdefer if (capture_slots.len > 0) allocator.free(capture_slots);
 
+            const capture_transforms = if (proc.capture_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(ValueTransformBoundaryId, proc.capture_transforms);
+            errdefer if (capture_transforms.len > 0) allocator.free(capture_transforms);
+
             const provenance = if (proc.provenance.len == 0)
                 &.{}
             else
@@ -737,12 +772,14 @@ fn cloneSessionCallableToErasedTransformPlan(
             errdefer if (provenance.len > 0) allocator.free(provenance);
 
             break :blk .{ .proc_value = .{
-                .source = proc.source,
+                .source_value = proc.source_value,
                 .proc_value = proc.proc_value,
+                .target_instance = proc.target_instance,
                 .erased_fn_sig_key = proc.erased_fn_sig_key,
                 .executable_specialization_key = key,
                 .capture_shape_key = proc.capture_shape_key,
                 .capture_slots = capture_slots,
+                .capture_transforms = capture_transforms,
                 .provenance = provenance,
             } };
         },
@@ -974,12 +1011,13 @@ pub const RepresentationStore = struct {
     allocator: std.mem.Allocator,
     roots_len: u32 = 0,
     classes_len: u32 = 0,
-    callable_emission_plans: []const CallableValueEmissionPlan = &.{},
-    callable_construction_plans: []const CallableSetConstructionPlan = &.{},
+    callable_emission_plans: []CallableValueEmissionPlan = &.{},
+    callable_construction_plans: []CallableSetConstructionPlan = &.{},
     callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
     session_executable_type_payloads: SessionExecutableTypePayloadStore,
     erased_fn_abis: ErasedFnAbiStore = .{},
     box_boundaries: []const BoxBoundary = &.{},
+    capture_boundaries: []CaptureBoundaryInfo = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
     transform_endpoint_scopes: std.ArrayList(TransformEndpointScope) = .empty,
     transform_endpoint_paths: std.ArrayList(Span(TransformEndpointPathStep)) = .empty,
@@ -1009,6 +1047,7 @@ pub const RepresentationStore = struct {
                     var key = erase.executable_specialization_key;
                     deinitExecutableSpecializationKey(self.allocator, &key);
                     if (erase.capture_slots.len > 0) self.allocator.free(erase.capture_slots);
+                    if (erase.capture_transforms.len > 0) self.allocator.free(erase.capture_transforms);
                     if (erase.provenance.len > 0) self.allocator.free(erase.provenance);
                 },
                 .erase_finite_set => |erase| {
@@ -1020,6 +1059,7 @@ pub const RepresentationStore = struct {
         if (self.callable_emission_plans.len > 0) self.allocator.free(self.callable_emission_plans);
         for (self.callable_construction_plans) |plan| {
             if (plan.capture_values.len > 0) self.allocator.free(plan.capture_values);
+            if (plan.capture_transforms.len > 0) self.allocator.free(plan.capture_transforms);
         }
         if (self.callable_construction_plans.len > 0) self.allocator.free(self.callable_construction_plans);
         for (self.callable_set_descriptors) |descriptor| {
@@ -1030,6 +1070,7 @@ pub const RepresentationStore = struct {
         }
         if (self.callable_set_descriptors.len > 0) self.allocator.free(self.callable_set_descriptors);
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
+        if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
         self.* = RepresentationStore.init(self.allocator);
     }
@@ -1106,6 +1147,40 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn reserveCaptureBoundary(
+        self: *RepresentationStore,
+        info: CaptureBoundaryInfo,
+    ) std.mem.Allocator.Error!CaptureBoundaryId {
+        const id: CaptureBoundaryId = @enumFromInt(@as(u32, @intCast(self.capture_boundaries.len)));
+        const old = self.capture_boundaries;
+        const next = try self.allocator.alloc(CaptureBoundaryInfo, old.len + 1);
+        @memcpy(next[0..old.len], old);
+        next[old.len] = info;
+        if (old.len > 0) self.allocator.free(old);
+        self.capture_boundaries = next;
+        return id;
+    }
+
+    pub fn fillCaptureBoundary(
+        self: *RepresentationStore,
+        id: CaptureBoundaryId,
+        boundary: ValueTransformBoundaryId,
+    ) void {
+        const index = @intFromEnum(id);
+        if (index >= self.capture_boundaries.len) {
+            debug.invariant(false, "lambda-solved invariant violated: capture boundary id out of range");
+            unreachable;
+        }
+        self.capture_boundaries[index].boundary = boundary;
+    }
+
+    pub fn captureBoundary(
+        self: *const RepresentationStore,
+        id: CaptureBoundaryId,
+    ) CaptureBoundaryInfo {
+        return self.capture_boundaries[@intFromEnum(id)];
+    }
+
     pub fn appendSessionExecutableValueTransform(
         self: *RepresentationStore,
         plan: SessionExecutableValueTransformPlan,
@@ -1152,11 +1227,65 @@ pub const RepresentationStore = struct {
         return self.callable_emission_plans[@intFromEnum(id)];
     }
 
+    pub fn callableEmissionPlanPtr(
+        self: *RepresentationStore,
+        id: CallableValueEmissionPlanId,
+    ) *CallableValueEmissionPlan {
+        return &self.callable_emission_plans[@intFromEnum(id)];
+    }
+
+    pub fn setProcValueEraseCaptureTransforms(
+        self: *RepresentationStore,
+        id: CallableValueEmissionPlanId,
+        transforms: []const ValueTransformBoundaryId,
+    ) std.mem.Allocator.Error!void {
+        const plan = self.callableEmissionPlanPtr(id);
+        switch (plan.*) {
+            .erase_proc_value => |*erase| {
+                if (erase.capture_transforms.len > 0) {
+                    debug.invariant(false, "lambda-solved invariant violated: proc-value erase capture transforms were already finalized");
+                    unreachable;
+                }
+                erase.capture_transforms = if (transforms.len == 0)
+                    &.{}
+                else
+                    try self.allocator.dupe(ValueTransformBoundaryId, transforms);
+            },
+            else => {
+                debug.invariant(false, "lambda-solved invariant violated: proc-value erase capture transforms attached to non-proc-value erase plan");
+                unreachable;
+            },
+        }
+    }
+
     pub fn callableConstructionPlan(
         self: *const RepresentationStore,
         id: CallableSetConstructionPlanId,
     ) CallableSetConstructionPlan {
         return self.callable_construction_plans[@intFromEnum(id)];
+    }
+
+    pub fn callableConstructionPlanPtr(
+        self: *RepresentationStore,
+        id: CallableSetConstructionPlanId,
+    ) *CallableSetConstructionPlan {
+        return &self.callable_construction_plans[@intFromEnum(id)];
+    }
+
+    pub fn setCallableConstructionCaptureTransforms(
+        self: *RepresentationStore,
+        id: CallableSetConstructionPlanId,
+        transforms: []const ValueTransformBoundaryId,
+    ) std.mem.Allocator.Error!void {
+        const plan = self.callableConstructionPlanPtr(id);
+        if (plan.capture_transforms.len > 0) {
+            debug.invariant(false, "lambda-solved invariant violated: callable construction capture transforms were already finalized");
+            unreachable;
+        }
+        plan.capture_transforms = if (transforms.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(ValueTransformBoundaryId, transforms);
     }
 
     pub fn valueTransformBoundary(
@@ -1177,6 +1306,37 @@ pub const RepresentationStore = struct {
                 if (self.session_executable_type_payloads.refForKey(arg_key) == null) {
                     debug.invariant(false, "lambda-solved invariant violated: erased ABI argument key has no session executable type payload");
                 }
+            }
+        }
+        for (self.callable_construction_plans) |construction| {
+            if (construction.capture_values.len != construction.capture_transforms.len) {
+                debug.invariant(false, "lambda-solved invariant violated: callable construction capture transform count differs from capture count");
+            }
+        }
+        for (self.callable_emission_plans) |plan| {
+            switch (plan) {
+                .erase_proc_value => |erase| {
+                    if (erase.capture_slots.len != erase.capture_transforms.len) {
+                        debug.invariant(false, "lambda-solved invariant violated: proc-value erase capture transform count differs from capture slot count");
+                    }
+                },
+                else => {},
+            }
+        }
+        for (self.capture_boundaries, 0..) |capture, raw_id| {
+            const boundary_index = @intFromEnum(capture.boundary);
+            if (boundary_index >= self.value_transform_boundaries.len) {
+                debug.invariant(false, "lambda-solved invariant violated: capture boundary did not point at a value transform boundary");
+            }
+            const boundary = self.value_transform_boundaries[boundary_index];
+            const capture_id: CaptureBoundaryId = @enumFromInt(@as(u32, @intCast(raw_id)));
+            switch (boundary.kind) {
+                .capture_value => |id| {
+                    if (id != capture_id) {
+                        debug.invariant(false, "lambda-solved invariant violated: capture boundary kind pointed at a different capture boundary");
+                    }
+                },
+                else => debug.invariant(false, "lambda-solved invariant violated: capture boundary transform has non-capture kind"),
             }
         }
     }
@@ -1306,6 +1466,10 @@ pub const RepresentationStore = struct {
                 &.{}
             else
                 try self.allocator.dupe(ValueInfoId, plan.capture_values),
+            .capture_transforms = if (plan.capture_transforms.len == 0)
+                &.{}
+            else
+                try self.allocator.dupe(ValueTransformBoundaryId, plan.capture_transforms),
         };
         self.callable_construction_plans = next;
         return id;
@@ -1387,11 +1551,35 @@ pub const RepresentationStore = struct {
             member.capture_slots.len == construction.capture_values.len,
             "lambda-solved invariant violated: callable construction capture count differs from descriptor member",
         );
+        debug.invariant(
+            member.capture_slots.len == construction.capture_transforms.len,
+            "lambda-solved invariant violated: callable construction capture transform count differs from descriptor member",
+        );
         for (member.capture_slots, 0..) |slot, i| {
             debug.invariant(
                 slot.slot == @as(u32, @intCast(i)),
                 "lambda-solved invariant violated: callable capture slots are not canonical",
             );
+            const boundary = self.valueTransformBoundary(construction.capture_transforms[i]);
+            switch (boundary.kind) {
+                .capture_value => |capture_boundary| {
+                    const info = self.captureBoundary(capture_boundary);
+                    switch (info.owner) {
+                        .callable_set_construction => |owner| {
+                            debug.invariant(owner.construction == construction_id, "lambda-solved invariant violated: capture boundary points at a different construction plan");
+                            debug.invariant(
+                                callableSetKeyEql(owner.selected_member.callable_set_key, construction.callable_set_key) and
+                                    owner.selected_member.member_index == construction.selected_member,
+                                "lambda-solved invariant violated: capture boundary selected member differs from construction plan",
+                            );
+                        },
+                        else => debug.invariant(false, "lambda-solved invariant violated: callable construction capture boundary has wrong owner"),
+                    }
+                    debug.invariant(info.slot == slot.slot, "lambda-solved invariant violated: capture boundary slot differs from descriptor member");
+                    debug.invariant(info.source_capture_value == construction.capture_values[i], "lambda-solved invariant violated: capture boundary source differs from construction capture value");
+                },
+                else => debug.invariant(false, "lambda-solved invariant violated: callable construction capture transform has non-capture kind"),
+            }
         }
     }
 };
@@ -2035,7 +2223,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         return switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
             .finite => |key| .{ .callable_set = try self.callableSetPayload(key) },
             .already_erased => |erased| .{ .erased_fn = try self.erasedFnPayloadForAlreadyErased(erased) },
-            .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(callable, erase) },
+            .erase_proc_value => |erase| .{ .erased_fn = try self.erasedFnPayloadForProcValue(erase) },
             .erase_finite_set => |erase| .{ .erased_fn = try self.erasedFnPayloadForFiniteSetAdapter(erase) },
         };
     }
@@ -2068,10 +2256,9 @@ const SessionExecutableTypePayloadBuilder = struct {
 
     fn erasedFnPayloadForProcValue(
         self: *SessionExecutableTypePayloadBuilder,
-        callable: CallableValueInfo,
         erase: ProcValueErasePlan,
     ) std.mem.Allocator.Error!SessionExecutableErasedFnPayload {
-        const capture = try self.hiddenCapturePayloadForProcValue(callable, erase.erased_fn_sig_key);
+        const capture = try self.hiddenCapturePayloadForProcValue(erase);
         return .{
             .sig_key = erase.erased_fn_sig_key,
             .capture_shape_key = erase.capture_shape_key,
@@ -2126,15 +2313,13 @@ const SessionExecutableTypePayloadBuilder = struct {
 
     fn hiddenCapturePayloadForProcValue(
         self: *SessionExecutableTypePayloadBuilder,
-        callable: CallableValueInfo,
-        sig_key: ErasedFnSigKey,
+        erase: ProcValueErasePlan,
     ) std.mem.Allocator.Error!?SessionExecutableTypeEndpoint {
-        if (sig_key.capture_ty == null) return null;
-        const source = switch (callable.source) {
-            .proc_value => |source| source,
-            else => representationInvariant("session proc-value erased payload attached to non-proc callable source"),
-        };
-        return try self.tuplePayloadForCaptureValues(source.captures, sig_key.capture_ty);
+        if (erase.erased_fn_sig_key.capture_ty == null) {
+            if (erase.capture_slots.len != 0) representationInvariant("session proc-value erased payload has captures but no signature capture type");
+            return null;
+        }
+        return try self.tuplePayloadForCaptureSlots(erase.capture_slots, erase.erased_fn_sig_key.capture_ty);
     }
 
     fn payloadForCallableSetType(
@@ -2180,6 +2365,50 @@ const SessionExecutableTypePayloadBuilder = struct {
                 .index = @intCast(i),
                 .ty = child.ty,
                 .key = child.key,
+            };
+        }
+        const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };
+        const id = try self.payload_store.append(self.allocator, key, .{ .tuple = items });
+        return .{
+            .ty = refFor(id),
+            .key = key,
+        };
+    }
+
+    fn tuplePayloadForCaptureSlots(
+        self: *SessionExecutableTypePayloadBuilder,
+        slots: []const CallableSetCaptureSlot,
+        expected_key: ?CanonicalExecValueTypeKey,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        if (slots.len == 0) {
+            const key = expected_key orelse blk: {
+                var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                key_hasher.update("capture_tuple");
+                break :blk CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
+            };
+            const id = try self.payload_store.append(self.allocator, key, .{ .tuple = &.{} });
+            return .{
+                .ty = refFor(id),
+                .key = key,
+            };
+        }
+
+        const items = try self.allocator.alloc(SessionExecutableTupleElemPayload, slots.len);
+        errdefer self.allocator.free(items);
+        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        key_hasher.update("capture_tuple");
+        for (slots, 0..) |slot, i| {
+            if (slot.slot != @as(u32, @intCast(i))) {
+                representationInvariant("session proc-value erased payload capture slots are not canonical");
+            }
+            const child = self.payload_store.refForKey(slot.exec_value_ty) orelse {
+                representationInvariant("session proc-value erased payload target capture slot has no executable payload");
+            };
+            key_hasher.update(&slot.exec_value_ty.bytes);
+            items[i] = .{
+                .index = @intCast(i),
+                .ty = child,
+                .key = slot.exec_value_ty,
             };
         }
         const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };

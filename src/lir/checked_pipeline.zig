@@ -835,7 +835,7 @@ const ExecutableTypePayloadBuilder = struct {
         self: *ExecutableTypePayloadBuilder,
         erase: repr.ProcValueErasePlan,
     ) Allocator.Error!checked_artifact.ExecutableErasedFnPayload {
-        const capture = try self.hiddenCapturePayloadForProcValue(erase.proc_value, erase.erased_fn_sig_key);
+        const capture = try self.hiddenCapturePayloadForProcValue(erase);
         return .{
             .sig_key = erase.erased_fn_sig_key,
             .capture_shape_key = erase.capture_shape_key,
@@ -896,15 +896,17 @@ const ExecutableTypePayloadBuilder = struct {
 
     fn hiddenCapturePayloadForProcValue(
         self: *ExecutableTypePayloadBuilder,
-        proc_value: canonical.ProcedureCallableRef,
-        sig_key: canonical.ErasedFnSigKey,
+        erase: repr.ProcValueErasePlan,
     ) Allocator.Error!?ExecutablePayloadWithKey {
-        if (sig_key.capture_ty == null) return null;
-        const instance = self.procInstanceForCallable(proc_value);
+        if (erase.erased_fn_sig_key.capture_ty == null) {
+            if (erase.capture_slots.len != 0) checkedPipelineInvariant("erased proc-value executable payload has captures but no hidden capture type");
+            return null;
+        }
+        const instance = &self.context.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
         const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
         const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
         const captures = value_store.sliceValueSpan(instance.public_roots.captures);
-        return try self.tuplePayloadForCaptureValues(instance.value_store, value_store, representation_store, captures, sig_key.capture_ty.?);
+        return try self.tuplePayloadForTargetCaptureSlots(instance.value_store, value_store, representation_store, captures, erase.capture_slots, erase.erased_fn_sig_key.capture_ty.?);
     }
 
     fn payloadForCallableSetType(
@@ -957,6 +959,84 @@ const ExecutableTypePayloadBuilder = struct {
         return .{
             .ref = ref,
             .key = key,
+        };
+    }
+
+    fn tuplePayloadForCaptureSlots(
+        self: *ExecutableTypePayloadBuilder,
+        slots: []const repr.CallableSetCaptureSlot,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        if (slots.len == 0) {
+            const ref = try self.appendPayload(expected_key, .{ .tuple = &.{} });
+            return .{
+                .ref = ref,
+                .key = expected_key,
+            };
+        }
+
+        const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, slots.len);
+        errdefer self.allocator.free(items);
+        for (slots, 0..) |slot, i| {
+            if (slot.slot != @as(u32, @intCast(i))) {
+                checkedPipelineInvariant("erased proc-value executable payload capture slots are not canonical");
+            }
+            const child = self.artifact.executable_type_payloads.refForKey(self.artifactRef(), slot.exec_value_ty) orelse {
+                checkedPipelineInvariant("erased proc-value executable payload capture slot has no published executable payload");
+            };
+            items[i] = .{
+                .index = @intCast(i),
+                .ty = child,
+                .key = slot.exec_value_ty,
+            };
+        }
+        const ref = try self.appendPayload(expected_key, .{ .tuple = items });
+        return .{
+            .ref = ref,
+            .key = expected_key,
+        };
+    }
+
+    fn tuplePayloadForTargetCaptureSlots(
+        self: *ExecutableTypePayloadBuilder,
+        value_store_id: repr.ValueInfoStoreId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        captures: []const repr.ValueInfoId,
+        slots: []const repr.CallableSetCaptureSlot,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        if (captures.len != slots.len) {
+            checkedPipelineInvariant("erased proc-value executable payload target capture count differs from erase plan");
+        }
+        if (slots.len == 0) {
+            const ref = try self.appendPayload(expected_key, .{ .tuple = &.{} });
+            return .{
+                .ref = ref,
+                .key = expected_key,
+            };
+        }
+
+        const items = try self.allocator.alloc(checked_artifact.ExecutableTupleElemPayload, slots.len);
+        errdefer self.allocator.free(items);
+        for (slots, captures, 0..) |slot, capture, i| {
+            if (slot.slot != @as(u32, @intCast(i))) {
+                checkedPipelineInvariant("erased proc-value executable payload target capture slots are not canonical");
+            }
+            const child = try self.payloadForValueInStore(value_store_id, value_store, representation_store, capture);
+            if (!repr.canonicalExecValueTypeKeyEql(child.key, slot.exec_value_ty)) {
+                checkedPipelineInvariant("erased proc-value executable payload target capture key differs from erase plan");
+            }
+            items[i] = .{
+                .index = @intCast(i),
+                .ty = child.ref,
+                .key = child.key,
+            };
+        }
+        const ref = try self.appendPayload(expected_key, .{ .tuple = items });
+        return .{
+            .ref = ref,
+            .key = expected_key,
         };
     }
 
@@ -1130,7 +1210,8 @@ fn erasedPromotedSignaturePayloadsForProcValue(
     var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
     defer builder.deinit();
 
-    const target_instance = builder.procInstanceForMir(source.proc);
+    _ = source;
+    const target_instance = &value_context.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
     return try erasedPromotedSignaturePayloadsForProcInstance(
         allocator,
         &builder,
@@ -1139,7 +1220,7 @@ fn erasedPromotedSignaturePayloadsForProcValue(
         erase.erased_fn_sig_key.source_fn_ty,
         erase.executable_specialization_key.exec_ret_ty,
         erase.capture_shape_key,
-        try builder.hiddenCapturePayloadForProcValue(erase.proc_value, erase.erased_fn_sig_key),
+        try builder.hiddenCapturePayloadForProcValue(erase),
     );
 }
 
