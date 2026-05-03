@@ -1196,6 +1196,58 @@ it may answer "which already-published payload entry has this key?" for
 debug-only verification and for ABI publication, but it must never synthesize a
 payload for a missing key. Missing key entries are compiler bugs.
 
+`ExecutableValueTransformRef` may appear at every child edge inside a session
+transform. Executable MIR must dispatch on the explicit owner:
+
+- `session` refs are resolved in the current
+  `SessionExecutableValueTransformStore` and lowered with session endpoints and
+  `SessionExecutableTypePayloadRef` payloads.
+- `published` refs are resolved through the already-published `ArtifactViews`
+  for the named artifact and lowered with that artifact's
+  `ExecutableValueTransformPlanStore`, `ExecutableTypePayloadStore`,
+  compile-time materialization stores, and promoted callable metadata.
+
+This is owner dispatch, not fallback. A missing published artifact view, missing
+transform id, missing payload ref, or mismatched key is a compiler invariant
+violation. Executable MIR must not replace a missing published transform by
+rebuilding one from the current session, comparing executable shapes, consulting
+source syntax, or using a canonical key as a lowerable payload.
+
+Session transform lowering is recursive and complete. A record, tuple, tag
+union, nominal, list, or `Box(T)` transform applies its child
+`ExecutableValueTransformRef` values by the same owner-dispatch rule. A session
+structural bridge may reference child bridge transforms through
+`ExecutableValueTransformRef`; those child transforms must lower to identity or
+another structural bridge. If a child transform contains callable packing,
+aggregate rebuilding, list mapping, or any non-structural operation, it is not a
+bridge and executable MIR must reject it as a compiler bug. This prevents the
+old compatible-shape repair path from reappearing as "bridge lowering."
+
+There are two distinct lowering contexts for `callable_to_erased`:
+
+- **Expression-owned callable emission.** When the value being emitted is an
+  explicit `proc_value` occurrence whose solved representation is erased,
+  executable MIR lowers that occurrence with its `ProcValueErasePlan`. This path
+  has access to the occurrence's explicit `proc_value.captures`, so it can build
+  the hidden capture value in the exact slot order named by the plan.
+- **Existing-value transformation.** When a `ValueTransformBoundary` transforms
+  an already-emitted executable value, executable MIR only has an
+  `ExecutableValueRef`. It may pass through an already-erased callable or pack a
+  finite callable-set value by consuming a finite-set adapter plan. It must not
+  accept `proc_value_to_erased` here, because doing so would require recovering
+  the original `proc_value.captures` from an executable value handle. If such a
+  boundary reaches executable MIR, lambda-solved MIR failed to emit the
+  `proc_value` occurrence under its erased representation, and executable MIR
+  must take the compiler-invariant path.
+
+This split is mandatory for correctness. It is the difference between consuming
+explicit occurrence data and trying to reconstruct occurrence data after the
+value has already been lowered. Existing-value transforms may rebuild records,
+tuples, tags, lists, nominals, and boxes, but every callable leaf in those
+rebuilt values must be either already erased or a finite callable-set value with
+an explicit finite adapter plan. Direct `proc_value` packing belongs only to the
+expression-owned `proc_value` lowering path.
+
 The endpoint owner is mandatory because not every session transform endpoint is
 a local expression value in the current procedure. Call transforms cross a real
 procedure boundary. A `call_proc` argument transforms from the caller's local

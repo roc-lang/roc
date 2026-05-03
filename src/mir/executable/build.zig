@@ -29,6 +29,13 @@ const MaterializationStores = struct {
     values: *const checked_artifact.CompileTimeValueStore,
 };
 
+const PublishedTransformContext = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    materialization: MaterializationStores,
+    executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    executable_value_transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+};
+
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
     origin: Ast.ProcOrigin,
@@ -1699,6 +1706,101 @@ fn tagTypeForLabel(
     executableInvariant("tag-union value transform target tag label is absent from target type");
 }
 
+fn recordFieldForId(
+    program: *const Program,
+    record: Type.RecordType,
+    field_id: MonoRow.RecordFieldId,
+) Type.RecordFieldType {
+    _ = program;
+    for (record.fields) |field| {
+        if (field.field == field_id) return field;
+    }
+    executableInvariant("session record value transform field id is absent from source type");
+}
+
+fn findSessionValueTransformRecordField(
+    fields: []const repr.SessionValueTransformRecordField,
+    field_id: MonoRow.RecordFieldId,
+    seen: []bool,
+) ?repr.SessionValueTransformRecordField {
+    for (fields, 0..) |field, i| {
+        if (field.field != field_id) continue;
+        if (seen[i]) executableInvariant("session record value transform duplicated a field");
+        seen[i] = true;
+        return field;
+    }
+    return null;
+}
+
+fn findSessionValueTransformTupleElem(
+    items: []const repr.SessionValueTransformTupleElem,
+    index: u32,
+    seen: []bool,
+) ?repr.SessionValueTransformTupleElem {
+    for (items, 0..) |item, i| {
+        if (item.index != index) continue;
+        if (seen[i]) executableInvariant("session tuple value transform duplicated an element");
+        seen[i] = true;
+        return item;
+    }
+    return null;
+}
+
+fn tagTypeForId(
+    program: *const Program,
+    tag_union: Type.TagUnionType,
+    tag_id: MonoRow.TagId,
+) Type.TagType {
+    _ = program;
+    for (tag_union.tags) |tag| {
+        if (tag.tag == tag_id) return tag;
+    }
+    executableInvariant("session tag-union value transform target tag id is absent from target type");
+}
+
+fn findSessionValueTransformTagCase(
+    cases: []const repr.SessionValueTransformTagCase,
+    source_tag: MonoRow.TagId,
+    seen: []bool,
+) ?repr.SessionValueTransformTagCase {
+    for (cases, 0..) |case, i| {
+        if (case.source_tag != source_tag) continue;
+        if (seen[i]) executableInvariant("session tag-union value transform duplicated a source tag case");
+        seen[i] = true;
+        return case;
+    }
+    return null;
+}
+
+fn findSessionValueTransformPayloadEdge(
+    payloads: []const repr.SessionValueTransformTagPayloadEdge,
+    target_payload_index: u32,
+    seen: []bool,
+) ?repr.SessionValueTransformTagPayloadEdge {
+    for (payloads, 0..) |payload, i| {
+        if (payload.target_payload_index != target_payload_index) continue;
+        if (seen[i]) executableInvariant("session tag-union value transform duplicated a target payload edge");
+        seen[i] = true;
+        return payload;
+    }
+    return null;
+}
+
+fn tagDiscriminantForId(
+    program: *const Program,
+    ty: Type.TypeId,
+    tag_id: MonoRow.TagId,
+) Allocator.Error!u16 {
+    const tag_union = switch (program.types.getType(ty)) {
+        .tag_union => |tag_union| tag_union,
+        else => executableInvariant("executable session structural bridge expected a tag union endpoint"),
+    };
+    for (tag_union.tags, 0..) |tag, i| {
+        if (tag.tag == tag_id) return @intCast(i);
+    }
+    executableInvariant("executable session structural bridge tag id is absent from endpoint type");
+}
+
 fn applyBoxValueTransform(
     program: *Program,
     materialization: MaterializationStores,
@@ -2142,6 +2244,53 @@ fn resolveConstInstanceForExecutable(
     ref: checked_artifact.ConstInstanceRef,
 ) ResolvedConstInstance {
     return resolveConstInstanceInArtifactViews(program.artifact_views, ref);
+}
+
+fn resolvePublishedTransformContext(
+    program: *const Program,
+    ref: checked_artifact.PublishedExecutableValueTransformRef,
+) PublishedTransformContext {
+    return resolvePublishedTransformContextInArtifactViews(program.artifact_views, ref.artifact);
+}
+
+fn resolvePublishedTransformContextInArtifactViews(
+    artifact_views: ArtifactViews,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+) PublishedTransformContext {
+    if (artifact_views.root) |root| {
+        if (artifactKeyEql(root.artifact.key, artifact)) {
+            return .{
+                .artifact = root.artifact.key,
+                .materialization = .{
+                    .plans = &root.artifact.comptime_plans,
+                    .values = &root.artifact.comptime_values,
+                },
+                .executable_type_payloads = &root.artifact.executable_type_payloads,
+                .executable_value_transforms = &root.artifact.executable_value_transforms,
+            };
+        }
+        for (root.relation_artifacts) |related| {
+            if (!artifactKeyEql(related.key, artifact)) continue;
+            return publishedTransformContextFromImportedView(related);
+        }
+    }
+    for (artifact_views.imports) |imported| {
+        if (!artifactKeyEql(imported.key, artifact)) continue;
+        return publishedTransformContextFromImportedView(imported);
+    }
+    executableInvariant("executable published value transform referenced an artifact view that was not published to executable MIR");
+}
+
+fn publishedTransformContextFromImportedView(view: checked_artifact.ImportedModuleView) PublishedTransformContext {
+    return .{
+        .artifact = view.key,
+        .materialization = .{
+            .plans = view.comptime_plans,
+            .values = view.comptime_values,
+        },
+        .executable_type_payloads = view.executable_type_payloads,
+        .executable_value_transforms = view.executable_value_transforms,
+    };
 }
 
 fn resolveConstInstanceInArtifactViews(
@@ -5962,7 +6111,7 @@ const BodyBuilder = struct {
         }
         const callable_set_key = switch (call_site.dispatch) {
             .call_value_finite => |key| key,
-            .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call_site, sig_key),
+            .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call.call_site, call_site, sig_key),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
         };
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
@@ -6065,6 +6214,7 @@ const BodyBuilder = struct {
         call: anytype,
         func: Ast.ExprId,
         func_value: Ast.ExecutableValueRef,
+        call_site_id: repr.CallSiteInfoId,
         call_site: repr.CallSiteInfo,
         sig_key: repr.ErasedFnSigKey,
     ) Allocator.Error!Ast.ExprId {
@@ -6093,37 +6243,666 @@ const BodyBuilder = struct {
         const capture_ty = self.erasedFnCaptureType(self.output.getExpr(func).ty, sig_key);
 
         const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
+        const arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.arg_transforms);
+        if (arg_transform_ids.len != arg_items.len) {
+            executableInvariant("executable erased call_value argument transform count differs from call arity");
+        }
+        const result_transform_id = call_site.result_transform orelse {
+            executableInvariant("executable erased call_value has no result transform");
+        };
+        const result_boundary = self.representation_store.valueTransformBoundary(result_transform_id);
+        self.verifyErasedCallRawResultBoundary(result_boundary, call_site_id, sig_key);
+
         const arg_values = try self.allocator.alloc(Ast.ExecutableValueRef, arg_items.len);
         defer self.allocator.free(arg_values);
-        const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len + 1);
-        defer self.allocator.free(stmt_ids);
-        stmt_ids[0] = try self.output.addStmt(.{ .decl = .{
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
             .value = func_value,
             .body = func,
-        } });
+        } }));
         for (arg_items, 0..) |arg, i| {
             const lowered = try self.lowerExpr(arg);
             const value = self.exprValue(lowered);
-            arg_values[i] = value;
-            stmt_ids[i + 1] = try self.output.addStmt(.{ .decl = .{
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
                 .value = value,
                 .body = lowered,
-            } });
+            } }));
+            const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
+            self.verifyErasedCallRawArgBoundary(boundary, call_site_id, @intCast(i), sig_key);
+            arg_values[i] = try self.applyValueTransformBoundary(&stmt_ids, boundary, value);
         }
 
-        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
-        const result_value = self.output.freshValueRef();
-        const final_call = try self.output.addExpr(result_ty, result_value, .{ .call_erased = .{
+        const raw_result_ty = try self.lowerSessionExecutableEndpointType(result_boundary.from_endpoint);
+        const raw_result_value = self.output.freshValueRef();
+        const final_call = try self.output.addExpr(raw_result_ty, raw_result_value, .{ .call_erased = .{
             .func = func_value,
             .args = try self.output.addValueRefSpan(arg_values),
             .sig_key = sig_key,
             .capture_ty = capture_ty,
         } });
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = raw_result_value,
+            .body = final_call,
+        } }));
+        const result_value = try self.applyValueTransformBoundary(&stmt_ids, result_boundary, raw_result_value);
+        const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
+        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids),
-            .final_expr = final_call,
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
         } });
+    }
+
+    fn verifyErasedCallRawArgBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        index: u32,
+        sig_key: repr.ErasedFnSigKey,
+    ) void {
+        const abi = self.representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
+            executableInvariant("executable erased call argument transform references missing ABI payload");
+        };
+        if (index >= abi.arg_exec_keys.len) executableInvariant("executable erased call argument transform index exceeds ABI arity");
+        const to = switch (boundary.to_endpoint.owner) {
+            .call_raw_arg => |raw| raw,
+            else => executableInvariant("executable erased call argument transform target is not call_raw_arg"),
+        };
+        if (to.call != call_site_id or to.index != index) {
+            executableInvariant("executable erased call argument transform target differs from call site");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, abi.arg_exec_keys[index])) {
+            executableInvariant("executable erased call argument endpoint key differs from ABI payload");
+        }
+    }
+
+    fn verifyErasedCallRawResultBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        sig_key: repr.ErasedFnSigKey,
+    ) void {
+        const abi = self.representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
+            executableInvariant("executable erased call result transform references missing ABI payload");
+        };
+        const from = switch (boundary.from_endpoint.owner) {
+            .call_raw_result => |raw| raw,
+            else => executableInvariant("executable erased call result transform source is not call_raw_result"),
+        };
+        if (from != call_site_id) {
+            executableInvariant("executable erased call result transform source differs from call site");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.from_endpoint.exec_ty.key, abi.ret_exec_key)) {
+            executableInvariant("executable erased call result endpoint key differs from ABI payload");
+        }
+    }
+
+    fn applyValueTransformBoundary(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        boundary: repr.ValueTransformBoundary,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        return try self.applyExecutableValueTransformRef(stmts, boundary.transform, value);
+    }
+
+    fn applyExecutableValueTransformRef(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        transform: checked_artifact.ExecutableValueTransformRef,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        return switch (transform) {
+            .session => |id| try self.applySessionExecutableValueTransform(stmts, self.representation_store.sessionExecutableValueTransform(id), value),
+            .published => |published| try self.applyPublishedValueTransformRef(stmts, published, value),
+        };
+    }
+
+    fn applyPublishedValueTransformRef(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        transform_ref: checked_artifact.PublishedExecutableValueTransformRef,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const context = resolvePublishedTransformContext(self.program, transform_ref);
+        var published_types = PublishedTypeLowerer.init(
+            self.allocator,
+            context.executable_type_payloads,
+            &self.program.types,
+            &self.program.row_shapes,
+        );
+        defer published_types.deinit();
+        return try applyPublishedExecutableValueTransformRef(
+            self.program,
+            context.materialization,
+            context.artifact,
+            &published_types,
+            context.executable_value_transforms,
+            stmts,
+            transform_ref,
+            value,
+        );
+    }
+
+    fn applySessionExecutableValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        return switch (plan.op) {
+            .identity => blk: {
+                if (!repr.canonicalExecValueTypeKeyEql(plan.from.exec_ty.key, plan.to.exec_ty.key)) {
+                    executableInvariant("executable session identity transform changes representation");
+                }
+                break :blk value;
+            },
+            .structural_bridge => |structural| blk: {
+                const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+                const bridge = try self.lowerSessionExecutableValueTransformAsBridge(plan, structural);
+                const bridged_value = self.output.freshValueRef();
+                const bridged_expr = try self.output.addExpr(to_ty, bridged_value, .{ .bridge = .{
+                    .bridge = bridge,
+                    .value = value,
+                } });
+                try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                    .value = bridged_value,
+                    .body = bridged_expr,
+                } }));
+                break :blk bridged_value;
+            },
+            .record => |fields| try self.applySessionRecordValueTransform(stmts, plan, fields, value),
+            .tuple => |items| try self.applySessionTupleValueTransform(stmts, plan, items, value),
+            .tag_union => |cases| try self.applySessionTagUnionValueTransform(stmts, plan, cases, value),
+            .nominal => |nominal| try self.applySessionNominalValueTransform(stmts, plan, nominal, value),
+            .list => |list| try self.applySessionListValueTransform(stmts, plan, list.elem, value),
+            .box_payload => |box| try self.applySessionBoxValueTransform(stmts, plan, box, value),
+            .callable_to_erased => |callable| try self.applySessionCallableToErasedTransform(stmts, plan, callable, value),
+            .already_erased_callable => |erased| blk: {
+                const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+                const from_erased_ty = erasedFnType(self.program, from_ty);
+                if (!repr.erasedFnSigKeyEql(from_erased_ty.sig_key, erased.sig_key)) {
+                    executableInvariant("executable already-erased session transform source signature differs from plan");
+                }
+                const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+                const erased_ty = erasedFnType(self.program, to_ty);
+                if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sig_key)) {
+                    executableInvariant("executable already-erased session transform target signature differs from plan");
+                }
+                break :blk value;
+            },
+        };
+    }
+
+    fn applySessionRecordValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        fields: []const repr.SessionValueTransformRecordField,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const source = switch (self.program.types.getType(from_ty)) {
+            .record => |record| record,
+            else => executableInvariant("session record value transform source endpoint is not a record"),
+        };
+        const target = switch (self.program.types.getType(to_ty)) {
+            .record => |record| record,
+            else => executableInvariant("session record value transform target endpoint is not a record"),
+        };
+        if (fields.len != target.fields.len) {
+            executableInvariant("session record value transform field count differs from target record");
+        }
+
+        const source_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const seen = try self.allocator.alloc(bool, fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        const output_fields = try self.allocator.alloc(Ast.RecordFieldExpr, target.fields.len);
+        defer self.allocator.free(output_fields);
+        for (target.fields, 0..) |target_field, target_i| {
+            const field_plan = findSessionValueTransformRecordField(fields, target_field.field, seen) orelse {
+                executableInvariant("session record value transform omitted a target field");
+            };
+            const source_field = recordFieldForId(self.program, source, field_plan.field);
+            const access_value = self.output.freshValueRef();
+            const access_expr = try self.output.addExpr(source_field.ty, access_value, .{ .access = .{
+                .record = source_expr,
+                .field = source_field.field,
+            } });
+            try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = access_value,
+                .body = access_expr,
+            } }));
+            const transformed = try self.applyExecutableValueTransformRef(stmts, field_plan.transform, access_value);
+            output_fields[target_i] = .{
+                .field = target_field.field,
+                .expr = try self.output.addExpr(target_field.ty, transformed, .{ .value_ref = transformed }),
+                .ty = target_field.ty,
+                .value = transformed,
+            };
+        }
+        verifyAllSeen(seen, "session record value transform had an extra field transform");
+
+        const record_value = self.output.freshValueRef();
+        const record_expr = try self.output.addExpr(to_ty, record_value, .{ .record = .{
+            .shape = target.shape,
+            .fields = try self.output.addRecordFieldExprSpan(output_fields),
+        } });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = record_value,
+            .body = record_expr,
+        } }));
+        return record_value;
+    }
+
+    fn applySessionTupleValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        items: []const repr.SessionValueTransformTupleElem,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const source = switch (self.program.types.getType(from_ty)) {
+            .tuple => |tuple| tuple,
+            else => executableInvariant("session tuple value transform source endpoint is not a tuple"),
+        };
+        const target = switch (self.program.types.getType(to_ty)) {
+            .tuple => |tuple| tuple,
+            else => executableInvariant("session tuple value transform target endpoint is not a tuple"),
+        };
+        if (items.len != target.len or source.len != target.len) {
+            executableInvariant("session tuple value transform arity differs from endpoint tuple");
+        }
+
+        const tuple_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const seen = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        const output_items = try self.allocator.alloc(Ast.ExprId, target.len);
+        defer self.allocator.free(output_items);
+        for (target, 0..) |target_item_ty, i| {
+            const item_plan = findSessionValueTransformTupleElem(items, @intCast(i), seen) orelse {
+                executableInvariant("session tuple value transform omitted a target element");
+            };
+            const access_value = self.output.freshValueRef();
+            const access_expr = try self.output.addExpr(source[i], access_value, .{ .tuple_access = .{
+                .tuple = tuple_expr,
+                .elem_index = @intCast(i),
+            } });
+            try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = access_value,
+                .body = access_expr,
+            } }));
+            const transformed = try self.applyExecutableValueTransformRef(stmts, item_plan.transform, access_value);
+            output_items[i] = try self.output.addExpr(target_item_ty, transformed, .{ .value_ref = transformed });
+        }
+        verifyAllSeen(seen, "session tuple value transform had an extra element transform");
+
+        const tuple_value = self.output.freshValueRef();
+        const result_expr = try self.output.addExpr(to_ty, tuple_value, .{ .tuple = try self.output.addExprSpan(output_items) });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = tuple_value,
+            .body = result_expr,
+        } }));
+        return tuple_value;
+    }
+
+    fn applySessionNominalValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        nominal: anytype,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const source = switch (self.program.types.getType(from_ty)) {
+            .nominal => |source| source,
+            else => executableInvariant("session nominal value transform source endpoint is not nominal"),
+        };
+        const target = switch (self.program.types.getType(to_ty)) {
+            .nominal => |target| target,
+            else => executableInvariant("session nominal value transform target endpoint is not nominal"),
+        };
+        if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
+            executableInvariant("session nominal value transform target nominal differs from plan");
+        }
+
+        const source_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const backing_value = self.output.freshValueRef();
+        const backing_expr = try self.output.addExpr(source.backing, backing_value, .{ .nominal_reinterpret = source_expr });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = backing_value,
+            .body = backing_expr,
+        } }));
+
+        const transformed_backing = try self.applyExecutableValueTransformRef(stmts, nominal.backing, backing_value);
+        const transformed_expr = try self.output.addExpr(target.backing, transformed_backing, .{ .value_ref = transformed_backing });
+        const nominal_value = self.output.freshValueRef();
+        const nominal_expr = try self.output.addExpr(to_ty, nominal_value, .{ .nominal_reinterpret = transformed_expr });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = nominal_value,
+            .body = nominal_expr,
+        } }));
+        return nominal_value;
+    }
+
+    fn applySessionListValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        elem_transform: checked_artifact.ExecutableValueTransformRef,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const source_elem_ty = listElementTypeForTransform(self.program, from_ty, "source");
+        const target_elem_ty = listElementTypeForTransform(self.program, to_ty, "target");
+
+        const source_elem = self.output.freshValueRef();
+        var body_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer body_stmts.deinit(self.allocator);
+
+        const transformed_elem = try self.applyExecutableValueTransformRef(&body_stmts, elem_transform, source_elem);
+        const transformed_expr = try self.output.addExpr(target_elem_ty, transformed_elem, .{ .value_ref = transformed_elem });
+        const body_expr = if (body_stmts.items.len == 0)
+            transformed_expr
+        else
+            try self.output.addExpr(target_elem_ty, transformed_elem, .{ .block = .{
+                .stmts = try self.output.addStmtSpan(body_stmts.items),
+                .final_expr = transformed_expr,
+            } });
+
+        const list_value = self.output.freshValueRef();
+        const list_expr = try self.output.addExpr(to_ty, list_value, .{ .value_transform_list = .{
+            .source = value,
+            .source_elem = source_elem,
+            .source_elem_ty = source_elem_ty,
+            .target_elem_ty = target_elem_ty,
+            .body = body_expr,
+        } });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = list_value,
+            .body = list_expr,
+        } }));
+        return list_value;
+    }
+
+    fn applySessionBoxValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        box: repr.SessionBoxPayloadTransformPlan,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        switch (box.kind) {
+            .payload_to_box => {
+                _ = boxPayloadType(self.program, to_ty);
+                const transformed = try self.applyExecutableValueTransformRef(stmts, box.payload, value);
+                return try boxTransformedPayload(self.program, stmts, to_ty, transformed);
+            },
+            .box_to_payload => {
+                _ = boxPayloadType(self.program, from_ty);
+                const unboxed = try unboxPayloadForTransform(self.program, stmts, from_ty, value);
+                return try self.applyExecutableValueTransformRef(stmts, box.payload, unboxed);
+            },
+            .box_to_box => {
+                _ = boxPayloadType(self.program, from_ty);
+                _ = boxPayloadType(self.program, to_ty);
+                const unboxed = try unboxPayloadForTransform(self.program, stmts, from_ty, value);
+                const transformed = try self.applyExecutableValueTransformRef(stmts, box.payload, unboxed);
+                return try boxTransformedPayload(self.program, stmts, to_ty, transformed);
+            },
+        }
+    }
+
+    fn applySessionTagUnionValueTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        cases: []const repr.SessionValueTransformTagCase,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const source = switch (self.program.types.getType(from_ty)) {
+            .tag_union => |tag_union| tag_union,
+            else => executableInvariant("session tag-union value transform source endpoint is not a tag union"),
+        };
+        const target = switch (self.program.types.getType(to_ty)) {
+            .tag_union => |tag_union| tag_union,
+            else => executableInvariant("session tag-union value transform target endpoint is not a tag union"),
+        };
+        if (cases.len != source.tags.len) {
+            executableInvariant("session tag-union value transform case count differs from source tag-union arity");
+        }
+
+        const seen_cases = try self.allocator.alloc(bool, cases.len);
+        defer self.allocator.free(seen_cases);
+        @memset(seen_cases, false);
+
+        const branches = try self.allocator.alloc(Ast.ValueTransformTagBranch, source.tags.len);
+        defer self.allocator.free(branches);
+        for (source.tags, 0..) |source_tag, source_i| {
+            const case = findSessionValueTransformTagCase(cases, source_tag.tag, seen_cases) orelse {
+                executableInvariant("session tag-union value transform omitted a source tag case");
+            };
+            const target_tag = tagTypeForId(self.program, target, case.target_tag);
+
+            var branch_stmts = std.ArrayList(Ast.StmtId).empty;
+            defer branch_stmts.deinit(self.allocator);
+            const branch_body = try self.sessionTagUnionValueTransformBranchBody(
+                &branch_stmts,
+                from_ty,
+                to_ty,
+                source_tag,
+                target,
+                target_tag,
+                case,
+                value,
+            );
+
+            branches[source_i] = .{
+                .discriminant = @intCast(self.program.row_shapes.tag(source_tag.tag).logical_index),
+                .body = branch_body,
+            };
+        }
+        verifyAllSeen(seen_cases, "session tag-union value transform had an extra source tag case");
+
+        const transformed_value = self.output.freshValueRef();
+        const transformed_expr = try self.output.addExpr(to_ty, transformed_value, .{ .value_transform_tag_union = .{
+            .source = value,
+            .branches = try self.output.addValueTransformTagBranchSpan(branches),
+        } });
+        try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = transformed_value,
+            .body = transformed_expr,
+        } }));
+        return transformed_value;
+    }
+
+    fn sessionTagUnionValueTransformBranchBody(
+        self: *BodyBuilder,
+        branch_stmts: *std.ArrayList(Ast.StmtId),
+        source_union_ty: Type.TypeId,
+        target_union_ty: Type.TypeId,
+        source_tag: Type.TagType,
+        target_union: Type.TagUnionType,
+        target_tag: Type.TagType,
+        case: repr.SessionValueTransformTagCase,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExprId {
+        if (case.payloads.len != target_tag.payloads.len) {
+            executableInvariant("session tag-union value transform payload edge count differs from target tag arity");
+        }
+
+        const source_expr = try self.output.addExpr(source_union_ty, value, .{ .value_ref = value });
+        const seen_payloads = try self.allocator.alloc(bool, case.payloads.len);
+        defer self.allocator.free(seen_payloads);
+        @memset(seen_payloads, false);
+
+        const payload_exprs = try self.allocator.alloc(Ast.TagPayloadExpr, target_tag.payloads.len);
+        defer self.allocator.free(payload_exprs);
+        for (target_tag.payloads, 0..) |target_payload, target_i| {
+            const edge = findSessionValueTransformPayloadEdge(case.payloads, @intCast(target_i), seen_payloads) orelse {
+                executableInvariant("session tag-union value transform omitted a target payload edge");
+            };
+            const source_payload_index: usize = @intCast(edge.source_payload_index);
+            if (source_payload_index >= source_tag.payloads.len) {
+                executableInvariant("session tag-union value transform source payload index exceeded source tag arity");
+            }
+            const source_payload = source_tag.payloads[source_payload_index];
+            const access_value = self.output.freshValueRef();
+            const access_expr = try self.output.addExpr(source_payload.ty, access_value, .{ .tag_payload = .{
+                .tag_union = source_expr,
+                .payload = source_payload.payload,
+            } });
+            try branch_stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = access_value,
+                .body = access_expr,
+            } }));
+
+            const transformed = try self.applyExecutableValueTransformRef(branch_stmts, edge.transform, access_value);
+            payload_exprs[target_i] = .{
+                .payload = target_payload.payload,
+                .expr = try self.output.addExpr(target_payload.ty, transformed, .{ .value_ref = transformed }),
+                .ty = target_payload.ty,
+                .value = transformed,
+            };
+        }
+        verifyAllSeen(seen_payloads, "session tag-union value transform had an extra payload edge");
+
+        const tag_value = self.output.freshValueRef();
+        const tag_expr = try self.output.addExpr(target_union_ty, tag_value, .{ .tag = .{
+            .union_shape = target_union.shape,
+            .tag = target_tag.tag,
+            .payloads = try self.output.addTagPayloadExprSpan(payload_exprs),
+        } });
+        if (branch_stmts.items.len == 0) return tag_expr;
+        return try self.output.addExpr(target_union_ty, tag_value, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(branch_stmts.items),
+            .final_expr = tag_expr,
+        } });
+    }
+
+    fn lowerSessionExecutableValueTransformAsBridge(
+        self: *BodyBuilder,
+        plan: repr.SessionExecutableValueTransformPlan,
+        structural: repr.SessionExecutableStructuralBridgePlan,
+    ) Allocator.Error!Ast.BridgeId {
+        const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+        const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        return try self.lowerSessionExecutableStructuralBridgePlan(from_ty, to_ty, structural);
+    }
+
+    fn lowerSessionExecutableValueChildBridge(
+        self: *BodyBuilder,
+        child: checked_artifact.ExecutableValueTransformRef,
+    ) Allocator.Error!Ast.BridgeId {
+        return switch (child) {
+            .session => |id| blk: {
+                const plan = self.representation_store.sessionExecutableValueTransform(id);
+                break :blk switch (plan.op) {
+                    .identity => try self.output.addBridgePlan(.direct),
+                    .structural_bridge => |structural| try self.lowerSessionExecutableValueTransformAsBridge(plan, structural),
+                    else => executableInvariant("session structural bridge child was not a bridge transform"),
+                };
+            },
+            .published => |published| blk: {
+                const context = resolvePublishedTransformContext(self.program, published);
+                var published_types = PublishedTypeLowerer.init(
+                    self.allocator,
+                    context.executable_type_payloads,
+                    &self.program.types,
+                    &self.program.row_shapes,
+                );
+                defer published_types.deinit();
+                break :blk try lowerExecutableValueChildBridge(
+                    self.program,
+                    &published_types,
+                    context.executable_value_transforms,
+                    published.transform,
+                );
+            },
+        };
+    }
+
+    fn lowerSessionExecutableStructuralBridgePlan(
+        self: *BodyBuilder,
+        from_ty: Type.TypeId,
+        to_ty: Type.TypeId,
+        op: repr.SessionExecutableStructuralBridgePlan,
+    ) Allocator.Error!Ast.BridgeId {
+        const plan: Ast.BridgePlan = switch (op) {
+            .direct => .direct,
+            .zst => .zst,
+            .list_reinterpret => .list_reinterpret,
+            .nominal_reinterpret => .nominal_reinterpret,
+            .box_unbox => |child| .{ .box_unbox = try self.lowerSessionExecutableValueChildBridge(child) },
+            .box_box => |child| .{ .box_box = try self.lowerSessionExecutableValueChildBridge(child) },
+            .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
+                .source_payload = from_ty,
+                .target_discriminant = try tagDiscriminantForId(self.program, to_ty, singleton.target_tag),
+                .payload_plan = if (singleton.value_transform) |payload| try self.lowerSessionExecutableValueChildBridge(payload) else null,
+            } },
+            .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
+                .target_payload = to_ty,
+                .source_discriminant = try tagDiscriminantForId(self.program, from_ty, singleton.source_tag),
+                .payload_plan = if (singleton.value_transform) |payload| try self.lowerSessionExecutableValueChildBridge(payload) else null,
+            } },
+        };
+        return try self.output.addBridgePlan(plan);
+    }
+
+    fn applySessionCallableToErasedTransform(
+        self: *BodyBuilder,
+        stmts: *std.ArrayList(Ast.StmtId),
+        plan: repr.SessionExecutableValueTransformPlan,
+        callable: repr.SessionCallableToErasedTransformPlan,
+        value: Ast.ExecutableValueRef,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const result_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+        const erased_ty = erasedFnType(self.program, result_ty);
+        return switch (callable) {
+            .finite_value => |finite| blk: {
+                const source_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+                const source_callable_set = switch (self.program.types.getType(source_ty)) {
+                    .callable_set => |callable_set| callable_set,
+                    else => executableInvariant("finite session callable erasure source endpoint is not a callable set"),
+                };
+                if (!repr.callableSetKeyEql(source_callable_set.key, finite.adapter.callable_set_key)) {
+                    executableInvariant("finite session callable erasure source callable-set key differs from adapter key");
+                }
+                if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, finite.adapter.erased_fn_sig_key)) {
+                    executableInvariant("finite session callable erasure target signature differs from adapter key");
+                }
+                const hidden_capture = if (erased_ty.capture_ty == null) null else value;
+                const packed_value = self.output.freshValueRef();
+                const packed_expr = try self.output.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
+                    .sig_key = finite.adapter.erased_fn_sig_key,
+                    .code = executableProcForErasedAdapter(self.program, finite.adapter),
+                    .capture = hidden_capture,
+                    .capture_ty = erased_ty.capture_ty,
+                    .capture_shape = finite.adapter.capture_shape_key,
+                } });
+                try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                    .value = packed_value,
+                    .body = packed_expr,
+                } }));
+                break :blk packed_value;
+            },
+            .proc_value => executableInvariant("proc-value session callable erasure is valid only while lowering the owning proc_value occurrence"),
+        };
     }
 
     fn erasedFnCaptureType(
