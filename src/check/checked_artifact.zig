@@ -4256,6 +4256,7 @@ fn sealConstEvalTemplatesForRoots(
         );
         const_templates.fillEval(const_ref, .{
             .body = body,
+            .entry_template = wrapper.template,
             .source_scheme = const_ref.source_scheme,
             .resolved_value_refs = template.resolved_value_refs,
             .static_dispatch_plans = template.static_dispatch_plans,
@@ -8798,6 +8799,52 @@ fn buildImportedConstTemplateClosure(
     };
     errdefer freeConstSlice(allocator, checked_const_bodies);
 
+    const checked_procedure_templates: []const ArtifactProcedureTemplateRef = switch (template.state) {
+        .eval_template => |eval| try singleton(allocator, ArtifactProcedureTemplateRef, eval.entry_template),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, checked_procedure_templates);
+
+    const nested_proc_sites: []const ArtifactNestedProcSiteTableRef = switch (template.state) {
+        .eval_template => |eval| if (eval.nested_proc_sites.len == 0)
+            &.{}
+        else
+            try singleton(allocator, ArtifactNestedProcSiteTableRef, .{
+                .artifact = artifact_key,
+                .table = eval.nested_proc_sites,
+            }),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, nested_proc_sites);
+
+    const resolved_value_refs: []const ArtifactResolvedValueRefTableRef = switch (template.state) {
+        .eval_template => |eval| if (eval.resolved_value_refs.len == 0)
+            &.{}
+        else
+            try singleton(allocator, ArtifactResolvedValueRefTableRef, .{
+                .artifact = artifact_key,
+                .table = eval.resolved_value_refs,
+            }),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, resolved_value_refs);
+
+    const static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = switch (template.state) {
+        .eval_template => |eval| if (eval.static_dispatch_plans.len == 0)
+            &.{}
+        else
+            try singleton(allocator, ArtifactStaticDispatchPlanTableRef, .{
+                .artifact = artifact_key,
+                .table = eval.static_dispatch_plans,
+            }),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, static_dispatch_plans);
+
     const dependency_summary_templates: []const ArtifactComptimeDependencySummaryTemplateRef = switch (template.state) {
         .eval_template => |eval| try singleton(allocator, ArtifactComptimeDependencySummaryTemplateRef, .{
             .artifact = artifact_key,
@@ -8817,7 +8864,11 @@ fn buildImportedConstTemplateClosure(
         .checked_type_roots = checked_type_roots,
         .checked_type_schemes = checked_type_schemes,
         .checked_const_bodies = checked_const_bodies,
+        .checked_procedure_templates = checked_procedure_templates,
         .const_templates = const_templates,
+        .nested_proc_sites = nested_proc_sites,
+        .resolved_value_refs = resolved_value_refs,
+        .static_dispatch_plans = static_dispatch_plans,
         .dependency_summary_templates = dependency_summary_templates,
         .interface_capabilities = interface_capabilities,
     };
@@ -9040,6 +9091,7 @@ fn buildProcedureBindingClosure(
 
 pub const ConstEvalTemplate = struct {
     body: CheckedConstBodyRef,
+    entry_template: canonical.ProcedureTemplateRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     resolved_value_refs: ResolvedValueRefTableRef = .{},
     static_dispatch_plans: StaticDispatchPlanTableRef = .{},
@@ -10693,8 +10745,11 @@ pub const CheckedModuleArtifact = struct {
             switch (exported.template.state) {
                 .eval_template => |eval| {
                     std.debug.assert(@intFromEnum(eval.body) < self.checked_const_bodies.bodies.len);
+                    std.debug.assert(std.mem.eql(u8, &eval.entry_template.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(@intFromEnum(eval.entry_template.template) < self.checked_procedure_templates.templates.len);
                     std.debug.assert(@intFromEnum(eval.dependency_template) < self.comptime_dependencies.templates.items.len);
                     std.debug.assert(exported.template_closure.checked_const_bodies.len > 0);
+                    std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
                     std.debug.assert(exported.template_closure.dependency_summary_templates.len > 0);
                 },
                 .value_graph_template => |graph| {
@@ -10912,6 +10967,8 @@ pub const ImportedModuleView = struct {
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
     checked_const_bodies: *const CheckedConstBodyTable,
+    checked_procedure_templates: *const CheckedProcedureTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -10954,6 +11011,8 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
         .checked_const_bodies = &artifact.checked_const_bodies,
+        .checked_procedure_templates = &artifact.checked_procedure_templates,
+        .entry_wrappers = &artifact.entry_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,

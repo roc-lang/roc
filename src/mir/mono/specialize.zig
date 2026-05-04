@@ -284,10 +284,28 @@ fn checkedTemplateForKey(
                     .executable_value_transforms = imported.executable_value_transforms,
                     .comptime_plans = imported.comptime_plans,
                     .comptime_values = imported.comptime_values,
-                    .entry_wrappers = null,
+                    .entry_wrappers = imported.entry_wrappers,
                     .template = exported.template_data,
                 };
             }
+        }
+        if (exportedConstEvalTemplateContains(imported.exported_const_templates, template_ref)) {
+            return .{
+                .artifact = imported.key,
+                .checked_types = imported.checked_types,
+                .checked_bodies = imported.checked_bodies,
+                .resolved_value_refs = imported.resolved_value_refs,
+                .nested_proc_sites = imported.nested_proc_sites,
+                .hosted_procs = imported.hosted_procs,
+                .promoted_callable_wrappers = imported.promoted_callable_wrappers,
+                .promoted_callable_body_plans = imported.promoted_callable_body_plans,
+                .executable_type_payloads = imported.executable_type_payloads,
+                .executable_value_transforms = imported.executable_value_transforms,
+                .comptime_plans = imported.comptime_plans,
+                .comptime_values = imported.comptime_values,
+                .entry_wrappers = imported.entry_wrappers,
+                .template = imported.checked_procedure_templates.get(template_ref.template),
+            };
         }
         debug.invariant(false, "mono specialization invariant violated: imported template was not exported or present in the imported closure");
         unreachable;
@@ -312,10 +330,28 @@ fn checkedTemplateForKey(
                     .executable_value_transforms = related.executable_value_transforms,
                     .comptime_plans = related.comptime_plans,
                     .comptime_values = related.comptime_values,
-                    .entry_wrappers = null,
+                    .entry_wrappers = related.entry_wrappers,
                     .template = exported.template_data,
                 };
             }
+        }
+        if (exportedConstEvalTemplateContains(related.exported_const_templates, template_ref)) {
+            return .{
+                .artifact = related.key,
+                .checked_types = related.checked_types,
+                .checked_bodies = related.checked_bodies,
+                .resolved_value_refs = related.resolved_value_refs,
+                .nested_proc_sites = related.nested_proc_sites,
+                .hosted_procs = related.hosted_procs,
+                .promoted_callable_wrappers = related.promoted_callable_wrappers,
+                .promoted_callable_body_plans = related.promoted_callable_body_plans,
+                .executable_type_payloads = related.executable_type_payloads,
+                .executable_value_transforms = related.executable_value_transforms,
+                .comptime_plans = related.comptime_plans,
+                .comptime_values = related.comptime_values,
+                .entry_wrappers = related.entry_wrappers,
+                .template = related.checked_procedure_templates.get(template_ref.template),
+            };
         }
         debug.invariant(false, "mono specialization invariant violated: relation template was not exported or present in the relation closure");
         unreachable;
@@ -323,6 +359,23 @@ fn checkedTemplateForKey(
 
     debug.invariant(false, "mono specialization invariant violated: template artifact was not available to lowering");
     unreachable;
+}
+
+fn exportedConstEvalTemplateContains(
+    exported_const_templates: checked_artifact.ExportedConstTemplateView,
+    template_ref: canonical.ProcedureTemplateRef,
+) bool {
+    for (exported_const_templates.templates) |exported| {
+        switch (exported.template.state) {
+            .eval_template => |eval| {
+                if (canonical.procedureTemplateRefEql(eval.entry_template, template_ref)) return true;
+            },
+            .value_graph_template,
+            .reserved,
+            => {},
+        }
+    }
+    return false;
 }
 
 fn executableSyntheticProcForReserved(
