@@ -3770,7 +3770,6 @@ pub const CallableEvalTemplate = struct {
     root: ComptimeRootId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
-    dependency_template: ?ComptimeDependencySummaryTemplateId = null,
 };
 
 pub const CallableEvalTemplateTableView = struct {
@@ -3805,21 +3804,6 @@ pub const CallableEvalTemplateTable = struct {
             .checked_fn_root = checked_fn_root,
         };
         return id;
-    }
-
-    pub fn fillDependencyTemplate(
-        self: *CallableEvalTemplateTable,
-        id: CallableEvalTemplateId,
-        dependency_template: ComptimeDependencySummaryTemplateId,
-    ) void {
-        const idx = @intFromEnum(id);
-        if (idx >= self.templates.len) {
-            checkedArtifactInvariant("callable eval template id is out of range", .{});
-        }
-        if (self.templates[idx].dependency_template != null) {
-            checkedArtifactInvariant("callable eval template dependency was filled twice", .{});
-        }
-        self.templates[idx].dependency_template = dependency_template;
     }
 
     pub fn get(self: *const CallableEvalTemplateTable, id: CallableEvalTemplateId) CallableEvalTemplate {
@@ -4394,16 +4378,13 @@ fn sealCheckedProcedureTemplateRefs(
 }
 
 fn sealConstEvalTemplatesForRoots(
-    allocator: Allocator,
     const_templates: *ConstTemplateTable,
-    comptime_dependencies: *ComptimeDependencySummaryStore,
     compile_time_roots: *const CompileTimeRootTable,
     checked_const_bodies: *const CheckedConstBodyTable,
     entry_wrappers: *const EntryWrapperTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
     top_level_values: *const TopLevelValueTable,
-) Allocator.Error!void {
+) void {
     for (compile_time_roots.roots) |root| {
         if (root.kind != .constant) continue;
         const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
@@ -4419,12 +4400,6 @@ fn sealConstEvalTemplatesForRoots(
         };
         const wrapper = entryWrapperForRoot(entry_wrappers, root.id);
         const template = checked_procedure_templates.get(wrapper.template.template);
-        const dependency_template = try appendDependencyTemplateForCheckedTemplate(
-            allocator,
-            comptime_dependencies,
-            resolved_value_refs,
-            template,
-        );
         const_templates.fillEval(const_ref, .{
             .body = body,
             .entry_template = wrapper.template,
@@ -4432,84 +4407,8 @@ fn sealConstEvalTemplatesForRoots(
             .resolved_value_refs = template.resolved_value_refs,
             .static_dispatch_plans = template.static_dispatch_plans,
             .nested_proc_sites = template.nested_proc_sites,
-            .dependency_template = dependency_template,
         });
     }
-}
-
-fn sealCallableEvalTemplatesForRoots(
-    allocator: Allocator,
-    callable_eval_templates: *CallableEvalTemplateTable,
-    comptime_dependencies: *ComptimeDependencySummaryStore,
-    entry_wrappers: *const EntryWrapperTable,
-    checked_procedure_templates: *const CheckedProcedureTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-) Allocator.Error!void {
-    for (callable_eval_templates.templates) |template| {
-        const wrapper = entryWrapperForRoot(entry_wrappers, template.root);
-        const checked_template = checked_procedure_templates.get(wrapper.template.template);
-        const dependency_template = try appendDependencyTemplateForCheckedTemplate(
-            allocator,
-            comptime_dependencies,
-            resolved_value_refs,
-            checked_template,
-        );
-        callable_eval_templates.fillDependencyTemplate(template.id, dependency_template);
-    }
-}
-
-fn appendDependencyTemplateForCheckedTemplate(
-    allocator: Allocator,
-    comptime_dependencies: *ComptimeDependencySummaryStore,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    template: CheckedProcedureTemplate,
-) Allocator.Error!ComptimeDependencySummaryTemplateId {
-    var availability = std.ArrayList(ComptimeAvailabilityUseTemplate).empty;
-    defer availability.deinit(allocator);
-    var concrete = std.ArrayList(ComptimeConcreteValueUseTemplate).empty;
-    defer concrete.deinit(allocator);
-
-    const start: usize = @intCast(template.resolved_value_refs.start);
-    const end = start + @as(usize, @intCast(template.resolved_value_refs.len));
-    if (end > resolved_value_refs.template_refs.len) {
-        checkedArtifactInvariant("checked template resolved-value dependency span is out of range", .{});
-    }
-    for (resolved_value_refs.template_refs[start..end]) |ref_id| {
-        const ref_index = @intFromEnum(ref_id);
-        if (ref_index >= resolved_value_refs.records.len) {
-            checkedArtifactInvariant("checked template resolved-value dependency id is out of range", .{});
-        }
-        switch (resolved_value_refs.records[ref_index].ref) {
-            .top_level_const,
-            .imported_const,
-            .platform_required_const,
-            => |const_use| {
-                try availability.append(allocator, .{ .const_template = const_use });
-                try concrete.append(allocator, .{ .const_use = const_use });
-            },
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            .platform_required_proc,
-            .promoted_top_level_proc,
-            => |proc_use| {
-                try availability.append(allocator, .{ .procedure_binding = proc_use });
-                try concrete.append(allocator, .{ .procedure_callable = proc_use });
-            },
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .local_proc,
-            => {},
-            .platform_required_declaration => checkedArtifactInvariant("dependency template reached unresolved platform-required declaration", .{}),
-        }
-    }
-
-    return try comptime_dependencies.appendTemplate(allocator, .{
-        .availability_values = availability.items,
-        .concrete_value_templates = concrete.items,
-    });
 }
 
 const CheckedTemplateRefCollector = struct {
@@ -8433,7 +8332,6 @@ pub const CallablePromotionPlanId = enum(u32) { _ };
 pub const ConstReificationPlanId = ConstGraphReificationPlanId;
 pub const CaptureSlotReificationPlanId = enum(u32) { _ };
 pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
-pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
 pub const ComptimeProcDependencySummaryId = enum(u32) { _ };
 pub const ComptimeCallSiteId = enum(u32) { _ };
@@ -8495,24 +8393,6 @@ pub const CheckedConstBodyTable = struct {
         allocator.free(self.by_root);
         self.* = .{};
     }
-};
-
-pub const ComptimeAvailabilityUseTemplate = union(enum) {
-    local_root: ComptimeRootId,
-    imported_value: TopLevelValueRef,
-    const_template: ConstUseTemplate,
-    procedure_binding: ProcedureUseTemplate,
-};
-
-pub const ComptimeConcreteValueUseTemplate = union(enum) {
-    const_use: ConstUseTemplate,
-    callable_binding_use: ProcedureUseTemplate,
-    procedure_callable: ProcedureUseTemplate,
-};
-
-pub const ComptimeDependencySummaryTemplate = struct {
-    availability_values: []const ComptimeAvailabilityUseTemplate = &.{},
-    concrete_value_templates: []const ComptimeConcreteValueUseTemplate = &.{},
 };
 
 pub const ComptimeAvailabilityUse = union(enum) {
@@ -8615,7 +8495,6 @@ pub const ComptimeProcDependencySummary = struct {
 pub const ComptimeDependencySummaryStoreView = struct {
     owner: CheckedModuleArtifactKey,
     root_requests: []const ?ComptimeDependencySummaryId = &.{},
-    templates: []const ComptimeDependencySummaryTemplate = &.{},
     summaries: []const ComptimeDependencySummary = &.{},
     proc_summaries: []const ComptimeProcDependencySummary = &.{},
 };
@@ -8623,7 +8502,6 @@ pub const ComptimeDependencySummaryStoreView = struct {
 pub const ComptimeDependencySummaryStore = struct {
     owner: CheckedModuleArtifactKey = .{},
     root_requests: []?ComptimeDependencySummaryId = &.{},
-    templates: std.ArrayList(ComptimeDependencySummaryTemplate) = .empty,
     summaries: std.ArrayList(ComptimeDependencySummary) = .empty,
     proc_summaries: std.ArrayList(ComptimeProcDependencySummary) = .empty,
 
@@ -8635,7 +8513,6 @@ pub const ComptimeDependencySummaryStore = struct {
         return .{
             .owner = self.owner,
             .root_requests = self.root_requests,
-            .templates = self.templates.items,
             .summaries = self.summaries.items,
             .proc_summaries = self.proc_summaries.items,
         };
@@ -8652,23 +8529,6 @@ pub const ComptimeDependencySummaryStore = struct {
         if (count == 0) return;
         self.root_requests = try allocator.alloc(?ComptimeDependencySummaryId, count);
         @memset(self.root_requests, null);
-    }
-
-    pub fn appendTemplate(
-        self: *ComptimeDependencySummaryStore,
-        allocator: Allocator,
-        template: ComptimeDependencySummaryTemplate,
-    ) Allocator.Error!ComptimeDependencySummaryTemplateId {
-        const id: ComptimeDependencySummaryTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
-        const availability_values = try allocator.dupe(ComptimeAvailabilityUseTemplate, template.availability_values);
-        errdefer allocator.free(availability_values);
-        const concrete_value_templates = try allocator.dupe(ComptimeConcreteValueUseTemplate, template.concrete_value_templates);
-        errdefer allocator.free(concrete_value_templates);
-        try self.templates.append(allocator, .{
-            .availability_values = availability_values,
-            .concrete_value_templates = concrete_value_templates,
-        });
-        return id;
     }
 
     pub fn fillRootRequest(
@@ -8738,15 +8598,6 @@ pub const ComptimeDependencySummaryStore = struct {
         return id;
     }
 
-    pub fn getTemplate(
-        self: *const ComptimeDependencySummaryStore,
-        id: ComptimeDependencySummaryTemplateId,
-    ) ComptimeDependencySummaryTemplate {
-        const idx = @intFromEnum(id);
-        if (idx >= self.templates.items.len) checkedArtifactInvariant("compile-time dependency template id is out of range", .{});
-        return self.templates.items[idx];
-    }
-
     pub fn getSummary(
         self: *const ComptimeDependencySummaryStore,
         id: ComptimeDependencySummaryId,
@@ -8768,10 +8619,6 @@ pub const ComptimeDependencySummaryStore = struct {
     pub fn verifySealed(self: *const ComptimeDependencySummaryStore) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.templates.items, 0..) |template, i| {
-            _ = template;
-            std.debug.assert(i <= std.math.maxInt(u32));
-        }
         for (self.summaries.items, 0..) |summary, i| {
             _ = summary;
             std.debug.assert(i <= std.math.maxInt(u32));
@@ -8800,16 +8647,11 @@ pub const ComptimeDependencySummaryStore = struct {
     pub fn deinit(self: *ComptimeDependencySummaryStore, allocator: Allocator) void {
         for (self.proc_summaries.items) |*summary| deinitComptimeProcDependencySummary(allocator, summary);
         self.proc_summaries.deinit(allocator);
-        for (self.templates.items) |template| {
-            allocator.free(template.availability_values);
-            allocator.free(template.concrete_value_templates);
-        }
         for (self.summaries.items) |summary| {
             allocator.free(summary.availability_values);
             allocator.free(summary.concrete_values);
         }
         allocator.free(self.root_requests);
-        self.templates.deinit(allocator);
         self.summaries.deinit(allocator);
         self.* = .{};
     }
@@ -8996,11 +8838,6 @@ pub const ArtifactConstGraphReificationPlanRef = struct {
     plan: ConstReificationPlanId,
 };
 
-pub const ArtifactComptimeDependencySummaryTemplateRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    template: ComptimeDependencySummaryTemplateId,
-};
-
 pub const ArtifactPrivateCaptureNodeRef = struct {
     artifact: CheckedModuleArtifactKey,
     node: PrivateCaptureNodeId,
@@ -9035,7 +8872,6 @@ pub const ImportedTemplateClosureView = struct {
     callable_result_plans: []const ArtifactCallableResultPlanRef = &.{},
     callable_promotion_plans: []const ArtifactCallablePromotionPlanRef = &.{},
     const_reification_plans: []const ArtifactConstGraphReificationPlanRef = &.{},
-    dependency_summary_templates: []const ArtifactComptimeDependencySummaryTemplateRef = &.{},
     nested_proc_sites: []const ArtifactNestedProcSiteTableRef = &.{},
     resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
     static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
@@ -9289,16 +9125,6 @@ fn buildImportedConstTemplateClosure(
     };
     errdefer freeConstSlice(allocator, static_dispatch_plans);
 
-    const dependency_summary_templates: []const ArtifactComptimeDependencySummaryTemplateRef = switch (template.state) {
-        .eval_template => |eval| try singleton(allocator, ArtifactComptimeDependencySummaryTemplateRef, .{
-            .artifact = artifact_key,
-            .template = eval.dependency_template,
-        }),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, dependency_summary_templates);
-
     const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
         .artifact = artifact_key,
     });
@@ -9313,7 +9139,6 @@ fn buildImportedConstTemplateClosure(
         .nested_proc_sites = nested_proc_sites,
         .resolved_value_refs = resolved_value_refs,
         .static_dispatch_plans = static_dispatch_plans,
-        .dependency_summary_templates = dependency_summary_templates,
         .interface_capabilities = interface_capabilities,
     };
 }
@@ -9354,7 +9179,6 @@ fn deinitImportedTemplateClosure(
     freeConstSlice(allocator, closure.callable_result_plans);
     freeConstSlice(allocator, closure.callable_promotion_plans);
     freeConstSlice(allocator, closure.const_reification_plans);
-    freeConstSlice(allocator, closure.dependency_summary_templates);
     freeConstSlice(allocator, closure.nested_proc_sites);
     freeConstSlice(allocator, closure.resolved_value_refs);
     freeConstSlice(allocator, closure.static_dispatch_plans);
@@ -9505,18 +9329,6 @@ fn buildProcedureBindingClosure(
             });
             errdefer freeConstSlice(allocator, checked_type_schemes);
 
-            const dependency_template = template.dependency_template orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: callable eval template dependency was not sealed", .{});
-                }
-                unreachable;
-            };
-            const dependency_summary_templates = try singleton(allocator, ArtifactComptimeDependencySummaryTemplateRef, .{
-                .artifact = artifact_key,
-                .template = dependency_template,
-            });
-            errdefer freeConstSlice(allocator, dependency_summary_templates);
-
             const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
                 .artifact = artifact_key,
             });
@@ -9526,7 +9338,6 @@ fn buildProcedureBindingClosure(
                 .checked_type_roots = checked_type_roots,
                 .checked_type_schemes = checked_type_schemes,
                 .callable_eval_templates = callable_eval_template,
-                .dependency_summary_templates = dependency_summary_templates,
                 .interface_capabilities = interface_capabilities,
             };
         },
@@ -9540,7 +9351,6 @@ pub const ConstEvalTemplate = struct {
     resolved_value_refs: ResolvedValueRefTableRef = .{},
     static_dispatch_plans: StaticDispatchPlanTableRef = .{},
     nested_proc_sites: NestedProcSiteTableRef = .{},
-    dependency_template: ComptimeDependencySummaryTemplateId,
 };
 
 pub const ConstValueGraphTemplate = struct {
@@ -11485,7 +11295,6 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(template_id) < self.callable_eval_templates.templates.len);
                     std.debug.assert(exported.template_closure.callable_eval_templates.len > 0);
                     std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
-                    std.debug.assert(exported.template_closure.dependency_summary_templates.len > 0);
                     std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
             }
@@ -11506,10 +11315,8 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(eval.body) < self.checked_const_bodies.bodies.len);
                     std.debug.assert(std.mem.eql(u8, &eval.entry_template.artifact.bytes, &self.key.bytes));
                     std.debug.assert(@intFromEnum(eval.entry_template.template) < self.checked_procedure_templates.templates.len);
-                    std.debug.assert(@intFromEnum(eval.dependency_template) < self.comptime_dependencies.templates.items.len);
                     std.debug.assert(exported.template_closure.checked_const_bodies.len > 0);
                     std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
-                    std.debug.assert(exported.template_closure.dependency_summary_templates.len > 0);
                 },
                 .value_graph_template => |graph| {
                     std.debug.assert(@intFromEnum(graph.schema) < self.comptime_values.schemas.items.len);
@@ -11535,10 +11342,6 @@ pub const CheckedModuleArtifact = struct {
             for (exported.template_closure.checked_const_bodies) |body_ref| {
                 std.debug.assert(std.mem.eql(u8, &body_ref.artifact.bytes, &self.key.bytes));
                 std.debug.assert(@intFromEnum(body_ref.body) < self.checked_const_bodies.bodies.len);
-            }
-            for (exported.template_closure.dependency_summary_templates) |summary_ref| {
-                std.debug.assert(std.mem.eql(u8, &summary_ref.artifact.bytes, &self.key.bytes));
-                std.debug.assert(@intFromEnum(summary_ref.template) < self.comptime_dependencies.templates.items.len);
             }
             for (exported.template_closure.interface_capabilities) |capability_ref| {
                 std.debug.assert(std.mem.eql(u8, &capability_ref.artifact.bytes, &self.key.bytes));
@@ -11572,10 +11375,6 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
-            const dependency_template = template.dependency_template orelse {
-                std.debug.panic("checked artifact invariant violated: callable eval template dependency was not sealed", .{});
-            };
-            std.debug.assert(@intFromEnum(dependency_template) < self.comptime_dependencies.templates.items.len);
             _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
             };
@@ -12231,24 +12030,12 @@ pub fn publishFromTypedModule(
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
 
-    try sealCallableEvalTemplatesForRoots(
-        allocator,
-        &callable_eval_templates,
-        &comptime_dependencies,
-        &entry_wrappers,
-        &checked_procedure_templates,
-        &resolved_value_refs,
-    );
-
-    try sealConstEvalTemplatesForRoots(
-        allocator,
+    sealConstEvalTemplatesForRoots(
         &const_templates,
-        &comptime_dependencies,
         &compile_time_roots,
         &checked_const_bodies,
         &entry_wrappers,
         &checked_procedure_templates,
-        &resolved_value_refs,
         &top_level_values,
     );
 
