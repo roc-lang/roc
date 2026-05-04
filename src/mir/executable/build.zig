@@ -3588,6 +3588,7 @@ const PublishedTypeLowerer = struct {
                     break :blk try self.lower(capture, capture_key);
                 } else null,
             } },
+            .vacant_callable_slot => .vacant_callable_slot,
             .recursive_ref => |ref| .{ .link = try self.lowerPayload(ref) },
         };
     }
@@ -3799,6 +3800,7 @@ const SessionTypeLowerer = struct {
                     break :blk try self.lower(capture, capture_key);
                 } else null,
             } },
+            .vacant_callable_slot => .vacant_callable_slot,
             .recursive_ref => |ref_id| .{ .link = try self.lowerPayload(ref_id) },
         };
     }

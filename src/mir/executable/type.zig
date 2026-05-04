@@ -69,6 +69,7 @@ pub const Content = union(enum) {
     tag_union: TagUnionType,
     callable_set: CallableSetType,
     erased_fn: ErasedFnType,
+    vacant_callable_slot,
 };
 
 pub const Store = struct {

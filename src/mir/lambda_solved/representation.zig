@@ -255,6 +255,7 @@ pub const SessionExecutableTypePayload = union(enum) {
     nominal: SessionExecutableNominalPayload,
     callable_set: SessionExecutableCallableSetPayload,
     erased_fn: SessionExecutableErasedFnPayload,
+    vacant_callable_slot,
     recursive_ref: SessionExecutableTypePayloadId,
 };
 
@@ -365,6 +366,7 @@ fn deinitSessionExecutableTypePayload(
         .box,
         .nominal,
         .erased_fn,
+        .vacant_callable_slot,
         .recursive_ref,
         => {},
         .record => |record| if (record.fields.len > 0) allocator.free(record.fields),
@@ -2701,10 +2703,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         root: RepRootId,
         ty: type_mod.TypeVarId,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        if (self.valueHasFunctionType(ty)) {
-            return try self.endpointForCallableClass(self.representation_store.classForRoot(root));
-        }
-
         const key = try execValueTypeKeyForRootType(
             self.allocator,
             self.names,
@@ -2714,6 +2712,14 @@ const SessionExecutableTypePayloadBuilder = struct {
             root,
             ty,
         );
+        if (self.valueHasFunctionType(ty)) {
+            const class = self.representation_store.classForRoot(root);
+            if (self.representation_store.callableClassEmission(class)) |emission_plan| {
+                return try self.endpointForCallableEmissionPlan(emission_plan);
+            }
+            return try self.endpointForVacantCallableSlot(key);
+        }
+
         const root_ty = self.types.unlinkConst(ty);
         const active_key = RootTypeKey{ .root = root, .ty = root_ty };
         if (self.active_root_types.get(active_key)) |active| {
@@ -3075,11 +3081,29 @@ const SessionExecutableTypePayloadBuilder = struct {
         const emission_plan = self.representation_store.callableClassEmission(class) orelse {
             representationInvariant("session executable function value class has no callable emission plan");
         };
+        return try self.endpointForCallableEmissionPlan(emission_plan);
+    }
+
+    fn endpointForCallableEmissionPlan(
+        self: *SessionExecutableTypePayloadBuilder,
+        emission_plan: CallableValueEmissionPlanId,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
         const key = self.callableEmissionPlanKey(emission_plan);
         if (self.payload_store.refForKey(key)) |existing| {
             return .{ .ty = existing, .key = key };
         }
         const id = try self.payload_store.append(self.allocator, key, try self.callablePayloadForEmissionPlan(emission_plan));
+        return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn endpointForVacantCallableSlot(
+        self: *SessionExecutableTypePayloadBuilder,
+        key: CanonicalExecValueTypeKey,
+    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+        if (self.payload_store.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+        const id = try self.payload_store.append(self.allocator, key, .vacant_callable_slot);
         return .{ .ty = refFor(id), .key = key };
     }
 
@@ -3775,24 +3799,7 @@ const ExecValueTypeKeyBuilder = struct {
 
     fn writeCallableValue(self: *ExecValueTypeKeyBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!void {
         const representations = self.representation_store orelse representationInvariant("executable value type key for callable has no representation store");
-        switch (representations.callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| {
-                self.writeTag("callable_set");
-                self.writeCanonicalCallableSetKey(key);
-            },
-            .already_erased => |erased| {
-                self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erased.sig_key);
-            },
-            .erase_proc_value => |erase| {
-                self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erase.erased_fn_sig_key);
-            },
-            .erase_finite_set => |erase| {
-                self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erase.adapter.erased_fn_sig_key);
-            },
-        }
+        try self.writeCallableEmissionPlan(callable.emission_plan, representations);
     }
 
     fn writeAggregateValue(
@@ -3881,7 +3888,13 @@ const ExecValueTypeKeyBuilder = struct {
         }
 
         if (self.valueHasFunctionType(root)) {
-            try self.writeCallableClass(self.representationStore().classForRoot(rep_root));
+            const representations = self.representationStore();
+            const class = representations.classForRoot(rep_root);
+            if (representations.callableClassEmission(class)) |emission| {
+                try self.writeCallableEmissionPlan(emission, representations);
+            } else {
+                try self.writeVacantCallableSlotType(root);
+            }
             return;
         }
 
@@ -3973,10 +3986,19 @@ const ExecValueTypeKeyBuilder = struct {
         self: *ExecValueTypeKeyBuilder,
         class: RepresentationClassId,
     ) std.mem.Allocator.Error!void {
-        const emission = self.representationStore().callableClassEmission(class) orelse {
+        const representations = self.representationStore();
+        const emission = representations.callableClassEmission(class) orelse {
             representationInvariant("executable value type key function root has no callable class emission");
         };
-        switch (self.representationStore().callableEmissionPlan(emission)) {
+        try self.writeCallableEmissionPlan(emission, representations);
+    }
+
+    fn writeCallableEmissionPlan(
+        self: *ExecValueTypeKeyBuilder,
+        emission: CallableValueEmissionPlanId,
+        representations: *const RepresentationStore,
+    ) std.mem.Allocator.Error!void {
+        switch (representations.callableEmissionPlan(emission)) {
             .finite => |key| {
                 self.writeTag("callable_set");
                 self.writeCanonicalCallableSetKey(key);
@@ -3994,6 +4016,14 @@ const ExecValueTypeKeyBuilder = struct {
                 self.writeErasedFnSigKey(erase.adapter.erased_fn_sig_key);
             },
         }
+    }
+
+    fn writeVacantCallableSlotType(
+        self: *ExecValueTypeKeyBuilder,
+        root: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!void {
+        self.writeTag("vacant_callable_slot");
+        try self.writeSourceTypeAllowFunctions(root);
     }
 
     fn writeTagUnionRootPayloadKeys(
@@ -4134,6 +4164,93 @@ const ExecValueTypeKeyBuilder = struct {
             },
             else => false,
         };
+    }
+
+    fn writeSourceTypeAllowFunctions(self: *ExecValueTypeKeyBuilder, id: type_mod.TypeVarId) std.mem.Allocator.Error!void {
+        const root = self.types.unlinkConst(id);
+        if (self.active.get(root)) |slot| {
+            self.writeTag("source_cycle");
+            self.writeU32(slot);
+            return;
+        }
+
+        const slot: u32 = @intCast(self.active.count());
+        try self.active.put(root, slot);
+        switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("vacant callable slot key reached unresolved lambda-solved type"),
+            .nominal => |nominal| {
+                self.writeTag("nominal");
+                self.writeBytes(self.names.moduleNameText(nominal.nominal.module_name));
+                self.writeBytes(self.names.typeNameText(nominal.nominal.type_name));
+                self.hasher.update(&nominal.source_ty.bytes);
+                self.writeBool(nominal.is_opaque);
+                try self.writeSourceTypeSpanAllowFunctions(nominal.args);
+                try self.writeSourceTypeAllowFunctions(nominal.backing);
+            },
+            .content => |content| try self.writeSourceContentAllowFunctions(content),
+        }
+        _ = self.active.remove(root);
+    }
+
+    fn writeSourceContentAllowFunctions(
+        self: *ExecValueTypeKeyBuilder,
+        content: type_mod.Content,
+    ) std.mem.Allocator.Error!void {
+        switch (content) {
+            .primitive => |prim| {
+                self.writeTag("primitive");
+                self.writeU32(@as(u32, @intCast(@intFromEnum(prim))));
+            },
+            .list => |elem| {
+                self.writeTag("list");
+                try self.writeSourceTypeAllowFunctions(elem);
+            },
+            .box => |elem| {
+                self.writeTag("box");
+                try self.writeSourceTypeAllowFunctions(elem);
+            },
+            .tuple => |items| {
+                self.writeTag("tuple");
+                try self.writeSourceTypeSpanAllowFunctions(items);
+            },
+            .record => |record| {
+                self.writeTag("record");
+                const fields = self.types.sliceFields(record.fields);
+                self.writeU32(@intCast(fields.len));
+                for (fields) |field| {
+                    self.writeBytes(self.names.recordFieldLabelText(field.name));
+                    try self.writeSourceTypeAllowFunctions(field.ty);
+                }
+            },
+            .tag_union => |tag_union| {
+                self.writeTag("tag_union");
+                const tags = self.types.sliceTags(tag_union.tags);
+                self.writeU32(@intCast(tags.len));
+                for (tags) |tag| {
+                    self.writeBytes(self.names.tagLabelText(tag.name));
+                    try self.writeSourceTypeSpanAllowFunctions(tag.args);
+                }
+            },
+            .func => |func| {
+                self.writeTag("func");
+                self.writeU32(func.fixed_arity);
+                try self.writeSourceTypeSpanAllowFunctions(func.args);
+                try self.writeSourceTypeAllowFunctions(func.ret);
+            },
+        }
+    }
+
+    fn writeSourceTypeSpanAllowFunctions(
+        self: *ExecValueTypeKeyBuilder,
+        span: type_mod.Span(type_mod.TypeVarId),
+    ) std.mem.Allocator.Error!void {
+        const items = self.types.sliceTypeVarSpan(span);
+        self.writeU32(@intCast(items.len));
+        for (items) |item| try self.writeSourceTypeAllowFunctions(item);
     }
 
     fn writeType(self: *ExecValueTypeKeyBuilder, id: type_mod.TypeVarId) std.mem.Allocator.Error!void {

@@ -11233,6 +11233,7 @@ solved callable child of that function representation:
 ```text
 function value with finite callable child -> callable_set(CanonicalCallableSetKey)
 function value with erased callable child -> erased_fn(ErasedFnSigKey)
+function-typed structural slot with no inhabitant -> vacant_callable_slot(source_fn_ty)
 ```
 
 The key recursively applies this rule through records, tuples, tag payloads,
@@ -11240,6 +11241,72 @@ The key recursively applies this rule through records, tuples, tag payloads,
 capability, function argument slots, and function return slots. Therefore two
 values with the same source function type can have different executable value
 keys when their solved callable representations differ.
+
+`vacant_callable_slot(source_fn_ty)` is mandatory for function-typed structural
+positions that are part of an executable payload but have no concrete callable
+inhabitant in the current solve session. It is not a finite callable set, not an
+erased callable, not a thunk, not a runtime closure object, and not a callable
+value. It is a bottom executable-type payload for an uninhabited function-typed
+slot.
+
+Concrete examples:
+
+```roc
+empty_fns : List(I64 -> I64)
+empty_fns = []
+```
+
+The `List(T)` element slot has source type `I64 -> I64`, but this value
+contains no elements, so there is no finite callable member and no erased
+callable payload to publish for the element slot.
+
+```roc
+x : [A(I64), B(I64 -> I64)]
+x = A(1)
+```
+
+The `B` tag payload slot is part of the row-finalized tag-union payload shape,
+but this value contains the `A` tag, so there is no runtime `B` payload callable
+inhabitant in this solve session.
+
+The vacant key must include the canonical source function type. A single global
+vacant marker is forbidden because it would make `List(I64 -> I64)` and
+`List(Str -> Str)` share the same executable element key when both happen to be
+empty. The exact key spelling may differ, but the semantic identity is:
+
+```text
+vacant_callable_slot(canonical source function type)
+```
+
+For implementation-local payload stores where the canonical source function key
+is not directly stored on the structural child, the key builder must hash the
+fully resolved source function type shape from the solved type store. That hash
+is part of the executable value type key and must be deterministic; it must not
+use allocation-order ids, expression ids, generated names, layout ids, runtime
+pointers, or backend ABI handles.
+
+Executable MIR may only carry `vacant_callable_slot` inside type payloads for
+structural positions with no inhabiting callable value. It must never emit:
+
+```text
+callable_set_value(vacant_callable_slot)
+callable_match(vacant_callable_slot)
+packed_erased_fn(vacant_callable_slot)
+call_direct(vacant_callable_slot)
+call_erased(vacant_callable_slot)
+```
+
+Debug builds must assert immediately if a vacant callable slot is used as an
+actual expression value, a call target, a callable-set member, an erased
+callable, a promoted callable, a boxed erased callable payload, or a materialized
+constant callable leaf. Release builds use the corresponding `unreachable` path.
+
+Lowering a vacant callable slot to IR layout may use the canonical zero-sized
+layout only because the slot is uninhabited in that executable payload. This is
+not callable erasure and not a runtime representation for real function values.
+If any value-flow edge later contributes a concrete callable to the same slot,
+the slot is no longer vacant; lambda-solved representation must publish the
+finite or erased callable representation instead.
 
 For example, these two executable specializations must not share one key:
 
@@ -11866,13 +11933,16 @@ const CanonicalExecValueTypeKey = union(enum) {
     nominal: NominalExecKey,
     callable_set: CanonicalCallableSetKey,
     erased_fn: ErasedFnSigKey,
+    vacant_callable_slot: CanonicalTypeKey,
 };
 ```
 
 The exact Zig layout may differ, but the semantic shape must not. Function-typed
 source values do not appear as a `function` case in executable value keys.
 Executable type lowering consumes the solved `FunctionRepShape.callable` child
-and produces either `callable_set` or `erased_fn`.
+and produces `callable_set`, `erased_fn`, or `vacant_callable_slot`. The vacant
+case is legal only for uninhabited structural slots; real function values still
+must be finite callable sets or erased callables.
 
 Function argument and return executable value keys still exist as metadata for
 calls, bridges, erased signatures, Box payload representation plans, and specialization
@@ -11899,6 +11969,7 @@ record
 tag_union
 erased_fn
 callable representation
+vacant_callable_slot
 ```
 
 They must not include:
@@ -13658,8 +13729,9 @@ Commit when executable MIR verification proves:
 - every `call_proc` was lowered through an explicit executable call plan
 - direct call args match target signatures
 - executable value types collapse function-typed runtime values to
-  `callable_set` or `erased_fn`, never to runtime function objects with
-  argument and return fields
+  `callable_set` or `erased_fn`, and function-typed uninhabited structural slots
+  to `vacant_callable_slot`; none become runtime function objects with argument
+  and return fields
 - executable specialization keys recursively encode nested function-valued
   argument, return, capture, record, tag, list, box, and nominal slots through
   `CanonicalExecValueTypeKey`
@@ -15477,10 +15549,12 @@ objects.
   from runtime bytes.
 - add non-boxed higher-order container tests where records, tags, lists, and
   nominals contain function values but do not flow into `Box(T)`. The expected
-  executable value types must contain `callable_set` or `erased_fn` for the
-  function-valued slots, never a runtime function object with argument and return
-  fields, and never erased representation unless an explicit `Box(T)` boundary
-  reaches that slot.
+  executable value types must contain `callable_set` or `erased_fn` for
+  inhabited function-valued slots and `vacant_callable_slot` for uninhabited
+  function-typed structural slots such as empty `List(T)` element payloads or
+  unselected tag payloads. They must never contain a runtime function object with
+  argument and return fields, and must never use erased representation unless an
+  explicit `Box(T)` boundary reaches that slot.
 - add hosted/platform callable ABI tests proving that hosted metadata does not
   introduce erasure for non-`Box(T)` callable slots. A hosted callable slot that
   requires erased representation must be exposed through an explicit `Box(T)`
@@ -15488,8 +15562,9 @@ objects.
   publication.
 - add debug-verifier tests that intentionally construct invalid internal MIR in
   test-only helpers: unresolved callable variables in executable inputs,
-  generalized variables in executable inputs, and function-typed executable
-  values that did not collapse to `callable_set` or `erased_fn`. Debug builds
+  generalized variables in executable inputs, function-typed executable runtime
+  values that did not collapse to `callable_set` or `erased_fn`, and
+  `vacant_callable_slot` payloads used as actual callable values. Debug builds
   must assert immediately; release builds use `unreachable` for the equivalent
   compiler-invariant path.
 - add hidden-capture ABI tests distinguishing no capture, typed zero-sized

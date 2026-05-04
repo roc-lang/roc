@@ -1851,6 +1851,7 @@ const IrBuilder = struct {
             .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
             .callable_set => |callable_set| try self.callableSetLayout(callable_set),
             .erased_fn => |erased| try self.erasedFnLayout(erased),
+            .vacant_callable_slot => .{ .canonical = .zst },
         };
     }
 

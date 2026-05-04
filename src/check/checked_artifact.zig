@@ -2913,6 +2913,7 @@ pub const ExecutableTypePayload = union(enum) {
     nominal: ExecutableNominalPayload,
     callable_set: ExecutableCallableSetPayload,
     erased_fn: ExecutableErasedFnPayload,
+    vacant_callable_slot,
     recursive_ref: ExecutableTypePayloadId,
 };
 
@@ -6863,6 +6864,7 @@ fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePay
         .box,
         .nominal,
         .erased_fn,
+        .vacant_callable_slot,
         .recursive_ref,
         => {},
         .record => |fields| allocator.free(fields),
@@ -7345,6 +7347,7 @@ fn verifyExecutableTypePayload(
         .list => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
         .box => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
         .nominal => |nominal| verifyExecutableTypePayloadRefKey(payloads, artifact_key, nominal.backing, nominal.backing_key),
+        .vacant_callable_slot => {},
         .callable_set => |callable_set| for (callable_set.members) |member| {
             if ((member.payload_ty == null) != (member.payload_ty_key == null)) {
                 std.debug.panic("checked artifact invariant violated: callable-set executable payload member has mismatched payload ref/key presence", .{});

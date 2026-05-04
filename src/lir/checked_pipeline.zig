@@ -626,6 +626,7 @@ const ExecutableTypePayloadBuilder = struct {
                     .backing_key = backing.key,
                 } };
             },
+            .vacant_callable_slot => .vacant_callable_slot,
             .callable_set => |callable_set| .{ .callable_set = try self.sessionCallableSetPayload(solve_session, callable_set) },
             .erased_fn => |erased| .{ .erased_fn = try self.sessionErasedFnPayload(solve_session, erased) },
             .recursive_ref => |ref| .{ .recursive_ref = self.active_session_payloads.get(.{
