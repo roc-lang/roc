@@ -389,20 +389,24 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             },
             .int => {
                 std.debug.assert(self.ptr != null);
-                const value = self.asI128();
                 const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
                 switch (self.layout.data.scalar.data.int) {
-                    .u8 => try writeChecked(u8, dest_bytes, value),
-                    .i8 => try writeChecked(i8, dest_bytes, value),
-                    .u16 => try writeChecked(u16, dest_bytes, value),
-                    .i16 => try writeChecked(i16, dest_bytes, value),
-                    .u32 => try writeChecked(u32, dest_bytes, value),
-                    .i32 => try writeChecked(i32, dest_bytes, value),
-                    .u64 => try writeChecked(u64, dest_bytes, value),
-                    .i64 => try writeChecked(i64, dest_bytes, value),
-                    .u128 => try writeChecked(u128, dest_bytes, value),
+                    .u8 => try writeChecked(u8, dest_bytes, self.asI128()),
+                    .i8 => try writeChecked(i8, dest_bytes, self.asI128()),
+                    .u16 => try writeChecked(u16, dest_bytes, self.asI128()),
+                    .i16 => try writeChecked(i16, dest_bytes, self.asI128()),
+                    .u32 => try writeChecked(u32, dest_bytes, self.asI128()),
+                    .i32 => try writeChecked(i32, dest_bytes, self.asI128()),
+                    .u64 => try writeChecked(u64, dest_bytes, self.asI128()),
+                    .i64 => try writeChecked(i64, dest_bytes, self.asI128()),
+                    .u128 => {
+                        // Read directly as u128 to preserve values > i128.max,
+                        // which would otherwise be lost going through an i128 round-trip.
+                        const u_value = self.asU128();
+                        @memcpy(dest_bytes[0..@sizeOf(u128)], std.mem.asBytes(&u_value));
+                    },
                     .i128 => {
-                        builtins.utils.alignedPtrCast(*i128, dest_bytes, @src()).* = value;
+                        builtins.utils.alignedPtrCast(*i128, dest_bytes, @src()).* = self.asI128();
                     },
                 }
                 return;

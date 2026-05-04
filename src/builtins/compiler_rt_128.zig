@@ -629,8 +629,10 @@ pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
     return formatFloatDecimal(buf, @as(u64, @as(u32, @bitCast(val))), true);
 }
 
-/// Format a float to decimal string using Ryu's binaryToDecimal (u64-only)
-/// followed by manual decimal formatting that avoids u128 div/mod.
+/// Format a float to a string using Ryu's binaryToDecimal (u64-only) followed
+/// by manual decimal formatting that avoids u128 div/mod. Uses scientific
+/// notation (`M.MMMeEE`) for very large/small magnitudes (matches Python's
+/// `repr` thresholds: dp_offset > 16 or dp_offset <= -4); decimal otherwise.
 pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
     const float = std.fmt.float;
     const tables = &float.Backend64_TablesFull;
@@ -671,7 +673,39 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
     const olength = u64DecimalDigits(mantissa);
     const dp_offset: i32 = d.exponent + @as(i32, @intCast(olength));
 
-    if (dp_offset <= 0) {
+    if (dp_offset > 16 or dp_offset <= -4) {
+        // Scientific notation: M.MMMeEE, where the exponent is dp_offset - 1.
+        // Extract digits MSB-first into a temp buffer.
+        var digits: [20]u8 = undefined;
+        var m = mantissa;
+        var i = olength;
+        while (i > 0) {
+            i -= 1;
+            digits[i] = '0' + @as(u8, @intCast(m % 10));
+            m /= 10;
+        }
+
+        buf[pos] = digits[0];
+        pos += 1;
+        if (olength > 1) {
+            buf[pos] = '.';
+            pos += 1;
+            @memcpy(buf[pos..][0 .. olength - 1], digits[1..olength]);
+            pos += olength - 1;
+        }
+        buf[pos] = 'e';
+        pos += 1;
+
+        const sci_exp: i32 = dp_offset - 1;
+        const exp_abs: u64 = if (sci_exp < 0) blk: {
+            buf[pos] = '-';
+            pos += 1;
+            break :blk @intCast(-sci_exp);
+        } else @intCast(sci_exp);
+        const exp_digits = u64DecimalDigits(exp_abs);
+        writeU64Digits(buf[pos..], exp_abs, exp_digits);
+        pos += exp_digits;
+    } else if (dp_offset <= 0) {
         // 0.000001234 — number is less than 1
         buf[pos] = '0';
         buf[pos + 1] = '.';

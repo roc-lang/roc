@@ -142,6 +142,10 @@ pub const RocDec = extern struct {
             index += 1;
         }
 
+        // Sign is folded into the magnitude before multiplication and addition,
+        // rather than negating at the end. This is required for the lowest Dec
+        // value: its magnitude is 2^127, which overflows positive i128 even
+        // though -2^127 is itself representable.
         var before_str_length = length;
         var after_val_i128: ?i128 = null;
         if (point_index) |pi| {
@@ -156,7 +160,10 @@ pub const RocDec = extern struct {
 
             const after_str = roc_str_slice[pi + 1 .. length];
             const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
-            after_val_i128 = if (after_u64) |f| i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places))) else null;
+            if (after_u64) |f| {
+                const unsigned = i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places)));
+                after_val_i128 = if (is_negative) -unsigned else unsigned;
+            }
         }
 
         const before_str = roc_str_slice[initial_index..before_str_length];
@@ -164,41 +171,30 @@ pub const RocDec = extern struct {
 
         var before_val_i128: ?i128 = null;
         if (before_val_not_adjusted) |before| {
-            const mul_ans = @import("num.zig").mulWithOverflow(i128, before, one_point_zero_i128);
-            const result = mul_ans.value;
-            const overflowed = mul_ans.has_overflowed;
-            if (overflowed) {
+            const signed_before: i128 = if (is_negative) -before else before;
+            const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
+            if (mul_ans.has_overflowed) {
                 // TODO: runtime exception for overflow!
                 return null;
             }
-            before_val_i128 = result;
+            before_val_i128 = mul_ans.value;
         }
 
-        const dec: RocDec = blk: {
-            if (before_val_i128) |before| {
-                if (after_val_i128) |after| {
-                    const answer = @addWithOverflow(before, after);
-                    const result = answer[0];
-                    const overflowed = answer[1];
-                    if (overflowed == 1) {
-                        // TODO: runtime exception for overflow!
-                        return null;
-                    }
-                    break :blk .{ .num = result };
-                } else {
-                    break :blk .{ .num = before };
+        if (before_val_i128) |before| {
+            if (after_val_i128) |after| {
+                const answer = @addWithOverflow(before, after);
+                if (answer[1] == 1) {
+                    // TODO: runtime exception for overflow!
+                    return null;
                 }
-            } else if (after_val_i128) |after| {
-                break :blk .{ .num = after };
+                return .{ .num = answer[0] };
             } else {
-                return null;
+                return .{ .num = before };
             }
-        };
-
-        if (is_negative) {
-            return dec.negate();
+        } else if (after_val_i128) |after| {
+            return .{ .num = after };
         } else {
-            return dec;
+            return null;
         }
     }
 

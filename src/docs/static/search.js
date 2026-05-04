@@ -4,10 +4,9 @@ const toggleSidebarEntryActive = (moduleName) => {
   if (sidebar != null) {
     // Un-hide everything
     sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
-      let entryName = entry.querySelector(".sidebar-module-link").dataset
-        .moduleName;
-      if (moduleName === entryName) {
-        entry.firstChild.classList.toggle("active");
+      let link = entry.querySelector(".sidebar-module-link");
+      if (moduleName === link.dataset.moduleName) {
+        link.classList.toggle("active");
       }
     });
   }

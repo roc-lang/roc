@@ -2823,8 +2823,8 @@ fn lowerExprWithMonotypeOverride(
     return switch (expr) {
         // --- Literals ---
         .e_num => |num| try self.store.addExpr(self.allocator, .{ .int = .{ .value = num.value } }, monotype, region),
-        .e_frac_f32 => |frac| try self.store.addExpr(self.allocator, .{ .frac_f32 = frac.value }, monotype, region),
-        .e_frac_f64 => |frac| try self.store.addExpr(self.allocator, .{ .frac_f64 = frac.value }, monotype, region),
+        .e_frac_f32 => |frac| try self.lowerFracLiteral(@floatCast(frac.value), monotype, region),
+        .e_frac_f64 => |frac| try self.lowerFracLiteral(frac.value, monotype, region),
         .e_dec => |dec| try self.store.addExpr(self.allocator, .{ .dec = dec.value }, monotype, region),
         .e_dec_small => |dec_small| {
             const roc_dec = dec_small.value.toRocDec();
@@ -3738,6 +3738,57 @@ fn monotypesStructurallyEqualRec(
                 }
             }
             break :blk true;
+        },
+    };
+}
+
+/// Lower a fractional literal to MIR, narrowing or widening the value to match
+/// the resolved monotype. The canonicalizer picks a representation based on
+/// what fits (e.g. an out-of-Dec-range value becomes `e_frac_f64`), but a type
+/// annotation can later constrain the literal to a different precision (such
+/// as `F32`). Without this conversion, downstream stages would emit a value
+/// with the wrong layout.
+fn lowerFracLiteral(
+    self: *Self,
+    value: f64,
+    monotype: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const mono = self.store.monotype_store.getMonotype(monotype);
+    return switch (mono) {
+        .prim => |p| switch (p) {
+            .f64 => try self.store.addExpr(self.allocator, .{ .frac_f64 = value }, monotype, region),
+            .f32 => try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(value) }, monotype, region),
+            .dec => {
+                const roc_dec = builtins.dec.RocDec.fromF64(value) orelse {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "lowerFracLiteral: f64 value {d} cannot be represented as Dec (checker/lowering invariant broken)",
+                            .{value},
+                        );
+                    }
+                    unreachable;
+                };
+                return try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region);
+            },
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "lowerFracLiteral: unsupported primitive monotype {s} (checker/lowering invariant broken)",
+                        .{@tagName(p)},
+                    );
+                }
+                unreachable;
+            },
+        },
+        else => {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "lowerFracLiteral: non-prim monotype {s} (checker/lowering invariant broken)",
+                    .{@tagName(mono)},
+                );
+            }
+            unreachable;
         },
     };
 }

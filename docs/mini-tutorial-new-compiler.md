@@ -14,15 +14,11 @@ With those disclaimers in mind, let's get into the adventure!
 
 First, [grab a nightly build of the new compiler](https://github.com/roc-lang/nightlies/releases). It'll have an executable named `roc` (or `roc.exe` on Windows). You'll want to [put that executable on your PATH] - you'll know it worked if you can run `roc version` in a terminal and see it print something like `Roc compiler version release-fast-123c5d78` (the hash at the very end there will be different from this one, as it changes with each nightly release).
 
-Next, copy/paste this into a new file named `main.roc`: (yes, the long URL is correct - we'll discuss it later!)
+Next, copy/paste this into a new file named `main.roc`:
 
 ```ruby
-app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.6/2BfGn4M9uWJNhDVeMghGeXNVDFijMfPsmmVeo6M4QjKX.tar.zst" }
-
-import pf.Stdout
-
 main! = |_args| {
-    Stdout.line!("Hello, World!")
+    echo!("Hello, World!")
     Ok({})
 }
 ```
@@ -43,31 +39,13 @@ Hooray!
 
 > Tip: If you don't provide a path to a .roc file, `roc` will default to "main.roc" - so since your Roc program is named main.roc, you can run your program by just running `roc` in the future.
 
-## Imports
-
-Let's look at that `main.roc` file, starting with the second line.
-
-```
-import pf.Stdout
-```
-
-This imports `Stdout` into scope, allowing us to call its `Stdout.line!` function later. The `pf.` means that `Stdout` can be found in the `pf` _package_, which we specified on the first line. 
-
-Let's add another import right below it:
-
-```
-import pf.Stdin
-```
-
-Now we can also use things from `Stdin`. 
-
 ## The `main!` function
 
 Let's take a look at `main!` next:
 
 ```ruby
 main! = |_args| {
-    Stdout.line!("Hello, World!")
+    echo!("Hello, World!")
     Ok({})
 }
 ```
@@ -87,42 +65,12 @@ In Roc, we call functions that can run side effects _effectful functions_,  and 
 we always name them with a `!` at the end of their names. In contrast, 
 [_pure functions_](https://en.wikipedia.org/wiki/Pure_function) don't have a `!` at the end of their names.
 
-## Standard I/O
-
-As you might guess, this prints the line `"Hello, World!"` to stdout:
-
-```ruby
-Stdout.line!("Hello, World!")
-```
-
-As you might also guess, `Stderr.line!` prints to stderr instead. (After adding an
-`import pf.Stderr` above, of course!)
-
-### Reading from stdin
-
-We can make our program interactive by replacing `main!` with a mix of `Stdout` and `Stdin`:
-
-```ruby
-main! = |_args| {
-    Stdout.line!("What's your name?")
-    name = Stdin.line!()
-    Stdout.line!("Hello, ${name}!")
-    Ok({})
-}
-```
-
-Just like with `main!`, the functions `Stdout.line!` and `Stdin.line!` end in an `!` because they're effectful functions:
-- `Stdout.line!` has the side effect of printing to stdout
-- `Stdin.line!` reads from standard in, meaning it can potentially return a different answer every time you call it (unlike a pure function, which must return the same answer when given the same arguments). 
-
-> `Stdin.line!` also has the subtle side effect of consuming data from the sdtin stream, although we'd only notice that side effect if we were reading from the same stdin stream in parallel.
-
 ### Constants
 
 This line defines a new _constant_ called `name`:
 
 ```ruby
-name = Stdin.line!()
+name = "Rocco"
 ```
 
 Constants should not be reassigned or shadowed, if you try to do `name =` again in the same scope, 
@@ -131,13 +79,13 @@ shadowing if you want but the non-zero exit code prevents it from ending up in p
 
 ### String interpolation
 
-The string `"Hello, ${name}!"` will evaluate to `"Hello, "` followed by whatever `name` is, followed by `"!"`.
+The string `"Hello, ${name}!"` will evaluate to `"Hello, Rocco!"`.
 
 Note that `name` must be a string! Roc's string interpolation does not automatically convert other types
 to strings. For example, if you wanted to print an integer you'd need to call `to_str` on it like so:
 
 ```ruby
-Stdout.line!("Number of things: ${thing_count.to_str()}")
+echo!("Number of things: ${thing_count.to_str()}")
 ```
 
 You can put any expression you like inside string interpolation, although it all has to be on a single line.
@@ -145,10 +93,10 @@ You can put any expression you like inside string interpolation, although it all
 If you really wanted to, you could do something like this:
 
 ```ruby
-Stdout.line!("Answer: ${((numerator / denominator) + 1).negate().to_str()}")
+echo!("Answer: ${((numerator / denominator) + 1).negate().to_str()}")
 ```
 
-...but at that point it'd probably be easier to read if extracted that expression into a constant.
+...but at that point it'd probably be easier to read if you extracted that expression into a constant.
 
 ## `for` and `fold`
 
@@ -229,7 +177,7 @@ Here's an example of a block expression:
 answer = {
     inner_constant = foo - 1
     
-    Stdout.line!("Inner constant: ${inner_constant.to_str()}")
+    echo!("Inner constant: ${inner_constant.to_str()}")
     
     inner_constant.abs()
 }
@@ -248,13 +196,13 @@ and expressions is:
 - A _statement_ does not.
 
 `for` loops and constant declarations like `inner_constant =` are statements. Since statements don't evaluate to
-values, you can't do things like pass them as function arguments. You couldn't write `Stdout.line!(for ...)` or
-`Stdout.line!(inner_constant = ...)` - you'd get a compile-time error if you did.
+values, you can't do things like pass them as function arguments. You couldn't write `echo!(for ...)` or
+`echo!(inner_constant = ...)` - you'd get a compile-time error if you did.
 
 Blocks are expressions, so you *could* write something like:
 
 ```ruby
-Stdout.line!({
+echo!({
     for ... {
       
     }
@@ -296,11 +244,11 @@ digits_to_num = |digits| {
 }
 ```
 
-The current tutorial—which is for an older version of Roc—has [a useful section on `crash`](https://www.roc-lang.org/tutorial#crashing). The section on [crashing for error handling](https://www.roc-lang.org/tutorial#crashing-for-error-handling)
+The old tutorial for Roc alpha4 has [a useful section on `crash`](https://alpha4.roc-lang.org/tutorial#crashing). The section on [crashing for error handling](https://alpha4.roc-lang.org/tutorial#crashing-for-error-handling)
 is especially important, and has been copy/pasted here:
 
 > `crash` is not for error handling.
-> The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in [unreachable branches](https://www.roc-lang.org/tutorial#crashing-in-unreachable-branches)), or where graceful error handling is infeasible (like running out of memory).
+> The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in [unreachable branches](https://alpha4.roc-lang.org/tutorial#crashing-in-unreachable-branches)), or where graceful error handling is infeasible (like running out of memory).
 > Errors that are recoverable should be represented using normal Roc types (like `Try`) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
 
 Just like `return`, if you use `crash` in a block, you may get a warning if any statements or expressions 
@@ -309,6 +257,11 @@ come after it in the block, as they will not be executed!
 ### `expect` statements
 
 We mentioned `expect` earlier - if you put these at the top level of your file, they will be run whenever `roc test` runs.
+
+You can also put them in blocks, in which case they will work essentially like a `crash` when you're doing `roc test` or
+a debug build of `roc`, but when you do `roc --opt=speed`, they will be skipped.
+
+> Note: `--opt=speed` does not discard `expect`s yet but it could be implemented at any moment.
 
 ```ruby
 digits_to_num = |digits| {
@@ -323,9 +276,6 @@ digits_to_num = |digits| {
 }
 ```
 
-You can also put them in blocks, in which case they will work essentially like a `crash` when you're doing `roc test` or
-a debug build of `roc`, but when you do `roc --optimize`, they will be skipped.
-
 Importantly, these are _not_ production [assertions](https://en.wikipedia.org/wiki/Assertion_(software_development))! 
 The point is that these are checks of things you assume will be true, and if they turn out not to be true, 
 you would like to be alerted about the assumption proving false during development or when running test. It is the 
@@ -338,7 +288,7 @@ For example, here are three different ways you can handle an assumption turning 
 
 All three of these have different tradeoffs, and different situations can reasonably call for one over the others.
 
-The point of `expect` working the way it does is that it does not run in `--optimize` builds at all, 
+The point of `expect` working the way it does is that it does not run in `--opt=speed` builds at all, 
 so it does not have production tradeoffs! You can use it as often as you like, and the consequences will 
 only be felt during development.
 
@@ -351,6 +301,7 @@ main! = |_args| {
     x = 5
     
     dbg x
+    # dbg(x) works too
     
     Ok({})
 }
@@ -593,6 +544,7 @@ So far we haven't seen any types. That's because although Roc is a statically ty
 of everything you write. All type annotations in Roc are optional, but the compiler still infers every type, so you'll
 still get compile-time errors if you mix up types. Technically, Roc has [sound](https://en.wikipedia.org/wiki/Type_safety#Definitions), [decidable](https://en.wikipedia.org/wiki/Type_system), [principal](https://en.wikipedia.org/wiki/Principal_type) static type inference. All Roc values are semantically immutable, making them free of [Data races](https://en.wikipedia.org/wiki/Race_condition#Data_race) as well.
 
+<!-- TODO not implemented yet
 Roc has a "nonblocking compilation" design philosophy. This means that `roc` will still run your program and `roc test`
 will still run your tests, even if you have compile-time errors—including static type mismatches. The assumption is 
 that your editor will have tooling to tell you about any compile-time errors, so if you're choosing to run anyway, 
@@ -600,6 +552,7 @@ you want to be unblocked to try something out despite knowing there are problems
 
 You can use `roc check && roc` for a one-line command that will check for errors first and then only actually run the 
 program if there were none.
+-->
 
 ### Type Annotations
 
@@ -695,25 +648,26 @@ This is a _nominal_ type definition.
 
 ## Dependencies
 
-Earlier we mentioned that we'd revisit the long URL in the first line of `main.roc`:
+The initial hello world example at the start is a special kind of app, a headerless app.
+Many Roc apps you encounter will have a header similar to this one:
 
 ```ruby
 app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.6/2BfGn4M9uWJNhDVeMghGeXNVDFijMfPsmmVeo6M4QjKX.tar.zst" }
 ```
 
-Now is the time to revisit it! Here is what this is doing:
+Let's break the header down:
 
 - `app` means this .roc file specifies a Roc _application_ - an executable, as opposed to a bundle of reusable code like a package
 - `[main!]` specifies the application's *entrypoint*. Some applications have multiple entrypoints, but it's most common to have just one—and also it's most common for that one to be named `main!`
-- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `pg: "https://..."` to add a dependency on [roc-pg](https://github.com/agu-z/roc-pg) for PostgreSQL access, at which point we'd be able to do things like `import pg.Cmd` and so on.
+- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `pg: "https://..."` to add a dependency on [roc-pg (uses Roc alpha4)](https://github.com/agu-z/roc-pg) for PostgreSQL access, at which point we'd be able to do things like `import pg.Cmd` and so on.
 
 ### Platforms
 
 Roc has a first-class concept of _platforms_ and _applications_. You can [read about the design philosophy](https://www.roc-lang.org/platforms), but for our purposes what matters is:
 
 - Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on
-- The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - that's why they're imported as `pf.Stdout` and `pf.Stdin`)
-- Roc's standard library does not include any effectful functions; they all come from the platform. We still have some platforms published in the old version of the compiler (e.g. [basic-cli](https://roc-lang.github.io/basic-cli/0.20.0/Stdout/) and [basic-webserver](https://roc-lang.github.io/basic-webserver/0.13.0/Http/#Request)) but at least as of December 1, 2025, the only platform that has been ported over to the new compiler is the one in this tutorial!
+- The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - they are imported as `pf.Stdout` and `pf.Stdin`)
+- Roc's standard library does not include any effectful functions; they all come from the platform. Most published platforms still use the old version of the compiler (e.g. [basic-cli](https://roc-lang.github.io/basic-cli/0.20.0/Stdout/) and [basic-webserver](https://roc-lang.github.io/basic-webserver/0.13.0/Http/#Request)) but ports are in progress!
 
 ## Additional Resources
 

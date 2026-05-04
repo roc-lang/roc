@@ -16,7 +16,7 @@ type=repl
 » I128.from_str("12345678901234567890")
 ~~~
 # OUTPUT
-Ok(3.140000104904175)
+Ok(3.14)
 ---
 Err(BadNumStr)
 ---

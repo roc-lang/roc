@@ -56,6 +56,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Foo := [A, B].{
+
 	## This is a multi-line doc comment
 	## for a nested type declaration
 	## that spans multiple lines

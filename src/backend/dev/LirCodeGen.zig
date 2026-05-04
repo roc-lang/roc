@@ -7182,7 +7182,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (ite.result_layout == .i128 or ite.result_layout == .u128 or ite.result_layout == .dec) {
                     return .{ .stack_i128 = slot };
                 }
-                return .{ .stack = .{ .offset = slot } };
+                // Use the layout-derived size so consumers (e.g. F32 readers) know
+                // how many bytes are actually valid in the slot.
+                return self.stackLocationForLayout(ite.result_layout, slot);
             } else if (result_reg) |reg| {
                 return .{ .general_reg = reg };
             } else {
@@ -8177,7 +8179,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const result_layout_val = ls.getLayout(when_expr.result_layout);
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
-            var use_stack_result = result_size > 8;
+            // Floats must use a stack result so the per-branch copy preserves
+            // the f32/f64 bit pattern. Routing them through a general_reg loses
+            // the float encoding (because `stabilize` then spills the reg as a
+            // generic 8-byte qword regardless of layout) and produces garbage
+            // when the result is later read back as a float.
+            const result_is_float = when_expr.result_layout == .f32 or when_expr.result_layout == .f64;
+            var use_stack_result = result_size > 8 or result_is_float;
             const value_layout_val = ls.getLayout(when_expr.value_layout);
             const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
@@ -8536,6 +8544,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             );
                         }
                         return .{ .stack = .{ .offset = result_slot } };
+                    } else if (result_layout_val.tag == .scalar) {
+                        // Scalars routed through the stack (e.g. floats — see
+                        // `use_stack_result` rationale above) need the
+                        // layout-derived size so float readers know how many
+                        // bytes are valid.
+                        return self.stackLocationForLayout(when_expr.result_layout, result_slot);
                     }
                 }
                 if (builtin.mode == .Debug) {
@@ -12875,8 +12889,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Convert callable values stored on stack to a concrete stack ValueLocation
         /// based on the expected return layout.
-        fn normalizeResultLocForLayout(_: *Self, loc: ValueLocation, _: layout.Idx) ValueLocation {
-            return loc;
+        fn normalizeResultLocForLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) ValueLocation {
+            return self.coerceImmediateToLayout(loc, ret_layout);
         }
 
         /// Normalize immediate literal representation to match the target layout.
@@ -14623,17 +14637,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     else => unreachable,
                                 }
                             } else {
-                                // f32/f64: float register return
+                                // f32/f64: float register return.
+                                // The caller's `saveCallReturnValue` expects V0/XMM0 to hold
+                                // an F64-widened value, so narrow F32 stack carriers up to F64.
+                                const ret_freg: FloatReg = if (comptime target.toCpuArch() == .aarch64) .V0 else .XMM0;
                                 switch (loc) {
                                     .float_reg => |freg| {
                                         if (comptime target.toCpuArch() == .aarch64) {
-                                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                                            if (freg != ret_freg) try self.codegen.emit.fmovRegReg(.double, ret_freg, freg);
                                         } else {
-                                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
+                                            if (freg != ret_freg) try self.codegen.emit.movsdRegReg(ret_freg, freg);
                                         }
                                     },
                                     .stack => |s| {
-                                        try self.codegen.emitLoadStackF64(if (comptime target.toCpuArch() == .aarch64) .V0 else .XMM0, s.offset);
+                                        if (s.size == .dword) {
+                                            // Stack slot holds real 4-byte F32 bits; load as single
+                                            // and extend to double so the caller's F64→F32 narrowing
+                                            // recovers the original value.
+                                            if (comptime target.toCpuArch() == .aarch64) {
+                                                const bits_reg = try self.allocTempGeneral();
+                                                try self.codegen.emitLoadStack(.w32, bits_reg, s.offset);
+                                                try self.codegen.emit.fmovFloatFromGen(.single, ret_freg, bits_reg);
+                                                self.codegen.freeGeneral(bits_reg);
+                                                try self.codegen.emit.fcvtFloatFloat(.double, ret_freg, .single, ret_freg);
+                                            } else {
+                                                try self.codegen.emit.movssRegMem(ret_freg, .RBP, s.offset);
+                                                try self.codegen.emit.cvtss2sdRegReg(ret_freg, ret_freg);
+                                            }
+                                        } else {
+                                            try self.codegen.emitLoadStackF64(ret_freg, s.offset);
+                                        }
                                     },
                                     .immediate_f64 => |val| {
                                         const bits: u64 = @bitCast(val);

@@ -3038,7 +3038,8 @@ pub const Interpreter = struct {
                 const rhs = try self.extractNumericValue(args[1]);
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
-                        .int => |r| l > r,
+                        // Use u128-aware comparison so values > i128.max don't appear negative.
+                        .int => orderIntStackValues(args[0], args[1]) == .gt,
                         // Int vs Dec: convert Dec to Int for comparison
                         .dec => |r| l > r.toWholeInt(),
                         else => return error.TypeMismatch,
@@ -3067,7 +3068,7 @@ pub const Interpreter = struct {
                 const rhs = try self.extractNumericValue(args[1]);
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
-                        .int => |r| l >= r,
+                        .int => orderIntStackValues(args[0], args[1]) != .lt,
                         .dec => |r| l >= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
@@ -3094,7 +3095,7 @@ pub const Interpreter = struct {
                 const rhs = try self.extractNumericValue(args[1]);
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
-                        .int => |r| l < r,
+                        .int => orderIntStackValues(args[0], args[1]) == .lt,
                         .dec => |r| l < r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
@@ -3121,7 +3122,7 @@ pub const Interpreter = struct {
                 const rhs = try self.extractNumericValue(args[1]);
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
-                        .int => |r| l <= r,
+                        .int => orderIntStackValues(args[0], args[1]) != .gt,
                         .dec => |r| l <= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
@@ -4586,7 +4587,7 @@ pub const Interpreter = struct {
 
         var float_buf: [400]u8 = undefined;
         const str_bytes = if (T == f32)
-            i128h.f64_to_str(&float_buf, @as(f64, @floatCast(float_value)))
+            i128h.f32_to_str(&float_buf, float_value)
         else
             i128h.f64_to_str(&float_buf, float_value);
 
@@ -5867,7 +5868,28 @@ pub const Interpreter = struct {
         };
     }
 
+    /// Order two integer StackValues, using unsigned comparison when either side is u128.
+    /// This is needed because asI128() bit-casts u128 values, so values > i128.max
+    /// would compare as negative under signed comparison.
+    fn orderIntStackValues(lhs: StackValue, rhs: StackValue) std.math.Order {
+        std.debug.assert(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int);
+        std.debug.assert(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int);
+        const lhs_prec = lhs.layout.data.scalar.data.int;
+        const rhs_prec = rhs.layout.data.scalar.data.int;
+        if (lhs_prec == .u128 or rhs_prec == .u128) {
+            return std.math.order(lhs.asU128(), rhs.asU128());
+        }
+        return std.math.order(lhs.asI128(), rhs.asI128());
+    }
+
     fn compareNumericScalars(self: *Interpreter, lhs: StackValue, rhs: StackValue) !std.math.Order {
+        // Handle int-vs-int with u128-aware comparison directly to avoid the i128 round-trip
+        // in extractNumericValue, which is lossy for u128 values > i128.max.
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
+            lhs.layout.data.scalar.tag == .int and rhs.layout.data.scalar.tag == .int)
+        {
+            return orderIntStackValues(lhs, rhs);
+        }
         const lhs_value = try self.extractNumericValue(lhs);
         const rhs_value = try self.extractNumericValue(rhs);
         return self.orderNumericValues(lhs_value, rhs_value);
@@ -13120,21 +13142,45 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F32 type for method dispatch to work.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        var final_rt_var = layout_rt_var;
+        if (is_flex_or_rigid) {
             const f32_content = try self.mkNumberTypeContentRuntime("F32");
-            break :blk try self.runtime_types.freshFromContent(f32_content);
-        } else layout_rt_var;
-
-        const value = try self.pushRaw(layout_val, 0, final_rt_var);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(f32, ptr, lit.value, @src());
+            final_rt_var = try self.runtime_types.freshFromContent(f32_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
         }
+
+        // Dispatch on the layout's float precision so the slot size and the
+        // stored bytes always agree, even if a wider/narrower numeric type was
+        // unified onto this literal.
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
+                        ptr.* = lit.value;
+                    },
+                    .f64 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
+                        ptr.* = @floatCast(lit.value);
+                    },
+                    .dec => {
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
+                        ptr.* = RocDec.fromF64(@floatCast(lit.value)) orelse return error.TypeMismatch;
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
         return value;
     }
 
@@ -13149,21 +13195,47 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F64 type for method dispatch to work.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        var final_rt_var = layout_rt_var;
+        if (is_flex_or_rigid) {
             const f64_content = try self.mkNumberTypeContentRuntime("F64");
-            break :blk try self.runtime_types.freshFromContent(f64_content);
-        } else layout_rt_var;
-
-        const value = try self.pushRaw(layout_val, 0, final_rt_var);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(f64, ptr, lit.value, @src());
+            final_rt_var = try self.runtime_types.freshFromContent(f64_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
         }
+
+        // The literal's value is f64 but the resolved layout may be F32 (when the
+        // literal was created from an unsuffixed source value too large for Dec
+        // and the surrounding context constrained the type to F32) or Dec.
+        // Dispatch on the layout's float precision so the slot size and stored
+        // bytes always agree.
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
+                        ptr.* = @floatCast(lit.value);
+                    },
+                    .f64 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
+                        ptr.* = lit.value;
+                    },
+                    .dec => {
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
+                        ptr.* = RocDec.fromF64(lit.value) orelse return error.TypeMismatch;
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
         return value;
     }
 

@@ -1104,7 +1104,7 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
     var buf: [400]u8 = undefined;
     const result = if (is_f32) blk: {
         const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
-        break :blk i128h.f64_to_str(&buf, @as(f64, @floatCast(f32_val)));
+        break :blk i128h.f32_to_str(&buf, f32_val);
     } else blk: {
         const f64_val: f64 = @bitCast(val_bits);
         break :blk i128h.f64_to_str(&buf, f64_val);

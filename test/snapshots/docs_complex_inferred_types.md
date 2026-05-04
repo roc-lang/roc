@@ -53,7 +53,7 @@ main_for_host = main
     (entry
       (name "get_name")
       (kind value)
-      (type (fn (record (ext (var "a")) (field "name" (var "b"))) (var "b")))
+      (type (fn (record (open) (ext (var "a")) (field "name" (var "b"))) (var "b")))
       (doc "Gets the name field.")
     )
     (entry

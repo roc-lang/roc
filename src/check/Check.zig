@@ -4495,7 +4495,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     does_fx = try self.checkExpr(call.func, env, .no_expectation) or does_fx;
-                    const func_var = ModuleEnv.varFrom(call.func);
+                    const call_func_expr_var = ModuleEnv.varFrom(call.func);
+
+                    // If the function was generalized (e.g. an immediately-invoked
+                    // lambda `(|x| ...)(arg)`), instantiate it so the call site gets
+                    // fresh type variables. Without this, the generalized vars would
+                    // be unified directly with concrete arg types, which can leak
+                    // generalization into the enclosing function's types.
+                    const func_var = blk_instantiate: {
+                        const resolved = self.types.resolveVar(call_func_expr_var);
+                        if (resolved.desc.rank == Rank.generalized) {
+                            break :blk_instantiate try self.instantiateVar(
+                                call_func_expr_var,
+                                env,
+                                .use_last_var,
+                            );
+                        } else {
+                            break :blk_instantiate call_func_expr_var;
+                        }
+                    };
 
                     // Resolve the func var
                     const resolved_func = self.types.resolveVar(func_var).desc.content;

@@ -578,6 +578,16 @@ fn resolveModulePathFromBase(
     };
 }
 
+/// Returns true when the annotation is the synthetic `#others` rigid used for
+/// anonymous open extensions (`..`). Such extensions should be rendered as
+/// `..` with no trailing name, so the caller should skip extracting the ext.
+fn isAnonymousOpenExt(module_env: *const ModuleEnv, ext_idx: CIR.TypeAnno.Idx) bool {
+    const anno = module_env.store.getTypeAnno(ext_idx);
+    if (anno != .rigid_var) return false;
+    const name = module_env.getIdentText(anno.rigid_var.name);
+    return name.len > 0 and name[0] == '#';
+}
+
 /// Extract a CIR TypeAnno as a structured DocType.
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
@@ -671,13 +681,18 @@ fn extractTypeAnnoAsDocType(
             }
 
             var ext: ?*const DocType = null;
+            var is_open = false;
             if (tu.ext) |ext_idx| {
-                ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                is_open = true;
+                if (!isAnonymousOpenExt(module_env, ext_idx)) {
+                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                }
             }
 
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = tags,
                 .ext = ext,
+                .is_open = is_open,
             } });
         },
         .tag => |t| {
@@ -695,6 +710,7 @@ fn extractTypeAnnoAsDocType(
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = tags,
                 .ext = null,
+                .is_open = false,
             } });
         },
         .tuple => |t| {
@@ -719,13 +735,18 @@ fn extractTypeAnnoAsDocType(
             }
 
             var ext: ?*const DocType = null;
+            var is_open = false;
             if (r.ext) |ext_idx| {
-                ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                is_open = true;
+                if (!isAnonymousOpenExt(module_env, ext_idx)) {
+                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                }
             }
 
             return try allocDocType(gpa, .{ .record = .{
                 .fields = fields,
                 .ext = ext,
+                .is_open = is_open,
             } });
         },
         .@"fn" => |f| {
@@ -1084,12 +1105,14 @@ fn extractFlatType(
             return try allocDocType(gpa, .{ .record = .{
                 .fields = try gpa.alloc(DocType.Field, 0),
                 .ext = null,
+                .is_open = false,
             } });
         },
         .empty_tag_union => {
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = try gpa.alloc(DocType.Tag, 0),
                 .ext = null,
+                .is_open = false,
             } });
         },
     }
@@ -1186,30 +1209,42 @@ fn extractRecord(
     // Follow the extension chain
     var ext = record.ext;
     var ext_doc_type: ?*const DocType = null;
+    var is_open = false;
     var guard_count: usize = 0;
     while (guard_count < 100) : (guard_count += 1) {
         const ext_resolved = types.resolveVar(ext);
         switch (ext_resolved.desc.content) {
             .flex => |flex| {
-                const var_name = if (flex.name) |ident_idx|
-                    try gpa.dupe(u8, idents.getText(ident_idx))
+                const ident_text: ?[]const u8 = if (flex.name) |ident_idx|
+                    idents.getText(ident_idx)
                 else
-                    try ctx.getFlexVarName(ext_resolved.var_);
+                    null;
 
                 // Collect constraints from the extension variable
                 const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
-                for (constraints) |constraint| {
-                    if (constraint.origin != .from_numeral) {
-                        const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
-                        try ctx.constraints_list.append(gpa, .{
-                            .dispatcher_name = dispatcher_name,
-                            .fn_name_text = idents.getText(constraint.fn_name),
-                            .fn_var = constraint.fn_var,
-                        });
+                if (constraints.len > 0) {
+                    const dispatcher_name = if (ident_text) |t| t else try ctx.getFlexVarName(ext_resolved.var_);
+                    for (constraints) |constraint| {
+                        if (constraint.origin != .from_numeral) {
+                            try ctx.constraints_list.append(gpa, .{
+                                .dispatcher_name = dispatcher_name,
+                                .fn_name_text = idents.getText(constraint.fn_name),
+                                .fn_var = constraint.fn_var,
+                            });
+                        }
                     }
                 }
 
-                ext_doc_type = try allocDocType(gpa, .{ .type_var = var_name });
+                is_open = true;
+                if (ident_text) |t| {
+                    if (t.len == 0 or t[0] == '#') {
+                        // Synthetic anonymous-open name — render as `..` with no name.
+                    } else {
+                        ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, t) });
+                    }
+                } else {
+                    ext_doc_type = try allocDocType(gpa, .{ .type_var = try ctx.getFlexVarName(ext_resolved.var_) });
+                }
                 break;
             },
             .rigid => |rigid| {
@@ -1224,7 +1259,10 @@ fn extractRecord(
                     });
                 }
 
-                ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
+                is_open = true;
+                if (var_name.len == 0 or var_name[0] != '#') {
+                    ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
+                }
                 break;
             },
             .alias => |alias| {
@@ -1270,6 +1308,7 @@ fn extractRecord(
     return try allocDocType(gpa, .{ .record = .{
         .fields = doc_fields,
         .ext = ext_doc_type,
+        .is_open = is_open,
     } });
 }
 
@@ -1283,6 +1322,7 @@ fn extractRecordUnbound(
         return try allocDocType(gpa, .{ .record = .{
             .fields = try gpa.alloc(DocType.Field, 0),
             .ext = null,
+            .is_open = false,
         } });
     }
 
@@ -1308,6 +1348,7 @@ fn extractRecordUnbound(
     return try allocDocType(gpa, .{ .record = .{
         .fields = fields,
         .ext = null,
+        .is_open = false,
     } });
 }
 
@@ -1360,11 +1401,16 @@ fn extractTagUnion(
 
     // Handle extension variable
     var ext_type: ?*const DocType = null;
+    var is_open = false;
     const ext_resolved = types.resolveVar(tag_union.ext);
     switch (ext_resolved.desc.content) {
         .flex => |flex| {
             if (flex.name) |ident_idx| {
-                ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(ident_idx)) });
+                const name = idents.getText(ident_idx);
+                is_open = true;
+                if (name.len > 0 and name[0] != '#') {
+                    ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, name) });
+                }
             }
             // unnamed flex with no constraints = closed union (no extension)
 
@@ -1379,12 +1425,16 @@ fn extractTagUnion(
             }
         },
         .rigid => |rigid| {
-            ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(rigid.name)) });
+            const name = idents.getText(rigid.name);
+            is_open = true;
+            if (name.len > 0 and name[0] != '#') {
+                ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, name) });
+            }
 
             const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = idents.getText(rigid.name),
+                    .dispatcher_name = name,
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });
@@ -1393,10 +1443,12 @@ fn extractTagUnion(
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
             else => {
+                is_open = true;
                 ext_type = try extractDocTypeInner(ctx, tag_union.ext);
             },
         },
         .alias => {
+            is_open = true;
             ext_type = try extractDocTypeInner(ctx, tag_union.ext);
         },
         .err => {},
@@ -1406,6 +1458,7 @@ fn extractTagUnion(
     return try allocDocType(gpa, .{ .tag_union = .{
         .tags = tags_slice,
         .ext = ext_type,
+        .is_open = is_open,
     } });
 }
 

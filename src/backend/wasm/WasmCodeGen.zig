@@ -586,30 +586,57 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             try self.emitFpOffset(base_offset);
         },
         .i128_literal => |val| {
-            // i128 stored in 16 bytes of linear memory
-            const base_offset = try self.allocStackMemory(16, 8);
-            const base_local = self.fp_local;
-
             const unsigned: u128 = @bitCast(val.value);
             const low: i64 = @bitCast(@as(u64, @truncate(unsigned)));
             const high: i64 = @bitCast(@as(u64, @truncate(unsigned >> 64)));
 
-            // Store low 8 bytes
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, low) catch return error.OutOfMemory;
-            try self.emitI64Store(base_offset);
+            // MirToLir lowers integer literals exceeding maxInt(i64) to i128_literal
+            // while preserving the original scalar layout (e.g., U64 max stays U64).
+            // Emit a scalar constant directly when the layout is primitive.
+            switch (WasmLayout.wasmReprWithStore(val.layout_idx, self.getLayoutStore())) {
+                .primitive => |vt| switch (vt) {
+                    .i32 => {
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, @truncate(low)) catch return error.OutOfMemory;
+                    },
+                    .i64 => {
+                        self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI64(self.allocator, &self.body, low) catch return error.OutOfMemory;
+                    },
+                    .f32 => {
+                        self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+                        const bytes: [4]u8 = @bitCast(@as(f32, @floatFromInt(val.value)));
+                        self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                    },
+                    .f64 => {
+                        self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+                        const bytes: [8]u8 = @bitCast(@as(f64, @floatFromInt(val.value)));
+                        self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                    },
+                },
+                .stack_memory => {
+                    // i128/u128/dec — store 16 bytes in linear memory and push pointer.
+                    const base_offset = try self.allocStackMemory(16, 8);
+                    const base_local = self.fp_local;
 
-            // Store high 8 bytes
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, high) catch return error.OutOfMemory;
-            try self.emitI64Store(base_offset + 8);
+                    // Store low 8 bytes
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, low) catch return error.OutOfMemory;
+                    try self.emitI64Store(base_offset);
 
-            // Push pointer to the 16-byte value
-            try self.emitFpOffset(base_offset);
+                    // Store high 8 bytes
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, high) catch return error.OutOfMemory;
+                    try self.emitI64Store(base_offset + 8);
+
+                    // Push pointer to the 16-byte value
+                    try self.emitFpOffset(base_offset);
+                },
+            }
         },
         .block => |b| {
             // Process statements (let bindings)
@@ -2258,7 +2285,8 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .i32,
-        .i128_literal, .dec_literal => .i32, // pointer to stack memory
+        .i128_literal => |i| self.resolveValType(i.layout_idx),
+        .dec_literal => .i32, // pointer to stack memory
         .block => |b| self.exprValType(b.final_expr),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .cell_load => |l| self.resolveValType(l.layout_idx),
@@ -2309,7 +2337,8 @@ fn exprByteSize(self: *Self, expr_id: LirExprId) u32 {
 fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .dec_literal, .i128_literal => true, // 16 bytes in stack memory
+        .dec_literal => true, // 16 bytes in stack memory
+        .i128_literal => |i| self.isCompositeLayout(i.layout_idx),
         .str_literal => true, // 12-byte RocStr in stack memory
         .list => true, // 12-byte RocList in stack memory
         .empty_list => true, // 12-byte RocList in stack memory
@@ -3198,10 +3227,22 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
                 const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             },
-            .num_is_gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
-            .num_is_gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
-            .num_is_lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
-            .num_is_lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
+            .num_is_gt => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gt, is_signed);
+            },
+            .num_is_gte => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gte, is_signed);
+            },
+            .num_is_lt => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .lt, is_signed);
+            },
+            .num_is_lte => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .lte, is_signed);
+            },
             .num_abs_diff => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
                 try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gte, is_signed);
@@ -3650,11 +3691,6 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 }
 
 const I128CmpOp = enum { lt, lte, gt, gte };
-
-/// Emit signed i128 comparison. Pushes i32 (0 or 1) result.
-fn emitI128Compare(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp) Allocator.Error!void {
-    return self.emitI128CompareWithSignedness(lhs_local, rhs_local, cmp_op, true);
-}
 
 fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp, is_signed: bool) Allocator.Error!void {
     // Signed i128 comparison strategy:

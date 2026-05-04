@@ -353,7 +353,7 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     var fmt_buf: [400]u8 = undefined;
     const formatted = if (is_f32) blk: {
         const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
-        break :blk i128h.f64_to_str(&fmt_buf, @as(f64, @floatCast(f32_val)));
+        break :blk i128h.f32_to_str(&fmt_buf, f32_val);
     } else blk: {
         const f64_val: f64 = @bitCast(val_bits);
         break :blk i128h.f64_to_str(&fmt_buf, f64_val);

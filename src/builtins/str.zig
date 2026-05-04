@@ -628,7 +628,7 @@ fn strFromFloatHelp(
 ) RocStr {
     var buf: [32]u8 = undefined;
     const result = if (T == f32)
-        compiler_rt_128.f64_to_str(&buf, @as(f64, @floatCast(float)))
+        compiler_rt_128.f32_to_str(&buf, float)
     else
         compiler_rt_128.f64_to_str(&buf, float);
 

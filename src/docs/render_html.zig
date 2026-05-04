@@ -12,6 +12,7 @@ const DocType = DocModel.DocType;
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
 const embedded_js = @embedFile("static/search.js");
+const embedded_favicon = @embedFile("static/favicon.svg");
 
 const Writer = *std.Io.Writer;
 
@@ -52,6 +53,11 @@ const SidebarNode = struct {
     }
 };
 
+/// URL prefix for the published Builtin module documentation, used when the
+/// docs being generated reference builtin types but the Builtin module is not
+/// part of the package being documented.
+const builtins_docs_url_prefix = "https://roc-lang.org/builtins/main/#Builtin.";
+
 /// Context for rendering, shared across all pages.
 const RenderContext = struct {
     package_docs: *const DocModel.PackageDocs,
@@ -64,17 +70,23 @@ const RenderContext = struct {
     /// When true, renderDocTypeHtml emits plain <span> instead of <a> for type
     /// references. Used inside search entries to avoid invalid nested <a> tags.
     suppress_type_links: bool = false,
+    /// True when the package being documented is Builtin itself, so references
+    /// to builtin types stay local instead of pointing at roc-lang.org.
+    documenting_builtin: bool = false,
 
     fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) RenderContext {
         var known = std.StringHashMapUnmanaged(void){};
+        var documenting_builtin = false;
         for (package_docs.modules) |mod| {
             known.put(gpa, mod.name, {}) catch {};
+            if (std.mem.eql(u8, mod.name, "Builtin")) documenting_builtin = true;
         }
         return .{
             .package_docs = package_docs,
             .known_modules = known,
             .current_module = null,
             .current_module_entries = null,
+            .documenting_builtin = documenting_builtin,
         };
     }
 
@@ -131,6 +143,7 @@ pub fn renderPackageDocs(
 fn writeStaticAssets(dir: std.fs.Dir) !void {
     try dir.writeFile(.{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
+    try dir.writeFile(.{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
 fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir) !void {
@@ -248,6 +261,9 @@ fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) !void {
     try writeHtmlEscaped(w, title);
     try w.writeAll("</title>\n");
     try w.writeAll("    <meta name=\"viewport\" content=\"width=device-width\">\n");
+    try w.writeAll("    <link rel=\"icon\" type=\"image/svg+xml\" href=\"");
+    try w.writeAll(base);
+    try w.writeAll("favicon.svg\">\n");
     try w.writeAll("    <link rel=\"stylesheet\" href=\"");
     try w.writeAll(base);
     try w.writeAll("styles.css\">\n");
@@ -282,25 +298,34 @@ fn writeBodyClose(w: Writer) !void {
 }
 
 const menu_toggle_svg =
-    \\<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-    \\    <path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/>
+    \\<svg viewBox="0 6 18 12" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+    \\    <path d="M0 6h18v2H0V6zm0 5h18v2H0v-2zm0 5h18v2H0v-2z"/>
     \\</svg>
 ;
 
 fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
     try w.writeAll("    <main>\n");
-    try w.writeAll("        <button class=\"menu-toggle\" aria-label=\"Toggle sidebar\">");
-    try w.writeAll(menu_toggle_svg);
-    try w.writeAll("</button>\n");
     try w.writeAll("        <form id=\"module-search-form\">\n");
     try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search Documentation\" autocomplete=\"off\" />\n");
+    // The no-JS input must be a sibling (not nested inside <noscript>) so it
+    // participates in the form's flex layout. With JS enabled it is hidden by
+    // default CSS; the <noscript><style> below swaps which input is visible
+    // when JS is disabled. Avoid putting layout-relevant elements inside
+    // <noscript> — Chrome can render them as literal text.
+    try w.writeAll("            <input type=\"search\" id=\"module-search-nojs\" placeholder=\"Enable JavaScript to search\" autocomplete=\"off\" disabled aria-label=\"Search requires JavaScript\" />\n");
+    try w.writeAll("            <noscript><style>#module-search{display:none}#module-search-nojs{display:block}</style></noscript>\n");
+    try w.writeAll("            <button class=\"menu-toggle\" type=\"button\" aria-label=\"Toggle sidebar\">");
+    try w.writeAll(menu_toggle_svg);
+    try w.writeAll("</button>\n");
     try w.writeAll("            <ul id=\"search-type-ahead\" class=\"hidden\">\n");
     try renderSearchEntries(w, ctx, gpa, base);
     try w.writeAll("            </ul>\n");
     try w.writeAll("        </form>\n");
+    try w.writeAll("        <div class=\"main-content\">\n");
 }
 
 fn writeFooter(w: Writer) !void {
+    try w.writeAll("        </div>\n");
     try w.writeAll("        <footer><p>Made by people who like to make nice things.</p></footer>\n");
 }
 
@@ -534,7 +559,11 @@ fn renderEntryTree(
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
                 try w.writeAll("</a> ");
+                try w.writeAll("<a href=\"#");
+                try writeHtmlEscaped(w, anchor_id);
+                try w.writeAll("\" class=\"entry-name-link\">");
                 try writeHtmlEscaped(w, node.name);
+                try w.writeAll("</a>");
                 try w.print("</h{d}>\n", .{heading_level});
 
                 // Nominal types also show their type definition below the heading
@@ -561,7 +590,7 @@ fn renderEntryTree(
                 try w.writeAll("</a>\n");
                 try writeIndent(w, base + 2);
                 try w.writeAll("<code class=\"entry-signature-code\">");
-                try renderEntrySignature(w, ctx, entry);
+                try renderEntrySignature(w, ctx, entry, anchor_id);
                 try w.writeAll("</code>\n");
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
@@ -619,6 +648,7 @@ const roc_logo_svg =
 fn renderSidebarTree(
     w: Writer,
     module_name: []const u8,
+    module_link_prefix: []const u8,
     node: *SidebarNode,
     depth: usize,
 ) !void {
@@ -635,7 +665,9 @@ fn renderSidebarTree(
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("  <a class=\"sidebar-type-name\" href=\"#");
+            try w.writeAll("  <a class=\"sidebar-type-name\" href=\"");
+            try w.writeAll(module_link_prefix);
+            try w.writeAll("#");
             try writeHtmlEscaped(w, node.full_path);
             try w.writeAll("\">");
             try writeHtmlEscaped(w, node.name);
@@ -648,7 +680,7 @@ fn renderSidebarTree(
 
             // Recurse for children
             for (node.children.items) |child| {
-                try renderSidebarTree(w, module_name, child, depth + 1);
+                try renderSidebarTree(w, module_name, module_link_prefix, child, depth + 1);
             }
 
             try w.writeAll("                        ");
@@ -669,7 +701,9 @@ fn renderSidebarTree(
                 try w.writeAll("                        ");
                 try w.writeAll("<li class=\"sidebar-type\">\n");
                 try w.writeAll("                        ");
-                try w.writeAll("  <a class=\"sidebar-type-name\" href=\"#");
+                try w.writeAll("  <a class=\"sidebar-type-name\" href=\"");
+                try w.writeAll(module_link_prefix);
+                try w.writeAll("#");
                 try writeHtmlEscaped(w, node.full_path);
                 try w.writeAll("\">");
                 try writeHtmlEscaped(w, node.name);
@@ -682,7 +716,9 @@ fn renderSidebarTree(
                 for (0..depth - 1) |_| {
                     try w.writeAll("  ");
                 }
-                try w.writeAll("<li><a href=\"#");
+                try w.writeAll("<li><a href=\"");
+                try w.writeAll(module_link_prefix);
+                try w.writeAll("#");
                 try writeHtmlEscaped(w, node.full_path);
                 try w.writeAll("\">");
                 try writeHtmlEscaped(w, node.name);
@@ -692,7 +728,7 @@ fn renderSidebarTree(
     } else {
         // Root node - just recurse
         for (node.children.items) |child| {
-            try renderSidebarTree(w, module_name, child, depth + 1);
+            try renderSidebarTree(w, module_name, module_link_prefix, child, depth + 1);
         }
     }
 }
@@ -701,6 +737,7 @@ fn renderSidebarEntries(
     w: Writer,
     gpa: std.mem.Allocator,
     module_name: []const u8,
+    module_link_prefix: []const u8,
     entries: []const DocModel.DocEntry,
     _depth: usize,
 ) !void {
@@ -709,7 +746,7 @@ fn renderSidebarEntries(
     const entry_tree = try buildEntryTree(gpa, entries, module_name);
     defer entry_tree.deinit(gpa);
 
-    try renderSidebarTree(w, module_name, entry_tree.root, 0);
+    try renderSidebarTree(w, module_name, module_link_prefix, entry_tree.root, 0);
 }
 
 fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
@@ -741,23 +778,35 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         else
             false;
 
+        // Build the href prefix for entries inside this module so that
+        // clicking a sidebar entry from another module's page navigates to
+        // the correct module page (not just changes the fragment on the
+        // current page).
+        var module_link_prefix = std.ArrayList(u8){};
+        defer module_link_prefix.deinit(gpa);
+        if (ctx.single_module_at_root) {
+            if (base.len == 0) {
+                // Root index page for the single module — same-page anchors.
+            } else {
+                try module_link_prefix.appendSlice(gpa, base);
+            }
+        } else {
+            try module_link_prefix.appendSlice(gpa, base);
+            // module names contain only identifier characters, no escaping needed for href
+            try module_link_prefix.appendSlice(gpa, mod.name);
+            try module_link_prefix.append(gpa, '/');
+        }
+
         try w.writeAll("                <li class=\"sidebar-entry\">\n");
         try w.writeAll("                    <a class=\"sidebar-module-link");
         if (is_active) try w.writeAll(" active");
         try w.writeAll("\" data-module-name=\"");
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("\" href=\"");
-        if (ctx.single_module_at_root) {
-            // Single module rendered at root; link to root
-            if (base.len == 0) {
-                try w.writeAll(".");
-            } else {
-                try w.writeAll(base);
-            }
+        if (module_link_prefix.items.len == 0) {
+            try w.writeAll(".");
         } else {
-            try w.writeAll(base);
-            try writeHtmlEscaped(w, mod.name);
-            try w.writeAll("/");
+            try w.writeAll(module_link_prefix.items);
         }
         try w.writeAll("\">");
         try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
@@ -767,7 +816,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
 
         // Sub-entries - grouped hierarchically
         try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
-        try renderSidebarEntries(w, gpa, mod.name, mod.entries, 0);
+        try renderSidebarEntries(w, gpa, mod.name, module_link_prefix.items, mod.entries, 0);
         try w.writeAll("                    </ul>\n");
         try w.writeAll("                </li>\n");
     }
@@ -870,9 +919,7 @@ fn renderSearchTree(
     }
 }
 
-fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocModel.DocEntry) !void {
-    try w.writeAll("<strong>");
-
+fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
     const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
@@ -880,8 +927,11 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
     else
         entry.name;
 
+    try w.writeAll("<a href=\"#");
+    try writeHtmlEscaped(w, anchor_id);
+    try w.writeAll("\" class=\"entry-name-link\"><strong>");
     try writeHtmlEscaped(w, display_name);
-    try w.writeAll("</strong>");
+    try w.writeAll("</strong></a>");
 
     if (entry.type_signature) |sig| {
         switch (entry.kind) {
@@ -1082,10 +1132,20 @@ fn parseMarkdownLink(text: []const u8, start: usize) ?MarkdownLink {
     if (j >= text.len) return null;
     const label_end = j;
     if (label_end + 1 >= text.len or text[label_end + 1] != '(') return null;
+    // Allow balanced parentheses inside the URL (e.g. a trailing ')' in a
+    // Wikipedia link like `Union_(set_theory)`): only a `)` at depth 0
+    // terminates the destination.
     var k = label_end + 2;
-    while (k < text.len and text[k] != ')') {
-        if (text[k] == '\n') return null;
-        k += 1;
+    var depth: usize = 0;
+    while (k < text.len) : (k += 1) {
+        const c = text[k];
+        if (c == '\n') return null;
+        if (c == '(') {
+            depth += 1;
+        } else if (c == ')') {
+            if (depth == 0) break;
+            depth -= 1;
+        }
     }
     if (k >= text.len) return null;
     return .{
@@ -1221,18 +1281,20 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                 try renderDocTypeHtml(w, ctx, arg, true);
             }
             if (func.effectful) {
-                try w.writeAll(" =&gt; ");
+                try w.writeAll("<span class=\"sig-arrow\"> =&gt; </span>");
             } else {
-                try w.writeAll(" -&gt; ");
+                try w.writeAll("<span class=\"sig-arrow\"> -&gt; </span>");
             }
             try renderDocTypeHtml(w, ctx, func.ret, false);
             if (needs_parens) try w.writeAll(")");
         },
         .record => |rec| {
             try w.writeAll("{ ");
-            if (rec.ext) |ext| {
+            if (rec.is_open) {
                 try w.writeAll("..");
-                try renderDocTypeHtml(w, ctx, ext, false);
+                if (rec.ext) |ext| {
+                    try renderDocTypeHtml(w, ctx, ext, false);
+                }
                 if (rec.fields.len > 0) try w.writeAll(", ");
             }
             for (rec.fields, 0..) |field, i| {
@@ -1259,10 +1321,14 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
                     try w.writeAll(")");
                 }
             }
-            try w.writeAll("]");
-            if (tu.ext) |ext| {
-                try renderDocTypeHtml(w, ctx, ext, false);
+            if (tu.is_open) {
+                if (tu.tags.len > 0) try w.writeAll(", ");
+                try w.writeAll("..");
+                if (tu.ext) |ext| {
+                    try renderDocTypeHtml(w, ctx, ext, false);
+                }
             }
+            try w.writeAll("]");
         },
         .tuple => |tup| {
             try w.writeAll("(");
@@ -1304,39 +1370,6 @@ fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocT
     }
 }
 
-/// Resolve a short type name to its full path within current module
-/// For example, "Dec" -> "Num.Dec"
-fn resolveTypeNameToFullPath(
-    ctx: *const RenderContext,
-    type_name: []const u8,
-) ?[]const u8 {
-    // If it already has a dot, it's a full path
-    if (std.mem.indexOf(u8, type_name, ".") != null) {
-        return type_name;
-    }
-
-    // Search current module entries for a match
-    if (ctx.current_module_entries) |entries| {
-        for (entries) |*entry| {
-            // Check if entry.name ends with ".{type_name}"
-            // This handles cases like "Num.Dec" where type_name is "Dec"
-            if (std.mem.endsWith(u8, entry.name, type_name)) {
-                const dot_pos = entry.name.len - type_name.len;
-                if (dot_pos == 0) {
-                    // Exact match (top-level type like "Bool")
-                    return type_name;
-                } else if (dot_pos > 0 and entry.name[dot_pos - 1] == '.') {
-                    // Match after a dot (nested type like "Num.Dec")
-                    return entry.name;
-                }
-            }
-        }
-    }
-
-    // Default to original name if not found
-    return type_name;
-}
-
 /// Check whether a type reference is linkable.
 fn resolveTypeLink(
     ctx: *const RenderContext,
@@ -1357,7 +1390,15 @@ fn writeTypeLink(
     module_path: []const u8,
     type_name: []const u8,
 ) !void {
-    // Determine the target module
+    // An empty module_path comes from `resolveModulePathFromBase` for `.builtin`
+    // references (Str, List, Bool, etc). When we are not documenting Builtin
+    // itself, point at the published Builtin docs instead of a same-page anchor.
+    if (module_path.len == 0 and !ctx.documenting_builtin) {
+        try w.writeAll(builtins_docs_url_prefix);
+        try writeHtmlEscaped(w, type_name);
+        return;
+    }
+
     const target_module = if (module_path.len > 0)
         module_path
     else if (ctx.current_module) |cur|
@@ -1372,33 +1413,33 @@ fn writeTypeLink(
         return;
     }
 
-    // Check if same module
     const is_same_module = if (ctx.current_module) |cur|
         std.mem.eql(u8, target_module, cur)
     else
         false;
 
-    // Resolve the full path for short names (e.g., "Dec" -> "Num.Dec")
-    const full_type_name = if (is_same_module)
-        resolveTypeNameToFullPath(ctx, type_name) orelse type_name
-    else
-        type_name;
+    // HTML anchors use module-qualified dotted paths (e.g. "Builtin.Str.Utf8Problem").
+    // The compiler may provide a bare type_name ("Str") or a partial path
+    // ("Str.Utf8Problem"); prepend the module name unless it's already there.
+    const already_qualified = std.mem.startsWith(u8, type_name, target_module) and
+        type_name.len > target_module.len and
+        type_name[target_module.len] == '.';
 
     if (is_same_module) {
-        // Same-page link with anchor to the entry's full_path
-        // The entry IDs are the type name path (e.g., "Num.Dec")
         try w.writeAll("#");
-        try writeHtmlEscaped(w, full_type_name);
     } else {
-        // Cross-module link with relative path
-        // If we're in a module page (current_module is set), use "../" prefix
         if (ctx.current_module) |_| {
             try w.writeAll("../");
         }
         try writeHtmlEscaped(w, target_module);
         try w.writeAll("/#");
-        try writeHtmlEscaped(w, full_type_name);
     }
+
+    if (!already_qualified) {
+        try writeHtmlEscaped(w, target_module);
+        try w.writeAll(".");
+    }
+    try writeHtmlEscaped(w, type_name);
 }
 
 fn writeHtmlEscaped(w: Writer, text: []const u8) !void {

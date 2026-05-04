@@ -170,7 +170,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 return switch (scalar.data.frac) {
                     .f32 => blk: {
                         var buf: [400]u8 = undefined;
-                        const slice = i128h.f64_to_str(&buf, @as(f64, self.readF32()));
+                        const slice = i128h.f32_to_str(&buf, self.readF32());
                         break :blk try allocator.dupe(u8, slice);
                     },
                     .f64 => blk: {
