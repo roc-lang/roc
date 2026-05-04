@@ -503,9 +503,12 @@ fn evaluateConstantRoot(
     try artifact.comptime_values.bind(pattern, reified.schema, reified.value);
 
     const requested_source_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
-    const instance_ref = try artifact.const_instances.reserve(allocator, .{
-        .const_ref = const_ref,
-        .requested_source_ty = requested_source_ty,
+    const instance_ref = try artifact.const_instances.reserveRequest(allocator, &artifact.checked_types, .{
+        .key = .{
+            .const_ref = const_ref,
+            .requested_source_ty = requested_source_ty,
+        },
+        .requested_source_ty_payload = root.checked_type,
     });
     artifact.const_instances.fill(instance_ref, .{
         .schema = reified.schema,
@@ -585,7 +588,10 @@ fn evaluateCallableBindingRoot(
         .binding = .{ .top_level = binding_ref },
         .requested_source_fn_ty = requested_source_fn_ty,
     };
-    const instance_ref = try artifact.callable_binding_instances.reserve(allocator, key);
+    const instance_ref = try artifact.callable_binding_instances.reserveRequest(allocator, &artifact.checked_types, .{
+        .key = key,
+        .requested_source_fn_ty_payload = root.checked_type,
+    });
     artifact.callable_binding_instances.markEvaluating(instance_ref);
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
@@ -1881,9 +1887,15 @@ const PrivateCaptureBuilder = struct {
             .value = reified.value,
         });
 
-        const instance_ref = try self.artifact.const_instances.reserve(self.allocator, .{
-            .const_ref = const_ref,
-            .requested_source_ty = leaf.requested_source_ty,
+        const requested_source_ty_payload = self.artifact.checked_types.rootForKey(leaf.requested_source_ty) orelse {
+            compileTimeFinalizationInvariant("serializable private capture leaf requested type has no checked payload");
+        };
+        const instance_ref = try self.artifact.const_instances.reserveRequest(self.allocator, &self.artifact.checked_types, .{
+            .key = .{
+                .const_ref = const_ref,
+                .requested_source_ty = leaf.requested_source_ty,
+            },
+            .requested_source_ty_payload = requested_source_ty_payload,
         });
         self.artifact.const_instances.fill(instance_ref, .{
             .schema = reified.schema,
@@ -1939,9 +1951,15 @@ const PrivateCaptureBuilder = struct {
                 .schema = reified.schema,
                 .value = reified.value,
             });
-            const instance_ref = try self.artifact.const_instances.reserve(self.allocator, .{
-                .const_ref = const_ref,
-                .requested_source_ty = leaf.requested_source_ty,
+            const requested_source_ty_payload = self.artifact.checked_types.rootForKey(leaf.requested_source_ty) orelse {
+                compileTimeFinalizationInvariant("executable private capture leaf requested type has no checked payload");
+            };
+            const instance_ref = try self.artifact.const_instances.reserveRequest(self.allocator, &self.artifact.checked_types, .{
+                .key = .{
+                    .const_ref = const_ref,
+                    .requested_source_ty = leaf.requested_source_ty,
+                },
+                .requested_source_ty_payload = requested_source_ty_payload,
             });
             self.artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,

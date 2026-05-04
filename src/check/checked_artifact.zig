@@ -9247,6 +9247,11 @@ pub const ConstInstantiationKey = struct {
     requested_source_ty: canonical.CanonicalTypeKey,
 };
 
+pub const ConstInstantiationRequest = struct {
+    key: ConstInstantiationKey,
+    requested_source_ty_payload: CheckedTypeId,
+};
+
 pub const ConstInstanceRef = struct {
     owner: CheckedModuleArtifactKey,
     key: ConstInstantiationKey,
@@ -9289,7 +9294,17 @@ pub const ConstInstantiationStore = struct {
         };
     }
 
-    pub fn reserve(
+    pub fn reserveRequest(
+        self: *ConstInstantiationStore,
+        allocator: Allocator,
+        checked_types: *const CheckedTypeStore,
+        request: ConstInstantiationRequest,
+    ) Allocator.Error!ConstInstanceRef {
+        verifyConstInstantiationRequest(checked_types, request);
+        return try self.reserveKey(allocator, request.key);
+    }
+
+    fn reserveKey(
         self: *ConstInstantiationStore,
         allocator: Allocator,
         key: ConstInstantiationKey,
@@ -9446,9 +9461,28 @@ pub const ConstInstantiationStore = struct {
     }
 };
 
+fn verifyConstInstantiationRequest(
+    checked_types: *const CheckedTypeStore,
+    request: ConstInstantiationRequest,
+) void {
+    const idx = @intFromEnum(request.requested_source_ty_payload);
+    if (idx >= checked_types.roots.len) {
+        checkedArtifactInvariant("constant instantiation request type payload is out of range", .{});
+    }
+    const payload_key = checked_types.roots[idx].key;
+    if (!std.mem.eql(u8, &payload_key.bytes, &request.key.requested_source_ty.bytes)) {
+        checkedArtifactInvariant("constant instantiation request key disagrees with checked type payload", .{});
+    }
+}
+
 pub const CallableBindingInstantiationKey = struct {
     binding: ProcedureBindingRef,
     requested_source_fn_ty: canonical.CanonicalTypeKey,
+};
+
+pub const CallableBindingInstantiationRequest = struct {
+    key: CallableBindingInstantiationKey,
+    requested_source_fn_ty_payload: CheckedTypeId,
 };
 
 pub const CallableBindingInstanceRef = struct {
@@ -9500,7 +9534,17 @@ pub const CallableBindingInstantiationStore = struct {
         };
     }
 
-    pub fn reserve(
+    pub fn reserveRequest(
+        self: *CallableBindingInstantiationStore,
+        allocator: Allocator,
+        checked_types: *const CheckedTypeStore,
+        request: CallableBindingInstantiationRequest,
+    ) Allocator.Error!CallableBindingInstanceRef {
+        verifyCallableBindingInstantiationRequest(checked_types, request);
+        return try self.reserveKey(allocator, request.key);
+    }
+
+    fn reserveKey(
         self: *CallableBindingInstantiationStore,
         allocator: Allocator,
         key: CallableBindingInstantiationKey,
@@ -9630,6 +9674,20 @@ pub const CallableBindingInstantiationStore = struct {
         self.* = .{};
     }
 };
+
+fn verifyCallableBindingInstantiationRequest(
+    checked_types: *const CheckedTypeStore,
+    request: CallableBindingInstantiationRequest,
+) void {
+    const idx = @intFromEnum(request.requested_source_fn_ty_payload);
+    if (idx >= checked_types.roots.len) {
+        checkedArtifactInvariant("callable binding instantiation request type payload is out of range", .{});
+    }
+    const payload_key = checked_types.roots[idx].key;
+    if (!std.mem.eql(u8, &payload_key.bytes, &request.key.requested_source_fn_ty.bytes)) {
+        checkedArtifactInvariant("callable binding instantiation request key disagrees with checked type payload", .{});
+    }
+}
 
 fn verifyCallableBindingInstance(
     index: usize,
