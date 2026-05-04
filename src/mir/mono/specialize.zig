@@ -1612,9 +1612,6 @@ const BodyLowerer = struct {
             .checked_body => |body_id| try self.lowerCheckedBody(reserved, fn_ty, body_id),
             .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperDef(reserved, fn_ty, wrapper_id),
             .promoted_callable_wrapper => |wrapper_id| try self.lowerPromotedCallableWrapperDef(reserved, fn_ty, wrapper_id),
-            .hosted_wrapper,
-            .intrinsic_wrapper,
-            => invariantViolation("mono body lowering reached a hosted/intrinsic wrapper template before wrapper lowering was implemented"),
         };
     }
 

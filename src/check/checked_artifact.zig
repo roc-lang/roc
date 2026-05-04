@@ -2564,8 +2564,6 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
 pub const CheckedProcedureBody = union(enum) {
     checked_body: CheckedBodyId,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
-    hosted_wrapper: canonical.HostedWrapperId,
-    intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
 };
 
@@ -4199,10 +4197,7 @@ fn sealCheckedProcedureTemplateRefs(
                 const wrapper = entry_wrappers.get(wrapper_id);
                 try collector.collectExpr(wrapper.body_expr);
             },
-            .promoted_callable_wrapper,
-            .hosted_wrapper,
-            .intrinsic_wrapper,
-            => {},
+            .promoted_callable_wrapper => {},
         }
 
         template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, collector.value_refs.items);
@@ -4505,10 +4500,7 @@ pub const NestedProcSiteTable = struct {
             switch (template.body) {
                 .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
                 .entry_wrapper => |wrapper_id| try builder.scanEntryWrapper(entry_wrappers.get(wrapper_id), template),
-                .promoted_callable_wrapper,
-                .hosted_wrapper,
-                .intrinsic_wrapper,
-                => {},
+                .promoted_callable_wrapper => {},
             }
             template.nested_proc_sites = .{
                 .start = start,
@@ -8511,8 +8503,6 @@ fn buildImportedTemplateClosure(
             .body = body,
         }),
         .promoted_callable_wrapper,
-        .hosted_wrapper,
-        .intrinsic_wrapper,
         .entry_wrapper,
         => &.{},
     };
@@ -10258,9 +10248,6 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &self.key.bytes));
                     std.debug.assert(@intFromEnum(wrapper.body_plan) < self.promoted_callable_body_plans.plans.len);
                 },
-                .hosted_wrapper,
-                .intrinsic_wrapper,
-                => {},
                 .entry_wrapper => |wrapper_id| {
                     const wrapper = self.entry_wrappers.get(wrapper_id);
                     std.debug.assert(@intFromEnum(wrapper.body_expr) < self.checked_bodies.exprs.len);
