@@ -4069,15 +4069,17 @@ same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
 
 All three cases must create `BoxBoundaryId` records from checked procedure
 metadata and the solved call-site metadata, not from syntax. `ProcTarget` for
-the intrinsic wrapper records the intrinsic role and checked
-`LowLevelValueFlowSignature`; `CallSiteInfo.dispatch` records which branch or
-direct target is being applied. If a finite callable-set call has a branch whose
-member is `Box.box`, that branch's callable-match plan owns the corresponding
-`BoxBoundaryId` and branch-local payload/result value metadata. If another
-branch returns an existing boxed value, the ordinary branch join connects that
-branch result to the same call result root. The representation solver then
-merges those roots according to the explicit edges. No stage may infer a boxed
-boundary merely because a result type is `Box(T)`.
+the intrinsic wrapper records the intrinsic role and checked low-level
+value-flow publication rule; lambda-solved MIR applies that rule to publish a
+concrete `LowLevelValueFlowSignatureId` for the call occurrence.
+`CallSiteInfo.dispatch` records which branch or direct target is being applied.
+If a finite callable-set call has a branch whose member is `Box.box`, that
+branch's callable-match plan owns the corresponding `BoxBoundaryId` and
+branch-local payload/result value metadata. If another branch returns an
+existing boxed value, the ordinary branch join connects that branch result to
+the same call result root. The representation solver then merges those roots
+according to the explicit edges. No stage may infer a boxed boundary merely
+because a result type is `Box(T)`.
 
 Projection metadata is mandatory for aggregates:
 
@@ -6219,10 +6221,24 @@ out-of-scope local use, no escaped branch-local binding, and no direct source
 name lookup after local ids have been assigned. Release builds use
 `unreachable` for the equivalent compiler-invariant path.
 
-Low-level operations are explicit nodes:
+Low-level operations have two distinct type-state records. This distinction is
+mandatory. Lambda-solved MIR is still inside representation solving and must
+record how a low-level operation contributed to value-flow representation.
+Executable MIR is after representation solving and must not carry or invent
+lambda-solved value-flow ids.
 
 ```zig
-const LowLevelCall = struct {
+const LambdaSolvedLowLevelCall = struct {
+    op: LowLevelOpId,
+    arg_exprs: Span(ExprId),
+    arg_values: Span(ValueInfoId),
+    result: ValueInfoId,
+    source_constraint_ty: TypeVarId,
+    rc_effect: LowLevelRcEffect,
+    value_flow: LowLevelValueFlowSignatureId,
+};
+
+const ExecutableLowLevelCall = struct {
     op: LowLevelOpId,
     arg_exprs: Span(ExprId),
     arg_values: Span(ExecutableValueRef),
@@ -6230,7 +6246,6 @@ const LowLevelCall = struct {
     result_tmp: TempId,
     abi: LowLevelAbiKey,
     rc_effect: LowLevelRcEffect,
-    value_flow: LowLevelValueFlowSignature,
 };
 
 const LowLevelRcEffect = struct {
@@ -6272,15 +6287,48 @@ const BoxBoundaryIntrinsic = struct {
 };
 ```
 
-`arg_exprs` evaluate exactly once in source order into `arg_values`. The ABI and
-RC-effect metadata are explicit inputs; later stages must not infer them from
-operation names. The value-flow signature is a separate explicit input. It
-records how representation edges for this low-level operation were created before
-executable MIR. Later stages must not derive those edges from the low-level
-operation name, argument layouts, result layout, or builtin implementation body.
+For both records, `arg_exprs` evaluate exactly once in source order into
+`arg_values`. The ABI and RC-effect metadata are explicit inputs; later stages
+must not infer them from operation names.
+
+`LowLevelValueFlowSignatureId` is a lambda-solved representation-solving input,
+not executable MIR payload. It records how representation edges for a
+lambda-solved low-level expression were created before executable MIR. Executable
+MIR consumes the already-solved executable representations. When executable MIR
+lowers a lambda-solved low-level input, debug builds verify that the referenced
+`LowLevelValueFlowSignatureId` exists and is complete, and release builds use
+`unreachable` for the equivalent compiler-invariant path. After that boundary,
+the id is discarded. IR, LIR, ARC, backends, interpreters, and executable-only
+materialization nodes must never read, manufacture, cache, or propagate
+lambda-solved value-flow ids.
+
+Executable-only low-level calls are different. They can be generated while
+materializing compile-time constants, promoted callable captures, erased capture
+records, or executable value transforms. Those generated nodes are not
+lambda-solved expressions and therefore do not have `ValueInfoId`, `RepRootId`,
+or `LowLevelValueFlowSignatureId` identities. Their correctness must come from
+the sealed executable inputs that requested them:
+
+- `ConstMaterializationPlan`
+- `ErasedCaptureExecutableMaterializationPlan`
+- `ExecutableValueTransformPlan`
+- `ProcValueErasePlan`
+- `ErasedFnSigKey`
+- `BoxBoundaryId`
+- executable type payload refs
+- callable-set descriptors
+- finalized row ids
+- committed layout graph records
+
+Executable MIR must not create fake `ValueInfoId`s, sentinel
+`LowLevelValueFlowSignatureId`s, a second executable value-flow store, or a
+fallback search that tries to rediscover representation flow from low-level
+operation names, argument layouts, result layouts, source syntax, or builtin
+implementation bodies.
 
 Every call-only intrinsic or low-level operation that can touch non-primitive
-values must publish a checked `LowLevelValueFlowSignature`:
+values while it is still a lambda-solved expression must publish a checked
+`LowLevelValueFlowSignature`:
 
 - pure numeric, boolean, and comparison operations use `no_value_flow`
 - `List.get_unsafe` links the selected element of argument 0 to the result
@@ -6297,12 +6345,13 @@ values must publish a checked `LowLevelValueFlowSignature`:
   to the result, and gives any function slots in the result erased callable
   provenance from that boundary
 
-Call-only intrinsics may lower directly to `LowLevelCall` only when they never
-flow as first-class values and when they have complete ABI, RC-effect, and
-value-flow signatures. First-class intrinsics still lower through wrapper
-procedures and `proc_value`. Missing value-flow signatures for non-primitive
-low-level operations are compiler invariant violations handled only by
-debug-only assertion in debug builds and `unreachable` in release builds.
+Call-only intrinsics may lower directly to `LambdaSolvedLowLevelCall` only when
+they never flow as first-class values and when they have complete ABI,
+RC-effect, and lambda-solved value-flow signatures. First-class intrinsics still
+lower through wrapper procedures and `proc_value`. Missing value-flow
+signatures for non-primitive lambda-solved low-level operations are compiler
+invariant violations handled only by debug-only assertion in debug builds and
+`unreachable` in release builds.
 
 Executable MIR is not required to be in administrative normal form. It may keep
 nested expression structure where that structure does not cross a semantic
@@ -6473,6 +6522,15 @@ It must not produce or consume semantic parameter modes, alias contracts,
 procedure result contracts, escape summaries, or interprocedural uniqueness
 summaries.
 
+The baseline ARC implementation for this cutover must be deliberately simple
+and correctness-first. It must not implement borrow inference, lifetime
+inference, permission solving, uniqueness optimization, procedure summaries, or
+interprocedural ownership optimization. A future borrow-inference system may
+replace it. Until then, the required behavior is plain automatic reference
+counting from explicit LIR value uses, explicit LIR writes, explicit call
+boundaries, explicit low-level RC-effect records, and refcounted layout
+metadata.
+
 The uniform Roc call boundary for this plan is:
 
 - Procedure parameters are ordinary live value references available during the
@@ -6559,6 +6617,61 @@ LIR ARC insertion is a value/control-flow pass, not a backend behavior and not a
 semantic procedure-summary pass. It computes where explicit `incref`, `decref`,
 and `free` statements belong from LIR uses, branch joins, call boundaries,
 runtime mutation sites, and refcounted layout metadata.
+
+LIR writes must expose their ownership meaning explicitly. ARC insertion must
+not infer write meaning from source syntax, statement position, control-flow
+shape, or naming conventions.
+
+The minimum required LIR write modes are:
+
+```zig
+const SetLocalMode = union(enum) {
+    /// First assignment into a branch/result join local on this control-flow
+    /// path. There is no previous owned value to release on this path.
+    initialize_join_result,
+
+    /// Ordinary mutable overwrite of a local that already owns a live value on
+    /// this path. ARC insertion must release the previous owned value before the
+    /// new value is installed.
+    overwrite_owned,
+
+    /// Assignment into a join-point parameter when a `jump` transfers values to
+    /// a `join`. The jump carries the source values explicitly; ARC insertion
+    /// treats the parameter write according to the join-point contract, never by
+    /// guessing from the enclosing loop shape.
+    initialize_join_param,
+};
+
+const ForListElementMode = enum {
+    /// The loop element is a borrowed view of the iterable storage for the
+    /// duration of the iteration. If it is copied into an owned local, returned,
+    /// boxed, captured, inserted into another aggregate, or otherwise escapes,
+    /// the ordinary ARC rules at that use emit the required `incref`.
+    borrowed_from_iterable,
+};
+
+const SwitchContinuation = struct {
+    /// Shared suffix entered after branch-local result writes. ARC insertion
+    /// uses this boundary to release branch-local owned values before entering
+    /// the suffix, then continues with the owned values that are live on every
+    /// branch, such as the explicit join result.
+    continuation: LirStmtId,
+};
+```
+
+The exact Zig names may differ, but the stage distinction must not. Branch
+result assignment, mutable overwrite, join-parameter transfer, and loop-element
+binding are different LIR facts. A single unqualified `set_local` operation is
+not enough information for correct ARC insertion, because it cannot distinguish
+an unassigned branch result slot from an owned mutable slot whose old value must
+be released.
+
+When LIR represents a structured branch with branch-local temporaries and a
+shared continuation, the branch statement must publish that continuation
+boundary explicitly. ARC insertion must not rediscover it by graph search or
+post-dominator heuristics. Each branch releases branch-local owned values before
+the continuation boundary and the shared suffix is lowered once with the owned
+locals that are common at the boundary.
 
 Every value-producing LIR statement must expose enough explicit operands for ARC
 insertion to see what values are produced and consumed mechanically:
@@ -9139,6 +9252,38 @@ store serializable bytes. If the implementation chooses to factor out the `41`
 as a sealed `ConstInstanceRef`, it must use an explicit constant-owner form for
 constant-materialization private leaves, with a parent `ConstInstanceRef` plus a
 stable `ComptimeValuePathKey`; it must not overload `promoted_capture`.
+
+The same separation is required for compile-time promoted callable values. For
+example:
+
+```roc
+make_boxed_adder : I64 -> (I64 -> I64)
+make_boxed_adder = |n| {
+    boxed_n = Box.box(n)
+
+    |x| x + Box.unbox(boxed_n)
+}
+
+add_one : I64 -> I64
+add_one = make_boxed_adder(1)
+
+main = add_one(41)
+```
+
+The source `Box.box(n)` and `Box.unbox(boxed_n)` low-level operations inside
+`make_boxed_adder` are ordinary lambda-solved expressions. They publish normal
+`LowLevelValueFlowSignatureId` metadata while representation solving is active.
+After compile-time evaluation of `add_one`, however, checking finalization has a
+closed callable value whose capture data contains the boxed value produced for
+`n = 1`. Promoting `add_one` to a procedure binding must reify that captured box
+through an explicit promoted-capture materialization plan. Any executable
+low-level `Box.box` emitted while materializing that private captured box is a
+generated executable materialization node, not the original source expression. It
+must consume the sealed promoted-capture materialization plan and the expected
+executable type payload; it must not refer to the source expression's
+`LowLevelValueFlowSignatureId`, create a fake lambda-solved value-flow id, create
+a runtime thunk, allocate a runtime top-level closure object, or rerun
+compile-time evaluation.
 
 `const_instance` is a MIR-family handle, not an IR/LIR value form. The
 `Executable MIR -> IR` boundary must eliminate every `const_instance` by building
@@ -14338,9 +14483,11 @@ Forbid solved erased callable representation without non-empty `BoxBoundaryId`
 provenance. Forbid any erased callable provenance case other than explicit
 `BoxBoundaryId`.
 
-Forbid non-primitive `LowLevelCall` nodes without a complete
-`LowLevelValueFlowSignature`. Low-level ABI metadata and RC-effect metadata are
-not allowed to stand in for representation value-flow metadata.
+Forbid non-primitive `LambdaSolvedLowLevelCall` nodes without a complete
+`LowLevelValueFlowSignatureId`. Low-level ABI metadata and RC-effect metadata
+are not allowed to stand in for lambda-solved representation value-flow metadata.
+Forbid executable MIR from inventing value-flow metadata for executable-only
+materialization low-level nodes.
 
 Forbid any MIR, executable MIR, IR, or LIR operation whose semantic purpose is
 automatic currying or compiler-synthesized partial application.
@@ -15000,8 +15147,11 @@ Executable MIR:
 - every runtime mutation site has an explicit runtime uniqueness check
 - executable MIR contains no semantic parameter-mode solver output
 - first-class intrinsic references use explicit wrapper procedures
-- every non-primitive `LowLevelCall` has a complete
-  `LowLevelValueFlowSignature`
+- every non-primitive `LambdaSolvedLowLevelCall` has a complete
+  `LowLevelValueFlowSignatureId`
+- every executable-only materialization low-level call is justified by a sealed
+  materialization, transform, or erased-call plan rather than by a synthesized
+  value-flow id
 - `Box.box` low-level value-flow creates a `BoxBoundaryId`, links the payload
   argument to the boxed payload representation, and creates
   `require_box_erased(boundary)`

@@ -158,6 +158,19 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 };
 
+/// Ownership meaning of a `set_local` write. ARC insertion consumes this
+/// directly; it must not derive the meaning from control-flow shape.
+pub const SetLocalMode = enum {
+    initialize_join_result,
+    overwrite_owned,
+    initialize_join_param,
+};
+
+/// Ownership meaning of the hidden element binding inside a `for_list`.
+pub const ForListElementMode = enum {
+    borrowed_from_iterable,
+};
+
 /// Single canonical statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     assign_ref: struct {
@@ -209,6 +222,7 @@ pub const CFStmt = union(enum) {
     set_local: struct {
         target: LocalId,
         value: LocalId,
+        mode: SetLocalMode,
         next: CFStmtId,
     },
     debug: struct {
@@ -238,9 +252,14 @@ pub const CFStmt = union(enum) {
         cond: LocalId,
         branches: CFSwitchBranchSpan,
         default_branch: CFStmtId,
+        /// Common continuation used by structured branch-result switches, when
+        /// the branch bodies flow back to a shared suffix. ARC insertion uses
+        /// this to release branch-local owned values before the shared suffix.
+        continuation: ?CFStmtId = null,
     },
     for_list: struct {
         elem: LocalId,
+        elem_mode: ForListElementMode,
         iterable: LocalId,
         iterable_elem_layout: layout.Idx,
         body: CFStmtId,

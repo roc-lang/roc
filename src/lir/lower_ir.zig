@@ -251,6 +251,7 @@ const Lowerer = struct {
             .set => |set| try self.store.addCFStmt(.{ .set_local = .{
                 .target = try self.lowerVar(set.target),
                 .value = try self.lowerVar(set.value),
+                .mode = .overwrite_owned,
                 .next = next,
             } }),
             .debug => |value| try self.store.addCFStmt(.{ .debug = .{
@@ -277,6 +278,7 @@ const Lowerer = struct {
         defer self.restoreBreakTargets(break_start);
         return try self.store.addCFStmt(.{ .for_list = .{
             .elem = try self.localForVar(for_list.elem),
+            .elem_mode = .borrowed_from_iterable,
             .iterable = try self.lowerVar(for_list.iterable),
             .iterable_elem_layout = try self.lowerLayoutRef(for_list.elem.layout),
             .body = try self.lowerBlockWithContinuation(for_list.body, null, loop_continue),
@@ -286,6 +288,10 @@ const Lowerer = struct {
 
     fn lowerWhile(self: *Lowerer, while_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
         const join_id = self.freshJoinPointId();
+        const initial_jump = try self.store.addCFStmt(.{ .jump = .{
+            .target = join_id,
+            .args = LIR.LocalSpan.empty(),
+        } });
         const loop_jump = try self.store.addCFStmt(.{ .jump = .{
             .target = join_id,
             .args = LIR.LocalSpan.empty(),
@@ -306,6 +312,7 @@ const Lowerer = struct {
             .cond = cond_local,
             .branches = try self.store.addCFSwitchBranches(&branches),
             .default_branch = next,
+            .continuation = next,
         } });
         const cond_body = try self.lowerBlockWithContinuation(while_.cond, cond_local, cond_switch);
 
@@ -313,7 +320,7 @@ const Lowerer = struct {
             .id = join_id,
             .params = LIR.LocalSpan.empty(),
             .body = cond_body,
-            .remainder = loop_jump,
+            .remainder = initial_jump,
         } });
     }
 
@@ -358,6 +365,7 @@ const Lowerer = struct {
             .cond = try self.lowerVar(switch_.cond),
             .branches = try self.store.addCFSwitchBranches(branches),
             .default_branch = try self.lowerBlockWithContinuation(switch_.default_block, join_local, next),
+            .continuation = next,
         } });
     }
 
@@ -375,6 +383,7 @@ const Lowerer = struct {
                 break :blk try self.store.addCFStmt(.{ .set_local = .{
                     .target = join,
                     .value = try self.lowerVar(value),
+                    .mode = .initialize_join_result,
                     .next = continuation,
                 } });
             },
@@ -724,6 +733,7 @@ const Lowerer = struct {
             .cond = discriminant,
             .branches = try self.store.addCFSwitchBranches(branches),
             .default_branch = try self.store.addCFStmt(.{ .runtime_error = {} }),
+            .continuation = next,
         } });
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
