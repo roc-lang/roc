@@ -107,22 +107,7 @@ pub fn lowerArtifactsToLir(
     const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
     defer allocator.free(selected_entrypoints);
 
-    var mono = try mir.Mono.Specialize.run(allocator, .{
-        .root = artifacts.root,
-        .imports = artifacts.imports,
-    }, selected_entrypoints);
-    errdefer mono.deinit();
-
-    var row_finalized = try mir.MonoRow.run(allocator, mono);
-    errdefer row_finalized.deinit();
-
-    var lifted = try mir.Lifted.Lift.run(allocator, row_finalized);
-    errdefer lifted.deinit();
-
-    var solved = try mir.LambdaSolved.Solve.run(allocator, lifted, .{
-        .root = artifacts.root,
-        .imports = artifacts.imports,
-    });
+    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints);
     errdefer solved.deinit();
 
     try publishCallableSetDescriptorsForLowering(
@@ -202,6 +187,29 @@ pub fn lowerArtifactsToLir(
         .compile_time_payloads = compile_time_payloads,
         .erased_callable_code_map = erased_callable_code_map,
     };
+}
+
+fn lowerArtifactsToLambdaSolved(
+    allocator: Allocator,
+    artifacts: ArtifactSet,
+    selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
+) Allocator.Error!mir.LambdaSolved.Solve.Program {
+    var mono = try mir.Mono.Specialize.run(allocator, .{
+        .root = artifacts.root,
+        .imports = artifacts.imports,
+    }, selected_entrypoints);
+    errdefer mono.deinit();
+
+    var row_finalized = try mir.MonoRow.run(allocator, mono);
+    errdefer row_finalized.deinit();
+
+    var lifted = try mir.Lifted.Lift.run(allocator, row_finalized);
+    errdefer lifted.deinit();
+
+    return try mir.LambdaSolved.Solve.run(allocator, lifted, .{
+        .root = artifacts.root,
+        .imports = artifacts.imports,
+    });
 }
 
 fn collectExecutableErasedCallableCodeOrigins(
