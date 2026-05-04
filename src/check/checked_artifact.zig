@@ -434,6 +434,9 @@ pub const RootRequestTable = struct {
         }
 
         for (compile_time_roots.roots) |root| {
+            if (root.kind != .expect and !try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root.checked_type)) {
+                continue;
+            }
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
@@ -460,6 +463,119 @@ pub const RootRequestTable = struct {
         self.* = .{};
     }
 };
+
+fn checkedTypeIsConcreteCompileTimeRoot(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeIsConcreteCompileTimeRootInner(checked_types, root, &active);
+}
+
+fn checkedTypeIsConcreteCompileTimeRootInner(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    if (active.contains(root)) return true;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    const index = @intFromEnum(root);
+    if (index >= checked_types.payloads.len) {
+        checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
+    }
+    return switch (checked_types.payloads[index]) {
+        .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
+        .flex,
+        .rigid,
+        => false,
+        .empty_record,
+        .empty_tag_union,
+        => true,
+        .alias => |alias| checkedTypeIsConcreteCompileTimeRootInner(checked_types, alias.backing, active),
+        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, record.fields, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, record.ext, active),
+        .record_unbound => |fields| checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, fields, active),
+        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, items, active),
+        .nominal => |nominal| (try checkedTypeIsConcreteCompileTimeRootInner(checked_types, nominal.backing, active)) and
+            try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, nominal.args, active),
+        .function => |function| !function.needs_instantiation and
+            (try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, function.args, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, function.ret, active),
+        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(checked_types, tag_union.tags, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, tag_union.ext, active),
+    };
+}
+
+fn checkedTypeSpanIsConcreteCompileTimeRoot(
+    checked_types: *const CheckedTypeStore,
+    items: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(checked_types, item, active)) return false;
+    }
+    return true;
+}
+
+fn checkedFieldTypesAreConcreteCompileTimeRoots(
+    checked_types: *const CheckedTypeStore,
+    fields: []const CheckedRecordField,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(checked_types, field.ty, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTagsAreConcreteCompileTimeRoots(
+    checked_types: *const CheckedTypeStore,
+    tags: []const CheckedTag,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, tag.args, active)) return false;
+    }
+    return true;
+}
+
+fn compileTimeRootHasRootRequest(
+    requests: []const RootRequest,
+    root: CompileTimeRoot,
+) bool {
+    for (requests) |request| {
+        if (request.abi != .compile_time and request.abi != .test_expect) continue;
+        if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
+        if (!rootSourceMatches(root.source, request.source)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn compileTimeRootKindMatchesRequest(
+    root_kind: CompileTimeRootKind,
+    request_kind: RootRequestKind,
+) bool {
+    return switch (root_kind) {
+        .constant => request_kind == .compile_time_constant,
+        .callable_binding => request_kind == .compile_time_callable,
+        .expect => request_kind == .test_expect,
+    };
+}
+
+fn rootSourceMatches(a: RootSource, b: RootSource) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .def => |def| def == b.def,
+        .expr => |expr| expr == b.expr,
+        .statement => |statement| statement == b.statement,
+        .required_binding => |binding| binding == b.required_binding,
+    };
+}
 
 fn appendPublishedEntrypointRoots(
     requests: *std.ArrayList(RootRequest),
@@ -10832,9 +10948,19 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
+            const has_request = compileTimeRootHasRootRequest(self.root_requests.requests, root);
             switch (root.payload) {
-                .pending => std.debug.panic("checked artifact invariant violated: published compile-time root has pending payload", .{}),
-                else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+                .pending => {
+                    if (has_request) {
+                        std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
+                    }
+                },
+                else => {
+                    if (!has_request) {
+                        std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
+                    }
+                    verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload);
+                },
             }
         }
 
