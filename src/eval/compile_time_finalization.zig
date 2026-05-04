@@ -729,6 +729,135 @@ fn promotedProcedureProvenance(
     };
 }
 
+fn ensureConstInstanceRequest(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    request: checked_artifact.ConstInstantiationRequest,
+) anyerror!checked_artifact.ConstInstanceRef {
+    const instance_ref = try artifact.const_instances.reserveRequest(allocator, &artifact.checked_types, request);
+    switch (artifact.const_instances.stateForRef(instance_ref)) {
+        .evaluated => return instance_ref,
+        .evaluating => compileTimeFinalizationInvariant("constant instance dependency cycle reached checking finalization"),
+        .reserved => {},
+    }
+
+    const source = constTemplateSourceForRef(artifact, import_views, request.key.const_ref);
+    switch (source.template.state) {
+        .reserved => compileTimeFinalizationInvariant("constant instance request reached unsealed const template"),
+        .value_graph_template => |graph| {
+            var cloner = ComptimeGraphCloner.init(
+                allocator,
+                artifact,
+                source.values,
+                source.plans,
+            );
+            defer cloner.deinit();
+
+            const cloned = try cloner.clone(graph.schema, graph.value);
+            const dependency_summary = try appendConcreteDependencySummaryForValueGraph(
+                allocator,
+                artifact,
+                cloned.value,
+            );
+            artifact.const_instances.fill(instance_ref, .{
+                .schema = cloned.schema,
+                .value = cloned.value,
+                .dependency_summary = dependency_summary,
+                .reification_plan = null,
+            });
+        },
+        .eval_template => {
+            artifact.const_instances.markEvaluating(instance_ref);
+
+            var lowered_request = try lowerSingleCompileTimeRequest(
+                allocator,
+                artifact,
+                import_views,
+                .{ .const_instance = request },
+            );
+            defer lowered_request.deinit();
+
+            var interpreter = try Interpreter.init(
+                allocator,
+                &lowered_request.lowered.lir_result.store,
+                &lowered_request.lowered.lir_result.layouts,
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+
+            const reification_plan = switch (lowered_request.payload) {
+                .const_instance => |plan| plan,
+                else => compileTimeFinalizationInvariant("const instance lowering did not publish a const graph payload"),
+            };
+
+            const result = try evalCompileTimeRoot(&interpreter, lowered_request.lir_root);
+            const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
+            defer interpreter.dropValue(result.value, ret_layout);
+
+            var reifier = ComptimeReifier{
+                .allocator = allocator,
+                .artifact = artifact,
+                .values = &artifact.comptime_values,
+                .plans = &artifact.comptime_plans,
+                .checked_types = &artifact.checked_types,
+                .layouts = &lowered_request.lowered.lir_result.layouts,
+                .lowered = &lowered_request.lowered,
+                .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+                .promotion_context = .{
+                    .source_binding = sourceBindingForConstInstanceRequest(artifact, request.key.const_ref),
+                    .base = .{ .const_instance = request.key },
+                },
+            };
+            const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
+            const dependency_summary = try appendConcreteDependencySummaryForConstRequest(
+                allocator,
+                artifact,
+                request,
+                reification_plan,
+            );
+            artifact.const_instances.fill(instance_ref, .{
+                .schema = reified.schema,
+                .value = reified.value,
+                .dependency_summary = dependency_summary,
+                .reification_plan = reification_plan,
+            });
+        },
+    }
+    return instance_ref;
+}
+
+fn sourceBindingForConstInstanceRequest(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    ref: checked_artifact.ConstRef,
+) ?checked_artifact.CheckedPatternId {
+    if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return null;
+    return switch (ref.owner) {
+        .top_level_binding => |top_level| top_level.pattern,
+        .promoted_capture => null,
+    };
+}
+
+fn appendConcreteDependencySummaryForConstRequest(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    request: checked_artifact.ConstInstantiationRequest,
+    reification_plan: checked_artifact.ConstGraphReificationPlanId,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
+    defer availability.deinit(allocator);
+    try availability.append(allocator, .{ .const_template = request.key.const_ref });
+
+    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    defer collector.deinit();
+    try collector.collectConstGraph(reification_plan);
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = availability.items,
+        .concrete_values = collector.concrete.items,
+    });
+}
+
 const DirectCallableBindingInfo = struct {
     direct: checked_artifact.DirectProcedureBinding,
 };
@@ -1198,6 +1327,20 @@ fn appendEmptyConcreteDependencySummary(
     });
 }
 
+fn appendConcreteDependencySummaryForValueGraph(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    value: checked_artifact.ComptimeValueId,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    defer collector.deinit();
+    try collector.collectComptimeValue(value);
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = &.{},
+        .concrete_values = collector.concrete.items,
+    });
+}
+
 const ConcreteDependencyCollector = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -1415,6 +1558,385 @@ const ConcreteDependencyCollector = struct {
             .nominal => |nominal| try self.collectErasedCaptureExecutableMaterialization(nominal.backing),
             .recursive_ref => |ref| try self.collectErasedCaptureExecutableMaterializationNode(ref),
         }
+    }
+
+    fn collectComptimeValue(
+        self: *ConcreteDependencyCollector,
+        value_id: checked_artifact.ComptimeValueId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(value_id);
+        if (raw >= self.artifact.comptime_values.values.items.len) {
+            compileTimeFinalizationInvariant("concrete dependency collection reached missing compile-time value");
+        }
+        switch (self.artifact.comptime_values.values.items[raw]) {
+            .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending compile-time value"),
+            .zst,
+            .int_bytes,
+            .f32,
+            .f64,
+            .dec,
+            .str,
+            => {},
+            .list,
+            .tuple,
+            .record,
+            => |items| for (items) |item| try self.collectComptimeValue(item),
+            .box,
+            .alias,
+            .nominal,
+            => |child| try self.collectComptimeValue(child),
+            .tag_union => |tag| for (tag.payloads) |payload| try self.collectComptimeValue(payload),
+            .callable => |leaf| switch (leaf) {
+                .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
+                .erased_boxed => |erased| {
+                    try self.collectErasedCodeRef(erased.code);
+                    try self.collectErasedCaptureExecutableMaterialization(erased.capture);
+                },
+            },
+        }
+    }
+};
+
+const ConstTemplateSource = struct {
+    template: checked_artifact.ConstTemplate,
+    values: *const checked_artifact.CompileTimeValueStore,
+    plans: *const checked_artifact.CompileTimePlanStore,
+};
+
+fn constTemplateSourceForRef(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    ref: checked_artifact.ConstRef,
+) ConstTemplateSource {
+    if (std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) {
+        return .{
+            .template = artifact.const_templates.get(ref),
+            .values = &artifact.comptime_values,
+            .plans = &artifact.comptime_plans,
+        };
+    }
+    for (import_views) |view| {
+        if (!std.mem.eql(u8, &ref.artifact.bytes, &view.key.bytes)) continue;
+        return .{
+            .template = view.const_templates.get(ref),
+            .values = view.comptime_values,
+            .plans = view.comptime_plans,
+        };
+    }
+    compileTimeFinalizationInvariant("const instance request referenced unavailable const template artifact");
+}
+
+const ComptimeGraphCloner = struct {
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    source_values: *const checked_artifact.CompileTimeValueStore,
+    source_plans: *const checked_artifact.CompileTimePlanStore,
+    schema_map: std.AutoHashMap(checked_artifact.ComptimeSchemaId, checked_artifact.ComptimeSchemaId),
+    value_map: std.AutoHashMap(checked_artifact.ComptimeValueId, checked_artifact.ComptimeValueId),
+    erased_node_map: std.AutoHashMap(
+        checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+        checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+    ),
+
+    fn init(
+        allocator: Allocator,
+        artifact: *checked_artifact.CheckedModuleArtifact,
+        source_values: *const checked_artifact.CompileTimeValueStore,
+        source_plans: *const checked_artifact.CompileTimePlanStore,
+    ) ComptimeGraphCloner {
+        return .{
+            .allocator = allocator,
+            .artifact = artifact,
+            .source_values = source_values,
+            .source_plans = source_plans,
+            .schema_map = std.AutoHashMap(checked_artifact.ComptimeSchemaId, checked_artifact.ComptimeSchemaId).init(allocator),
+            .value_map = std.AutoHashMap(checked_artifact.ComptimeValueId, checked_artifact.ComptimeValueId).init(allocator),
+            .erased_node_map = std.AutoHashMap(
+                checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+                checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+            ).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ComptimeGraphCloner) void {
+        self.erased_node_map.deinit();
+        self.value_map.deinit();
+        self.schema_map.deinit();
+    }
+
+    fn clone(
+        self: *ComptimeGraphCloner,
+        schema: checked_artifact.ComptimeSchemaId,
+        value: checked_artifact.ComptimeValueId,
+    ) Allocator.Error!ReifiedValue {
+        return .{
+            .schema = try self.cloneSchema(schema),
+            .value = try self.cloneValue(value),
+        };
+    }
+
+    fn cloneSchema(
+        self: *ComptimeGraphCloner,
+        schema_id: checked_artifact.ComptimeSchemaId,
+    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+        if (self.schema_map.get(schema_id)) |existing| return existing;
+        const raw = @intFromEnum(schema_id);
+        if (raw >= self.source_values.schemas.items.len) {
+            compileTimeFinalizationInvariant("constant value graph clone reached missing schema");
+        }
+        const cloned = try self.cloneSchemaPayload(self.source_values.schemas.items[raw]);
+        const out = try self.artifact.comptime_values.addSchema(cloned);
+        try self.schema_map.put(schema_id, out);
+        return out;
+    }
+
+    fn cloneSchemaPayload(
+        self: *ComptimeGraphCloner,
+        schema: checked_artifact.ComptimeSchema,
+    ) Allocator.Error!checked_artifact.ComptimeSchema {
+        return switch (schema) {
+            .pending => compileTimeFinalizationInvariant("constant value graph clone reached pending schema"),
+            .zst => .zst,
+            .int => |int| .{ .int = int },
+            .frac => |frac| .{ .frac = frac },
+            .str => .str,
+            .callable => |source_fn_ty| .{ .callable = source_fn_ty },
+            .list => |child| .{ .list = try self.cloneSchema(child) },
+            .box => |child| .{ .box = try self.cloneSchema(child) },
+            .tuple => |items| .{ .tuple = try self.cloneSchemaSpan(items) },
+            .record => |fields| .{ .record = try self.cloneRecordSchema(fields) },
+            .tag_union => |variants| .{ .tag_union = try self.cloneTagUnionSchema(variants) },
+            .alias => |alias| .{ .alias = .{
+                .type_name = alias.type_name,
+                .backing = try self.cloneSchema(alias.backing),
+                .is_opaque = alias.is_opaque,
+            } },
+            .nominal => |nominal| .{ .nominal = .{
+                .type_name = nominal.type_name,
+                .backing = try self.cloneSchema(nominal.backing),
+                .is_opaque = nominal.is_opaque,
+            } },
+        };
+    }
+
+    fn cloneSchemaSpan(
+        self: *ComptimeGraphCloner,
+        items: []const checked_artifact.ComptimeSchemaId,
+    ) Allocator.Error![]checked_artifact.ComptimeSchemaId {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
+        for (items, 0..) |item, i| out[i] = try self.cloneSchema(item);
+        return out;
+    }
+
+    fn cloneRecordSchema(
+        self: *ComptimeGraphCloner,
+        fields: []const checked_artifact.ComptimeFieldSchema,
+    ) Allocator.Error![]checked_artifact.ComptimeFieldSchema {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = field.name,
+                .schema = try self.cloneSchema(field.schema),
+            };
+        }
+        return out;
+    }
+
+    fn cloneTagUnionSchema(
+        self: *ComptimeGraphCloner,
+        variants: []const checked_artifact.ComptimeVariantSchema,
+    ) Allocator.Error![]checked_artifact.ComptimeVariantSchema {
+        if (variants.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, variants.len);
+        for (variants, 0..) |variant, i| {
+            out[i] = .{
+                .name = variant.name,
+                .payloads = try self.cloneSchemaSpan(variant.payloads),
+            };
+        }
+        return out;
+    }
+
+    fn cloneValue(
+        self: *ComptimeGraphCloner,
+        value_id: checked_artifact.ComptimeValueId,
+    ) Allocator.Error!checked_artifact.ComptimeValueId {
+        if (self.value_map.get(value_id)) |existing| return existing;
+        const raw = @intFromEnum(value_id);
+        if (raw >= self.source_values.values.items.len) {
+            compileTimeFinalizationInvariant("constant value graph clone reached missing value");
+        }
+        const cloned = try self.cloneValuePayload(self.source_values.values.items[raw]);
+        const out = try self.artifact.comptime_values.addValue(cloned);
+        try self.value_map.put(value_id, out);
+        return out;
+    }
+
+    fn cloneValuePayload(
+        self: *ComptimeGraphCloner,
+        value: checked_artifact.ComptimeValue,
+    ) Allocator.Error!checked_artifact.ComptimeValue {
+        return switch (value) {
+            .pending => compileTimeFinalizationInvariant("constant value graph clone reached pending value"),
+            .zst => .zst,
+            .int_bytes => |bytes| .{ .int_bytes = bytes },
+            .f32 => |float| .{ .f32 = float },
+            .f64 => |float| .{ .f64 = float },
+            .dec => |bytes| .{ .dec = bytes },
+            .str => |bytes| .{ .str = try self.allocator.dupe(u8, bytes) },
+            .list => |items| .{ .list = try self.cloneValueSpan(items) },
+            .tuple => |items| .{ .tuple = try self.cloneValueSpan(items) },
+            .record => |items| .{ .record = try self.cloneValueSpan(items) },
+            .box => |child| .{ .box = try self.cloneValue(child) },
+            .alias => |child| .{ .alias = try self.cloneValue(child) },
+            .nominal => |child| .{ .nominal = try self.cloneValue(child) },
+            .tag_union => |tag| .{ .tag_union = .{
+                .variant_index = tag.variant_index,
+                .payloads = try self.cloneValueSpan(tag.payloads),
+            } },
+            .callable => |leaf| .{ .callable = try self.cloneCallableLeaf(leaf) },
+        };
+    }
+
+    fn cloneValueSpan(
+        self: *ComptimeGraphCloner,
+        items: []const checked_artifact.ComptimeValueId,
+    ) Allocator.Error![]checked_artifact.ComptimeValueId {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ComptimeValueId, items.len);
+        for (items, 0..) |item, i| out[i] = try self.cloneValue(item);
+        return out;
+    }
+
+    fn cloneCallableLeaf(
+        self: *ComptimeGraphCloner,
+        leaf: checked_artifact.CallableLeafInstance,
+    ) Allocator.Error!checked_artifact.CallableLeafInstance {
+        return switch (leaf) {
+            .finite => |finite| .{ .finite = finite },
+            .erased_boxed => |erased| .{ .erased_boxed = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .sig_key = erased.sig_key,
+                .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+                .code = erased.code,
+                .capture = try self.cloneErasedCapturePlan(erased.capture),
+            } },
+        };
+    }
+
+    fn cloneErasedCapturePlan(
+        self: *ComptimeGraphCloner,
+        plan: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        return switch (plan) {
+            .none => .none,
+            .zero_sized_typed => |key| .{ .zero_sized_typed = key },
+            .node => |node| .{ .node = try self.cloneErasedCaptureNode(node) },
+        };
+    }
+
+    fn cloneErasedCaptureNode(
+        self: *ComptimeGraphCloner,
+        node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNodeId {
+        if (self.erased_node_map.get(node_id)) |existing| return existing;
+
+        const out = try self.artifact.comptime_plans.reserveErasedCaptureExecutableMaterializationNode(self.allocator);
+        try self.erased_node_map.put(node_id, out);
+        errdefer _ = self.erased_node_map.remove(node_id);
+
+        const cloned = try self.cloneErasedCaptureNodePayload(
+            self.source_plans.erasedCaptureExecutableMaterializationNode(node_id),
+        );
+        self.artifact.comptime_plans.fillErasedCaptureExecutableMaterializationNode(out, cloned);
+        return out;
+    }
+
+    fn cloneErasedCaptureNodePayload(
+        self: *ComptimeGraphCloner,
+        node: checked_artifact.ErasedCaptureExecutableMaterializationNode,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
+        return switch (node) {
+            .pending => compileTimeFinalizationInvariant("constant value graph clone reached pending erased capture node"),
+            .const_instance => |instance| .{ .const_instance = instance },
+            .pure_const => |pure| .{ .pure_const = pure },
+            .pure_value => |pure| blk: {
+                const cloned = try self.clone(pure.schema, pure.value);
+                break :blk .{ .pure_value = .{
+                    .schema = cloned.schema,
+                    .value = cloned.value,
+                    .no_reachable_callable_slots = pure.no_reachable_callable_slots,
+                } };
+            },
+            .finite_callable_set => |finite| .{ .finite_callable_set = .{
+                .source_fn_ty = finite.source_fn_ty,
+                .callable_set_key = finite.callable_set_key,
+                .selected_member = finite.selected_member,
+                .captures = try self.cloneErasedCapturePlanSpan(finite.captures),
+            } },
+            .erased_callable => |erased| .{ .erased_callable = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .sig_key = erased.sig_key,
+                .code = erased.code,
+                .capture = try self.cloneErasedCapturePlan(erased.capture),
+                .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+            } },
+            .record => |fields| .{ .record = try self.cloneErasedCaptureRecord(fields) },
+            .tuple => |items| .{ .tuple = try self.cloneErasedCapturePlanSpan(items) },
+            .tag_union => |tag| .{ .tag_union = .{
+                .tag = tag.tag,
+                .payloads = try self.cloneErasedCaptureTagPayloads(tag.payloads),
+            } },
+            .list => |items| .{ .list = try self.cloneErasedCapturePlanSpan(items) },
+            .box => |payload| .{ .box = try self.cloneErasedCapturePlan(payload) },
+            .nominal => |nominal| .{ .nominal = .{
+                .nominal = nominal.nominal,
+                .backing = try self.cloneErasedCapturePlan(nominal.backing),
+            } },
+            .recursive_ref => |ref| .{ .recursive_ref = try self.cloneErasedCaptureNode(ref) },
+        };
+    }
+
+    fn cloneErasedCapturePlanSpan(
+        self: *ComptimeGraphCloner,
+        items: []const checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, items.len);
+        for (items, 0..) |item, i| out[i] = try self.cloneErasedCapturePlan(item);
+        return out;
+    }
+
+    fn cloneErasedCaptureRecord(
+        self: *ComptimeGraphCloner,
+        fields: []const checked_artifact.ErasedCaptureExecutableMaterializationRecordField,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationRecordField, fields.len);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .field = field.field,
+                .value = try self.cloneErasedCapturePlan(field.value),
+            };
+        }
+        return out;
+    }
+
+    fn cloneErasedCaptureTagPayloads(
+        self: *ComptimeGraphCloner,
+        payloads: []const checked_artifact.ErasedCaptureExecutableMaterializationTagPayload,
+    ) Allocator.Error![]const checked_artifact.ErasedCaptureExecutableMaterializationTagPayload {
+        if (payloads.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationTagPayload, payloads.len);
+        for (payloads, 0..) |payload, i| {
+            out[i] = .{
+                .index = payload.index,
+                .value = try self.cloneErasedCapturePlan(payload.value),
+            };
+        }
+        return out;
     }
 };
 

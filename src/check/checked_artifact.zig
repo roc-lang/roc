@@ -9574,6 +9574,7 @@ pub const ConstInstantiationStore = struct {
 
     pub fn verifySealed(
         self: *const ConstInstantiationStore,
+        const_templates: *const ConstTemplateTable,
         comptime_dependencies: *const ComptimeDependencySummaryStore,
         semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
     ) void {
@@ -9601,11 +9602,23 @@ pub const ConstInstantiationStore = struct {
                             .{i},
                         );
                     }
-                    if (instance.reification_plan == null) {
-                        std.debug.panic(
-                            "checked artifact invariant violated: constant instance {d} has no reification plan",
-                            .{i},
-                        );
+                    if (std.mem.eql(u8, &record.key.const_ref.artifact.bytes, &self.owner.bytes)) {
+                        const template = const_templates.get(record.key.const_ref);
+                        switch (template.state) {
+                            .eval_template => {
+                                if (instance.reification_plan == null) {
+                                    std.debug.panic(
+                                        "checked artifact invariant violated: eval constant instance {d} has no reification plan",
+                                        .{i},
+                                    );
+                                }
+                            },
+                            .value_graph_template => {},
+                            .reserved => std.debug.panic(
+                                "checked artifact invariant violated: constant instance {d} references an unsealed local template",
+                                .{i},
+                            ),
+                        }
                     }
                     for (instance.generated_procedures) |procedure| {
                         const proc_index = @intFromEnum(procedure);
@@ -11143,6 +11156,7 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_dependencies.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed(
+            &self.const_templates,
             &self.comptime_dependencies,
             &self.semantic_instantiation_procedures,
         );
