@@ -2189,6 +2189,49 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(3, 2)" },
     },
+    .{
+        .name = "inspect: top-level empty callable list has no reachable callable slots",
+        .source_kind = .module,
+        .source =
+        \\empty_fns : List(I64 -> I64)
+        \\empty_fns = []
+        \\
+        \\main = List.len(empty_fns)
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "inspect: promoted callable captures empty callable list schema only",
+        .source_kind = .module,
+        .source =
+        \\make_len : List(I64 -> I64) -> (I64 -> U64)
+        \\make_len = |fns| |_x| List.len(fns)
+        \\
+        \\len_empty : I64 -> U64
+        \\len_empty = make_len([])
+        \\
+        \\main = len_empty(41.I64)
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "inspect: promoted callable ignores inactive callable tag payload",
+        .source_kind = .module,
+        .source =
+        \\make_tagged : [A(I64), B(I64 -> I64)] -> (I64 -> I64)
+        \\make_tagged = |tagged| |x|
+        \\    match tagged {
+        \\        A(n) => x + n
+        \\        B(f) => f(x)
+        \\    }
+        \\
+        \\add1 : I64 -> I64
+        \\add1 = make_tagged(A(1.I64))
+        \\
+        \\main = add1(41.I64)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
     .{ .name = "inspect: List.fold builtin sum", .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)", .expected = .{ .inspect_str = "6.0" } },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
