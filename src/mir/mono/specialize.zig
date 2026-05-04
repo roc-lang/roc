@@ -278,6 +278,44 @@ pub fn collectStaticDispatchDependenciesForTemplate(
     return try collector.dependencies.toOwnedSlice(allocator);
 }
 
+pub fn collectStaticDispatchDependenciesForCompileTimeReturn(
+    allocator: Allocator,
+    input: Input,
+    template_ref: canonical.ProcedureTemplateRef,
+    return_ty: checked_artifact.CheckedTypeId,
+) Allocator.Error![]StaticDispatchDependency {
+    var program = Program.init(allocator);
+    defer program.deinit();
+    program.root_artifact_key = input.root.artifact.key;
+
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
+    const requested_ref = try compileTimeEntryFunctionTypeForReturn(
+        allocator,
+        input,
+        &program,
+        &name_resolver,
+        return_ty,
+    );
+
+    var collector = StaticDispatchDependencyCollector{
+        .allocator = allocator,
+        .input = input,
+        .program = &program,
+        .name_resolver = &name_resolver,
+        .dependencies = .empty,
+        .visited = .empty,
+    };
+    defer collector.deinit();
+
+    try collector.collectTemplate(template_ref, requested_ref);
+    return try collector.dependencies.toOwnedSlice(allocator);
+}
+
 const CheckedTemplateLookup = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     checked_types: checked_artifact.CheckedTypeStoreView,

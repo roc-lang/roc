@@ -971,6 +971,15 @@ fn ensureConstInstanceRequest(
                 dependency_state,
                 eval.entry_template,
             );
+            try ensureStaticDispatchTargetConcreteDependenciesForCompileTimeReturn(
+                allocator,
+                artifact,
+                import_views,
+                runtime_env,
+                dependency_state,
+                eval.entry_template,
+                request.requested_source_ty_payload,
+            );
 
             var lowered_request = try lowerSingleCompileTimeRequest(
                 allocator,
@@ -1112,6 +1121,15 @@ fn ensureRootConcreteDependencies(
         &dependency_state,
         wrapper.template,
     );
+    try ensureStaticDispatchTargetConcreteDependencies(
+        allocator,
+        artifact,
+        import_views,
+        runtime_env,
+        &dependency_state,
+        wrapper.template,
+        wrapper.checked_fn_root,
+    );
 }
 
 const DependencyPreparationState = struct {
@@ -1209,6 +1227,105 @@ fn ensureProcedureTemplateConcreteDependencies(
     try dependency_state.finishActive(allocator, template_ref);
 }
 
+fn ensureStaticDispatchTargetConcreteDependenciesForCallableTemplate(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    dependency_state: *DependencyPreparationState,
+    template: canonical.CallableProcedureTemplateRef,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+) anyerror!void {
+    switch (template) {
+        .checked => |checked| try ensureStaticDispatchTargetConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            runtime_env,
+            dependency_state,
+            checked,
+            requested_fn_ty,
+        ),
+        .synthetic => |synthetic| try ensureStaticDispatchTargetConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            runtime_env,
+            dependency_state,
+            synthetic.template,
+            requested_fn_ty,
+        ),
+        .lifted => compileTimeFinalizationInvariant("checking finalization static-dispatch dependency preparation reached a lifted procedure template"),
+    }
+}
+
+fn ensureStaticDispatchTargetConcreteDependencies(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    dependency_state: *DependencyPreparationState,
+    template_ref: canonical.ProcedureTemplateRef,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+) anyerror!void {
+    const dependencies = try mir.Mono.Specialize.collectStaticDispatchDependenciesForTemplate(
+        allocator,
+        .{
+            .root = checked_artifact.loweringView(artifact),
+            .imports = import_views,
+        },
+        template_ref,
+        artifact.key,
+        requested_fn_ty,
+    );
+    defer if (dependencies.len > 0) allocator.free(dependencies);
+
+    for (dependencies) |dependency| {
+        if (!std.mem.eql(u8, &dependency.target_template.artifact.bytes, &artifact.key.bytes)) continue;
+        try ensureProcedureTemplateConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            runtime_env,
+            dependency_state,
+            dependency.target_template,
+        );
+    }
+}
+
+fn ensureStaticDispatchTargetConcreteDependenciesForCompileTimeReturn(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    dependency_state: *DependencyPreparationState,
+    template_ref: canonical.ProcedureTemplateRef,
+    return_ty: checked_artifact.CheckedTypeId,
+) anyerror!void {
+    const dependencies = try mir.Mono.Specialize.collectStaticDispatchDependenciesForCompileTimeReturn(
+        allocator,
+        .{
+            .root = checked_artifact.loweringView(artifact),
+            .imports = import_views,
+        },
+        template_ref,
+        return_ty,
+    );
+    defer if (dependencies.len > 0) allocator.free(dependencies);
+
+    for (dependencies) |dependency| {
+        if (!std.mem.eql(u8, &dependency.target_template.artifact.bytes, &artifact.key.bytes)) continue;
+        try ensureProcedureTemplateConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            runtime_env,
+            dependency_state,
+            dependency.target_template,
+        );
+    }
+}
+
 fn procedureTemplateDependencySource(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     import_views: []const checked_artifact.ImportedModuleView,
@@ -1282,6 +1399,18 @@ fn ensureResolvedConcreteDependency(
                     runtime_env,
                     dependency_state,
                     direct.direct.template,
+                );
+                const payload = proc_use.source_fn_ty_payload orelse {
+                    compileTimeFinalizationInvariant("direct callable dependency did not carry a checked source function type payload");
+                };
+                try ensureStaticDispatchTargetConcreteDependenciesForCallableTemplate(
+                    allocator,
+                    artifact,
+                    import_views,
+                    runtime_env,
+                    dependency_state,
+                    direct.direct.template,
+                    payload,
                 );
                 return;
             }
@@ -1697,6 +1826,15 @@ fn ensureCallableBindingInstanceRequest(
         runtime_env,
         dependency_state,
         callableEvalEntryTemplateForRequest(artifact, import_views, request),
+    );
+    try ensureStaticDispatchTargetConcreteDependencies(
+        allocator,
+        artifact,
+        import_views,
+        runtime_env,
+        dependency_state,
+        callableEvalEntryTemplateForRequest(artifact, import_views, request),
+        request.requested_source_fn_ty_payload,
     );
 
     var lowered_request = try lowerSingleCompileTimeRequest(
