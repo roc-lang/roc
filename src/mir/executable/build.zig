@@ -4658,6 +4658,27 @@ const BodyBuilder = struct {
         test: Ast.PatternTest,
     };
 
+    const SourceMatchDecisionRow = struct {
+        branch: Ast.BranchId,
+        degenerate: bool,
+        guard: ?Ast.ExprId,
+        body: Ast.ExprId,
+        tests: []const PendingPatternTest,
+        bindings: []const Ast.PatternBinding,
+    };
+
+    const SourceMatchDecisionRowRef = struct {
+        row: *const SourceMatchDecisionRow,
+        remaining: []const PendingPatternTest,
+        owns_remaining: bool = false,
+    };
+
+    const PatternTestAssumptionRelation = enum {
+        impossible,
+        possible,
+        proves,
+    };
+
     const TransformedIfBranches = struct {
         then_body: Ast.ExprId,
         else_body: Ast.ExprId,
@@ -4936,9 +4957,52 @@ const BodyBuilder = struct {
             .ty = scrutinee_ty,
         });
 
+        var rows = std.ArrayList(SourceMatchDecisionRow).empty;
+        defer {
+            for (rows.items) |row| {
+                self.allocator.free(row.tests);
+                self.allocator.free(row.bindings);
+            }
+            rows.deinit(self.allocator);
+        }
+        for (branch_ids) |branch_id| {
+            const branch = self.output.branches.items[@intFromEnum(branch_id)];
+
+            var tests = std.ArrayList(PendingPatternTest).empty;
+            defer tests.deinit(self.allocator);
+            var bindings = std.ArrayList(Ast.PatternBinding).empty;
+            defer bindings.deinit(self.allocator);
+            try self.collectPatternDecisionData(branch.pat, root_path, &tests, &bindings, &path_plans);
+
+            var owned_tests = try self.allocator.dupe(PendingPatternTest, tests.items);
+            errdefer if (owned_tests.len > 0) self.allocator.free(owned_tests);
+            var owned_bindings = try self.allocator.dupe(Ast.PatternBinding, bindings.items);
+            errdefer if (owned_bindings.len > 0) self.allocator.free(owned_bindings);
+
+            try rows.append(self.allocator, .{
+                .branch = branch_id,
+                .degenerate = branch.degenerate,
+                .guard = branch.guard,
+                .body = branch.body,
+                .tests = owned_tests,
+                .bindings = owned_bindings,
+            });
+            owned_tests = &.{};
+            owned_bindings = &.{};
+        }
+
+        const initial_rows = try self.allocator.alloc(SourceMatchDecisionRowRef, rows.items.len);
+        defer self.allocator.free(initial_rows);
+        for (rows.items, 0..) |*row, i| {
+            initial_rows[i] = .{
+                .row = row,
+                .remaining = row.tests,
+            };
+        }
+
         var leaves = std.ArrayList(Ast.DecisionLeafId).empty;
         defer leaves.deinit(self.allocator);
-        const root = (try self.buildSourceMatchDecisionCascade(branch_ids, 0, root_path, &path_plans, &leaves)) orelse
+        const root = (try self.buildSourceMatchDecisionRows(initial_rows, &leaves)) orelse
             executableInvariant("executable source_match decision plan had no reachable root");
 
         return try self.output.addPatternDecisionPlan(.{
@@ -4950,53 +5014,375 @@ const BodyBuilder = struct {
         });
     }
 
-    fn buildSourceMatchDecisionCascade(
+    fn buildSourceMatchDecisionRows(
         self: *BodyBuilder,
-        branch_ids: []const Ast.BranchId,
-        index: usize,
-        root_path: Ast.PatternPathValuePlanId,
-        path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
+        rows: []const SourceMatchDecisionRowRef,
         leaves: *std.ArrayList(Ast.DecisionLeafId),
     ) Allocator.Error!?Ast.DecisionNodeId {
-        if (index >= branch_ids.len) return null;
+        if (rows.len == 0) return null;
 
-        const fallback = try self.buildSourceMatchDecisionCascade(branch_ids, index + 1, root_path, path_plans, leaves);
-        const branch_id = branch_ids[index];
-        const branch = self.output.branches.items[@intFromEnum(branch_id)];
+        const first = rows[0];
+        if (first.remaining.len == 0) {
+            const fallback = if (first.row.guard != null)
+                try self.buildSourceMatchDecisionRows(rows[1..], leaves)
+            else
+                null;
 
-        var tests = std.ArrayList(PendingPatternTest).empty;
-        defer tests.deinit(self.allocator);
-        var bindings = std.ArrayList(Ast.PatternBinding).empty;
-        defer bindings.deinit(self.allocator);
-        try self.collectPatternDecisionData(branch.pat, root_path, &tests, &bindings, path_plans);
-
-        const leaf_id = try self.output.addDecisionLeaf(.{
-            .branch = branch_id,
-            .degenerate = branch.degenerate,
-            .guard = branch.guard,
-            .body = branch.body,
-            .fallback = fallback,
-            .bindings = try self.output.addPatternBindingSpan(bindings.items),
-        });
-        try leaves.append(self.allocator, leaf_id);
-
-        var next = try self.output.addDecisionNode(.{ .leaf = leaf_id });
-        var test_i = tests.items.len;
-        while (test_i > 0) {
-            test_i -= 1;
-            const pending = tests.items[test_i];
-            const edges = [_]Ast.DecisionEdge{.{
-                .test = pending.test,
-                .next = next,
-            }};
-            next = try self.output.addDecisionNode(.{ .test = .{
-                .path_value = pending.path_value,
-                .edges = try self.output.addDecisionEdgeSpan(&edges),
-                .default = fallback,
-            } });
+            const leaf_id = try self.output.addDecisionLeaf(.{
+                .branch = first.row.branch,
+                .degenerate = first.row.degenerate,
+                .guard = first.row.guard,
+                .body = first.row.body,
+                .fallback = fallback,
+                .bindings = try self.output.addPatternBindingSpan(first.row.bindings),
+            });
+            try leaves.append(self.allocator, leaf_id);
+            return try self.output.addDecisionNode(.{ .leaf = leaf_id });
         }
 
-        return next;
+        const selected = first.remaining[0];
+        var tests_at_path = std.ArrayList(Ast.PatternTest).empty;
+        defer tests_at_path.deinit(self.allocator);
+        try self.collectDecisionTestsAtPath(rows, selected.path_value, &tests_at_path);
+        if (tests_at_path.items.len == 0) executableInvariant("executable source_match decision row selected a path with no tests");
+
+        var edges = std.ArrayList(Ast.DecisionEdge).empty;
+        defer edges.deinit(self.allocator);
+        for (tests_at_path.items) |test| {
+            const edge_rows = try self.decisionRowsForAssumedTest(rows, selected.path_value, test);
+            defer self.deinitSourceMatchDecisionRowRefs(edge_rows);
+            const next = (try self.buildSourceMatchDecisionRows(edge_rows, leaves)) orelse
+                executableInvariant("executable source_match decision edge had no reachable rows");
+            try edges.append(self.allocator, .{
+                .test = test,
+                .next = next,
+            });
+        }
+
+        const default_rows = try self.decisionRowsWithoutPathTest(rows, selected.path_value);
+        defer self.deinitSourceMatchDecisionRowRefs(default_rows);
+        const default = try self.buildSourceMatchDecisionRows(default_rows, leaves);
+
+        return try self.output.addDecisionNode(.{ .test = .{
+            .path_value = selected.path_value,
+            .edges = try self.output.addDecisionEdgeSpan(edges.items),
+            .default = default,
+        } });
+    }
+
+    fn collectDecisionTestsAtPath(
+        self: *BodyBuilder,
+        rows: []const SourceMatchDecisionRowRef,
+        path_value: Ast.PatternPathValuePlanId,
+        tests: *std.ArrayList(Ast.PatternTest),
+    ) Allocator.Error!void {
+        for (rows) |row| {
+            if (self.firstTestIndexAtPath(row.remaining, path_value)) |index| {
+                const test = row.remaining[index].test;
+                if (!self.hasDecisionTest(tests.items, test)) {
+                    try tests.append(self.allocator, test);
+                }
+            }
+        }
+    }
+
+    fn decisionRowsForAssumedTest(
+        self: *BodyBuilder,
+        rows: []const SourceMatchDecisionRowRef,
+        path_value: Ast.PatternPathValuePlanId,
+        assumed: Ast.PatternTest,
+    ) Allocator.Error![]SourceMatchDecisionRowRef {
+        var out = std.ArrayList(SourceMatchDecisionRowRef).empty;
+        errdefer {
+            for (out.items) |row| {
+                if (row.owns_remaining and row.remaining.len > 0) {
+                    self.allocator.free(row.remaining);
+                }
+            }
+            out.deinit(self.allocator);
+        }
+
+        for (rows) |row| {
+            if (self.firstTestIndexAtPath(row.remaining, path_value)) |index| {
+                const relation = self.patternTestRelationWhenAssumed(assumed, row.remaining[index].test);
+                switch (relation) {
+                    .impossible => continue,
+                    .proves => {
+                        var remaining = try self.remainingWithoutTest(row.remaining, index);
+                        errdefer if (remaining.len > 0) self.allocator.free(remaining);
+                        try out.append(self.allocator, .{
+                            .row = row.row,
+                            .remaining = remaining,
+                            .owns_remaining = true,
+                        });
+                        remaining = &.{};
+                    },
+                    .possible => try out.append(self.allocator, .{
+                        .row = row.row,
+                        .remaining = row.remaining,
+                    }),
+                }
+            } else {
+                try out.append(self.allocator, .{
+                    .row = row.row,
+                    .remaining = row.remaining,
+                });
+            }
+        }
+
+        return try out.toOwnedSlice(self.allocator);
+    }
+
+    fn decisionRowsWithoutPathTest(
+        self: *BodyBuilder,
+        rows: []const SourceMatchDecisionRowRef,
+        path_value: Ast.PatternPathValuePlanId,
+    ) Allocator.Error![]SourceMatchDecisionRowRef {
+        var out = std.ArrayList(SourceMatchDecisionRowRef).empty;
+        errdefer out.deinit(self.allocator);
+        for (rows) |row| {
+            if (self.firstTestIndexAtPath(row.remaining, path_value) == null) {
+                try out.append(self.allocator, .{
+                    .row = row.row,
+                    .remaining = row.remaining,
+                });
+            }
+        }
+        return try out.toOwnedSlice(self.allocator);
+    }
+
+    fn remainingWithoutTest(
+        self: *BodyBuilder,
+        tests: []const PendingPatternTest,
+        removed: usize,
+    ) Allocator.Error![]const PendingPatternTest {
+        if (removed >= tests.len) executableInvariant("executable source_match removed test index out of range");
+        if (tests.len == 1) return &.{};
+        const out = try self.allocator.alloc(PendingPatternTest, tests.len - 1);
+        var write: usize = 0;
+        for (tests, 0..) |test, i| {
+            if (i == removed) continue;
+            out[write] = test;
+            write += 1;
+        }
+        return out;
+    }
+
+    fn deinitSourceMatchDecisionRowRefs(
+        self: *BodyBuilder,
+        rows: []const SourceMatchDecisionRowRef,
+    ) void {
+        for (rows) |row| {
+            if (row.owns_remaining and row.remaining.len > 0) {
+                self.allocator.free(row.remaining);
+            }
+        }
+        if (rows.len > 0) self.allocator.free(rows);
+    }
+
+    fn firstTestIndexAtPath(
+        self: *BodyBuilder,
+        tests: []const PendingPatternTest,
+        path_value: Ast.PatternPathValuePlanId,
+    ) ?usize {
+        _ = self;
+        for (tests, 0..) |test, i| {
+            if (test.path_value == path_value) return i;
+        }
+        return null;
+    }
+
+    fn hasDecisionTest(
+        self: *BodyBuilder,
+        tests: []const Ast.PatternTest,
+        needle: Ast.PatternTest,
+    ) bool {
+        for (tests) |test| {
+            if (self.patternTestEql(test, needle)) return true;
+        }
+        return false;
+    }
+
+    fn patternTestRelationWhenAssumed(
+        self: *BodyBuilder,
+        assumed: Ast.PatternTest,
+        required: Ast.PatternTest,
+    ) PatternTestAssumptionRelation {
+        if (self.patternTestEql(assumed, required)) return .proves;
+
+        return switch (assumed) {
+            .list_len_exact => |assumed_len| switch (required) {
+                .list_len_exact => |required_len| if (assumed_len == required_len) .proves else .impossible,
+                .list_len_at_least => |required_len| if (assumed_len >= required_len) .proves else .impossible,
+                else => .impossible,
+            },
+            .list_len_at_least => |assumed_len| switch (required) {
+                .list_len_exact => |required_len| if (required_len >= assumed_len) .possible else .impossible,
+                .list_len_at_least => |required_len| if (assumed_len >= required_len) .proves else .possible,
+                else => .impossible,
+            },
+            else => .impossible,
+        };
+    }
+
+    fn patternTestEql(
+        self: *BodyBuilder,
+        a: Ast.PatternTest,
+        b: Ast.PatternTest,
+    ) bool {
+        _ = self;
+        return switch (a) {
+            .tag => |left| switch (b) {
+                .tag => |right| left == right,
+                else => false,
+            },
+            .bool_literal => |left| switch (b) {
+                .bool_literal => |right| left == right,
+                else => false,
+            },
+            .int_literal => |left| switch (b) {
+                .int_literal => |right| left == right,
+                else => false,
+            },
+            .float_f32_literal => |left| switch (b) {
+                .float_f32_literal => |right| @as(u32, @bitCast(left)) == @as(u32, @bitCast(right)),
+                else => false,
+            },
+            .float_f64_literal => |left| switch (b) {
+                .float_f64_literal => |right| @as(u64, @bitCast(left)) == @as(u64, @bitCast(right)),
+                else => false,
+            },
+            .decimal_literal => |left| switch (b) {
+                .decimal_literal => |right| left == right,
+                else => false,
+            },
+            .str_literal => |left| switch (b) {
+                .str_literal => |right| left == right,
+                else => false,
+            },
+            .list_len_exact => |left| switch (b) {
+                .list_len_exact => |right| left == right,
+                else => false,
+            },
+            .list_len_at_least => |left| switch (b) {
+                .list_len_at_least => |right| left == right,
+                else => false,
+            },
+            .guard => |left| switch (b) {
+                .guard => |right| left == right,
+                else => false,
+            },
+        };
+    }
+
+    fn patternPathValuePlanEql(
+        self: *BodyBuilder,
+        a: Ast.PatternPathValuePlan,
+        b: Ast.PatternPathValuePlan,
+    ) bool {
+        if (a.ty != b.ty) return false;
+        if (a.path.scrutinee != b.path.scrutinee) return false;
+        if (!self.patternPathValueSourceEql(a.source, b.source)) return false;
+
+        const a_steps = self.output.slicePatternPathStepSpan(a.path.steps);
+        const b_steps = self.output.slicePatternPathStepSpan(b.path.steps);
+        if (a_steps.len != b_steps.len) return false;
+        for (a_steps, b_steps) |left, right| {
+            if (!self.patternPathStepEql(left, right)) return false;
+        }
+        return true;
+    }
+
+    fn patternPathStepEql(
+        self: *BodyBuilder,
+        a: Ast.PatternPathStep,
+        b: Ast.PatternPathStep,
+    ) bool {
+        _ = self;
+        return switch (a) {
+            .tag_payload_record => |left| switch (b) {
+                .tag_payload_record => |right| left == right,
+                else => false,
+            },
+            .tag_payload => |left| switch (b) {
+                .tag_payload => |right| left == right,
+                else => false,
+            },
+            .record_field => |left| switch (b) {
+                .record_field => |right| left == right,
+                else => false,
+            },
+            .record_rest => |left| switch (b) {
+                .record_rest => |right| left == right,
+                else => false,
+            },
+            .tuple_field => |left| switch (b) {
+                .tuple_field => |right| left == right,
+                else => false,
+            },
+            .list_index => |left| switch (b) {
+                .list_index => |right| left.index == right.index and left.from_end == right.from_end,
+                else => false,
+            },
+            .list_rest => |left| switch (b) {
+                .list_rest => |right| left.start == right.start and left.from_end_count == right.from_end_count,
+                else => false,
+            },
+            .nominal_payload => switch (b) {
+                .nominal_payload => true,
+                else => false,
+            },
+        };
+    }
+
+    fn patternPathValueSourceEql(
+        self: *BodyBuilder,
+        a: Ast.PatternPathValueSource,
+        b: Ast.PatternPathValueSource,
+    ) bool {
+        _ = self;
+        return switch (a) {
+            .scrutinee => |left| switch (b) {
+                .scrutinee => |right| left == right,
+                else => false,
+            },
+            .tag_payload_record => |left| switch (b) {
+                .tag_payload_record => |right| left.parent == right.parent and left.tag == right.tag,
+                else => false,
+            },
+            .tag_payload_field => |left| switch (b) {
+                .tag_payload_field => |right| left.parent_payload_record == right.parent_payload_record and left.payload == right.payload,
+                else => false,
+            },
+            .record_field => |left| switch (b) {
+                .record_field => |right| left.parent == right.parent and left.field == right.field,
+                else => false,
+            },
+            .record_rest => |left| switch (b) {
+                .record_rest => |right| left == right,
+                else => false,
+            },
+            .tuple_field => |left| switch (b) {
+                .tuple_field => |right| left.parent == right.parent and left.field == right.field,
+                else => false,
+            },
+            .list_element => |left| switch (b) {
+                .list_element => |right| left.parent == right.parent and
+                    left.probe.index == right.probe.index and
+                    left.probe.from_end == right.probe.from_end,
+                else => false,
+            },
+            .list_rest => |left| switch (b) {
+                .list_rest => |right| left.parent == right.parent and
+                    left.probe.start == right.probe.start and
+                    left.probe.from_end_count == right.probe.from_end_count,
+                else => false,
+            },
+            .nominal_payload => |left| switch (b) {
+                .nominal_payload => |right| left == right,
+                else => false,
+            },
+        };
     }
 
     fn addPatternPathValuePlan(
@@ -5004,6 +5390,11 @@ const BodyBuilder = struct {
         path_plans: *std.ArrayList(Ast.PatternPathValuePlanId),
         plan: Ast.PatternPathValuePlan,
     ) Allocator.Error!Ast.PatternPathValuePlanId {
+        for (path_plans.items) |existing_id| {
+            if (self.patternPathValuePlanEql(self.output.getPatternPathValuePlan(existing_id), plan)) {
+                return existing_id;
+            }
+        }
         const id = try self.output.addPatternPathValuePlan(plan);
         try path_plans.append(self.allocator, id);
         return id;
@@ -5019,6 +5410,28 @@ const BodyBuilder = struct {
     ) Allocator.Error!Ast.PatternPathValuePlanId {
         const parent = self.output.getPatternPathValuePlan(parent_id);
         const parent_steps = self.output.slicePatternPathStepSpan(parent.path.steps);
+
+        for (path_plans.items) |existing_id| {
+            const existing = self.output.getPatternPathValuePlan(existing_id);
+            if (existing.ty != ty) continue;
+            if (existing.path.scrutinee != parent.path.scrutinee) continue;
+            if (!self.patternPathValueSourceEql(existing.source, source)) continue;
+
+            const existing_steps = self.output.slicePatternPathStepSpan(existing.path.steps);
+            if (existing_steps.len != parent_steps.len + 1) continue;
+
+            var matches_parent = true;
+            for (parent_steps, 0..) |parent_step, i| {
+                if (!self.patternPathStepEql(existing_steps[i], parent_step)) {
+                    matches_parent = false;
+                    break;
+                }
+            }
+            if (matches_parent and self.patternPathStepEql(existing_steps[parent_steps.len], step)) {
+                return existing_id;
+            }
+        }
+
         const steps = try self.allocator.alloc(Ast.PatternPathStep, parent_steps.len + 1);
         defer self.allocator.free(steps);
         if (parent_steps.len > 0) @memcpy(steps[0..parent_steps.len], parent_steps);

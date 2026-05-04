@@ -2171,6 +2171,26 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: match tuple pattern destructures", .source = "match (1, 2) { (1, b) => b, _ => 0 }", .expected = .{ .inspect_str = "2.0" } },
     .{ .name = "inspect: match bool patterns", .source = "match True { True => 1, False => 0 }", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "inspect: match result tag payload", .source = "match Ok(3) { Ok(n) => n + 1, Err(_) => 0 }", .expected = .{ .inspect_str = "4.0" } },
+    .{
+        .name = "inspect: match branch alternatives remap first binder",
+        .source =
+        \\{
+        \\    value = if True Ok(3) else Err(4)
+        \\    match value { Ok(v) | Err(v) => v }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: match branch alternatives remap later binder",
+        .source =
+        \\{
+        \\    value = if False Ok(3) else Err(4)
+        \\    match value { Ok(v) | Err(v) => v }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4.0" },
+    },
     .{ .name = "inspect: match record destructures fields", .source = "match { x: 1, y: 2 } { { x, y } => x + y }", .expected = .{ .inspect_str = "3.0" } },
     .{ .name = "inspect: render Try.Ok literal", .source = "match True { True => Ok(42), False => Err(\"boom\") }", .expected = .{ .inspect_str = "Ok(42.0)" } },
     .{ .name = "inspect: render Try.Err string", .source = "match True { True => Err(\"boom\"), False => Ok(42) }", .expected = .{ .inspect_str = "Err(\"boom\")" } },
@@ -2178,6 +2198,8 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: match tuple payload tag", .source = "match Ok((1, 2)) { Ok((a, b)) => a + b, Err(_) => 0 }", .expected = .{ .inspect_str = "3.0" } },
     .{ .name = "inspect: match record payload tag", .source = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg: _msg }) => code, Ok(_) => 0 }", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "inspect: direct list pattern destructure sum", .source = "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }", .expected = .{ .inspect_str = "6.0" } },
+    .{ .name = "inspect: list pattern keeps more specific rest branch first", .source = "match [1, 2] { [x, y, ..] => y, [x, ..] => x, _ => 0 }", .expected = .{ .inspect_str = "2.0" } },
+    .{ .name = "inspect: list pattern falls through to less specific rest branch", .source = "match [1] { [x, y, ..] => y, [x, ..] => x, _ => 0 }", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "inspect: List.len on literal", .source = "List.len([1, 2, 3])", .expected = .{ .inspect_str = "3" } },
     .{
         .name = "inspect: generic local List.len specialization stays resolved",
