@@ -23,6 +23,7 @@ my @violations;
 my %files = map { $_ => read_file($_) } qw(
     src/lir/checked_pipeline.zig
     src/mir/debug_verify.zig
+    src/mir/executable/build.zig
     src/mir/mono/specialize.zig
     src/mir/mono_row/mod.zig
     src/mir/lambda_solved/solve.zig
@@ -55,6 +56,12 @@ push @violations, "src/mir/mono_row/mod.zig: row-finalized verifier body must re
 
 push @violations, "src/mir/lambda_solved/solve.zig: lambda-solved sealed verifiers must be Debug-only"
     unless $files{'src/mir/lambda_solved/solve.zig'} =~ /if \(\@import\("builtin"\)\.mode == \.Debug\) \{\s*verifySealedLambdaSolvedProgram\(&program\);\s*for \(program\.solve_sessions\.items\) \|\*session\| \{\s*session\.representation_store\.verifySealed\(\);\s*\}\s*\}/s;
+
+push @violations, "src/mir/executable/build.zig: executable MIR verifier must use the debug verifier gate"
+    unless $files{'src/mir/executable/build.zig'} =~ /if \(debug\.enabled\(\)\) verifyExecutableProgram\(&program\);/s;
+
+push @violations, "src/mir/executable/build.zig: executable MIR verifier must reject unresolved type placeholders"
+    unless $files{'src/mir/executable/build.zig'} =~ /\.placeholder => debug\.invariant\(false, "executable MIR type store contains an unresolved placeholder"\),/s;
 
 my @required_eval_fixtures = (
     'boxed lambda round trip: direct proc-value capture transform',

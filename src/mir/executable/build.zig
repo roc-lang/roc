@@ -231,8 +231,56 @@ pub fn run(
         try program.root_metadata.append(allocator, metadata);
     }
 
+    if (debug.enabled()) verifyExecutableProgram(&program);
+
     input.deinit();
     return program;
+}
+
+fn verifyExecutableProgram(program: *const Program) void {
+    verifyExecutableTypes(&program.types);
+}
+
+fn verifyExecutableTypes(types_store: *const Type.Store) void {
+    const len = types_store.types.items.len;
+    for (types_store.types.items) |content| {
+        switch (content) {
+            .placeholder => debug.invariant(false, "executable MIR type store contains an unresolved placeholder"),
+            .link => |next| verifyExecutableTypeRef(next, len),
+            .primitive,
+            .vacant_callable_slot,
+            => {},
+            .nominal => |nominal| verifyExecutableTypeRef(nominal.backing, len),
+            .list,
+            .box,
+            => |child| verifyExecutableTypeRef(child, len),
+            .tuple => |items| {
+                for (items) |item| verifyExecutableTypeRef(item, len);
+            },
+            .record => |record| {
+                for (record.fields) |field| verifyExecutableTypeRef(field.ty, len);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.payloads) |payload| verifyExecutableTypeRef(payload.ty, len);
+                }
+            },
+            .callable_set => |callable_set| {
+                for (callable_set.members) |member| {
+                    if (member.payload_ty) |payload_ty| verifyExecutableTypeRef(payload_ty, len);
+                }
+            },
+            .erased_fn => |erased_fn| {
+                if (erased_fn.capture_ty) |capture_ty| verifyExecutableTypeRef(capture_ty, len);
+            },
+        }
+    }
+}
+
+fn verifyExecutableTypeRef(ref: Type.TypeId, len: usize) void {
+    if (@intFromEnum(ref) >= len) {
+        debug.invariant(false, "executable MIR type store contains an out-of-range type reference");
+    }
 }
 
 fn programCallableSetDescriptor(
