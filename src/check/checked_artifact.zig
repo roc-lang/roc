@@ -9123,6 +9123,7 @@ pub const ConstInstantiationStore = struct {
 
     pub fn verifySealed(
         self: *const ConstInstantiationStore,
+        comptime_dependencies: *const ComptimeDependencySummaryStore,
         semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
     ) void {
         if (builtin.mode != .Debug) return;
@@ -9140,6 +9141,12 @@ pub const ConstInstantiationStore = struct {
                     if (instance.dependency_summary == null) {
                         std.debug.panic(
                             "checked artifact invariant violated: constant instance {d} has no dependency summary",
+                            .{i},
+                        );
+                    }
+                    if (@intFromEnum(instance.dependency_summary.?) >= comptime_dependencies.summaries.items.len) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: constant instance {d} references missing dependency summary",
                             .{i},
                         );
                     }
@@ -9330,6 +9337,7 @@ pub const CallableBindingInstantiationStore = struct {
 
     pub fn verifySealed(
         self: *const CallableBindingInstantiationStore,
+        comptime_dependencies: *const ComptimeDependencySummaryStore,
         plans: *const CompileTimePlanStore,
         roots: *const CompileTimeRootTable,
         promoted_procedures: *const PromotedProcedureTable,
@@ -9349,6 +9357,7 @@ pub const CallableBindingInstantiationStore = struct {
                     i,
                     record.key,
                     instance,
+                    comptime_dependencies,
                     plans,
                     roots,
                     promoted_procedures,
@@ -9402,12 +9411,16 @@ fn verifyCallableBindingInstance(
     index: usize,
     key: CallableBindingInstantiationKey,
     instance: CallableBindingInstance,
+    comptime_dependencies: *const ComptimeDependencySummaryStore,
     plans: *const CompileTimePlanStore,
     roots: *const CompileTimeRootTable,
     promoted_procedures: *const PromotedProcedureTable,
 ) void {
     if (!callableBindingInstantiationKeyEql(instance.key, key)) {
         std.debug.panic("checked artifact invariant violated: callable binding instance {d} payload key does not match row key", .{index});
+    }
+    if (@intFromEnum(instance.dependency_summary) >= comptime_dependencies.summaries.items.len) {
+        std.debug.panic("checked artifact invariant violated: callable binding instance {d} references missing dependency summary", .{index});
     }
     verifyCallableResultRef(plans, instance.result_plan);
 
@@ -10427,8 +10440,12 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_plans.verifySealed(&self.callable_set_descriptors);
         self.comptime_dependencies.verifySealed();
         self.comptime_values.verifySealed();
-        self.const_instances.verifySealed(&self.semantic_instantiation_procedures);
+        self.const_instances.verifySealed(
+            &self.comptime_dependencies,
+            &self.semantic_instantiation_procedures,
+        );
         self.callable_binding_instances.verifySealed(
+            &self.comptime_dependencies,
             &self.comptime_plans,
             &self.compile_time_roots,
             &self.promoted_procedures,
