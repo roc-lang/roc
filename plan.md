@@ -13494,14 +13494,14 @@ Do not provide old-name compatibility modules.
 All public executable pipelines must call:
 
 ```text
-checked CIR -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir
+checked artifacts -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir
 ```
 
 Compile-time constant evaluation must call the same MIR-family lowering path and
 then run the LIR interpreter during checking finalization:
 
 ```text
-checked CIR -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir -> LIR interpreter -> compile-time value store
+checked artifacts -> mir.mono -> mir.mono.row_finalize -> mir.lifted -> mir.lambda_solved -> mir.executable -> ir -> lir -> LIR interpreter -> compile-time value store
 ```
 
 Required pipeline call-site updates include:
@@ -16858,7 +16858,7 @@ Forbidden responses:
 
 The cutover is complete only when all of these are true:
 
-- public executable pipeline is `checked CIR -> mono MIR -> row-finalized mono
+- public executable pipeline is `checked artifacts -> mono MIR -> row-finalized mono
   MIR -> lifted MIR -> lambda-solved MIR -> executable MIR -> IR -> LIR`
 - every public semantic lowering client enters through the checked-artifact
   pipeline with explicit roots and target configuration
@@ -16899,7 +16899,7 @@ The cutover is complete only when all of these are true:
   missing-data conditions are checking diagnostics before publication or
   compiler invariant violations after publication
 - compile-time constant evaluation runs during checking finalization through
-  `checked CIR -> mono MIR -> row-finalized mono MIR -> lifted MIR ->
+  `checked artifacts -> mono MIR -> row-finalized mono MIR -> lifted MIR ->
   lambda-solved MIR -> executable MIR -> IR -> LIR -> LIR interpreter ->
   compile-time value store -> constant instantiation store -> callable binding
   instantiation store -> semantic-instantiation procedure table`
