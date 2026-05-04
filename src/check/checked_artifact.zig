@@ -8547,10 +8547,24 @@ pub const ComptimeFiniteCallValueDependency = struct {
 
 pub const ComptimeErasedCallValueDependency = struct {
     call_site: ComptimeCallSiteId,
-    code: canonical.ErasedCallableCodeRef,
+    code: ErasedCallableCodeDependency,
     capture_availability: []const ComptimeAvailabilityUse = &.{},
     capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
     provenance: []const canonical.BoxBoundaryId = &.{},
+};
+
+pub const ErasedCallableCodeDependency = union(enum) {
+    direct_proc_value: ErasedDirectProcCodeDependency,
+    finite_set_adapter: ErasedFiniteAdapterDependency,
+};
+
+pub const ErasedDirectProcCodeDependency = struct {
+    erase_plan: ProcValueToErasedPlan,
+};
+
+pub const ErasedFiniteAdapterDependency = struct {
+    adapter_key: canonical.ErasedAdapterKey,
+    member_targets: []const canonical.ExecutableSpecializationKey = &.{},
 };
 
 pub const ConstGraphDependency = struct {
@@ -8575,7 +8589,7 @@ pub const CallableLeafDependency = union(enum) {
 };
 
 pub const ErasedCallableDependency = struct {
-    code: canonical.ErasedCallableCodeRef,
+    code: ErasedCallableCodeDependency,
     capture_availability: []const ComptimeAvailabilityUse = &.{},
     capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
     provenance: []const canonical.BoxBoundaryId = &.{},
@@ -8808,6 +8822,7 @@ fn deinitComptimeCallDependency(allocator: Allocator, dep: *const ComptimeCallDe
         .call_value_finite => |finite| deinitExecutableSpecializationKeySlice(allocator, finite.members),
         .call_value_erased => |erased| deinitErasedCallableDependencyFields(
             allocator,
+            erased.code,
             erased.capture_availability,
             erased.capture_concrete_values,
             erased.provenance,
@@ -8841,6 +8856,7 @@ fn deinitCallableLeafDependency(allocator: Allocator, leaf: *const CallableLeafD
 fn deinitErasedCallableDependency(allocator: Allocator, erased: ErasedCallableDependency) void {
     deinitErasedCallableDependencyFields(
         allocator,
+        erased.code,
         erased.capture_availability,
         erased.capture_concrete_values,
         erased.provenance,
@@ -8849,13 +8865,28 @@ fn deinitErasedCallableDependency(allocator: Allocator, erased: ErasedCallableDe
 
 fn deinitErasedCallableDependencyFields(
     allocator: Allocator,
+    code: ErasedCallableCodeDependency,
     availability: []const ComptimeAvailabilityUse,
     concrete: []const ComptimeConcreteValueUse,
     provenance: []const canonical.BoxBoundaryId,
 ) void {
+    deinitErasedCallableCodeDependency(allocator, code);
     allocator.free(availability);
     allocator.free(concrete);
     allocator.free(provenance);
+}
+
+fn deinitErasedCallableCodeDependency(allocator: Allocator, code: ErasedCallableCodeDependency) void {
+    switch (code) {
+        .direct_proc_value => |direct| deinitProcValueToErasedPlan(allocator, direct.erase_plan),
+        .finite_set_adapter => |adapter| deinitExecutableSpecializationKeySlice(allocator, adapter.member_targets),
+    }
+}
+
+fn deinitProcValueToErasedPlan(allocator: Allocator, plan: ProcValueToErasedPlan) void {
+    var key = plan.executable_specialization_key;
+    deinitExecutableSpecializationKey(allocator, &key);
+    deinitErasedCaptureExecutableMaterializationPlan(allocator, plan.capture);
 }
 
 fn deinitExecutableSpecializationKeySlice(
