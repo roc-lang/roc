@@ -3407,7 +3407,7 @@ pub const PromotedCallableWrapper = struct {
     promoted_proc: canonical.ProcedureValueRef,
     proc_base_key: canonical.ProcBaseKeyRef,
     callable_node: canonical.PromotedCallableNodeId,
-    source_binding: CIR.Pattern.Idx,
+    source_binding: CheckedPatternId,
     checked_fn_root: CheckedTypeId,
     body_plan: canonical.PromotedCallableBodyPlanId,
 };
@@ -3450,6 +3450,7 @@ pub const PromotedCallableWrapperTable = struct {
         self: *const PromotedCallableWrapperTable,
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
+        checked_bodies: *const CheckedBodyStore,
         body_plans: *const PromotedCallableBodyPlanTable,
     ) void {
         if (builtin.mode != .Debug) return;
@@ -3464,6 +3465,9 @@ pub const PromotedCallableWrapperTable = struct {
             }
             if (@intFromEnum(wrapper.checked_fn_root) >= checked_types.roots.len) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper checked function root is out of range", .{});
+            }
+            if (@intFromEnum(wrapper.source_binding) >= checked_bodies.patterns.len) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper source binding is out of range", .{});
             }
             if (@intFromEnum(wrapper.body_plan) >= body_plans.plans.len) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper body plan is out of range", .{});
@@ -3496,14 +3500,14 @@ pub const LocalBindingRef = struct {
 pub const TopLevelBindingRef = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const ImportedTopLevelValueRef = struct {
     artifact: CheckedModuleArtifactKey,
     module_idx: u32,
     def: CIR.Def.Idx,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const HostedProcRef = struct {
@@ -3515,7 +3519,7 @@ pub const HostedProcRef = struct {
 
 pub const TopLevelValueRef = struct {
     artifact: CheckedModuleArtifactKey,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const RequiredAppProcedureRef = struct {
@@ -3622,7 +3626,7 @@ pub const TopLevelProcedureBindingTable = struct {
 pub const CallableEvalTemplate = struct {
     id: CallableEvalTemplateId,
     module_idx: u32,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
     root: ComptimeRootId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
@@ -3639,7 +3643,7 @@ pub const CallableEvalTemplateTable = struct {
         self: *CallableEvalTemplateTable,
         allocator: Allocator,
         module_idx: u32,
-        pattern: CIR.Pattern.Idx,
+        pattern: CheckedPatternId,
         root: ComptimeRootId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
         checked_fn_root: CheckedTypeId,
@@ -3680,7 +3684,7 @@ pub const ImportedProcedureBindingRef = struct {
     artifact: CheckedModuleArtifactKey,
     module_idx: u32,
     def: CIR.Def.Idx,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const ProcedureUseTemplate = struct {
@@ -3906,7 +3910,7 @@ fn classifyLocalValueRef(
     top_level_values: *const TopLevelValueTable,
     checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
-    _ = checked_bodies.patternIdForSource(pattern) orelse {
+    const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
@@ -3917,7 +3921,7 @@ fn classifyLocalValueRef(
     };
 
     if (topLevelDefByPattern(module, pattern)) |def_idx| {
-        const entry = topLevelValueForPattern(top_level_values, pattern) orelse {
+        const entry = topLevelValueForPattern(top_level_values, checked_pattern) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "checked artifact invariant violated: top-level pattern {d} has no top-level value entry",
@@ -4093,7 +4097,7 @@ fn topLevelDefByPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.
     return null;
 }
 
-fn topLevelValueForPattern(table: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
+fn topLevelValueForPattern(table: *const TopLevelValueTable, pattern: CheckedPatternId) ?TopLevelValueEntry {
     for (table.entries) |entry| {
         if (entry.pattern == pattern) return entry;
     }
@@ -6120,8 +6124,8 @@ pub const CompileTimeRoot = struct {
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
-    pattern: ?CIR.Pattern.Idx,
-    expr: CIR.Expr.Idx,
+    pattern: ?CheckedPatternId,
+    expr: CheckedExprId,
     checked_type: CheckedTypeId,
     dependency_summary_request: ComptimeDependencySummaryRequestId,
     payload: CompileTimeRootPayload,
@@ -6134,6 +6138,7 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         checked_types: *const CheckedTypeStore,
+        checked_bodies: *const CheckedBodyStore,
     ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
         errdefer roots.deinit(allocator);
@@ -6147,7 +6152,7 @@ pub const CompileTimeRootTable = struct {
                 .kind = .expect,
                 .source = .{ .statement = statement_idx },
                 .pattern = null,
-                .expr = stmt.s_expect.body,
+                .expr = checkedExprIdForSource(checked_bodies, stmt.s_expect.body),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt.s_expect.body)),
                 .payload = .expect,
             });
@@ -6163,8 +6168,8 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = if (is_callable) .callable_binding else .constant,
                 .source = .{ .def = def_idx },
-                .pattern = def.pattern.idx,
-                .expr = def.expr.idx,
+                .pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx),
+                .expr = checkedExprIdForSource(checked_bodies, def.expr.idx),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                 .payload = .pending,
             });
@@ -6173,7 +6178,7 @@ pub const CompileTimeRootTable = struct {
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
-    pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
+    pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) ?ComptimeRootId {
         for (self.roots) |root| {
             if (root.pattern != null and root.pattern.? == pattern) return root.id;
         }
@@ -6206,8 +6211,8 @@ pub const CompileTimeRootTable = struct {
         module_idx: u32,
         kind: CompileTimeRootKind,
         source: RootSource,
-        pattern: ?CIR.Pattern.Idx,
-        expr: CIR.Expr.Idx,
+        pattern: ?CheckedPatternId,
+        expr: CheckedExprId,
         checked_type: CheckedTypeId,
         payload: CompileTimeRootPayload,
     };
@@ -6249,6 +6254,24 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     };
     if (matches) return;
     checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
+}
+
+fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Expr.Idx) CheckedExprId {
+    return checked_bodies.exprIdForSource(expr) orelse {
+        checkedArtifactInvariant(
+            "checked artifact publication could not map CIR expression {d} to a checked expression id",
+            .{@intFromEnum(expr)},
+        );
+    };
+}
+
+fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) CheckedPatternId {
+    return checked_bodies.patternIdForSource(pattern) orelse {
+        checkedArtifactInvariant(
+            "checked artifact publication could not map CIR pattern {d} to a checked pattern id",
+            .{@intFromEnum(pattern)},
+        );
+    };
 }
 
 pub const FiniteCallableLeafInstance = struct {
@@ -7582,7 +7605,7 @@ pub const ConstOwner = union(enum) {
 
 pub const ConstTopLevelOwner = struct {
     module_idx: u32,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
 };
 
 pub const PromotedCaptureId = struct {
@@ -7598,7 +7621,7 @@ pub const TopLevelValueKind = union(enum) {
 pub const TopLevelValueEntry = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
     source_name: canonical.ExportNameId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     value: TopLevelValueKind,
@@ -7611,6 +7634,7 @@ pub const TopLevelValueTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        checked_bodies: *const CheckedBodyStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
@@ -7623,6 +7647,7 @@ pub const TopLevelValueTable = struct {
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
+            const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def);
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
@@ -7641,7 +7666,7 @@ pub const TopLevelValueTable = struct {
                 );
                 break :blk .{ .procedure_binding = binding };
             } else if (sourceTypeIsFunction(module, source_ty)) blk: {
-                const root_id = compile_time_roots.lookupIdByPattern(def.pattern.idx) orelse {
+                const root_id = compile_time_roots.lookupIdByPattern(checked_pattern) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
                             "checked artifact invariant violated: function-valued binding {d} has no compile-time callable root",
@@ -7664,7 +7689,7 @@ pub const TopLevelValueTable = struct {
                 const callable_template = try callable_eval_templates.append(
                     allocator,
                     module.moduleIndex(),
-                    def.pattern.idx,
+                    checked_pattern,
                     root_id,
                     source_scheme,
                     checked_fn_root,
@@ -7679,14 +7704,14 @@ pub const TopLevelValueTable = struct {
                 allocator,
                 artifact_key,
                 module.moduleIndex(),
-                def.pattern.idx,
+                checked_pattern,
                 source_scheme,
             ) };
 
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
-                .pattern = def.pattern.idx,
+                .pattern = checked_pattern,
                 .source_name = source_name,
                 .source_scheme = source_scheme,
                 .value = value,
@@ -7696,7 +7721,7 @@ pub const TopLevelValueTable = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 
-    pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
+    pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CheckedPatternId) ?TopLevelValueEntry {
         for (self.entries) |entry| {
             if (entry.pattern == pattern) return entry;
         }
@@ -7719,7 +7744,7 @@ pub const TopLevelValueTable = struct {
 pub const PromotedProcedure = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
-    source_binding: CIR.Pattern.Idx,
+    source_binding: CheckedPatternId,
 };
 
 pub const ReservedPromotedCallableWrapper = struct {
@@ -7772,6 +7797,7 @@ pub const PromotedProcedureTable = struct {
         self: *const PromotedProcedureTable,
         artifact_key: CheckedModuleArtifactKey,
         templates: *const CheckedProcedureTemplateTable,
+        checked_bodies: *const CheckedBodyStore,
     ) void {
         if (builtin.mode != .Debug) return;
 
@@ -7789,6 +7815,9 @@ pub const PromotedProcedureTable = struct {
             }
             if (!std.mem.eql(u8, &procedure.template.artifact.bytes, &artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure template belongs to a different artifact", .{});
+            }
+            if (@intFromEnum(procedure.source_binding) >= checked_bodies.patterns.len) {
+                std.debug.panic("checked artifact invariant violated: promoted procedure source binding is out of range", .{});
             }
             if (procedure.proc.proc_base != procedure.template.proc_base) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure proc base differs from its template", .{});
@@ -7870,7 +7899,7 @@ pub const ComptimeValue = union(enum) {
 };
 
 pub const ComptimeBinding = struct {
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
 };
@@ -7880,7 +7909,7 @@ pub const CompileTimeValueStore = struct {
     schemas: std.ArrayList(ComptimeSchema),
     values: std.ArrayList(ComptimeValue),
     bindings: []ComptimeBinding = &.{},
-    by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, ComptimeBinding) = .{},
+    by_pattern: std.AutoHashMapUnmanaged(CheckedPatternId, ComptimeBinding) = .{},
 
     pub fn init(allocator: Allocator) CompileTimeValueStore {
         return .{
@@ -7914,7 +7943,7 @@ pub const CompileTimeValueStore = struct {
 
     pub fn bind(
         self: *CompileTimeValueStore,
-        pattern: CIR.Pattern.Idx,
+        pattern: CheckedPatternId,
         schema: ComptimeSchemaId,
         value: ComptimeValueId,
     ) Allocator.Error!void {
@@ -7948,7 +7977,7 @@ pub const CompileTimeValueStore = struct {
         self.bindings = bindings;
     }
 
-    pub fn lookupBinding(self: *const CompileTimeValueStore, pattern: CIR.Pattern.Idx) ?ComptimeBinding {
+    pub fn lookupBinding(self: *const CompileTimeValueStore, pattern: CheckedPatternId) ?ComptimeBinding {
         return self.by_pattern.get(pattern);
     }
 
@@ -8423,8 +8452,7 @@ pub const ExportedProcedureBindingTable = struct {
 
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
-            const def = module.def(def_idx);
-            const top_level = top_level_values.lookupByPattern(def.pattern.idx) orelse continue;
+            const top_level = top_level_values.lookupByDef(def_idx) orelse continue;
             const binding_ref = switch (top_level.value) {
                 .procedure_binding => |binding| binding,
                 .const_ref => continue,
@@ -8449,7 +8477,7 @@ pub const ExportedProcedureBindingTable = struct {
                     .artifact = artifact_key,
                     .module_idx = module.moduleIndex(),
                     .def = def_idx,
-                    .pattern = def.pattern.idx,
+                    .pattern = top_level.pattern,
                 },
                 .source_scheme = binding.source_scheme,
                 .body = body,
@@ -8579,7 +8607,7 @@ pub const ConstTemplateTable = struct {
         allocator: Allocator,
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
-        pattern: CIR.Pattern.Idx,
+        pattern: CheckedPatternId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
     ) Allocator.Error!ConstRef {
         const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
@@ -8707,7 +8735,7 @@ pub const ConstTemplateTable = struct {
 pub const ImportedConstTemplateView = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
-    pattern: CIR.Pattern.Idx,
+    pattern: CheckedPatternId,
     const_ref: ConstRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     template: ConstTemplate,
@@ -8732,8 +8760,7 @@ pub const ExportedConstTemplateTable = struct {
 
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
-            const def = module.def(def_idx);
-            const top_level = top_level_values.lookupByPattern(def.pattern.idx) orelse continue;
+            const top_level = top_level_values.lookupByDef(def_idx) orelse continue;
             const const_ref = switch (top_level.value) {
                 .const_ref => |ref| ref,
                 .procedure_binding => continue,
@@ -8742,7 +8769,7 @@ pub const ExportedConstTemplateTable = struct {
             try templates.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
-                .pattern = def.pattern.idx,
+                .pattern = top_level.pattern,
                 .const_ref = const_ref,
                 .source_scheme = top_level.source_scheme,
                 .template = template,
@@ -9671,7 +9698,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn appendPromotedCallableWrapper(
         self: *CheckedModuleArtifact,
         allocator: Allocator,
-        source_binding: CIR.Pattern.Idx,
+        source_binding: CheckedPatternId,
         checked_fn_root: CheckedTypeId,
         checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
         body_plan: PromotedCallableBodyPlan,
@@ -9690,7 +9717,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn reservePromotedCallableWrapper(
         self: *CheckedModuleArtifact,
         allocator: Allocator,
-        source_binding: CIR.Pattern.Idx,
+        source_binding: CheckedPatternId,
         checked_fn_root: CheckedTypeId,
         checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
     ) Allocator.Error!ReservedPromotedCallableWrapper {
@@ -9869,6 +9896,8 @@ pub const CheckedModuleArtifact = struct {
         for (self.compile_time_roots.roots, 0..) |root, i| {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
+            if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
                 .constant,
                 .callable_binding,
@@ -9907,6 +9936,8 @@ pub const CheckedModuleArtifact = struct {
         for (self.compile_time_roots.roots, 0..) |root, i| {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
+            if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.payload) {
                 .pending => std.debug.panic("checked artifact invariant violated: published compile-time root has pending payload", .{}),
                 else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
@@ -10078,6 +10109,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.callable_eval_templates.templates, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.id) == i);
             std.debug.assert(template.module_idx == self.module_identity.module_idx);
+            std.debug.assert(@intFromEnum(template.pattern) < self.checked_bodies.patterns.len);
             std.debug.assert(@intFromEnum(template.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(template.root);
             std.debug.assert(root.kind == .callable_binding);
@@ -10089,6 +10121,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.top_level_values.entries) |entry| {
+            std.debug.assert(@intFromEnum(entry.pattern) < self.checked_bodies.patterns.len);
             _ = self.canonical_names.exportNameText(entry.source_name);
             switch (entry.value) {
                 .const_ref => |const_ref| {
@@ -10152,9 +10185,10 @@ pub const CheckedModuleArtifact = struct {
         self.promoted_callable_wrappers.verifyPublished(
             self.key,
             &self.checked_types,
+            &self.checked_bodies,
             &self.promoted_callable_body_plans,
         );
-        self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates);
+        self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates, &self.checked_bodies);
         self.comptime_plans.verifySealed(&self.callable_set_descriptors);
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
@@ -10619,7 +10653,7 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
-    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types);
+    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types, &checked_bodies);
     errdefer compile_time_roots.deinit(allocator);
 
     var entry_wrappers = EntryWrapperTable{};
@@ -10670,6 +10704,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         &canonical_names,
+        &checked_bodies,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
