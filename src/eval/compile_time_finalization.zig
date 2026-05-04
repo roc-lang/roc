@@ -324,9 +324,12 @@ fn appendProcedureAvailabilityUse(
                 },
             }
         },
-        .imported,
+        .imported => |imported| try availability.append(allocator, .{ .imported_value = .{
+            .artifact = imported.artifact,
+            .pattern = imported.pattern,
+        } }),
+        .platform_required => |required| try availability.append(allocator, .{ .imported_value = required.app_value }),
         .hosted,
-        .platform_required,
         .promoted,
         => {},
     }
@@ -353,6 +356,9 @@ fn orderCompileTimeRootRequests(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     roots: []const checked_artifact.RootRequest,
 ) Allocator.Error![]checked_artifact.RootRequest {
+    var graph = try buildCompileTimeRootDependencyGraph(allocator, artifact, roots);
+    defer graph.deinit(allocator);
+
     var root_to_request = std.AutoHashMap(checked_artifact.ComptimeRootId, usize).init(allocator);
     defer root_to_request.deinit();
 
@@ -374,8 +380,7 @@ fn orderCompileTimeRootRequests(
         for (roots, 0..) |request, i| {
             if (emitted[i]) continue;
             const root = compileTimeRootForRequest(artifact, request);
-            const summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
-            if (!localRootDependenciesSatisfied(summary, &root_to_request, emitted)) continue;
+            if (!localRootDependenciesSatisfied(root.id, graph.edges, &root_to_request, emitted)) continue;
 
             try ordered.append(allocator, request);
             emitted[i] = true;
@@ -390,23 +395,65 @@ fn orderCompileTimeRootRequests(
     return try ordered.toOwnedSlice(allocator);
 }
 
+fn buildCompileTimeRootDependencyGraph(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    roots: []const checked_artifact.RootRequest,
+) Allocator.Error!CompileTimeRootDependencyGraph {
+    const nodes = try allocator.alloc(CompileTimeRootNode, roots.len);
+    errdefer allocator.free(nodes);
+
+    var edges = std.ArrayList(CompileTimeRootEdge).empty;
+    errdefer edges.deinit(allocator);
+
+    for (roots, 0..) |request, i| {
+        const root = compileTimeRootForRequest(artifact, request);
+        nodes[i] = switch (root.kind) {
+            .constant => .{ .compile_time_constant_root = root.id },
+            .callable_binding => .{ .callable_binding_root = root.id },
+            .expect => .{ .expect_root = root.id },
+        };
+        const summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
+        for (summary.availability_values) |availability| {
+            const prerequisite: ?CompileTimeRootPrerequisite = switch (availability) {
+                .local_root => |dependency| .{ .local_root = dependency },
+                .imported_value => |imported| .{ .imported_value = imported },
+                .const_template,
+                .procedure_binding,
+                => null,
+            };
+            if (prerequisite) |to| {
+                try edges.append(allocator, .{
+                    .from = root.id,
+                    .to = to,
+                    .reason = .{ .availability_value = availability },
+                });
+            }
+        }
+    }
+
+    return .{
+        .nodes = nodes,
+        .edges = try edges.toOwnedSlice(allocator),
+    };
+}
+
 fn localRootDependenciesSatisfied(
-    summary: checked_artifact.ComptimeDependencySummary,
+    root: checked_artifact.ComptimeRootId,
+    edges: []const CompileTimeRootEdge,
     root_to_request: *const std.AutoHashMap(checked_artifact.ComptimeRootId, usize),
     emitted: []const bool,
 ) bool {
-    for (summary.availability_values) |availability| {
-        switch (availability) {
+    for (edges) |edge| {
+        if (edge.from != root) continue;
+        switch (edge.to) {
             .local_root => |dependency| {
                 const dependency_index = root_to_request.get(dependency) orelse {
                     compileTimeFinalizationInvariant("compile-time root dependency references a root outside the selected compile-time root set");
                 };
                 if (!emitted[dependency_index]) return false;
             },
-            .imported_value,
-            .const_template,
-            .procedure_binding,
-            => {},
+            .imported_value => {},
         }
     }
     return true;
@@ -583,6 +630,38 @@ const PublishedCallableResult = struct {
     proc_value: check.CanonicalNames.ProcedureCallableRef,
     output: checked_artifact.CallablePromotionOutput,
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
+};
+
+const CompileTimeRootDependencyGraph = struct {
+    nodes: []CompileTimeRootNode = &.{},
+    edges: []CompileTimeRootEdge = &.{},
+
+    fn deinit(self: *CompileTimeRootDependencyGraph, allocator: Allocator) void {
+        allocator.free(self.edges);
+        allocator.free(self.nodes);
+        self.* = .{};
+    }
+};
+
+const CompileTimeRootNode = union(enum) {
+    compile_time_constant_root: checked_artifact.ComptimeRootId,
+    callable_binding_root: checked_artifact.ComptimeRootId,
+    expect_root: checked_artifact.ComptimeRootId,
+};
+
+const CompileTimeRootEdge = struct {
+    from: checked_artifact.ComptimeRootId,
+    to: CompileTimeRootPrerequisite,
+    reason: CompileTimeRootDependencyReason,
+};
+
+const CompileTimeRootPrerequisite = union(enum) {
+    local_root: checked_artifact.ComptimeRootId,
+    imported_value: checked_artifact.TopLevelValueRef,
+};
+
+const CompileTimeRootDependencyReason = union(enum) {
+    availability_value: checked_artifact.ComptimeAvailabilityUse,
 };
 
 fn constGraphContainsCallableSlots(
