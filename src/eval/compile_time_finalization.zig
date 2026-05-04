@@ -446,6 +446,12 @@ fn evaluateConstantRoot(
         .source_binding = pattern,
     };
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
+    const dependency_summary = try appendConcreteDependencySummaryForConstRoot(
+        allocator,
+        artifact,
+        root,
+        reification_plan,
+    );
 
     artifact.const_templates.fillValueGraph(const_ref, .{
         .schema = reified.schema,
@@ -461,7 +467,7 @@ fn evaluateConstantRoot(
     artifact.const_instances.fill(instance_ref, .{
         .schema = reified.schema,
         .value = reified.value,
-        .dependency_summary = artifact.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request),
+        .dependency_summary = dependency_summary,
         .reification_plan = reification_plan,
     });
 }
@@ -524,6 +530,13 @@ fn evaluateCallableBindingRoot(
     if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
+    const dependency_summary = try appendConcreteDependencySummaryForCallableRoot(
+        allocator,
+        artifact,
+        root,
+        result_plan,
+        callable.proc_value,
+    );
 
     const key = checked_artifact.CallableBindingInstantiationKey{
         .binding = .{ .top_level = binding_ref },
@@ -533,7 +546,7 @@ fn evaluateCallableBindingRoot(
     artifact.callable_binding_instances.markEvaluating(instance_ref);
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
-        .dependency_summary = artifact.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request),
+        .dependency_summary = dependency_summary,
         .executable_root = root.id,
         .result_plan = result_plan,
         .promotion_plan = callable.promotion_plan,
@@ -625,6 +638,265 @@ fn constGraphContainsCallableSlotsInner(
         .recursive_ref => |ref| try constGraphContainsCallableSlotsInner(plans, active, ref),
     };
 }
+
+fn appendConcreteDependencySummaryForConstRoot(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    reification_plan: checked_artifact.ConstGraphReificationPlanId,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    defer collector.deinit();
+    try collector.collectConstGraph(reification_plan);
+    return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
+}
+
+fn appendConcreteDependencySummaryForCallableRoot(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    result_plan: checked_artifact.CallableResultPlanId,
+    published_proc: canonical.ProcedureCallableRef,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    defer collector.deinit();
+    try collector.collectCallableResult(result_plan);
+    try collector.appendProcedureCallable(published_proc);
+    return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
+}
+
+fn appendConcreteDependencySummary(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    concrete_values: []const checked_artifact.ComptimeConcreteValueUse,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    const root_summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = root_summary.availability_values,
+        .concrete_values = concrete_values,
+    });
+}
+
+const ConcreteDependencyCollector = struct {
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    concrete: std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    active_const_graphs: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void),
+    active_capture_slots: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void),
+    active_erased_nodes: std.AutoHashMap(checked_artifact.ErasedCaptureExecutableMaterializationNodeId, void),
+
+    fn init(
+        allocator: Allocator,
+        artifact: *checked_artifact.CheckedModuleArtifact,
+    ) ConcreteDependencyCollector {
+        return .{
+            .allocator = allocator,
+            .artifact = artifact,
+            .concrete = .empty,
+            .active_const_graphs = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void).init(allocator),
+            .active_capture_slots = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void).init(allocator),
+            .active_erased_nodes = std.AutoHashMap(checked_artifact.ErasedCaptureExecutableMaterializationNodeId, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ConcreteDependencyCollector) void {
+        self.active_erased_nodes.deinit();
+        self.active_capture_slots.deinit();
+        self.active_const_graphs.deinit();
+        self.concrete.deinit(self.allocator);
+    }
+
+    fn appendProcedureCallable(
+        self: *ConcreteDependencyCollector,
+        proc_value: canonical.ProcedureCallableRef,
+    ) Allocator.Error!void {
+        try self.concrete.append(self.allocator, .{ .procedure_callable = proc_value });
+    }
+
+    fn appendConstInstance(
+        self: *ConcreteDependencyCollector,
+        instance: checked_artifact.ConstInstanceRef,
+    ) Allocator.Error!void {
+        try self.concrete.append(self.allocator, .{ .const_instance = instance.key });
+    }
+
+    fn collectConstGraph(
+        self: *ConcreteDependencyCollector,
+        root: checked_artifact.ConstGraphReificationPlanId,
+    ) Allocator.Error!void {
+        if (self.active_const_graphs.contains(root)) return;
+        try self.active_const_graphs.put(root, {});
+        defer _ = self.active_const_graphs.remove(root);
+
+        switch (self.artifact.comptime_plans.constGraph(root)) {
+            .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending const graph plan"),
+            .scalar,
+            .string,
+            .callable_schema,
+            => {},
+            .list => |list| try self.collectConstGraph(list.elem),
+            .box => |box| try self.collectConstGraph(box.payload),
+            .tuple => |items| for (items) |item| try self.collectConstGraph(item.value),
+            .record => |fields| for (fields) |field| try self.collectConstGraph(field.value),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectConstGraph(payload.value);
+            },
+            .transparent_alias => |alias| try self.collectConstGraph(alias.backing),
+            .nominal => |nominal| try self.collectConstGraph(nominal.backing),
+            .callable_leaf => |leaf| try self.collectCallableLeaf(leaf),
+            .recursive_ref => |ref| try self.collectConstGraph(ref),
+        }
+    }
+
+    fn collectCallableLeaf(
+        self: *ConcreteDependencyCollector,
+        leaf: checked_artifact.CallableLeafReificationPlan,
+    ) Allocator.Error!void {
+        switch (leaf) {
+            .finite,
+            .erased_boxed,
+            => |result_plan| try self.collectCallableResult(result_plan),
+            .already_resolved => |resolved| switch (resolved) {
+                .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
+                .erased_boxed => |erased| {
+                    try self.collectErasedCodeRef(erased.code);
+                    try self.collectErasedCaptureExecutableMaterialization(erased.capture);
+                },
+            },
+        }
+    }
+
+    fn collectCallableResult(
+        self: *ConcreteDependencyCollector,
+        result_plan_id: checked_artifact.CallableResultPlanId,
+    ) Allocator.Error!void {
+        switch (self.artifact.comptime_plans.callableResult(result_plan_id)) {
+            .finite => |finite| {
+                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                    compileTimeFinalizationInvariant("concrete dependency collection reached finite callable result without descriptor");
+                };
+                for (finite.members) |member_plan| {
+                    const member = callableSetMember(descriptor, member_plan.member) orelse {
+                        compileTimeFinalizationInvariant("concrete dependency collection reached missing callable-set member");
+                    };
+                    try self.appendProcedureCallable(member.proc_value);
+                    for (member_plan.capture_slots) |capture| try self.collectCaptureSlot(capture);
+                }
+            },
+            .erased => |erased| {
+                switch (erased.code_plan) {
+                    .materialized_by_lowering => |code| try self.collectErasedCodeRef(code),
+                    .read_from_interpreted_erased_value => {},
+                }
+                try self.collectErasedCaptureReification(erased.capture);
+            },
+        }
+    }
+
+    fn collectCaptureSlot(
+        self: *ConcreteDependencyCollector,
+        slot_id: checked_artifact.CaptureSlotReificationPlanId,
+    ) Allocator.Error!void {
+        if (self.active_capture_slots.contains(slot_id)) return;
+        try self.active_capture_slots.put(slot_id, {});
+        defer _ = self.active_capture_slots.remove(slot_id);
+
+        switch (self.artifact.comptime_plans.captureSlot(slot_id)) {
+            .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending capture slot plan"),
+            .serializable_leaf => |leaf| try self.appendConstInstance(leaf.const_instance),
+            .callable_leaf => |result_plan| try self.collectCallableResult(result_plan),
+            .callable_schema => {},
+            .record => |fields| for (fields) |field| try self.collectCaptureSlot(field.value),
+            .tuple => |items| for (items) |item| try self.collectCaptureSlot(item),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectCaptureSlot(payload.value);
+            },
+            .list => |list| try self.collectCaptureSlot(list.elem),
+            .box => |payload| try self.collectCaptureSlot(payload),
+            .nominal => |nominal| try self.collectCaptureSlot(nominal.backing),
+            .recursive_ref => |ref| try self.collectCaptureSlot(ref),
+        }
+    }
+
+    fn collectErasedCaptureReification(
+        self: *ConcreteDependencyCollector,
+        capture: checked_artifact.ErasedCaptureReificationPlan,
+    ) Allocator.Error!void {
+        switch (capture) {
+            .none,
+            .zero_sized_typed,
+            => {},
+            .whole_hidden_capture_value => |ref| try self.collectCaptureSlot(ref.plan),
+            .proc_capture_tuple => |refs| for (refs) |ref| try self.collectCaptureSlot(ref.plan),
+            .finite_callable_set_value => |result_plan| try self.collectCallableResult(result_plan),
+        }
+    }
+
+    fn collectErasedCodeRef(
+        self: *ConcreteDependencyCollector,
+        code: canonical.ErasedCallableCodeRef,
+    ) Allocator.Error!void {
+        switch (code) {
+            .direct_proc_value => |direct| try self.appendProcedureCallable(direct.proc_value),
+            .finite_set_adapter => |adapter| {
+                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, adapter.callable_set_key) orelse {
+                    compileTimeFinalizationInvariant("concrete dependency collection reached erased finite adapter without descriptor");
+                };
+                for (descriptor.members) |member| try self.appendProcedureCallable(member.proc_value);
+            },
+        }
+    }
+
+    fn collectErasedCaptureExecutableMaterialization(
+        self: *ConcreteDependencyCollector,
+        capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+    ) Allocator.Error!void {
+        switch (capture) {
+            .none,
+            .zero_sized_typed,
+            => {},
+            .node => |node_id| try self.collectErasedCaptureExecutableMaterializationNode(node_id),
+        }
+    }
+
+    fn collectErasedCaptureExecutableMaterializationNode(
+        self: *ConcreteDependencyCollector,
+        node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+    ) Allocator.Error!void {
+        if (self.active_erased_nodes.contains(node_id)) return;
+        try self.active_erased_nodes.put(node_id, {});
+        defer _ = self.active_erased_nodes.remove(node_id);
+
+        switch (self.artifact.comptime_plans.erasedCaptureExecutableMaterializationNode(node_id)) {
+            .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending erased capture node"),
+            .const_instance => |instance| try self.appendConstInstance(instance),
+            .pure_const => |pure| try self.appendConstInstance(pure.const_instance),
+            .pure_value => {},
+            .finite_callable_set => |finite| {
+                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                    compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set without descriptor");
+                };
+                const member = callableSetMember(descriptor, finite.selected_member) orelse {
+                    compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set with missing member");
+                };
+                try self.appendProcedureCallable(member.proc_value);
+                for (finite.captures) |capture| try self.collectErasedCaptureExecutableMaterialization(capture);
+            },
+            .erased_callable => |erased| {
+                try self.collectErasedCodeRef(erased.code);
+                try self.collectErasedCaptureExecutableMaterialization(erased.capture);
+            },
+            .record => |fields| for (fields) |field| try self.collectErasedCaptureExecutableMaterialization(field.value),
+            .tuple => |items| for (items) |item| try self.collectErasedCaptureExecutableMaterialization(item),
+            .tag_union => |tag| for (tag.payloads) |payload| try self.collectErasedCaptureExecutableMaterialization(payload.value),
+            .list => |items| for (items) |item| try self.collectErasedCaptureExecutableMaterialization(item),
+            .box => |payload| try self.collectErasedCaptureExecutableMaterialization(payload),
+            .nominal => |nominal| try self.collectErasedCaptureExecutableMaterialization(nominal.backing),
+            .recursive_ref => |ref| try self.collectErasedCaptureExecutableMaterializationNode(ref),
+        }
+    }
+};
 
 fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
