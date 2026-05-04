@@ -8559,7 +8559,15 @@ pub const ErasedCallableCodeDependency = union(enum) {
 };
 
 pub const ErasedDirectProcCodeDependency = struct {
-    erase_plan: ProcValueToErasedPlan,
+    erase_plan: ProcValueEraseDependencyPlan,
+};
+
+pub const ProcValueEraseDependencyPlan = struct {
+    proc_value: canonical.ProcedureCallableRef,
+    erased_fn_sig_key: canonical.ErasedFnSigKey,
+    capture_shape_key: canonical.CaptureShapeKey,
+    executable_specialization_key: canonical.ExecutableSpecializationKey,
+    capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
 };
 
 pub const ErasedFiniteAdapterDependency = struct {
@@ -8748,6 +8756,15 @@ pub const ComptimeDependencySummaryStore = struct {
         return self.summaries.items[idx];
     }
 
+    pub fn getProcSummary(
+        self: *const ComptimeDependencySummaryStore,
+        id: ComptimeProcDependencySummaryId,
+    ) ComptimeProcDependencySummary {
+        const idx = @intFromEnum(id);
+        if (idx >= self.proc_summaries.items.len) checkedArtifactInvariant("compile-time procedure dependency summary id is out of range", .{});
+        return self.proc_summaries.items[idx];
+    }
+
     pub fn verifySealed(self: *const ComptimeDependencySummaryStore) void {
         if (builtin.mode != .Debug) return;
 
@@ -8878,15 +8895,15 @@ fn deinitErasedCallableDependencyFields(
 
 fn deinitErasedCallableCodeDependency(allocator: Allocator, code: ErasedCallableCodeDependency) void {
     switch (code) {
-        .direct_proc_value => |direct| deinitProcValueToErasedPlan(allocator, direct.erase_plan),
+        .direct_proc_value => |direct| deinitProcValueEraseDependencyPlan(allocator, direct.erase_plan),
         .finite_set_adapter => |adapter| deinitExecutableSpecializationKeySlice(allocator, adapter.member_targets),
     }
 }
 
-fn deinitProcValueToErasedPlan(allocator: Allocator, plan: ProcValueToErasedPlan) void {
+fn deinitProcValueEraseDependencyPlan(allocator: Allocator, plan: ProcValueEraseDependencyPlan) void {
     var key = plan.executable_specialization_key;
     deinitExecutableSpecializationKey(allocator, &key);
-    deinitErasedCaptureExecutableMaterializationPlan(allocator, plan.capture);
+    allocator.free(plan.capture_slots);
 }
 
 fn deinitExecutableSpecializationKeySlice(

@@ -73,6 +73,18 @@ pub const LoweredProgram = struct {
     }
 };
 
+pub const CompileTimeDependencySummaryResult = struct {
+    allocator: Allocator,
+    compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
+
+    pub fn deinit(self: *CompileTimeDependencySummaryResult) void {
+        if (self.compile_time_payloads.len > 0) {
+            self.allocator.free(self.compile_time_payloads);
+        }
+        self.* = .{ .allocator = self.allocator };
+    }
+};
+
 pub const LoweredErasedCallableCodeEntry = struct {
     lir_proc: LIR.LirProcSpecId,
     code: canonical.ErasedCallableCodeRef,
@@ -186,6 +198,72 @@ pub fn lowerArtifactsToLir(
         .target_usize = target.target_usize,
         .compile_time_payloads = compile_time_payloads,
         .erased_callable_code_map = erased_callable_code_map,
+    };
+}
+
+pub fn summarizeCompileTimeDependencies(
+    allocator: Allocator,
+    artifacts: ArtifactSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+) LowerResourceError!CompileTimeDependencySummaryResult {
+    if (roots.purpose != .compile_time) {
+        checkedPipelineInvariant("compile-time dependency summary requires compile-time root purpose");
+    }
+    switch (target.artifact_state) {
+        .published => checkedPipelineInvariant("compile-time dependency summary requires checking-finalization artifact state"),
+        .checking_finalization => artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
+    }
+
+    const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("compile-time dependency summary requires mutable checked artifact sink");
+    if (@intFromPtr(artifact_sink) != @intFromPtr(artifacts.root.artifact)) {
+        checkedPipelineInvariant("compile-time dependency summary artifact sink does not match root artifact");
+    }
+
+    const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
+    defer allocator.free(selected_roots);
+    const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
+    defer allocator.free(selected_entrypoints);
+
+    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints);
+    defer solved.deinit();
+
+    try publishCallableSetDescriptorsForLowering(
+        allocator,
+        artifacts.root.artifact,
+        &solved,
+        roots,
+        target.artifact_state,
+    );
+    try publishErasedFnAbisForLowering(
+        allocator,
+        artifacts.root.artifact,
+        &solved,
+        roots,
+        target.artifact_state,
+    );
+
+    const compile_time_payloads = try publishCompileTimePayloads(
+        allocator,
+        artifacts.root.artifact,
+        &solved,
+        selected_entrypoints,
+        roots,
+    );
+    errdefer if (compile_time_payloads.len > 0) allocator.free(compile_time_payloads);
+
+    try publishCompileTimeDependencySummariesFromSolved(
+        allocator,
+        artifacts.root.artifact,
+        artifact_sink,
+        &solved,
+        selected_entrypoints,
+        compile_time_payloads,
+    );
+
+    return .{
+        .allocator = allocator,
+        .compile_time_payloads = compile_time_payloads,
     };
 }
 
@@ -469,6 +547,764 @@ fn publishCompileTimePayloads(
     }
 
     return payloads;
+}
+
+fn publishCompileTimeDependencySummariesFromSolved(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    solved: *const mir.LambdaSolved.Solve.Program,
+    selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
+    payloads: []const checked_artifact.CompileTimeEvaluationPayload,
+) Allocator.Error!void {
+    if (selected_entrypoints.len != solved.root_procs.items.len or selected_entrypoints.len != payloads.len) {
+        checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
+    }
+
+    var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved);
+    defer collector.deinit();
+
+    for (selected_entrypoints, solved.root_procs.items, payloads) |entrypoint, root_proc, payload| {
+        const root_request = switch (entrypoint) {
+            .root => |root| root,
+            .const_instance,
+            .callable_binding_instance,
+            => continue,
+        };
+        const root = compileTimeRootForRequest(artifact, root_request);
+        const local_payload = switch (payload) {
+            .local_root => |local| local,
+            .const_instance,
+            .callable_binding_instance,
+            => checkedPipelineInvariant("compile-time dependency summary root had non-root payload"),
+        };
+        var summary = try collector.rootSummary(root_proc, local_payload);
+        defer summary.deinit(allocator);
+        const summary_id = try artifact_sink.comptime_dependencies.appendSummary(allocator, .{
+            .availability_values = summary.availability.items,
+            .concrete_values = summary.concrete.items,
+        });
+        artifact_sink.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
+    }
+}
+
+const CompileTimeRootSummary = struct {
+    availability: std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    concrete: std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+
+    fn init() CompileTimeRootSummary {
+        return .{
+            .availability = .empty,
+            .concrete = .empty,
+        };
+    }
+
+    fn deinit(self: *CompileTimeRootSummary, allocator: Allocator) void {
+        self.concrete.deinit(allocator);
+        self.availability.deinit(allocator);
+    }
+};
+
+const CompileTimeDependencySummaryBuilder = struct {
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    solved: *const mir.LambdaSolved.Solve.Program,
+    proc_summary_ids: std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId),
+    transitive_proc_visits: std.AutoHashMap(repr.ProcRepresentationInstanceId, void),
+
+    fn init(
+        allocator: Allocator,
+        artifact: *const checked_artifact.CheckedModuleArtifact,
+        artifact_sink: *checked_artifact.CheckedModuleArtifact,
+        solved: *const mir.LambdaSolved.Solve.Program,
+    ) CompileTimeDependencySummaryBuilder {
+        return .{
+            .allocator = allocator,
+            .artifact = artifact,
+            .artifact_sink = artifact_sink,
+            .solved = solved,
+            .proc_summary_ids = std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId).init(allocator),
+            .transitive_proc_visits = std.AutoHashMap(repr.ProcRepresentationInstanceId, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *CompileTimeDependencySummaryBuilder) void {
+        self.transitive_proc_visits.deinit();
+        self.proc_summary_ids.deinit();
+    }
+
+    fn rootSummary(
+        self: *CompileTimeDependencySummaryBuilder,
+        root_proc: canonical.MirProcedureRef,
+        payload: checked_artifact.CompileTimeRootPayload,
+    ) Allocator.Error!CompileTimeRootSummary {
+        var summary = CompileTimeRootSummary.init();
+        errdefer summary.deinit(self.allocator);
+
+        self.transitive_proc_visits.clearRetainingCapacity();
+        const root_instance = self.procInstanceIdForMir(root_proc);
+        try self.collectTransitiveProc(root_instance, &summary.availability, &summary.concrete);
+        try self.collectRootPayload(payload, &summary.availability, &summary.concrete);
+
+        return summary;
+    }
+
+    fn collectTransitiveProc(
+        self: *CompileTimeDependencySummaryBuilder,
+        instance_id: repr.ProcRepresentationInstanceId,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        const visit = try self.transitive_proc_visits.getOrPut(instance_id);
+        if (visit.found_existing) return;
+
+        const summary_id = try self.ensureProcSummary(instance_id);
+        const proc_summary = self.artifact_sink.comptime_dependencies.getProcSummary(summary_id);
+        try availability.appendSlice(self.allocator, proc_summary.availability_values);
+        try concrete.appendSlice(self.allocator, proc_summary.concrete_values);
+
+        for (proc_summary.call_deps) |call_dep| {
+            switch (call_dep) {
+                .call_proc => |key| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(key), availability, concrete),
+                .call_value_finite => |finite| for (finite.members) |member| {
+                    try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
+                },
+                .call_value_erased => |erased| {
+                    try availability.appendSlice(self.allocator, erased.capture_availability);
+                    try concrete.appendSlice(self.allocator, erased.capture_concrete_values);
+                    switch (erased.code) {
+                        .direct_proc_value => |direct| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(direct.erase_plan.executable_specialization_key), availability, concrete),
+                        .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
+                            try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
+                        },
+                    }
+                },
+            }
+        }
+
+        for (proc_summary.const_graph_deps) |dep| {
+            try availability.appendSlice(self.allocator, dep.availability_values);
+            try concrete.appendSlice(self.allocator, dep.concrete_values);
+            for (dep.callable_leaves) |leaf| try self.collectCallableLeafDependency(leaf, availability, concrete);
+        }
+        for (proc_summary.callable_result_deps) |dep| {
+            try self.collectCallableResultDependency(dep, availability, concrete);
+        }
+    }
+
+    fn ensureProcSummary(
+        self: *CompileTimeDependencySummaryBuilder,
+        instance_id: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!checked_artifact.ComptimeProcDependencySummaryId {
+        if (self.proc_summary_ids.get(instance_id)) |existing| return existing;
+
+        var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
+        errdefer availability.deinit(self.allocator);
+        var concrete = std.ArrayList(checked_artifact.ComptimeConcreteValueUse).empty;
+        errdefer concrete.deinit(self.allocator);
+        var call_deps = std.ArrayList(checked_artifact.ComptimeCallDependency).empty;
+        errdefer call_deps.deinit(self.allocator);
+
+        const proc_record = self.procRecordForInstance(instance_id);
+        const instance = self.solved.proc_instances.items[@intFromEnum(instance_id)];
+        const value_store = &self.solved.value_stores.items[@intFromEnum(instance.value_store)];
+        const representation_store = &self.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+        try self.collectDefImmediate(proc_record.body, value_store, representation_store, &availability, &concrete, &call_deps);
+
+        const proc_key = try repr.cloneExecutableSpecializationKey(self.allocator, instance.executable_specialization_key);
+        errdefer {
+            var key = proc_key;
+            repr.deinitExecutableSpecializationKey(self.allocator, &key);
+        }
+
+        const summary_id = try self.artifact_sink.comptime_dependencies.appendProcSummary(self.allocator, .{
+            .proc = proc_key,
+            .availability_values = try availability.toOwnedSlice(self.allocator),
+            .concrete_values = try concrete.toOwnedSlice(self.allocator),
+            .call_deps = try call_deps.toOwnedSlice(self.allocator),
+        });
+        try self.proc_summary_ids.put(instance_id, summary_id);
+        return summary_id;
+    }
+
+    fn collectRootPayload(
+        self: *CompileTimeDependencySummaryBuilder,
+        payload: checked_artifact.CompileTimeRootPayload,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (payload) {
+            .pending => checkedPipelineInvariant("compile-time dependency summary reached pending root payload"),
+            .expect => {},
+            .const_graph => |plan| try self.collectConstGraphPlan(plan, availability, concrete),
+            .callable_result => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
+        }
+    }
+
+    fn collectDefImmediate(
+        self: *CompileTimeDependencySummaryBuilder,
+        def_id: mir.LambdaSolved.Ast.DefId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+        call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
+    ) Allocator.Error!void {
+        const def = self.solved.ast.defs.items[@intFromEnum(def_id)];
+        switch (def.value) {
+            .fn_ => |fn_def| try self.collectExprImmediate(fn_def.body, value_store, representation_store, availability, concrete, call_deps),
+            .val => |expr| try self.collectExprImmediate(expr, value_store, representation_store, availability, concrete, call_deps),
+            .run => |run| try self.collectExprImmediate(run.body, value_store, representation_store, availability, concrete, call_deps),
+            .hosted_fn => {},
+        }
+    }
+
+    fn collectExprImmediate(
+        self: *CompileTimeDependencySummaryBuilder,
+        expr_id: mir.LambdaSolved.Ast.ExprId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+        call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
+    ) Allocator.Error!void {
+        const expr = self.solved.ast.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .var_,
+            .capture_ref,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bool_lit,
+            .unit,
+            .crash,
+            .runtime_error,
+            => {},
+            .const_instance => |const_instance| try self.appendConstInstanceDependency(const_instance, availability, concrete),
+            .tag => |tag| {
+                for (self.sliceTagPayloadEval(tag.eval_order)) |payload| try self.collectExprImmediate(payload.value, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .record => |record| {
+                for (self.sliceRecordFieldEval(record.eval_order)) |field| try self.collectExprImmediate(field.value, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .nominal_reinterpret,
+            .inspect,
+            => |child| try self.collectExprImmediate(child, value_store, representation_store, availability, concrete, call_deps),
+            .access => |access| try self.collectExprImmediate(access.record, value_store, representation_store, availability, concrete, call_deps),
+            .structural_eq => |eq| {
+                try self.collectExprImmediate(eq.lhs, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(eq.rhs, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .bool_not => |child| try self.collectExprImmediate(child, value_store, representation_store, availability, concrete, call_deps),
+            .let_ => |let_| {
+                try self.collectExprImmediate(let_.body, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(let_.rest, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .call_value => |call| {
+                try self.collectExprImmediate(call.func, value_store, representation_store, availability, concrete, call_deps);
+                for (self.sliceExprs(call.args)) |arg| try self.collectExprImmediate(arg, value_store, representation_store, availability, concrete, call_deps);
+                try self.appendCallSiteDependency(call.call_site, value_store, representation_store, call_deps);
+            },
+            .call_proc => |call| {
+                for (self.sliceExprs(call.args)) |arg| try self.collectExprImmediate(arg, value_store, representation_store, availability, concrete, call_deps);
+                try self.appendCallSiteDependency(call.call_site, value_store, representation_store, call_deps);
+            },
+            .proc_value => |proc_value| {
+                for (self.sliceCaptureArgs(proc_value.captures)) |capture| try self.collectExprImmediate(capture.expr, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .low_level => |low_level| {
+                for (self.sliceExprs(low_level.args)) |arg| try self.collectExprImmediate(arg, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .match_ => |match_| {
+                try self.collectExprImmediate(match_.cond, value_store, representation_store, availability, concrete, call_deps);
+                for (self.sliceBranches(match_.branches)) |branch_id| {
+                    const branch = self.solved.ast.branches.items[@intFromEnum(branch_id)];
+                    if (branch.guard) |guard| try self.collectExprImmediate(guard, value_store, representation_store, availability, concrete, call_deps);
+                    try self.collectExprImmediate(branch.body, value_store, representation_store, availability, concrete, call_deps);
+                }
+            },
+            .if_ => |if_| {
+                try self.collectExprImmediate(if_.cond, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(if_.then_body, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(if_.else_body, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .block => |block| {
+                for (self.sliceStmts(block.stmts)) |stmt| try self.collectStmtImmediate(stmt, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(block.final_expr, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .tuple,
+            .list,
+            => |items| for (self.sliceExprs(items)) |item| try self.collectExprImmediate(item, value_store, representation_store, availability, concrete, call_deps),
+            .tag_payload => |payload| try self.collectExprImmediate(payload.tag_union, value_store, representation_store, availability, concrete, call_deps),
+            .tuple_access => |access| try self.collectExprImmediate(access.tuple, value_store, representation_store, availability, concrete, call_deps),
+            .return_ => |ret| try self.collectExprImmediate(ret.expr, value_store, representation_store, availability, concrete, call_deps),
+            .for_ => |for_| {
+                try self.collectExprImmediate(for_.iterable, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(for_.body, value_store, representation_store, availability, concrete, call_deps);
+            },
+        }
+    }
+
+    fn collectStmtImmediate(
+        self: *CompileTimeDependencySummaryBuilder,
+        stmt_id: mir.LambdaSolved.Ast.StmtId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+        call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
+    ) Allocator.Error!void {
+        const stmt = self.solved.ast.stmts.items[@intFromEnum(stmt_id)];
+        switch (stmt) {
+            .decl,
+            .var_decl,
+            => |decl| try self.collectExprImmediate(decl.body, value_store, representation_store, availability, concrete, call_deps),
+            .reassign => |reassign| try self.collectExprImmediate(reassign.body, value_store, representation_store, availability, concrete, call_deps),
+            .expr,
+            .debug,
+            .expect,
+            => |expr| try self.collectExprImmediate(expr, value_store, representation_store, availability, concrete, call_deps),
+            .return_ => |ret| try self.collectExprImmediate(ret.expr, value_store, representation_store, availability, concrete, call_deps),
+            .for_ => |for_| {
+                try self.collectExprImmediate(for_.iterable, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(for_.body, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .while_ => |while_| {
+                try self.collectExprImmediate(while_.cond, value_store, representation_store, availability, concrete, call_deps);
+                try self.collectExprImmediate(while_.body, value_store, representation_store, availability, concrete, call_deps);
+            },
+            .crash,
+            .break_,
+            => {},
+        }
+    }
+
+    fn appendCallSiteDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        call_site_id: repr.CallSiteInfoId,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+        call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
+    ) Allocator.Error!void {
+        const call_site = value_store.call_sites.items[@intFromEnum(call_site_id)];
+        const dispatch = call_site.dispatch orelse checkedPipelineInvariant("compile-time dependency summary reached unresolved call site");
+        switch (dispatch) {
+            .call_proc => |target| {
+                const key = try self.cloneExecutableKeyForInstance(target);
+                errdefer {
+                    var owned = key;
+                    repr.deinitExecutableSpecializationKey(self.allocator, &owned);
+                }
+                try call_deps.append(self.allocator, .{ .call_proc = key });
+            },
+            .call_value_finite => |callable_set| {
+                const members = try self.cloneExecutableKeysForCallableSet(callable_set);
+                errdefer deinitExecutableSpecializationKeys(self.allocator, members);
+                try call_deps.append(self.allocator, .{ .call_value_finite = .{
+                    .call_site = @enumFromInt(@intFromEnum(call_site_id)),
+                    .callable_set = callable_set,
+                    .members = members,
+                } });
+            },
+            .call_value_erased => |sig_key| {
+                const callee = call_site.callee orelse checkedPipelineInvariant("erased call_value dependency had no callee value");
+                const code = try self.erasedCallCodeDependency(callee, sig_key, value_store, representation_store);
+                errdefer deinitErasedCallableCodeDependencyForPipeline(self.allocator, code);
+                const provenance = try self.erasedCallProvenance(callee, sig_key, value_store, representation_store);
+                errdefer self.allocator.free(provenance);
+                try call_deps.append(self.allocator, .{ .call_value_erased = .{
+                    .call_site = @enumFromInt(@intFromEnum(call_site_id)),
+                    .code = code,
+                    .provenance = provenance,
+                } });
+            },
+        }
+    }
+
+    fn erasedCallCodeDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        callee: repr.ValueInfoId,
+        sig_key: canonical.ErasedFnSigKey,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+    ) Allocator.Error!checked_artifact.ErasedCallableCodeDependency {
+        const info = value_store.values.items[@intFromEnum(callee)];
+        const callable = info.callable orelse checkedPipelineInvariant("erased call_value dependency callee had no callable metadata");
+        return switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .erase_proc_value => |erase| blk: {
+                if (!repr.erasedFnSigKeyEql(erase.erased_fn_sig_key, sig_key)) {
+                    checkedPipelineInvariant("erased call_value dependency signature differs from proc-value erase plan");
+                }
+                break :blk .{ .direct_proc_value = .{ .erase_plan = try self.procValueEraseDependencyPlan(erase) } };
+            },
+            .erase_finite_set => |erase| blk: {
+                if (!repr.erasedFnSigKeyEql(erase.adapter.erased_fn_sig_key, sig_key)) {
+                    checkedPipelineInvariant("erased call_value dependency signature differs from finite-set erase plan");
+                }
+                break :blk .{ .finite_set_adapter = .{
+                    .adapter_key = erase.adapter,
+                    .member_targets = try self.cloneExecutableKeysForCallableSet(erase.adapter.callable_set_key),
+                } };
+            },
+            .already_erased => |erased| {
+                if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
+                    checkedPipelineInvariant("erased call_value dependency signature differs from already-erased plan");
+                }
+                checkedPipelineInvariant("already-erased call dependency requires resolved interpreted code before concrete dependency publication");
+            },
+            .finite => checkedPipelineInvariant("erased call_value dependency reached finite callable emission"),
+        };
+    }
+
+    fn erasedCallProvenance(
+        self: *CompileTimeDependencySummaryBuilder,
+        callee: repr.ValueInfoId,
+        sig_key: canonical.ErasedFnSigKey,
+        value_store: *const repr.ValueInfoStore,
+        representation_store: *const repr.RepresentationStore,
+    ) Allocator.Error![]const canonical.BoxBoundaryId {
+        const info = value_store.values.items[@intFromEnum(callee)];
+        const callable = info.callable orelse checkedPipelineInvariant("erased call_value dependency callee had no callable metadata");
+        const provenance = switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .already_erased => |erased| blk: {
+                if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) checkedPipelineInvariant("erased call provenance signature differs from already-erased plan");
+                break :blk erased.provenance;
+            },
+            .erase_proc_value => |erase| blk: {
+                if (!repr.erasedFnSigKeyEql(erase.erased_fn_sig_key, sig_key)) checkedPipelineInvariant("erased call provenance signature differs from proc-value erase plan");
+                break :blk erase.provenance;
+            },
+            .erase_finite_set => |erase| blk: {
+                if (!repr.erasedFnSigKeyEql(erase.adapter.erased_fn_sig_key, sig_key)) checkedPipelineInvariant("erased call provenance signature differs from finite-set erase plan");
+                break :blk erase.provenance;
+            },
+            .finite => checkedPipelineInvariant("erased call provenance reached finite callable emission"),
+        };
+        if (provenance.len == 0) checkedPipelineInvariant("erased call dependency had empty Box(T) provenance");
+        return try self.allocator.dupe(canonical.BoxBoundaryId, provenance);
+    }
+
+    fn procValueEraseDependencyPlan(
+        self: *CompileTimeDependencySummaryBuilder,
+        erase: repr.ProcValueErasePlan,
+    ) Allocator.Error!checked_artifact.ProcValueEraseDependencyPlan {
+        return .{
+            .proc_value = erase.proc_value,
+            .erased_fn_sig_key = erase.erased_fn_sig_key,
+            .capture_shape_key = erase.capture_shape_key,
+            .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, erase.executable_specialization_key),
+            .capture_slots = if (erase.capture_slots.len == 0)
+                &.{}
+            else
+                try self.allocator.dupe(canonical.CallableSetCaptureSlot, erase.capture_slots),
+        };
+    }
+
+    fn appendConstInstanceDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        const_instance: checked_artifact.ConstInstanceRef,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        try concrete.append(self.allocator, .{ .const_instance = const_instance.key });
+        const const_ref = const_instance.key.const_ref;
+        try availability.append(self.allocator, .{ .const_template = const_ref });
+        switch (const_ref.owner) {
+            .top_level_binding => |owner| {
+                if (std.mem.eql(u8, &const_ref.artifact.bytes, &self.artifact.key.bytes)) {
+                    const dep_root = self.artifact.compile_time_roots.lookupIdByPattern(owner.pattern) orelse {
+                        checkedPipelineInvariant("local const dependency has no compile-time root");
+                    };
+                    try availability.append(self.allocator, .{ .local_root = dep_root });
+                } else {
+                    try availability.append(self.allocator, .{ .imported_value = .{
+                        .artifact = const_ref.artifact,
+                        .pattern = owner.pattern,
+                    } });
+                }
+            },
+            .promoted_capture => {},
+        }
+    }
+
+    fn collectConstGraphPlan(
+        self: *CompileTimeDependencySummaryBuilder,
+        plan_id: checked_artifact.ConstGraphReificationPlanId,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (self.artifact_sink.comptime_plans.constGraph(plan_id)) {
+            .pending => checkedPipelineInvariant("compile-time dependency summary reached pending const graph plan"),
+            .scalar,
+            .string,
+            .callable_schema,
+            => {},
+            .list => |list| try self.collectConstGraphPlan(list.elem, availability, concrete),
+            .box => |box| try self.collectConstGraphPlan(box.payload, availability, concrete),
+            .tuple => |items| for (items) |item| try self.collectConstGraphPlan(item.value, availability, concrete),
+            .record => |fields| for (fields) |field| try self.collectConstGraphPlan(field.value, availability, concrete),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectConstGraphPlan(payload.value, availability, concrete);
+            },
+            .transparent_alias => |alias| try self.collectConstGraphPlan(alias.backing, availability, concrete),
+            .nominal => |nominal| try self.collectConstGraphPlan(nominal.backing, availability, concrete),
+            .callable_leaf => |leaf| switch (leaf) {
+                .finite,
+                .erased_boxed,
+                => |callable| try self.collectCallableResultPlan(callable, availability, concrete),
+                .already_resolved => |resolved| try self.collectCallableLeafInstance(resolved, availability, concrete),
+            },
+            .recursive_ref => |ref| try self.collectConstGraphPlan(ref, availability, concrete),
+        }
+    }
+
+    fn collectCallableResultPlan(
+        self: *CompileTimeDependencySummaryBuilder,
+        plan_id: checked_artifact.CallableResultPlanId,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (self.artifact_sink.comptime_plans.callableResult(plan_id)) {
+            .finite => |finite| {
+                const descriptor = self.callableSetDescriptor(finite.callable_set_key);
+                for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                for (finite.members) |member| {
+                    for (member.capture_slots) |capture| try self.collectCaptureSlotPlan(capture, availability, concrete);
+                }
+            },
+            .erased => |erased| {
+                switch (erased.code_plan) {
+                    .materialized_by_lowering => |code| switch (code) {
+                        .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
+                        .finite_set_adapter => |adapter| {
+                            const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
+                            for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                        },
+                    },
+                    .read_from_interpreted_erased_value => {},
+                }
+                try self.collectErasedCaptureReificationPlan(erased.capture, availability, concrete);
+            },
+        }
+    }
+
+    fn collectCallableLeafDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        leaf: checked_artifact.CallableLeafDependency,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (leaf) {
+            .resolved_finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
+            .promoted_callable => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
+            .erased_boxed_callable => |erased| try self.collectErasedCallableDependency(erased, availability, concrete),
+        }
+    }
+
+    fn collectCallableResultDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        dep: checked_artifact.CallableResultDependency,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        for (dep.members) |member| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
+        try availability.appendSlice(self.allocator, dep.capture_availability);
+        try concrete.appendSlice(self.allocator, dep.capture_concrete_values);
+        if (dep.erased) |erased| try self.collectErasedCallableDependency(erased, availability, concrete);
+    }
+
+    fn collectErasedCallableDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        erased: checked_artifact.ErasedCallableDependency,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        try availability.appendSlice(self.allocator, erased.capture_availability);
+        try concrete.appendSlice(self.allocator, erased.capture_concrete_values);
+        switch (erased.code) {
+            .direct_proc_value => |direct| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(direct.erase_plan.executable_specialization_key), availability, concrete),
+            .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
+                try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
+            },
+        }
+    }
+
+    fn collectCallableLeafInstance(
+        self: *CompileTimeDependencySummaryBuilder,
+        leaf: checked_artifact.CallableLeafInstance,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (leaf) {
+            .finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
+            .erased_boxed => |erased| switch (erased.code) {
+                .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
+                .finite_set_adapter => |adapter| {
+                    const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
+                    for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                },
+            },
+        }
+    }
+
+    fn collectCaptureSlotPlan(
+        self: *CompileTimeDependencySummaryBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (self.artifact_sink.comptime_plans.captureSlot(plan_id)) {
+            .pending => checkedPipelineInvariant("compile-time dependency summary reached pending capture slot plan"),
+            .serializable_leaf => |leaf| try self.collectConstGraphPlan(leaf.reification_plan, availability, concrete),
+            .callable_leaf => |callable| try self.collectCallableResultPlan(callable, availability, concrete),
+            .callable_schema => {},
+            .record => |fields| for (fields) |field| try self.collectCaptureSlotPlan(field.value, availability, concrete),
+            .tuple => |items| for (items) |item| try self.collectCaptureSlotPlan(item.value, availability, concrete),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectCaptureSlotPlan(payload.value, availability, concrete);
+            },
+            .list => |list| try self.collectCaptureSlotPlan(list.elem, availability, concrete),
+            .box => |payload| try self.collectCaptureSlotPlan(payload, availability, concrete),
+            .nominal => |nominal| try self.collectCaptureSlotPlan(nominal.backing, availability, concrete),
+            .recursive_ref => |ref| try self.collectCaptureSlotPlan(ref, availability, concrete),
+        }
+    }
+
+    fn collectErasedCaptureReificationPlan(
+        self: *CompileTimeDependencySummaryBuilder,
+        plan: checked_artifact.ErasedCaptureReificationPlan,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+    ) Allocator.Error!void {
+        switch (plan) {
+            .none,
+            .zero_sized_typed,
+            => {},
+            .whole_hidden_capture_value => |capture| try self.collectCaptureSlotPlan(capture.plan, availability, concrete),
+            .proc_capture_tuple => |captures| for (captures) |capture| try self.collectCaptureSlotPlan(capture.plan, availability, concrete),
+            .finite_callable_set_value => |callable| try self.collectCallableResultPlan(callable, availability, concrete),
+        }
+    }
+
+    fn cloneExecutableKeysForCallableSet(
+        self: *CompileTimeDependencySummaryBuilder,
+        key: canonical.CanonicalCallableSetKey,
+    ) Allocator.Error![]const canonical.ExecutableSpecializationKey {
+        const descriptor = self.callableSetDescriptor(key);
+        if (descriptor.members.len == 0) return &.{};
+        const out = try self.allocator.alloc(canonical.ExecutableSpecializationKey, descriptor.members.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (out[0..initialized]) |*item| repr.deinitExecutableSpecializationKey(self.allocator, item);
+            self.allocator.free(out);
+        }
+        for (descriptor.members, 0..) |member, i| {
+            out[i] = try self.cloneExecutableKeyForInstance(self.procInstanceIdForMir(member.source_proc));
+            initialized += 1;
+        }
+        return out;
+    }
+
+    fn cloneExecutableKeyForInstance(
+        self: *CompileTimeDependencySummaryBuilder,
+        instance_id: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!canonical.ExecutableSpecializationKey {
+        const instance = self.solved.proc_instances.items[@intFromEnum(instance_id)];
+        return try repr.cloneExecutableSpecializationKey(self.allocator, instance.executable_specialization_key);
+    }
+
+    fn callableSetDescriptor(
+        self: *CompileTimeDependencySummaryBuilder,
+        key: canonical.CanonicalCallableSetKey,
+    ) *const canonical.CanonicalCallableSetDescriptor {
+        return self.artifact_sink.callable_set_descriptors.descriptorFor(key) orelse {
+            checkedPipelineInvariant("compile-time dependency summary referenced missing callable-set descriptor");
+        };
+    }
+
+    fn procInstanceIdForMir(
+        self: *CompileTimeDependencySummaryBuilder,
+        proc: canonical.MirProcedureRef,
+    ) repr.ProcRepresentationInstanceId {
+        for (self.solved.procs.items) |record| {
+            if (canonical.mirProcedureRefEql(record.proc, proc)) return record.representation_instance;
+        }
+        checkedPipelineInvariant("compile-time dependency summary referenced missing procedure instance");
+    }
+
+    fn procInstanceIdForExecutableKey(
+        self: *CompileTimeDependencySummaryBuilder,
+        key: canonical.ExecutableSpecializationKey,
+    ) repr.ProcRepresentationInstanceId {
+        for (self.solved.proc_instances.items, 0..) |instance, raw| {
+            if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
+                return @enumFromInt(@as(u32, @intCast(raw)));
+            }
+        }
+        checkedPipelineInvariant("compile-time dependency summary referenced executable specialization outside solved program");
+    }
+
+    fn procRecordForInstance(
+        self: *CompileTimeDependencySummaryBuilder,
+        instance_id: repr.ProcRepresentationInstanceId,
+    ) mir.LambdaSolved.Solve.Proc {
+        for (self.solved.procs.items) |record| {
+            if (record.representation_instance == instance_id) return record;
+        }
+        checkedPipelineInvariant("compile-time dependency summary could not find procedure record for instance");
+    }
+
+    fn sliceExprs(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.ExprId)) []const mir.LambdaSolved.Ast.ExprId {
+        return self.solved.ast.expr_ids.items[span.start..][0..span.len];
+    }
+
+    fn sliceStmts(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.StmtId)) []const mir.LambdaSolved.Ast.StmtId {
+        return self.solved.ast.stmt_ids.items[span.start..][0..span.len];
+    }
+
+    fn sliceBranches(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.BranchId)) []const mir.LambdaSolved.Ast.BranchId {
+        return self.solved.ast.branch_ids.items[span.start..][0..span.len];
+    }
+
+    fn sliceCaptureArgs(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.CaptureArg)) []const mir.LambdaSolved.Ast.CaptureArg {
+        return self.solved.ast.capture_args.items[span.start..][0..span.len];
+    }
+
+    fn sliceRecordFieldEval(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.RecordFieldEval)) []const mir.LambdaSolved.Ast.RecordFieldEval {
+        return self.solved.ast.record_field_evals.items[span.start..][0..span.len];
+    }
+
+    fn sliceTagPayloadEval(self: *CompileTimeDependencySummaryBuilder, span: mir.LambdaSolved.Ast.Span(mir.LambdaSolved.Ast.TagPayloadEval)) []const mir.LambdaSolved.Ast.TagPayloadEval {
+        return self.solved.ast.tag_payload_evals.items[span.start..][0..span.len];
+    }
+};
+
+fn deinitExecutableSpecializationKeys(
+    allocator: Allocator,
+    keys: []const canonical.ExecutableSpecializationKey,
+) void {
+    for (keys) |key| {
+        var owned = key;
+        repr.deinitExecutableSpecializationKey(allocator, &owned);
+    }
+    allocator.free(keys);
+}
+
+fn deinitErasedCallableCodeDependencyForPipeline(
+    allocator: Allocator,
+    code: checked_artifact.ErasedCallableCodeDependency,
+) void {
+    switch (code) {
+        .direct_proc_value => |direct| {
+            var key = direct.erase_plan.executable_specialization_key;
+            repr.deinitExecutableSpecializationKey(allocator, &key);
+            allocator.free(direct.erase_plan.capture_slots);
+        },
+        .finite_set_adapter => |adapter| deinitExecutableSpecializationKeys(allocator, adapter.member_targets),
+    }
 }
 
 const ConstValueContext = struct {
