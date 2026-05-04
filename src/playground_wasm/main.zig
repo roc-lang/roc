@@ -1807,14 +1807,6 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
         return html_writer_allocating.toOwnedSlice();
     }
 
-    var module_envs = try allocator.alloc(*const ModuleEnv, resources.extra_modules.len + 2);
-    defer allocator.free(module_envs);
-    module_envs[0] = resources.module_env;
-    module_envs[1] = resources.builtin_module.env;
-    for (resources.extra_modules, 0..) |module, i| {
-        module_envs[i + 2] = module.module_env;
-    }
-
     var import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
     defer allocator.free(import_views);
     for (resources.import_artifacts, 0..) |*artifact, i| {
@@ -1829,7 +1821,6 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
         },
         .{ .requests = test_roots },
         .{
-            .module_envs = module_envs,
             .target_usize = .u32,
         },
     );
