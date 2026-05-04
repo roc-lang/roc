@@ -2496,15 +2496,30 @@ const ConstGraphPlanBuilder = struct {
         return list.elems[0];
     }
 
+    fn valueForRoot(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        root: repr.RepRootId,
+    ) ?repr.ValueInfoId {
+        _ = self;
+        for (context.value_store.values.items, 0..) |value, i| {
+            if (value.root == root) return @enumFromInt(@as(u32, @intCast(i)));
+        }
+        return null;
+    }
+
     fn boxPayloadValue(
         self: *const ConstGraphPlanBuilder,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
     ) ?repr.ValueInfoId {
-        _ = self;
-        _ = value_context;
-        _ = value_info;
-        return null;
+        const context = value_context orelse return null;
+        const info = self.valueInfo(value_context, value_info) orelse return null;
+        const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) constant value had no boxed metadata");
+        if (boxed.payload_value) |payload| return payload;
+        return self.valueForRoot(context, boxed.payload_root) orelse {
+            checkedPipelineInvariant("Box(T) constant payload root had no value-flow metadata");
+        };
     }
 };
 
