@@ -154,10 +154,7 @@ fn evaluateConstantRoot(
         .procedure_binding => compileTimeFinalizationInvariant("constant root top-level value was a procedure binding"),
     };
 
-    const result = try interpreter.eval(.{
-        .proc_id = lir_root,
-        .arg_layouts = &.{},
-    });
+    const result = try evalCompileTimeRoot(interpreter, lir_root);
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
@@ -211,10 +208,7 @@ fn evaluateCallableBindingRoot(
         .const_ref => compileTimeFinalizationInvariant("callable root top-level value was a const"),
     };
 
-    const result = try interpreter.eval(.{
-        .proc_id = lir_root,
-        .arg_layouts = &.{},
-    });
+    const result = try evalCompileTimeRoot(interpreter, lir_root);
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
@@ -270,6 +264,21 @@ fn evaluateCallableBindingRoot(
         .promotion_output = callable.output,
         .proc_value = callable.proc_value,
     });
+}
+
+fn evalCompileTimeRoot(
+    interpreter: *Interpreter,
+    lir_root: lir.LIR.LirProcSpecId,
+) Allocator.Error!Interpreter.EvalResult {
+    return interpreter.eval(.{
+        .proc_id = lir_root,
+        .arg_layouts = &.{},
+    }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.RuntimeError => compileTimeFinalizationInvariant("compile-time root produced a runtime error"),
+        error.DivisionByZero => compileTimeFinalizationInvariant("compile-time root divided by zero"),
+        error.Crash => compileTimeFinalizationInvariant("compile-time root crashed"),
+    };
 }
 
 const SelectedFiniteCallableResult = struct {
