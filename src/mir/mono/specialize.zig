@@ -2427,8 +2427,8 @@ const BodyLowerer = struct {
             .const_ref = const_use.const_ref,
             .requested_source_ty = requested_key,
         };
-        const instance = constInstanceForKey(self.input, const_use.const_ref.artifact, key) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in its owning artifact");
+        const instance = constInstanceForKey(self.input, self.input.root.artifact.key, key) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
             unreachable;
         };
         return try self.program.ast.addExpr(ty, .{ .const_instance = instance });
