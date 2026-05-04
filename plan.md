@@ -7025,24 +7025,6 @@ const ConcreteValueUse = union(enum) {
     callable_binding_instance: CallableBindingInstantiationKey,
     procedure_callable: ProcedureCallableRef,
 };
-
-const ComptimeDependencySummaryTemplate = struct {
-    availability_values: Span(AvailabilityUseTemplate),
-    concrete_value_templates: Span(ConcreteValueUseTemplate),
-};
-
-const AvailabilityUseTemplate = union(enum) {
-    local_root: ComptimeRootId,
-    imported_value: ImportedTopLevelValueRef,
-    const_template: ConstUseTemplate,
-    procedure_binding: ProcedureUseTemplate,
-};
-
-const ConcreteValueUseTemplate = union(enum) {
-    const_use: ConstUseTemplate,
-    callable_binding_use: ProcedureUseTemplate,
-    procedure_callable: ProcedureUseTemplate,
-};
 ```
 
 The exact Zig names may differ, but the staging must not. A procedure summary is
@@ -7066,22 +7048,36 @@ instances have already been reserved and sealed. Code that constructs a new
 concrete instance must use `ConstInstantiationRequest` or
 `CallableBindingInstantiationRequest`, not the key alone.
 
-Generic templates do not store concrete summaries. A `ConstEvalTemplate` or
-`CallableEvalTemplate` stores a `ComptimeDependencySummaryTemplate` containing
-only availability uses and use templates. A concrete
-`ConstInstantiationRequest` or `CallableBindingInstantiationRequest`
-instantiates that template in the requesting artifact's concrete mono context,
-resolves static dispatch, finite callable members, erased callable code,
-callable leaves, and promoted captures, and then stores a concrete
-`ComptimeDependencySummary` in the concrete instance. The template must not
+Generic templates do not store dependency summaries or any parameterized summary
+data. A `ConstEvalTemplate` or `CallableEvalTemplate` is a reusable checked
+entry template only: it records the checked body/template identity, checked
+source scheme, resolved value-reference table, static-dispatch plans,
+nested-procedure site table, and checked type roots needed to lower a future
+concrete request. A concrete `ConstInstantiationRequest` or
+`CallableBindingInstantiationRequest` is summarized by running that exact
+request through summary-only MIR-family lowering in the requesting artifact:
+mono MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR, and executable
+MIR summary records. The resulting concrete `ComptimeDependencySummaryId` is
+stored next to the concrete `ConstInstance` or `CallableBindingInstance`.
+
+This means the generic checked template never contains parameterized
+availability-use rows, parameterized concrete-value-use rows, or any structure
+that later stages can "instantiate" without lowering the concrete request. The
+summary-only lowering path is the single source of truth for static dispatch,
+finite callable members, erased callable code, callable leaves, promoted
+captures, and concrete top-level value uses for that request. It must not
 manufacture a concrete `ConstInstantiationKey`,
 `CallableBindingInstantiationKey`, `ProcedureCallableRef`, executable
 specialization, or concrete source type payload before the requested source type
-is fully resolved. This is required for generic constants such as
-`table = { f: id }`, where different consumers of the same exported constant
-instantiate callable leaves at different function types, and for generic
-callable roots such as `also_id = choose(True, id, id)`, where different
-consumers instantiate the callable binding at different function types.
+is fully resolved. It must also not scan checked template syntax, collect
+resolved-value refs out of a checked body as a shortcut, run a mono-only static
+dispatch collector, or ask an imported artifact to patch in a missing summary.
+
+This is required for generic constants such as `table = { f: id }`, where
+different consumers of the same exported constant instantiate callable leaves at
+different function types, and for generic callable roots such as
+`also_id = choose(Bool.true, id, id)`, where different consumers instantiate the
+callable binding at different function types.
 
 - top-level values named directly by the root expression
 - imported top-level values named directly by the root expression
@@ -7219,7 +7215,6 @@ represented as `pending_callable_root`, but only inside checking finalization:
 const TopLevelProcedureBindingRef = enum(u32) { _ };
 const CallableEvalTemplateId = enum(u32) { _ };
 const CallableBindingInstanceId = enum(u32) { _ };
-const ComptimeDependencySummaryTemplateRef = enum(u32) { _ };
 const ComptimeDependencySummaryId = enum(u32) { _ };
 const ComptimeOnlyExecutableRootId = enum(u32) { _ };
 
@@ -7239,12 +7234,16 @@ const DirectProcedureBinding = struct {
 };
 
 const CallableEvalTemplate = struct {
-    body: CheckedCallableBodyRef,
+    id: CallableEvalTemplateId,
+    module_idx: u32,
+    pattern: CheckedPatternId,
+    root: ComptimeRootId,
     source_scheme: CanonicalTypeSchemeKey,
+    checked_fn_root: CheckedTypeId,
+    checked_callable_body: CheckedCallableBodyRef,
     resolved_value_refs: ResolvedValueRefTableRef,
     static_dispatch_plans: StaticDispatchPlanTableRef,
     nested_proc_sites: NestedProcSiteTableRef,
-    dependency_template: ComptimeDependencySummaryTemplateRef,
 };
 
 const CallableBindingInstantiationKey = struct {
@@ -7514,7 +7513,7 @@ id = |x| x
 choose : Bool, (a -> a), (a -> a) -> (a -> a)
 choose = |b, f, g| if b { f } else { g }
 
-also_id = choose(True, id, id)
+also_id = choose(Bool.true, id, id)
 
 use_int = also_id(1)
 use_str = also_id("x")
@@ -7701,7 +7700,7 @@ id = |x| x
 choose : Bool, (a -> a), (a -> a) -> (a -> a)
 choose = |b, f, g| if b { f } else { g }
 
-table = { f: choose(True, id, id) }
+table = { f: choose(Bool.true, id, id) }
 
 use_int = (table.f)(1)
 use_str = (table.f)("x")
@@ -8901,8 +8900,7 @@ const ConstEvalTemplate = struct {
     source_scheme: CanonicalTypeSchemeKey,
     resolved_value_refs: ResolvedValueRefTableRef,
     static_dispatch_plans: StaticDispatchPlanTableRef,
-    reification_template: ConstGraphReificationTemplateId,
-    dependency_template: ComptimeDependencySummaryTemplateRef,
+    nested_proc_sites: NestedProcSiteTableRef,
 };
 
 const ConstValueGraphTemplate = struct {
@@ -9669,7 +9667,9 @@ importing modules consume, including:
 - `SemanticInstantiationProcedureTable` entries owned by the artifact
 - private promoted-capture graph nodes addressed by `PrivateCaptureRef`
 - callable result plans, callable promotion plans, constant reification plans,
-  and dependency-summary templates referenced by concrete instances or imported
+  nested procedure-site tables, resolved value-reference tables,
+  static-dispatch plans, method-registry entries, interface capabilities, and
+  concrete dependency summaries referenced by concrete instances or imported
   template closures
 
 The exact names may differ, but the cache hit unit must be the complete checked
@@ -10452,7 +10452,6 @@ const ArtifactNestedProcSiteTableRef = ArtifactRef;
 const ArtifactCallableResultPlanRef = ArtifactRef;
 const ArtifactCallablePromotionPlanRef = ArtifactRef;
 const ArtifactConstGraphReificationPlanRef = ArtifactRef;
-const ArtifactComptimeDependencySummaryTemplateRef = ArtifactRef;
 const ArtifactPrivateCaptureNodeRef = ArtifactRef;
 
 const ImportedModuleView = struct {
@@ -10509,7 +10508,6 @@ const ImportedTemplateClosureView = struct {
     callable_result_plans: Span(ArtifactCallableResultPlanRef),
     callable_promotion_plans: Span(ArtifactCallablePromotionPlanRef),
     const_reification_plans: Span(ArtifactConstGraphReificationPlanRef),
-    dependency_summary_templates: Span(ArtifactComptimeDependencySummaryTemplateRef),
     nested_proc_sites: Span(ArtifactNestedProcSiteTableRef),
     resolved_value_refs: Span(ArtifactResolvedValueRefTableRef),
     static_dispatch_plans: Span(ArtifactStaticDispatchPlanTableRef),
@@ -10565,10 +10563,13 @@ For an exported `ConstEvalTemplate`, that private closure must include the
 compile-time-only `entry_template` named by the template, the checked procedure
 template row for that entry, the checked const body, the entry template's
 resolved-value refs, static-dispatch plans, nested-procedure sites, checked type
-roots/schemes, dependency summary template, interface capabilities, and every
-private promoted procedure, private capture node, callable-result plan,
-callable-promotion plan, constant reification plan, and semantic-instantiation
-procedure row reachable from those records. The importing artifact may lower
+roots/schemes, interface capabilities, and every private promoted procedure,
+private capture node, callable-result plan, callable-promotion plan, constant
+reification plan, and semantic-instantiation procedure row reachable from those
+records. It must not include parameterized dependency summary data. The
+importing artifact produces the concrete dependency summary itself by running
+the exact `ConstInstantiationRequest` through summary-only MIR-family lowering
+in the importing artifact's concrete context. The importing artifact may lower
 that entry template only as a checking-finalization interpreter root for a
 concrete `ConstInstantiationRequest`. It must not expose the entry as a runtime
 procedure, runtime top-level constant thunk, runtime zero-argument wrapper,
@@ -10586,8 +10587,8 @@ Lowering a `ConstInstantiationRequest` for a value-graph template does not run
 the interpreter. It clones the target-independent value graph into the
 requesting artifact's `CompileTimeValueStore`, instantiates every callable leaf
 through explicit semantic-instantiation procedure requests, builds the concrete
-dependency summary from the template plus concrete requests, and fills the
-requesting artifact's `ConstInstantiationStore`.
+dependency summary by summary-only MIR-family lowering of the exact concrete
+request, and fills the requesting artifact's `ConstInstantiationStore`.
 
 Lowering a `CallableBindingInstantiationRequest` follows the same ownership
 rule. If the binding is already a direct sealed procedure binding at the
@@ -10605,13 +10606,15 @@ schemes, checked callable bodies, checked constant bodies, checked procedure
 templates, callable eval templates, constant templates, promoted procedures,
 semantic-instantiation procedures, private promoted-capture roots and nodes,
 private capture constant templates, callable-result plans, callable-promotion
-plans, constant reification plans, dependency-summary templates, nested
-procedure-site tables, resolved value references, static dispatch plans,
-method-registry entries, and interface capabilities required to instantiate the
-exported binding or constant at a concrete requested type. The closure must be
-deterministic and complete. If an imported callable or constant template needs an
-entry that is absent from the closure after the imported artifact has been
-accepted, that is a compiler invariant violation: debug builds assert
+plans, constant reification plans, nested procedure-site tables, resolved value
+references, static dispatch plans, method-registry entries, and interface
+capabilities required to instantiate the exported binding or constant at a
+concrete requested type. It contains no parameterized dependency summary data;
+concrete summaries are owned by the artifact that owns the concrete instance.
+The closure must be deterministic and complete. If an imported callable or
+constant template needs an entry that is absent from the closure after the
+imported artifact has been accepted, that is a compiler invariant violation:
+debug builds assert
 immediately and release builds use `unreachable`.
 
 For example, if an exported generic function `id` calls a private helper `go`,
@@ -14428,8 +14431,11 @@ This work must preserve the current valid architecture:
   through exported procedure-binding views
 - imported template closures carry artifact-qualified private refs, private
   capture nodes, callable result plans, callable promotion plans, constant
-  reification plans, dependency summary templates, and semantic-instantiation
-  procedure entries required by the exported template
+  reification plans, nested procedure-site tables, resolved value-reference
+  tables, static-dispatch plans, method-registry entries, interface
+  capabilities, and semantic-instantiation procedure entries required by the
+  exported template; concrete dependency summaries are produced by the artifact
+  that owns each concrete instance
 - top-level constants, including constants with callable leaves, are consumed
   by `ConstRef` plus a concrete `ConstInstantiationKey`
 - function declarations and function-valued declarations are consumed as
@@ -14455,7 +14461,8 @@ This work must delete or replace the current invalid architecture:
 - no post-check creation or evaluation of `ConstInstantiationStore`,
   `CallableBindingInstantiationStore`, `SemanticInstantiationProcedureTable`,
   promoted procedures, private capture graphs, callable result plans, callable
-  promotion plans, constant reification plans, or dependency summary templates
+  promotion plans, constant reification plans, or compile-time dependency
+  summaries
 
 Introduce an explicit compile-time root table before LIR interpretation. The
 table must record the source module, top-level pattern, expression, procedure
@@ -14489,16 +14496,61 @@ Checking finalization computes an SCC fixed point over those summaries so a
 root depends on top-level values referenced by every procedure or callable
 member it can call during compile-time evaluation.
 
-Generic constant and callable templates store dependency summary templates, not
-concrete dependency summaries. `ConstEvalTemplate` and `CallableEvalTemplate`
-contain `ComptimeDependencySummaryTemplate` values whose entries are still
-parameterized by requested source type and concrete mono specialization. A
-concrete `ConstInstance` or `CallableBindingInstance` resolves that template in
-the requesting artifact's concrete mono context and stores the resulting
-`ComptimeDependencySummaryId` next to the evaluated value or callable result.
-This keeps the generic template reusable while ensuring post-check lowering
-never has to infer dependencies, rerun checking, or ask an imported artifact to
-add a missing concrete summary.
+Generic constant and callable templates store neither concrete dependency
+summaries nor parameterized summary data. `ConstEvalTemplate` and
+`CallableEvalTemplate` are reusable checked entry templates only. A concrete
+`ConstInstance` or `CallableBindingInstance` obtains its
+`ComptimeDependencySummaryId` by running the exact concrete request through
+summary-only MIR-family lowering in the artifact that owns the concrete
+instance. This lowering uses the requested source type payload, cloned checked
+type roots, resolved value-reference tables, static-dispatch plans,
+nested-procedure site tables, imported template closure data, and the same
+callable representation records that executable lowering will consume. It then
+records concrete `AvailabilityUse` and `ConcreteValueUse` keys after static
+dispatch and callable representation are resolved.
+
+The summary-only path must not be replaced by a checked-template scan,
+parameterized dependency rows, a mono-only static-dispatch collector, imported
+artifact mutation, imported root re-execution, or a post-check attempt to infer
+dependencies from source names. This keeps generic templates reusable while
+ensuring every concrete instance has an exact concrete summary and later stages
+never have to infer dependencies, rerun checking, or ask an imported artifact to
+add a missing summary.
+
+For example, these declarations require separate concrete summaries for
+different requested source types:
+
+```roc
+id = |x| x
+table = { f: id }
+
+use_i64 = table.f(1)
+use_str = table.f("x")
+```
+
+The generic `table` constant does not contain precomputed dependency rows for
+`id`. The concrete `table` use that feeds `use_i64` is summarized at a function
+type compatible with `I64 -> I64`; the concrete `table` use that feeds
+`use_str` is summarized at a function type compatible with `Str -> Str`. The
+summaries are owned by the concrete instances that requested those types.
+
+The same rule applies when compile-time evaluation returns a callable:
+
+```roc
+id = |x| x
+choose = |cond, a, b| if cond { a } else { b }
+
+also_id = choose(Bool.true, id, id)
+
+use_i64 = also_id(1)
+use_str = also_id("x")
+```
+
+`also_id` may publish a reusable `CallableEvalTemplate`, but it does not publish
+parameterized dependency rows. Each `CallableBindingInstantiationRequest`
+summarizes the exact requested function type in the requesting artifact and
+stores the resulting `ComptimeDependencySummaryId` next to that concrete
+callable binding instance.
 
 The dependency graph is the checking-time availability graph. It is not a
 dynamic demand trace of the particular LIR interpreter path for one execution.
@@ -14903,6 +14955,25 @@ dispatch_call
 type_dispatch_call
 method_eq
 ```
+
+Forbid the obsolete compile-time dependency-template architecture everywhere
+except this deletion audit:
+
+```text
+ComptimeDependencySummaryTemplate
+ComptimeDependencySummaryTemplateRef
+AvailabilityUseTemplate
+ConcreteValueUseTemplate
+dependency_template
+dependency_summary_templates
+appendDependencyTemplateForCheckedTemplate
+```
+
+Generic checked templates may contain `ConstUseTemplate` and
+`ProcedureUseTemplate` records as checked semantic use sites, but those are not
+compile-time dependency rows. They must be resolved by summary-only MIR-family
+lowering of an exact concrete request before any `ComptimeDependencySummaryId`
+is published.
 
 Commit when guarded semantic audits pass.
 
@@ -16133,7 +16204,7 @@ Compile-time constants:
   choose : Bool, (a -> a), (a -> a) -> (a -> a)
   choose = |b, f, g| if b { f } else { g }
 
-  also_id = choose(True, id, id)
+  also_id = choose(Bool.true, id, id)
 
   use_int = also_id(1)
   use_str = also_id("x")
@@ -16295,7 +16366,7 @@ Compile-time constants:
       }
 
   add : I64 -> I64
-  add = Box.unbox(choose_boxed(Bool.True))
+  add = Box.unbox(choose_boxed(Bool.true))
 
   main : I64
   main = add(41)
@@ -16416,7 +16487,7 @@ Compile-time constants:
   choose : Bool, (a -> a), (a -> a) -> (a -> a)
   choose = |b, f, g| if b { f } else { g }
 
-  table = { f: choose(True, id, id) }
+  table = { f: choose(Bool.true, id, id) }
 
   use_int = (table.f)(1)
   use_str = (table.f)("x")
@@ -16497,7 +16568,7 @@ Compile-time constants:
   module's interpreter or inspect source declarations to recover callable leaves.
 - imported generic callable eval bindings are consumed through
   `ImportedProcedureBindingView` and `CallableBindingInstantiationKey`. A test
-  must put the `also_id = choose(True, id, id)` example in one module, import it
+  must put the `also_id = choose(Bool.true, id, id)` example in one module, import it
   from another module, and use it at both `I64 -> I64` and `Str -> Str`. The
   importing artifact must own the two concrete callable binding instances it
   requests, and it must not inspect the exporting module's source, mutate the
@@ -16527,11 +16598,12 @@ Compile-time constants:
   fixtures must omit a reachable checked body, checked type root, checked type
   scheme, private capture node, private capture constant template,
   semantic-instantiation procedure row, callable result plan, callable promotion
-  plan, constant reification plan, dependency summary template, or checked
-  procedure template needed by an imported `ConstEvalTemplate`,
-  `CallableEvalTemplate`, or exported generic procedure template. The verifier
-  must panic at import/checking finalization time, before executable MIR can see
-  the template.
+  plan, constant reification plan, nested procedure-site table, resolved
+  value-reference table, static-dispatch plan, method-registry entry, interface
+  capability, or checked procedure template needed by an imported
+  `ConstEvalTemplate`, `CallableEvalTemplate`, or exported generic procedure
+  template. The verifier must panic at import/checking finalization time, before
+  executable MIR can see the template.
 - concrete instantiation ownership tests must put `table = { f: |x| x }` in one
   module, import it in another module, and use it at both `{ f : I64 -> I64 }`
   and `{ f : Str -> Str }`. The importer must own two sealed concrete
@@ -16539,7 +16611,7 @@ Compile-time constants:
   templates in its own `SemanticInstantiationProcedureTable`; the exporter must
   remain immutable after publication, and post-check lowering must not create
   semantic instances.
-- callable binding ownership tests must put `also_id = choose(True, id, id)` in
+- callable binding ownership tests must put `also_id = choose(Bool.true, id, id)` in
   one module, import it in another module, and call it at both `I64 -> I64` and
   `Str -> Str`. The importer must own two sealed
   `CallableBindingInstance` rows with concrete dependency summaries and final
@@ -16703,14 +16775,14 @@ The cutover is complete only when all of these are true:
   filled `ConstRef` templates or promoted `procedure_binding` entries into
   `TopLevelValueTable`, and every runnable constant use carries a concrete
   `ConstInstantiationKey`
-- generic `ConstEvalTemplate` and `CallableEvalTemplate` records contain
-  dependency summary templates; concrete `ConstInstance` and
-  `CallableBindingInstance` rows contain concrete dependency summaries resolved
-  in the owning artifact's concrete mono context
+- generic `ConstEvalTemplate` and `CallableEvalTemplate` records contain checked
+  entry-template data only; concrete `ConstInstance` and
+  `CallableBindingInstance` rows contain concrete dependency summaries produced
+  by summary-only MIR-family lowering in the owning artifact's concrete context
 - no post-check lowering stage creates or finishes a `ConstInstance`,
   `CallableBindingInstance`, `SemanticInstantiationProcedureTable` row,
   promoted procedure row, private capture graph, callable result plan, callable
-  promotion plan, constant reification plan, or dependency summary template
+  promotion plan, constant reification plan, or compile-time dependency summary
 - no runtime top-level constant thunks, runtime global initializer procedures
   for constants, runtime zero-argument constant wrappers, runtime top-level
   closure objects, or runtime global callable-value objects exist for top-level
