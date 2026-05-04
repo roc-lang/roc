@@ -37,17 +37,17 @@ fn finalize(
     const compile_time_roots = try compileTimeRootRequests(allocator, artifact.root_requests.requests);
     defer if (compile_time_roots.len > 0) allocator.free(compile_time_roots);
 
-    try publishCompileTimeRootDependencySummaries(allocator, artifact);
-
-    if (compile_time_roots.len == 0) {
-        try artifact.comptime_values.sealBindings();
-        return;
-    }
-
     const import_views = try allocator.alloc(checked_artifact.ImportedModuleView, imports.len);
     defer allocator.free(import_views);
     for (imports, 0..) |import, i| {
         import_views[i] = import.view;
+    }
+
+    try publishCompileTimeRootDependencySummaries(allocator, artifact, import_views);
+
+    if (compile_time_roots.len == 0) {
+        try artifact.comptime_values.sealBindings();
+        return;
     }
 
     const ordered_roots = try orderCompileTimeRootRequests(allocator, artifact, compile_time_roots);
@@ -188,12 +188,13 @@ fn compileTimeRootRequests(
 fn publishCompileTimeRootDependencySummaries(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (artifact.compile_time_roots.roots) |root| {
         var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
         defer availability.deinit(allocator);
 
-        try collectRootAvailabilityUses(allocator, artifact, root, &availability);
+        try collectRootAvailabilityUses(allocator, artifact, import_views, root, &availability);
 
         const summary_id = try artifact.comptime_dependencies.appendSummary(allocator, .{
             .availability_values = availability.items,
@@ -206,6 +207,7 @@ fn publishCompileTimeRootDependencySummaries(
 fn collectRootAvailabilityUses(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     root: checked_artifact.CompileTimeRoot,
     availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
 ) Allocator.Error!void {
@@ -218,7 +220,9 @@ fn collectRootAvailabilityUses(
     try collectLocalTemplateAvailabilityUses(
         allocator,
         artifact,
+        import_views,
         wrapper.template,
+        wrapper.checked_fn_root,
         availability,
         &visited_templates,
     );
@@ -227,6 +231,35 @@ fn collectRootAvailabilityUses(
 fn collectLocalTemplateAvailabilityUses(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    template_ref: canonical.ProcedureTemplateRef,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    try collectLocalTemplateDirectAvailabilityUses(
+        allocator,
+        artifact,
+        import_views,
+        template_ref,
+        availability,
+        visited_templates,
+    );
+    try collectStaticDispatchTargetAvailabilityUses(
+        allocator,
+        artifact,
+        import_views,
+        template_ref,
+        requested_fn_ty,
+        availability,
+        visited_templates,
+    );
+}
+
+fn collectLocalTemplateDirectAvailabilityUses(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     template_ref: canonical.ProcedureTemplateRef,
     availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
     visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
@@ -234,16 +267,17 @@ fn collectLocalTemplateAvailabilityUses(
     if (!std.mem.eql(u8, &template_ref.artifact.bytes, &artifact.key.bytes)) {
         compileTimeFinalizationInvariant("compile-time dependency collection attempted to walk a non-local procedure template");
     }
-    if (templateAlreadyVisited(visited_templates.items, template_ref)) return;
-    try visited_templates.append(allocator, template_ref);
-
     const template = artifact.checked_procedure_templates.get(template_ref.template);
-    try collectTemplateAvailabilityUses(allocator, artifact, template, availability, visited_templates);
+    if (!templateAlreadyVisited(visited_templates.items, template_ref)) {
+        try visited_templates.append(allocator, template_ref);
+        try collectTemplateAvailabilityUses(allocator, artifact, import_views, template, availability, visited_templates);
+    }
 }
 
 fn collectTemplateAvailabilityUses(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     template: checked_artifact.CheckedProcedureTemplate,
     availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
     visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
@@ -262,7 +296,42 @@ fn collectTemplateAvailabilityUses(
         try collectAvailabilityUse(
             allocator,
             artifact,
+            import_views,
             artifact.resolved_value_refs.records[ref_index].ref,
+            availability,
+            visited_templates,
+        );
+    }
+}
+
+fn collectStaticDispatchTargetAvailabilityUses(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    template_ref: canonical.ProcedureTemplateRef,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    const dependencies = try mir.Mono.Specialize.collectStaticDispatchDependenciesForTemplate(
+        allocator,
+        .{
+            .root = checked_artifact.loweringView(artifact),
+            .imports = import_views,
+        },
+        template_ref,
+        artifact.key,
+        requested_fn_ty,
+    );
+    defer if (dependencies.len > 0) allocator.free(dependencies);
+
+    for (dependencies) |dependency| {
+        if (!std.mem.eql(u8, &dependency.target_template.artifact.bytes, &artifact.key.bytes)) continue;
+        try collectLocalTemplateDirectAvailabilityUses(
+            allocator,
+            artifact,
+            import_views,
+            dependency.target_template,
             availability,
             visited_templates,
         );
@@ -272,6 +341,7 @@ fn collectTemplateAvailabilityUses(
 fn collectAvailabilityUse(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     resolved: checked_artifact.ResolvedValueRef,
     availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
     visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
@@ -290,6 +360,7 @@ fn collectAvailabilityUse(
         => |proc_use| try appendProcedureAvailabilityUse(
             allocator,
             artifact,
+            import_views,
             proc_use,
             availability,
             visited_templates,
@@ -334,6 +405,7 @@ fn appendConstAvailabilityUse(
 fn appendProcedureAvailabilityUse(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     proc_use: checked_artifact.ProcedureUseTemplate,
     availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
     visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
@@ -346,14 +418,22 @@ fn appendProcedureAvailabilityUse(
                     .checked => |template| try collectLocalTemplateAvailabilityUses(
                         allocator,
                         artifact,
+                        import_views,
                         template,
+                        proc_use.source_fn_ty_payload orelse {
+                            compileTimeFinalizationInvariant("direct procedure availability use had no checked source function type payload");
+                        },
                         availability,
                         visited_templates,
                     ),
                     .synthetic => |synthetic| try collectLocalTemplateAvailabilityUses(
                         allocator,
                         artifact,
+                        import_views,
                         synthetic.template,
+                        proc_use.source_fn_ty_payload orelse {
+                            compileTimeFinalizationInvariant("synthetic procedure availability use had no checked source function type payload");
+                        },
                         availability,
                         visited_templates,
                     ),

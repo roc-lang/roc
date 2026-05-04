@@ -52,6 +52,12 @@ pub const MonoSpecializationRequest = struct {
     reason: MonoSpecializationReason,
 };
 
+pub const StaticDispatchDependency = struct {
+    plan: checked_artifact.StaticDispatchPlanId,
+    target_template: canonical.ProcedureTemplateRef,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
+};
+
 pub const ReservedState = enum {
     reserved,
     lowering,
@@ -230,6 +236,48 @@ pub fn run(
     return program;
 }
 
+pub fn collectStaticDispatchDependenciesForTemplate(
+    allocator: Allocator,
+    input: Input,
+    template_ref: canonical.ProcedureTemplateRef,
+    requested_fn_ty_artifact: checked_artifact.CheckedModuleArtifactKey,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+) Allocator.Error![]StaticDispatchDependency {
+    var program = Program.init(allocator);
+    defer program.deinit();
+    program.root_artifact_key = input.root.artifact.key;
+
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
+
+    const checked_types = checkedTypesForKey(input, requested_fn_ty_artifact) orelse {
+        debug.invariant(false, "mono static-dispatch dependency invariant violated: requested function type artifact was unavailable");
+        unreachable;
+    };
+    const requested_ref = try program.concrete_source_types.registerArtifactRoot(
+        requested_fn_ty_artifact,
+        checked_types,
+        requested_fn_ty,
+    );
+
+    var collector = StaticDispatchDependencyCollector{
+        .allocator = allocator,
+        .input = input,
+        .program = &program,
+        .name_resolver = &name_resolver,
+        .dependencies = .empty,
+        .visited = .empty,
+    };
+    defer collector.deinit();
+
+    try collector.collectTemplate(template_ref, requested_ref);
+    return try collector.dependencies.toOwnedSlice(allocator);
+}
+
 const CheckedTemplateLookup = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     checked_types: checked_artifact.CheckedTypeStoreView,
@@ -245,6 +293,107 @@ const CheckedTemplateLookup = struct {
     comptime_values: *const checked_artifact.CompileTimeValueStore,
     entry_wrappers: ?*const checked_artifact.EntryWrapperTable,
     template: checked_artifact.CheckedProcedureTemplate,
+};
+
+const StaticDispatchDependencyVisit = struct {
+    template: canonical.ProcedureTemplateRef,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
+};
+
+const StaticDispatchDependencyCollector = struct {
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    dependencies: std.ArrayList(StaticDispatchDependency),
+    visited: std.ArrayList(StaticDispatchDependencyVisit),
+
+    fn deinit(self: *StaticDispatchDependencyCollector) void {
+        self.visited.deinit(self.allocator);
+        self.dependencies.deinit(self.allocator);
+    }
+
+    fn collectTemplate(
+        self: *StaticDispatchDependencyCollector,
+        template_ref: canonical.ProcedureTemplateRef,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+        if (self.alreadyVisited(template_ref, requested_key)) return;
+        try self.visited.append(self.allocator, .{
+            .template = template_ref,
+            .requested_source_fn_ty = requested_key,
+        });
+
+        const template_lookup = checkedTemplateForKey(self.input, template_ref);
+        if (template_lookup.template.static_dispatch_plans.len == 0) return;
+
+        var type_instantiator = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            template_lookup.checked_types,
+            self.name_resolver,
+            template_lookup.artifact,
+        );
+        defer type_instantiator.deinit();
+        try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, requested_fn_ty);
+
+        const table = staticDispatchPlansForKey(self.input, template_lookup.artifact) orelse {
+            debug.invariant(false, "mono static-dispatch dependency invariant violated: static dispatch plan artifact was unavailable");
+            unreachable;
+        };
+        const start: usize = @intCast(template_lookup.template.static_dispatch_plans.start);
+        const end = start + @as(usize, @intCast(template_lookup.template.static_dispatch_plans.len));
+        if (end > table.template_refs.len) {
+            invariantViolation("mono static-dispatch dependency template span was out of range");
+        }
+
+        for (table.template_refs[start..end]) |plan_id| {
+            try self.collectPlan(template_lookup.artifact, &type_instantiator, table, plan_id);
+        }
+    }
+
+    fn collectPlan(
+        self: *StaticDispatchDependencyCollector,
+        plan_artifact: checked_artifact.CheckedModuleArtifactKey,
+        type_instantiator: *TypeInstantiator,
+        table: *const static_dispatch.StaticDispatchPlanTable,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= table.plans.len) invariantViolation("mono static-dispatch dependency plan id was out of range");
+        const plan = table.plans[raw];
+        const dispatcher_ty = try type_instantiator.lowerTemplateType(plan.dispatcher_ty);
+        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_ty);
+        const method = try self.name_resolver.methodName(plan_artifact, plan.method);
+        const target = (try lookupStaticDispatchMethodTarget(self.input, self.name_resolver, plan_artifact, owner, method)) orelse return;
+        const target_template = target.template orelse invariantViolation("mono static-dispatch dependency target did not publish a checked procedure template");
+        const requested_fn_ty = try type_instantiator.concreteRefForTemplateType(plan.callable_ty);
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+
+        try self.dependencies.append(self.allocator, .{
+            .plan = plan_id,
+            .target_template = target_template,
+            .requested_source_fn_ty = requested_key,
+        });
+        try self.collectTemplate(target_template, requested_fn_ty);
+    }
+
+    fn alreadyVisited(
+        self: *const StaticDispatchDependencyCollector,
+        template: canonical.ProcedureTemplateRef,
+        requested_source_fn_ty: canonical.CanonicalTypeKey,
+    ) bool {
+        for (self.visited.items) |visit| {
+            if (canonical.procedureTemplateRefEql(visit.template, template) and
+                std.mem.eql(u8, &visit.requested_source_fn_ty.bytes, &requested_source_fn_ty.bytes))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 fn checkedTemplateForKey(
@@ -3168,16 +3317,13 @@ const BodyLowerer = struct {
         owner: static_dispatch.MethodOwner,
         method: canonical.MethodNameId,
     ) Allocator.Error!?static_dispatch.MethodTarget {
-        const registry = methodRegistryForKey(self.input, self.template_lookup.artifact) orelse {
-            debug.invariant(false, "mono static dispatch invariant violated: method registry artifact was not available");
-            unreachable;
-        };
-        for (registry.entries) |entry| {
-            const entry_owner = try self.name_resolver.methodOwner(self.template_lookup.artifact, entry.key.owner);
-            const entry_method = try self.name_resolver.methodName(self.template_lookup.artifact, entry.key.method);
-            if (methodOwnerEql(entry_owner, owner) and entry_method == method) return entry.target;
-        }
-        return null;
+        return try lookupStaticDispatchMethodTarget(
+            self.input,
+            self.name_resolver,
+            self.template_lookup.artifact,
+            owner,
+            method,
+        );
     }
 
     fn lowerIf(
@@ -4710,6 +4856,25 @@ fn methodRegistryForKey(
         if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
             return related.method_registry;
         }
+    }
+    return null;
+}
+
+fn lookupStaticDispatchMethodTarget(
+    input: Input,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    registry_artifact: checked_artifact.CheckedModuleArtifactKey,
+    owner: static_dispatch.MethodOwner,
+    method: canonical.MethodNameId,
+) Allocator.Error!?static_dispatch.MethodTarget {
+    const registry = methodRegistryForKey(input, registry_artifact) orelse {
+        debug.invariant(false, "mono static-dispatch invariant violated: method registry artifact was not available");
+        unreachable;
+    };
+    for (registry.entries) |entry| {
+        const entry_owner = try name_resolver.methodOwner(registry_artifact, entry.key.owner);
+        const entry_method = try name_resolver.methodName(registry_artifact, entry.key.method);
+        if (methodOwnerEql(entry_owner, owner) and entry_method == method) return entry.target;
     }
     return null;
 }
