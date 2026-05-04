@@ -4209,6 +4209,103 @@ fn sealCheckedProcedureTemplateRefs(
     }
 }
 
+fn sealConstEvalTemplatesForRoots(
+    allocator: Allocator,
+    const_templates: *ConstTemplateTable,
+    comptime_dependencies: *ComptimeDependencySummaryStore,
+    compile_time_roots: *const CompileTimeRootTable,
+    checked_const_bodies: *const CheckedConstBodyTable,
+    entry_wrappers: *const EntryWrapperTable,
+    checked_procedure_templates: *const CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_values: *const TopLevelValueTable,
+) Allocator.Error!void {
+    for (compile_time_roots.roots) |root| {
+        if (root.kind != .constant) continue;
+        const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
+        const top_level = top_level_values.lookupByPattern(pattern) orelse {
+            checkedArtifactInvariant("constant root has no top-level value entry", .{});
+        };
+        const const_ref = switch (top_level.value) {
+            .const_ref => |ref| ref,
+            .procedure_binding => checkedArtifactInvariant("constant root top-level value is not a ConstRef", .{}),
+        };
+        const body = checked_const_bodies.bodyForRoot(root.id) orelse {
+            checkedArtifactInvariant("constant root has no checked const body", .{});
+        };
+        const wrapper = entryWrapperForRoot(entry_wrappers, root.id);
+        const template = checked_procedure_templates.get(wrapper.template.template);
+        const dependency_template = try appendDependencyTemplateForCheckedTemplate(
+            allocator,
+            comptime_dependencies,
+            resolved_value_refs,
+            template,
+        );
+        const_templates.fillEval(const_ref, .{
+            .body = body,
+            .source_scheme = const_ref.source_scheme,
+            .resolved_value_refs = template.resolved_value_refs,
+            .static_dispatch_plans = template.static_dispatch_plans,
+            .nested_proc_sites = template.nested_proc_sites,
+            .dependency_template = dependency_template,
+        });
+    }
+}
+
+fn appendDependencyTemplateForCheckedTemplate(
+    allocator: Allocator,
+    comptime_dependencies: *ComptimeDependencySummaryStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    template: CheckedProcedureTemplate,
+) Allocator.Error!ComptimeDependencySummaryTemplateId {
+    var availability = std.ArrayList(ComptimeAvailabilityUseTemplate).empty;
+    defer availability.deinit(allocator);
+    var concrete = std.ArrayList(ComptimeConcreteValueUseTemplate).empty;
+    defer concrete.deinit(allocator);
+
+    const start: usize = @intCast(template.resolved_value_refs.start);
+    const end = start + @as(usize, @intCast(template.resolved_value_refs.len));
+    if (end > resolved_value_refs.template_refs.len) {
+        checkedArtifactInvariant("checked template resolved-value dependency span is out of range", .{});
+    }
+    for (resolved_value_refs.template_refs[start..end]) |ref_id| {
+        const ref_index = @intFromEnum(ref_id);
+        if (ref_index >= resolved_value_refs.records.len) {
+            checkedArtifactInvariant("checked template resolved-value dependency id is out of range", .{});
+        }
+        switch (resolved_value_refs.records[ref_index].ref) {
+            .top_level_const,
+            .imported_const,
+            .platform_required_const,
+            => |const_use| {
+                try availability.append(allocator, .{ .const_template = const_use });
+                try concrete.append(allocator, .{ .const_use = const_use });
+            },
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => |proc_use| {
+                try availability.append(allocator, .{ .procedure_binding = proc_use });
+                try concrete.append(allocator, .{ .procedure_callable = proc_use });
+            },
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            => {},
+            .platform_required_declaration => checkedArtifactInvariant("dependency template reached unresolved platform-required declaration", .{}),
+        }
+    }
+
+    return try comptime_dependencies.appendTemplate(allocator, .{
+        .availability_values = availability.items,
+        .concrete_value_templates = concrete.items,
+    });
+}
+
 const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
@@ -8079,6 +8176,65 @@ pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
 
+pub const CheckedConstBody = struct {
+    id: CheckedConstBodyRef,
+    root: ComptimeRootId,
+    body_expr: CheckedExprId,
+    checked_type: CheckedTypeId,
+};
+
+pub const CheckedConstBodyTable = struct {
+    bodies: []CheckedConstBody = &.{},
+    by_root: []?CheckedConstBodyRef = &.{},
+
+    pub fn fromRoots(
+        allocator: Allocator,
+        roots: *const CompileTimeRootTable,
+    ) Allocator.Error!CheckedConstBodyTable {
+        var bodies = std.ArrayList(CheckedConstBody).empty;
+        errdefer bodies.deinit(allocator);
+
+        const by_root = try allocator.alloc(?CheckedConstBodyRef, roots.roots.len);
+        errdefer allocator.free(by_root);
+        @memset(by_root, null);
+
+        for (roots.roots) |root| {
+            if (root.kind != .constant) continue;
+            const id: CheckedConstBodyRef = @enumFromInt(@as(u32, @intCast(bodies.items.len)));
+            try bodies.append(allocator, .{
+                .id = id,
+                .root = root.id,
+                .body_expr = root.expr,
+                .checked_type = root.checked_type,
+            });
+            by_root[@intFromEnum(root.id)] = id;
+        }
+
+        return .{
+            .bodies = try bodies.toOwnedSlice(allocator),
+            .by_root = by_root,
+        };
+    }
+
+    pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootId) ?CheckedConstBodyRef {
+        const idx = @intFromEnum(root);
+        if (idx >= self.by_root.len) return null;
+        return self.by_root[idx];
+    }
+
+    pub fn get(self: *const CheckedConstBodyTable, id: CheckedConstBodyRef) CheckedConstBody {
+        const idx = @intFromEnum(id);
+        if (idx >= self.bodies.len) checkedArtifactInvariant("checked const body id is out of range", .{});
+        return self.bodies[idx];
+    }
+
+    pub fn deinit(self: *CheckedConstBodyTable, allocator: Allocator) void {
+        allocator.free(self.bodies);
+        allocator.free(self.by_root);
+        self.* = .{};
+    }
+};
+
 pub const ComptimeAvailabilityUseTemplate = union(enum) {
     local_root: ComptimeRootId,
     imported_value: TopLevelValueRef,
@@ -8573,6 +8729,69 @@ fn buildImportedTemplateClosure(
     };
 }
 
+fn buildImportedConstTemplateClosure(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    const_ref: ConstRef,
+    template: ConstTemplate,
+) Allocator.Error!ImportedTemplateClosureView {
+    const const_templates = try singleton(allocator, ConstRef, const_ref);
+    errdefer freeConstSlice(allocator, const_templates);
+
+    const scheme = checked_types.schemeForKey(const_ref.source_scheme) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: exported const template references missing checked type scheme", .{});
+        }
+        unreachable;
+    };
+    const checked_type_roots = try singleton(allocator, ArtifactCheckedTypeRef, .{
+        .artifact = artifact_key,
+        .ty = scheme.root,
+    });
+    errdefer freeConstSlice(allocator, checked_type_roots);
+
+    const checked_type_schemes = try singleton(allocator, ArtifactCheckedTypeSchemeRef, .{
+        .artifact = artifact_key,
+        .scheme = scheme.id,
+    });
+    errdefer freeConstSlice(allocator, checked_type_schemes);
+
+    const checked_const_bodies: []const ArtifactCheckedConstBodyRef = switch (template.state) {
+        .eval_template => |eval| try singleton(allocator, ArtifactCheckedConstBodyRef, .{
+            .artifact = artifact_key,
+            .body = eval.body,
+        }),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, checked_const_bodies);
+
+    const dependency_summary_templates: []const ArtifactComptimeDependencySummaryTemplateRef = switch (template.state) {
+        .eval_template => |eval| try singleton(allocator, ArtifactComptimeDependencySummaryTemplateRef, .{
+            .artifact = artifact_key,
+            .template = eval.dependency_template,
+        }),
+        .value_graph_template => &.{},
+        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
+    };
+    errdefer freeConstSlice(allocator, dependency_summary_templates);
+
+    const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
+        .artifact = artifact_key,
+    });
+    errdefer freeConstSlice(allocator, interface_capabilities);
+
+    return .{
+        .checked_type_roots = checked_type_roots,
+        .checked_type_schemes = checked_type_schemes,
+        .checked_const_bodies = checked_const_bodies,
+        .const_templates = const_templates,
+        .dependency_summary_templates = dependency_summary_templates,
+        .interface_capabilities = interface_capabilities,
+    };
+}
+
 fn singleton(
     allocator: Allocator,
     comptime T: type,
@@ -8955,11 +9174,16 @@ pub const ExportedConstTemplateTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        artifact_key: CheckedModuleArtifactKey,
+        checked_types: *const CheckedTypeStore,
         top_level_values: *const TopLevelValueTable,
         const_templates: *const ConstTemplateTable,
     ) Allocator.Error!ExportedConstTemplateTable {
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
-        errdefer templates.deinit(allocator);
+        errdefer {
+            for (templates.items) |*template| deinitImportedTemplateClosure(allocator, &template.template_closure);
+            templates.deinit(allocator);
+        }
 
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
@@ -8969,6 +9193,14 @@ pub const ExportedConstTemplateTable = struct {
                 .procedure_binding => continue,
             };
             const template = const_templates.get(const_ref);
+            var template_closure = try buildImportedConstTemplateClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                const_ref,
+                template,
+            );
+            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
             try templates.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
@@ -8976,7 +9208,9 @@ pub const ExportedConstTemplateTable = struct {
                 .const_ref = const_ref,
                 .source_scheme = top_level.source_scheme,
                 .template = template,
+                .template_closure = template_closure,
             });
+            template_closure = .{};
         }
 
         return .{ .templates = try templates.toOwnedSlice(allocator) };
@@ -9882,6 +10116,7 @@ pub const CheckedModuleArtifact = struct {
     exports: ExportTable,
     checked_types: CheckedTypeStore = .{},
     checked_bodies: CheckedBodyStore = .{},
+    checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
@@ -10085,6 +10320,7 @@ pub const CheckedModuleArtifact = struct {
         self.exported_const_templates.deinit(allocator);
         self.exported_procedure_bindings.deinit(allocator);
         self.exported_procedure_templates.deinit(allocator);
+        self.checked_const_bodies.deinit(allocator);
         self.checked_bodies.deinit(allocator);
         self.checked_types.deinit(allocator);
         self.exports.deinit(allocator);
@@ -10111,6 +10347,17 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(expr.id) == i);
             std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
             verifyCheckedExprDataPublished(expr.data);
+        }
+
+        for (self.checked_const_bodies.bodies, 0..) |body, i| {
+            std.debug.assert(@intFromEnum(body.id) == i);
+            std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
+            const root = self.compile_time_roots.root(body.root);
+            std.debug.assert(root.kind == .constant);
+            std.debug.assert(root.expr == body.body_expr);
+            std.debug.assert(root.checked_type == body.checked_type);
+            std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
+            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.len);
         }
 
         for (self.root_requests.requests, 0..) |request, i| {
@@ -10227,6 +10474,17 @@ pub const CheckedModuleArtifact = struct {
             verifyCheckedStatementDataPublished(statement.data);
         }
 
+        for (self.checked_const_bodies.bodies, 0..) |body, i| {
+            std.debug.assert(@intFromEnum(body.id) == i);
+            std.debug.assert(@intFromEnum(body.root) < self.compile_time_roots.roots.len);
+            const root = self.compile_time_roots.root(body.root);
+            std.debug.assert(root.kind == .constant);
+            std.debug.assert(root.expr == body.body_expr);
+            std.debug.assert(root.checked_type == body.checked_type);
+            std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
+            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.len);
+        }
+
         for (self.checked_procedure_templates.templates, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.template_id) == i);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
@@ -10316,6 +10574,54 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
                     std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
+            }
+            for (exported.template_closure.interface_capabilities) |capability_ref| {
+                std.debug.assert(std.mem.eql(u8, &capability_ref.artifact.bytes, &self.key.bytes));
+            }
+        }
+
+        for (self.exported_const_templates.templates) |exported| {
+            std.debug.assert(std.mem.eql(u8, &exported.const_ref.artifact.bytes, &self.key.bytes));
+            std.debug.assert(@intFromEnum(exported.const_ref.template) < self.const_templates.templates.items.len);
+            std.debug.assert(exported.template_closure.const_templates.len > 0);
+            std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+            std.debug.assert(exported.template_closure.checked_type_schemes.len > 0);
+            std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
+            switch (exported.template.state) {
+                .eval_template => |eval| {
+                    std.debug.assert(@intFromEnum(eval.body) < self.checked_const_bodies.bodies.len);
+                    std.debug.assert(@intFromEnum(eval.dependency_template) < self.comptime_dependencies.templates.items.len);
+                    std.debug.assert(exported.template_closure.checked_const_bodies.len > 0);
+                    std.debug.assert(exported.template_closure.dependency_summary_templates.len > 0);
+                },
+                .value_graph_template => |graph| {
+                    std.debug.assert(@intFromEnum(graph.schema) < self.comptime_values.schemas.items.len);
+                    std.debug.assert(@intFromEnum(graph.value) < self.comptime_values.values.items.len);
+                },
+                .reserved => std.debug.panic(
+                    "checked artifact invariant violated: exported const template was not sealed",
+                    .{},
+                ),
+            }
+            for (exported.template_closure.const_templates) |const_ref| {
+                std.debug.assert(std.mem.eql(u8, &const_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(const_ref.template) < self.const_templates.templates.items.len);
+            }
+            for (exported.template_closure.checked_type_roots) |type_ref| {
+                std.debug.assert(std.mem.eql(u8, &type_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.len);
+            }
+            for (exported.template_closure.checked_type_schemes) |scheme_ref| {
+                std.debug.assert(std.mem.eql(u8, &scheme_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
+            }
+            for (exported.template_closure.checked_const_bodies) |body_ref| {
+                std.debug.assert(std.mem.eql(u8, &body_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(body_ref.body) < self.checked_const_bodies.bodies.len);
+            }
+            for (exported.template_closure.dependency_summary_templates) |summary_ref| {
+                std.debug.assert(std.mem.eql(u8, &summary_ref.artifact.bytes, &self.key.bytes));
+                std.debug.assert(@intFromEnum(summary_ref.template) < self.comptime_dependencies.templates.items.len);
             }
             for (exported.template_closure.interface_capabilities) |capability_ref| {
                 std.debug.assert(std.mem.eql(u8, &capability_ref.artifact.bytes, &self.key.bytes));
@@ -10499,6 +10805,7 @@ pub const ImportedModuleView = struct {
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
+    checked_const_bodies: *const CheckedConstBodyTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -10540,6 +10847,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
+        .checked_const_bodies = &artifact.checked_const_bodies,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
@@ -10898,6 +11206,9 @@ pub fn publishFromTypedModule(
     var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types, &checked_bodies);
     errdefer compile_time_roots.deinit(allocator);
 
+    var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
+    errdefer checked_const_bodies.deinit(allocator);
+
     var entry_wrappers = EntryWrapperTable{};
     errdefer entry_wrappers.deinit(allocator);
     try checked_procedure_templates.appendEntryWrappersForRoots(
@@ -10990,6 +11301,18 @@ pub fn publishFromTypedModule(
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
 
+    try sealConstEvalTemplatesForRoots(
+        allocator,
+        &const_templates,
+        &comptime_dependencies,
+        &compile_time_roots,
+        &checked_const_bodies,
+        &entry_wrappers,
+        &checked_procedure_templates,
+        &resolved_value_refs,
+        &top_level_values,
+    );
+
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
         module,
@@ -11015,6 +11338,8 @@ pub fn publishFromTypedModule(
     var exported_const_templates = try ExportedConstTemplateTable.fromModule(
         allocator,
         module,
+        artifact_key,
+        &checked_types,
         &top_level_values,
         &const_templates,
     );
@@ -11040,6 +11365,7 @@ pub fn publishFromTypedModule(
         .exports = .{ .defs = exports },
         .checked_types = checked_types,
         .checked_bodies = checked_bodies,
+        .checked_const_bodies = checked_const_bodies,
         .exported_procedure_templates = exported_procedure_templates,
         .exported_procedure_bindings = exported_procedure_bindings,
         .exported_const_templates = exported_const_templates,

@@ -500,10 +500,6 @@ fn evaluateConstantRoot(
         reification_plan,
     );
 
-    artifact.const_templates.fillValueGraph(const_ref, .{
-        .schema = reified.schema,
-        .value = reified.value,
-    });
     try artifact.comptime_values.bind(pattern, reified.schema, reified.value);
 
     const requested_source_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
