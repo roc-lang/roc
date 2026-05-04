@@ -6231,6 +6231,7 @@ pub const CompileTimeRootTable = struct {
         module: TypedCIR.Module,
         checked_types: *const CheckedTypeStore,
         checked_bodies: *const CheckedBodyStore,
+        procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
         errdefer roots.deinit(allocator);
@@ -6252,7 +6253,7 @@ pub const CompileTimeRootTable = struct {
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
-            if (topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
+            if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
             const source_ty = module.defType(def_idx);
             const is_callable = sourceTypeIsFunction(module, source_ty);
@@ -7749,8 +7750,7 @@ pub const TopLevelValueTable = struct {
                 module.identStoreConst(),
                 source_ty,
             );
-            const value: TopLevelValueKind = if (topLevelExprIsAlreadyProcedure(def.expr.data)) blk: {
-                const template = templates.lookupByDef(def_idx) orelse unreachable;
+            const value: TopLevelValueKind = if (templates.lookupByDef(def_idx)) |template| blk: {
                 const binding = try procedure_bindings.appendDirect(
                     allocator,
                     source_scheme,
@@ -11261,7 +11261,7 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
-    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types, &checked_bodies);
+    var compile_time_roots = try CompileTimeRootTable.fromModule(allocator, module, &checked_types, &checked_bodies, &checked_procedure_templates);
     errdefer compile_time_roots.deinit(allocator);
 
     var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
