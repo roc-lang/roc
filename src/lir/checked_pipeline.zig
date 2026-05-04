@@ -183,7 +183,7 @@ pub fn lowerArtifactsToLir(
     deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
     erased_code_origins = &.{};
 
-    try Arc.insert(&lowered_lir.store);
+    try Arc.insert(&lowered_lir.store, &lowered_lir.layouts);
 
     if (lowered_lir.root_procs.items.len == 0) {
         if (@import("builtin").mode == .Debug) {

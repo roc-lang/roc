@@ -153,6 +153,21 @@ pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) []const 
     return self.cf_switch_branches.items[span.start..][0..span.len];
 }
 
+/// Resolves a switch-branch span to its stored mutable slice.
+pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) []CFSwitchBranch {
+    if (span.len == 0) return self.cf_switch_branches.items[0..0];
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.cf_switch_branches.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: mutable switch-branch span start={d} len={d} exceeds switch-branch storage len={d}",
+                .{ span.start, span.len, self.cf_switch_branches.items.len },
+            );
+        }
+    }
+    return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
 /// Appends a proc specification and returns its id.
 pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     const idx = self.proc_specs.items.len;
