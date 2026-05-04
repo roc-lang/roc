@@ -3607,11 +3607,20 @@ const PrivateCaptureBuilder = struct {
             },
             .requested_source_ty_payload = requested_source_ty_payload,
         });
+        const instance_key = checked_artifact.ConstInstantiationKey{
+            .const_ref = const_ref,
+            .requested_source_ty = leaf.requested_source_ty,
+        };
         self.artifact.const_instances.fill(instance_ref, .{
             .schema = reified.schema,
             .value = reified.value,
-            .dependency_summary = try appendEmptyConcreteDependencySummary(self.allocator, self.artifact),
+            .dependency_summary = try appendConcreteDependencySummaryForValueGraph(self.allocator, self.artifact, reified.value),
             .reification_plan = leaf.reification_plan,
+            .generated_procedures = try generatedProceduresForConstInstance(
+                self.allocator,
+                self.artifact,
+                instance_key,
+            ),
         });
 
         return .{
@@ -3672,11 +3681,20 @@ const PrivateCaptureBuilder = struct {
                 },
                 .requested_source_ty_payload = requested_source_ty_payload,
             });
+            const instance_key = checked_artifact.ConstInstantiationKey{
+                .const_ref = const_ref,
+                .requested_source_ty = leaf.requested_source_ty,
+            };
             self.artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
                 .value = reified.value,
-                .dependency_summary = try appendEmptyConcreteDependencySummary(self.allocator, self.artifact),
+                .dependency_summary = try appendConcreteDependencySummaryForValueGraph(self.allocator, self.artifact, reified.value),
                 .reification_plan = leaf.reification_plan,
+                .generated_procedures = try generatedProceduresForConstInstance(
+                    self.allocator,
+                    self.artifact,
+                    instance_key,
+                ),
             });
             return .{ .const_instance = instance_ref };
         }

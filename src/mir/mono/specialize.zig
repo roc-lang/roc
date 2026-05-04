@@ -36,6 +36,7 @@ pub const MonoSpecializationReason = union(enum) {
     comptime_dependency_summary: checked_artifact.ComptimeDependencySummaryId,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     private_capture_callable_leaf: checked_artifact.PrivateCaptureNodeId,
+    semantic_instantiation_procedure: checked_artifact.SemanticInstantiationProcedureId,
     erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
     erased_finite_capture_member: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 };
@@ -627,18 +628,64 @@ const ErasedCaptureExecutableMaterializationDependencyKey = struct {
     node: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 };
 
+const ConstInstanceDependencyKey = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    instance: checked_artifact.ConstInstanceId,
+};
+
+const CallableBindingInstanceDependencyKey = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    instance: checked_artifact.CallableBindingInstanceId,
+};
+
+const ComptimeSummaryDependencyKey = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    summary: checked_artifact.ComptimeDependencySummaryId,
+};
+
+const SemanticInstantiationProcedureDependencyKey = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    procedure: checked_artifact.SemanticInstantiationProcedureId,
+};
+
+const ConcreteDependencyReservationState = struct {
+    const_instances: std.AutoHashMap(ConstInstanceDependencyKey, void),
+    callable_binding_instances: std.AutoHashMap(CallableBindingInstanceDependencyKey, void),
+    comptime_summaries: std.AutoHashMap(ComptimeSummaryDependencyKey, void),
+    semantic_procedures: std.AutoHashMap(SemanticInstantiationProcedureDependencyKey, void),
+
+    fn init(allocator: Allocator) ConcreteDependencyReservationState {
+        return .{
+            .const_instances = std.AutoHashMap(ConstInstanceDependencyKey, void).init(allocator),
+            .callable_binding_instances = std.AutoHashMap(CallableBindingInstanceDependencyKey, void).init(allocator),
+            .comptime_summaries = std.AutoHashMap(ComptimeSummaryDependencyKey, void).init(allocator),
+            .semantic_procedures = std.AutoHashMap(SemanticInstantiationProcedureDependencyKey, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ConcreteDependencyReservationState) void {
+        self.semantic_procedures.deinit();
+        self.comptime_summaries.deinit();
+        self.callable_binding_instances.deinit();
+        self.const_instances.deinit();
+    }
+};
+
 const ExecutableSyntheticDependencyState = struct {
     private_captures: std.AutoHashMap(PrivateCaptureDependencyKey, void),
     erased_materializations: std.AutoHashMap(ErasedCaptureExecutableMaterializationDependencyKey, void),
+    concrete_dependencies: ConcreteDependencyReservationState,
 
     fn init(allocator: Allocator) ExecutableSyntheticDependencyState {
         return .{
             .private_captures = std.AutoHashMap(PrivateCaptureDependencyKey, void).init(allocator),
             .erased_materializations = std.AutoHashMap(ErasedCaptureExecutableMaterializationDependencyKey, void).init(allocator),
+            .concrete_dependencies = ConcreteDependencyReservationState.init(allocator),
         };
     }
 
     fn deinit(self: *ExecutableSyntheticDependencyState) void {
+        self.concrete_dependencies.deinit();
         self.erased_materializations.deinit();
         self.private_captures.deinit();
     }
@@ -733,6 +780,13 @@ fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
 
     switch (plans.erasedCaptureExecutableMaterializationNode(node_id)) {
         .pending => invariantViolation("mono dependency reservation reached pending erased capture materialization node"),
+        .const_instance => |const_instance| try reserveConstInstanceRefDependencies(
+            input,
+            program,
+            queue,
+            &state.concrete_dependencies,
+            const_instance,
+        ),
         .pure_const,
         .pure_value,
         => {},
@@ -806,7 +860,13 @@ fn reservePrivateCaptureNodeDependencies(
 
     switch (plans.privateCapture(node_id)) {
         .pending => invariantViolation("mono dependency reservation reached pending private capture node"),
-        .const_instance_leaf => {},
+        .const_instance_leaf => |leaf| try reserveConstInstanceRefDependencies(
+            input,
+            program,
+            queue,
+            &state.concrete_dependencies,
+            leaf.const_instance,
+        ),
         .finite_callable_leaf => |leaf| try reserveCallableLeafDependency(input, program, queue, leaf, .{ .private_capture_callable_leaf = node_id }),
         .record => |fields| for (fields) |field| {
             try reservePrivateCaptureNodeDependencies(input, program, queue, state, artifact, plans, field.value);
@@ -834,6 +894,151 @@ fn reserveCallableLeafDependency(
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
     _ = try reserveProcedureCallableDependency(input, program, queue, leaf.proc_value, reason);
+}
+
+fn reserveConstInstanceRefDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ConcreteDependencyReservationState,
+    ref: checked_artifact.ConstInstanceRef,
+) Allocator.Error!void {
+    const visit_key = ConstInstanceDependencyKey{
+        .owner = ref.owner,
+        .instance = ref.instance,
+    };
+    const visit = try state.const_instances.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    const instance = constInstanceForRef(input, ref);
+    const summary = instance.dependency_summary orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: constant instance had no concrete dependency summary");
+        unreachable;
+    };
+    try reserveComptimeDependencySummaryDependencies(input, program, queue, state, ref.owner, summary);
+    for (instance.generated_procedures) |procedure| {
+        try reserveSemanticInstantiationProcedureDependency(input, program, queue, state, ref.owner, procedure);
+    }
+}
+
+fn reserveCallableBindingInstanceRefDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ConcreteDependencyReservationState,
+    ref: checked_artifact.CallableBindingInstanceRef,
+) Allocator.Error!void {
+    const visit_key = CallableBindingInstanceDependencyKey{
+        .owner = ref.owner,
+        .instance = ref.instance,
+    };
+    const visit = try state.callable_binding_instances.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    const instance = callableBindingInstanceForRef(input, ref);
+    const reason = MonoSpecializationReason{ .comptime_dependency_summary = instance.dependency_summary };
+    _ = try reserveProcedureCallableDependency(input, program, queue, instance.proc_value, reason);
+    try reserveComptimeDependencySummaryDependencies(input, program, queue, state, ref.owner, instance.dependency_summary);
+    for (instance.generated_procedures) |procedure| {
+        try reserveSemanticInstantiationProcedureDependency(input, program, queue, state, ref.owner, procedure);
+    }
+}
+
+fn reserveComptimeDependencySummaryDependencies(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ConcreteDependencyReservationState,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    summary_id: checked_artifact.ComptimeDependencySummaryId,
+) Allocator.Error!void {
+    const visit_key = ComptimeSummaryDependencyKey{
+        .owner = owner,
+        .summary = summary_id,
+    };
+    const visit = try state.comptime_summaries.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    const dependencies = comptimeDependenciesForKey(input, owner) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: dependency summary owner artifact was not available");
+        unreachable;
+    };
+    const summary_index = @intFromEnum(summary_id);
+    if (summary_index >= dependencies.summaries.len) {
+        debug.invariant(false, "mono dependency reservation invariant violated: dependency summary id was out of range");
+        unreachable;
+    }
+    const summary = dependencies.summaries[summary_index];
+    const reason = MonoSpecializationReason{ .comptime_dependency_summary = summary_id };
+
+    for (summary.concrete_values) |value| {
+        switch (value) {
+            .const_instance => |key| {
+                const ref = constInstanceForKey(input, owner, key) orelse {
+                    debug.invariant(false, "mono dependency reservation invariant violated: dependency summary referenced an unsealed constant instance");
+                    unreachable;
+                };
+                try reserveConstInstanceRefDependencies(input, program, queue, state, ref);
+            },
+            .callable_binding_instance => |key| {
+                const ref = callableBindingInstanceForKey(input, owner, key) orelse {
+                    debug.invariant(false, "mono dependency reservation invariant violated: dependency summary referenced an unsealed callable binding instance");
+                    unreachable;
+                };
+                try reserveCallableBindingInstanceRefDependencies(input, program, queue, state, ref);
+            },
+            .procedure_callable => |callable| {
+                _ = try reserveProcedureCallableDependency(input, program, queue, callable, reason);
+            },
+        }
+    }
+}
+
+fn reserveSemanticInstantiationProcedureDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    state: *ConcreteDependencyReservationState,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    procedure_id: checked_artifact.SemanticInstantiationProcedureId,
+) Allocator.Error!void {
+    const visit_key = SemanticInstantiationProcedureDependencyKey{
+        .owner = owner,
+        .procedure = procedure_id,
+    };
+    const visit = try state.semantic_procedures.getOrPut(visit_key);
+    if (visit.found_existing) return;
+
+    const procedures = semanticInstantiationProceduresForKey(input, owner) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure owner artifact was not available");
+        unreachable;
+    };
+    const proc_index = @intFromEnum(procedure_id);
+    if (proc_index >= procedures.procedures.len) {
+        debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure id was out of range");
+        unreachable;
+    }
+    const record = procedures.procedures[proc_index];
+    if (record.id != procedure_id) {
+        debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure table id was not canonical");
+        unreachable;
+    }
+    const procedure = switch (record.state) {
+        .sealed => |sealed| sealed,
+        .reserved => {
+            debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure was not sealed");
+            unreachable;
+        },
+    };
+    const callable = canonical.ProcedureCallableRef{
+        .template = procedure.template,
+        .source_fn_ty = semanticInstantiationProcedureSourceTy(record.key),
+    };
+    const reserved = try reserveProcedureCallableDependency(input, program, queue, callable, .{ .semantic_instantiation_procedure = procedure_id });
+    if (!canonical.procedureValueRefEql(reserved.proc, procedure.proc_value)) {
+        debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure proc value disagreed with reserved procedure");
+        unreachable;
+    }
 }
 
 fn reserveProcedureCallableDependency(
@@ -2108,6 +2313,9 @@ const BodyLowerer = struct {
         })) {
             invariantViolation("private capture const leaf instance key disagrees with published const ref and requested source type");
         }
+        var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
+        defer dependency_state.deinit();
+        try reserveConstInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, leaf.const_instance);
         return try self.program.ast.addExprWithSource(ty, leaf.requested_source_ty, .{ .const_instance = leaf.const_instance });
     }
 
@@ -2690,6 +2898,9 @@ const BodyLowerer = struct {
             debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
             unreachable;
         };
+        var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
+        defer dependency_state.deinit();
+        try reserveConstInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, instance);
         return try self.program.ast.addExpr(ty, .{ .const_instance = instance });
     }
 
@@ -3657,7 +3868,7 @@ const BodyLowerer = struct {
     }
 
     fn procedureTemplateForUse(
-        self: *const BodyLowerer,
+        self: *BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!canonical.ProcedureTemplateRef {
@@ -3708,7 +3919,7 @@ const BodyLowerer = struct {
     }
 
     fn templateFromTopLevelBinding(
-        self: *const BodyLowerer,
+        self: *BodyLowerer,
         owner: checked_artifact.CheckedModuleArtifactKey,
         bindings: *const checked_artifact.TopLevelProcedureBindingTable,
         binding_ref: checked_artifact.TopLevelProcedureBindingRef,
@@ -3723,7 +3934,7 @@ const BodyLowerer = struct {
     }
 
     fn templateFromImportedProcedureBinding(
-        self: *const BodyLowerer,
+        self: *BodyLowerer,
         imported: checked_artifact.ImportedProcedureBindingRef,
         requested_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!canonical.ProcedureTemplateRef {
@@ -3767,37 +3978,29 @@ const BodyLowerer = struct {
     }
 
     fn templateFromCallableBindingInstance(
-        self: *const BodyLowerer,
+        self: *BodyLowerer,
         owner: checked_artifact.CheckedModuleArtifactKey,
         binding: checked_artifact.ProcedureBindingRef,
         requested_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!canonical.ProcedureTemplateRef {
-        const store = callableBindingInstancesForKey(self.input, owner) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: callable-eval binding instance owner artifact was not available");
-            unreachable;
-        };
         const key = checked_artifact.CallableBindingInstantiationKey{
             .binding = binding,
             .requested_source_fn_ty = requested_key,
         };
-        for (store.instances) |record| {
-            if (!checked_artifact.callableBindingInstantiationKeyEql(record.key, key)) continue;
-            const instance = switch (record.state) {
-                .evaluated => |evaluated| evaluated,
-                .reserved, .evaluating => {
-                    debug.invariant(false, "mono body lowering invariant violated: callable-eval binding instance was not sealed before lowering");
-                    unreachable;
-                },
-            };
-            if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &requested_key.bytes)) {
-                debug.invariant(false, "mono body lowering invariant violated: callable-eval instance source function type disagrees with requested type");
-                unreachable;
-            }
-            return checkedTemplateFromCallableTemplate(instance.proc_value.template);
-        }
+        const ref = callableBindingInstanceForKey(self.input, owner, key) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: callable-eval procedure binding had no sealed concrete instance for requested function type");
+            unreachable;
+        };
+        var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
+        defer dependency_state.deinit();
+        try reserveCallableBindingInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, ref);
 
-        debug.invariant(false, "mono body lowering invariant violated: callable-eval procedure binding had no sealed concrete instance for requested function type");
-        unreachable;
+        const instance = callableBindingInstanceForRef(self.input, ref);
+        if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &requested_key.bytes)) {
+            debug.invariant(false, "mono body lowering invariant violated: callable-eval instance source function type disagrees with requested type");
+            unreachable;
+        }
+        return checkedTemplateFromCallableTemplate(instance.proc_value.template);
     }
 };
 
@@ -3993,6 +4196,20 @@ fn constInstancesForKey(
     return null;
 }
 
+fn comptimeDependenciesForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.ComptimeDependencySummaryStoreView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) return input.root.artifact.comptime_dependencies.view();
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.comptime_dependencies;
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.comptime_dependencies;
+    }
+    return null;
+}
+
 fn constInstanceForKey(
     input: Input,
     owner: checked_artifact.CheckedModuleArtifactKey,
@@ -4011,6 +4228,30 @@ fn constInstanceForKey(
         }
     }
     return null;
+}
+
+fn constInstanceForRef(
+    input: Input,
+    ref: checked_artifact.ConstInstanceRef,
+) checked_artifact.ConstInstance {
+    const view = constInstancesForKey(input, ref.owner) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: constant instance owner artifact was not available");
+        unreachable;
+    };
+    const idx = @intFromEnum(ref.instance);
+    if (idx >= view.instances.len) {
+        debug.invariant(false, "mono dependency reservation invariant violated: constant instance id was out of range");
+        unreachable;
+    }
+    const record = view.instances[idx];
+    if (record.id != ref.instance or !checked_artifact.constInstantiationKeyEql(record.key, ref.key)) {
+        debug.invariant(false, "mono dependency reservation invariant violated: constant instance ref did not match its table row");
+        unreachable;
+    }
+    return switch (record.state) {
+        .evaluated => |instance| instance,
+        .reserved, .evaluating => invariantViolation("constant instance was consumed before it was sealed"),
+    };
 }
 
 fn monoConstInstantiationKeyEql(
@@ -4357,6 +4598,80 @@ fn callableBindingInstancesForKey(
         }
     }
     return null;
+}
+
+fn callableBindingInstanceForKey(
+    input: Input,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    key: checked_artifact.CallableBindingInstantiationKey,
+) ?checked_artifact.CallableBindingInstanceRef {
+    const view = callableBindingInstancesForKey(input, owner) orelse return null;
+    for (view.instances) |record| {
+        if (!checked_artifact.callableBindingInstantiationKeyEql(record.key, key)) continue;
+        switch (record.state) {
+            .evaluated => return .{
+                .owner = view.owner,
+                .key = key,
+                .instance = record.id,
+            },
+            .reserved, .evaluating => invariantViolation("callable binding instance was consumed before it was sealed"),
+        }
+    }
+    return null;
+}
+
+fn callableBindingInstanceForRef(
+    input: Input,
+    ref: checked_artifact.CallableBindingInstanceRef,
+) checked_artifact.CallableBindingInstance {
+    const view = callableBindingInstancesForKey(input, ref.owner) orelse {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable binding instance owner artifact was not available");
+        unreachable;
+    };
+    const idx = @intFromEnum(ref.instance);
+    if (idx >= view.instances.len) {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable binding instance id was out of range");
+        unreachable;
+    }
+    const record = view.instances[idx];
+    if (record.id != ref.instance or !checked_artifact.callableBindingInstantiationKeyEql(record.key, ref.key)) {
+        debug.invariant(false, "mono dependency reservation invariant violated: callable binding instance ref did not match its table row");
+        unreachable;
+    }
+    return switch (record.state) {
+        .evaluated => |instance| instance,
+        .reserved, .evaluating => invariantViolation("callable binding instance was consumed before it was sealed"),
+    };
+}
+
+fn semanticInstantiationProceduresForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.SemanticInstantiationProcedureTableView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return input.root.artifact.semantic_instantiation_procedures.view();
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.semantic_instantiation_procedures;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.semantic_instantiation_procedures;
+        }
+    }
+    return null;
+}
+
+fn semanticInstantiationProcedureSourceTy(
+    key: checked_artifact.SemanticInstantiationProcedureKey,
+) canonical.CanonicalTypeKey {
+    return switch (key) {
+        .const_instance_callable_leaf => |leaf| leaf.source_fn_ty,
+        .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty,
+        .private_capture_callable_leaf => |leaf| leaf.source_fn_ty,
+    };
 }
 
 fn staticDispatchPlansForKey(
