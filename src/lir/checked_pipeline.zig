@@ -1049,13 +1049,11 @@ fn erasedPromotedSignaturePayloadsForProcValue(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     value_context: ConstValueContext,
-    source: anytype,
     erase: repr.ProcValueErasePlan,
 ) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
     var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
     defer builder.deinit();
 
-    _ = source;
     const target_instance = &value_context.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
     return try erasedPromotedSignaturePayloadsForProcInstance(
         allocator,
@@ -1073,10 +1071,8 @@ fn erasedPromotedSignaturePayloadsForFiniteSetAdapter(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     value_context: ConstValueContext,
-    callable: repr.CallableValueInfo,
     erase: repr.FiniteSetErasePlan,
 ) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
-    _ = callable;
     var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
     defer builder.deinit();
 
@@ -1309,7 +1305,6 @@ fn erasedProcValueResultPlan(
             allocator,
             artifact_sink,
             value_context,
-            source,
             erase,
         ),
     } });
@@ -1344,7 +1339,6 @@ fn erasedFiniteSetResultPlan(
             allocator,
             artifact_sink,
             value_context,
-            callable,
             erase,
         ),
     } });
