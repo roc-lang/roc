@@ -599,7 +599,7 @@ fn evaluateCallableBindingRoot(
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
         .dependency_summary = dependency_summary,
-        .executable_root = root.id,
+        .executable_root = .{ .local_root = root.id },
         .result_plan = result_plan,
         .promotion_plan = callable.promotion_plan,
         .promotion_output = callable.output,

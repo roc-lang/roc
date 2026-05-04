@@ -7255,11 +7255,22 @@ const CallableBindingInstanceRef = struct {
 const CallableBindingInstance = struct {
     key: CallableBindingInstantiationKey,
     dependency_summary: ComptimeDependencySummaryId,
-    executable_root: ComptimeOnlyExecutableRootId,
+    executable_root: CallableBindingExecutableRoot,
     result_plan: CallableResultPlanId,
     promotion_plan: ?CallablePromotionPlanId,
     promotion_output: CallablePromotionOutput,
     proc_value: ProcedureCallableRef,
+};
+
+const CallableBindingExecutableRoot = union(enum) {
+    /// The instance came from evaluating a source top-level callable root in
+    /// this artifact's `CompileTimeRootTable`.
+    local_root: ComptimeRootId,
+
+    /// The instance came from evaluating a concrete callable-binding request
+    /// that may not correspond to any source root row in the requesting
+    /// artifact, such as an imported or generic `CallableEvalTemplate`.
+    concrete_request: CallableBindingInstantiationKey,
 };
 
 const CallablePromotionOutput = union(enum) {

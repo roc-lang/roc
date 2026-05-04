@@ -9610,10 +9610,15 @@ pub const CallablePromotionOutput = union(enum) {
     promoted_procedure: PromotedProcedureRef,
 };
 
+pub const CallableBindingExecutableRoot = union(enum) {
+    local_root: ComptimeRootId,
+    concrete_request: CallableBindingInstantiationKey,
+};
+
 pub const CallableBindingInstance = struct {
     key: CallableBindingInstantiationKey,
     dependency_summary: ComptimeDependencySummaryId,
-    executable_root: ComptimeRootId,
+    executable_root: CallableBindingExecutableRoot,
     result_plan: CallableResultPlanId,
     promotion_plan: ?CallablePromotionPlanId = null,
     promotion_output: CallablePromotionOutput,
@@ -9820,12 +9825,21 @@ fn verifyCallableBindingInstance(
     }
     verifyCallableResultRef(plans, instance.result_plan);
 
-    const root_index = @intFromEnum(instance.executable_root);
-    if (root_index >= roots.roots.len) {
-        std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is out of range", .{index});
-    }
-    if (roots.roots[root_index].kind != .callable_binding) {
-        std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is not callable", .{index});
+    switch (instance.executable_root) {
+        .local_root => |root| {
+            const root_index = @intFromEnum(root);
+            if (root_index >= roots.roots.len) {
+                std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is out of range", .{index});
+            }
+            if (roots.roots[root_index].kind != .callable_binding) {
+                std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is not callable", .{index});
+            }
+        },
+        .concrete_request => |request_key| {
+            if (!callableBindingInstantiationKeyEql(request_key, key)) {
+                std.debug.panic("checked artifact invariant violated: callable binding instance {d} concrete executable request key differs from row key", .{index});
+            }
+        },
     }
 
     switch (instance.promotion_output) {
