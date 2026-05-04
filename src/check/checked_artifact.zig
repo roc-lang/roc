@@ -9744,7 +9744,22 @@ pub const ConstInstantiationStore = struct {
                                 .{ i, proc_index },
                             );
                         }
-                        switch (semantic_instantiation_procedures.procedures.items[proc_index].state) {
+                        const procedure_record = semantic_instantiation_procedures.procedures.items[proc_index];
+                        switch (procedure_record.key) {
+                            .const_instance_callable_leaf => |leaf| {
+                                if (!constInstantiationKeyEql(leaf.instance, record.key)) {
+                                    std.debug.panic(
+                                        "checked artifact invariant violated: constant instance {d} generated procedure belongs to a different instance",
+                                        .{i},
+                                    );
+                                }
+                            },
+                            else => std.debug.panic(
+                                "checked artifact invariant violated: constant instance {d} generated procedure has the wrong key shape",
+                                .{i},
+                            ),
+                        }
+                        switch (procedure_record.state) {
                             .sealed => {},
                             .reserved => std.debug.panic(
                                 "checked artifact invariant violated: constant instance {d} references unsealed generated procedure {d}",
@@ -9864,6 +9879,7 @@ pub const CallableBindingInstance = struct {
     dependency_summary: ComptimeDependencySummaryId,
     proc_value: canonical.ProcedureCallableRef,
     body: CallableBindingInstanceBody,
+    generated_procedures: []const SemanticInstantiationProcedureId = &.{},
 };
 
 pub const CallableBindingInstantiationState = union(enum) {
@@ -9973,6 +9989,7 @@ pub const CallableBindingInstantiationStore = struct {
         plans: *const CompileTimePlanStore,
         roots: *const CompileTimeRootTable,
         promoted_procedures: *const PromotedProcedureTable,
+        semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
     ) void {
         if (builtin.mode != .Debug) return;
 
@@ -9993,6 +10010,7 @@ pub const CallableBindingInstantiationStore = struct {
                     plans,
                     roots,
                     promoted_procedures,
+                    semantic_instantiation_procedures,
                 ),
                 .reserved, .evaluating => std.debug.panic(
                     "checked artifact invariant violated: callable binding instance {d} was not sealed before publication",
@@ -10033,6 +10051,10 @@ pub const CallableBindingInstantiationStore = struct {
     }
 
     pub fn deinit(self: *CallableBindingInstantiationStore, allocator: Allocator) void {
+        for (self.instances.items) |*record| switch (record.state) {
+            .evaluated => |instance| allocator.free(instance.generated_procedures),
+            .reserved, .evaluating => {},
+        };
         self.by_key.deinit(allocator);
         self.instances.deinit(allocator);
         self.* = .{};
@@ -10061,6 +10083,7 @@ fn verifyCallableBindingInstance(
     plans: *const CompileTimePlanStore,
     roots: *const CompileTimeRootTable,
     promoted_procedures: *const PromotedProcedureTable,
+    semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
 ) void {
     if (!callableBindingInstantiationKeyEql(instance.key, key)) {
         std.debug.panic("checked artifact invariant violated: callable binding instance {d} payload key does not match row key", .{index});
@@ -10083,6 +10106,38 @@ fn verifyCallableBindingInstance(
             roots,
             promoted_procedures,
         ),
+    }
+
+    for (instance.generated_procedures) |procedure| {
+        const proc_index = @intFromEnum(procedure);
+        if (proc_index >= semantic_instantiation_procedures.procedures.items.len) {
+            std.debug.panic(
+                "checked artifact invariant violated: callable binding instance {d} references missing generated procedure {d}",
+                .{ index, proc_index },
+            );
+        }
+        const record = semantic_instantiation_procedures.procedures.items[proc_index];
+        switch (record.key) {
+            .callable_binding_promoted_leaf => |leaf| {
+                if (!callableBindingInstantiationKeyEql(leaf.instance, key)) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: callable binding instance {d} generated procedure belongs to a different instance",
+                        .{index},
+                    );
+                }
+            },
+            else => std.debug.panic(
+                "checked artifact invariant violated: callable binding instance {d} generated procedure has the wrong key shape",
+                .{index},
+            ),
+        }
+        switch (record.state) {
+            .sealed => {},
+            .reserved => std.debug.panic(
+                "checked artifact invariant violated: callable binding instance {d} references unsealed generated procedure {d}",
+                .{ index, proc_index },
+            ),
+        }
     }
 }
 
@@ -10242,6 +10297,26 @@ pub const SemanticInstantiationProcedureTable = struct {
         }
     }
 
+    pub fn publish(
+        self: *SemanticInstantiationProcedureTable,
+        allocator: Allocator,
+        key: SemanticInstantiationProcedureKey,
+        procedure: SemanticInstantiationProcedure,
+    ) Allocator.Error!SemanticInstantiationProcedureId {
+        const id = try self.reserve(allocator, key);
+        const record = self.recordFor(id);
+        if (!semanticInstantiationProcedureKeyEql(record.key, key)) {
+            checkedArtifactInvariant("semantic instantiation procedure key does not match reserved row", .{});
+        }
+        switch (record.state) {
+            .reserved => record.state = .{ .sealed = procedure },
+            .sealed => |existing| if (!semanticInstantiationProcedureEql(existing, procedure)) {
+                checkedArtifactInvariant("semantic instantiation procedure was republished with different data", .{});
+            },
+        }
+        return id;
+    }
+
     pub fn lookup(self: *const SemanticInstantiationProcedureTable, key: SemanticInstantiationProcedureKey) ?SemanticInstantiationProcedureId {
         return self.by_key.get(hashSemanticInstantiationProcedureKey(key));
     }
@@ -10257,7 +10332,10 @@ pub const SemanticInstantiationProcedureTable = struct {
         };
     }
 
-    pub fn verifySealed(self: *const SemanticInstantiationProcedureTable) void {
+    pub fn verifySealed(
+        self: *const SemanticInstantiationProcedureTable,
+        promoted_procedures: *const PromotedProcedureTable,
+    ) void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.by_key.count() == self.procedures.items.len);
@@ -10269,7 +10347,12 @@ pub const SemanticInstantiationProcedureTable = struct {
             };
             std.debug.assert(indexed == record.id);
             switch (record.state) {
-                .sealed => {},
+                .sealed => |procedure| verifySemanticInstantiationProcedure(
+                    i,
+                    record.key,
+                    procedure,
+                    promoted_procedures,
+                ),
                 .reserved => std.debug.panic(
                     "checked artifact invariant violated: semantic instantiation procedure {d} was not sealed before publication",
                     .{i},
@@ -10292,6 +10375,72 @@ pub const SemanticInstantiationProcedureTable = struct {
         self.* = .{};
     }
 };
+
+fn verifySemanticInstantiationProcedure(
+    index: usize,
+    key: SemanticInstantiationProcedureKey,
+    procedure: SemanticInstantiationProcedure,
+    promoted_procedures: *const PromotedProcedureTable,
+) void {
+    if (procedure.promoted) |promoted| {
+        const promoted_record = promoted_procedures.get(promoted) orelse {
+            std.debug.panic(
+                "checked artifact invariant violated: semantic instantiation procedure {d} references a missing promoted procedure",
+                .{index},
+            );
+        };
+        if (!canonical.procedureValueRefEql(procedure.proc_value, promoted_record.proc)) {
+            std.debug.panic(
+                "checked artifact invariant violated: semantic instantiation procedure {d} proc value differs from promoted procedure",
+                .{index},
+            );
+        }
+        switch (procedure.template) {
+            .synthetic => |synthetic| {
+                if (!canonical.procedureTemplateRefEql(synthetic.template, promoted_record.template)) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: semantic instantiation procedure {d} template differs from promoted procedure",
+                        .{index},
+                    );
+                }
+            },
+            .checked,
+            .lifted,
+            => std.debug.panic(
+                "checked artifact invariant violated: promoted semantic instantiation procedure {d} did not use a synthetic template",
+                .{index},
+            ),
+        }
+        if (!std.mem.eql(u8, &semanticInstantiationProcedureKeySourceTy(key).bytes, &promoted_record.source_fn_ty.bytes)) {
+            std.debug.panic(
+                "checked artifact invariant violated: semantic instantiation procedure {d} source type differs from promoted procedure",
+                .{index},
+            );
+        }
+    }
+
+    switch (key) {
+        .private_capture_callable_leaf => |private| {
+            _ = promoted_procedures.get(private.promoted_proc) orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: private-capture semantic instantiation procedure {d} references a missing owner promoted procedure",
+                    .{index},
+                );
+            };
+        },
+        .const_instance_callable_leaf,
+        .callable_binding_promoted_leaf,
+        => {},
+    }
+}
+
+fn semanticInstantiationProcedureKeySourceTy(key: SemanticInstantiationProcedureKey) canonical.CanonicalTypeKey {
+    return switch (key) {
+        .const_instance_callable_leaf => |leaf| leaf.source_fn_ty,
+        .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty,
+        .private_capture_callable_leaf => |leaf| leaf.source_fn_ty,
+    };
+}
 
 fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
@@ -10620,6 +10769,19 @@ fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b:
                 std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
         },
     };
+}
+
+fn semanticInstantiationProcedureEql(a: SemanticInstantiationProcedure, b: SemanticInstantiationProcedure) bool {
+    const promoted_matches = if (a.promoted == null and b.promoted == null)
+        true
+    else if (a.promoted == null or b.promoted == null)
+        false
+    else
+        promotedProcedureRefEql(a.promoted.?, b.promoted.?);
+
+    return canonical.callableProcedureTemplateRefEql(a.template, b.template) and
+        canonical.procedureValueRefEql(a.proc_value, b.proc_value) and
+        promoted_matches;
 }
 
 pub const CheckedModuleArtifact = struct {
@@ -11291,8 +11453,9 @@ pub const CheckedModuleArtifact = struct {
             &self.comptime_plans,
             &self.compile_time_roots,
             &self.promoted_procedures,
+            &self.semantic_instantiation_procedures,
         );
-        self.semantic_instantiation_procedures.verifySealed();
+        self.semantic_instantiation_procedures.verifySealed(&self.promoted_procedures);
 
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);

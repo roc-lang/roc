@@ -558,11 +558,17 @@ fn evaluateConstantRoot(
         .key = const_instance_key,
         .requested_source_ty_payload = root.checked_type,
     });
+    const generated_procedures = try generatedProceduresForConstInstance(
+        allocator,
+        artifact,
+        const_instance_key,
+    );
     artifact.const_instances.fill(instance_ref, .{
         .schema = reified.schema,
         .value = reified.value,
         .dependency_summary = dependency_summary,
         .reification_plan = reification_plan,
+        .generated_procedures = generated_procedures,
     });
 }
 
@@ -645,6 +651,11 @@ fn evaluateCallableBindingRoot(
         .requested_source_fn_ty_payload = root.checked_type,
     });
     artifact.callable_binding_instances.markEvaluating(instance_ref);
+    const generated_procedures = try generatedProceduresForCallableBindingInstance(
+        allocator,
+        artifact,
+        key,
+    );
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
         .dependency_summary = dependency_summary,
@@ -655,6 +666,7 @@ fn evaluateCallableBindingRoot(
             .promotion_plan = callable.promotion_plan,
             .promotion_output = callable.output,
         } },
+        .generated_procedures = generated_procedures,
     });
 }
 
@@ -686,6 +698,7 @@ const PublishedCallableResult = struct {
     proc_value: check.CanonicalNames.ProcedureCallableRef,
     output: checked_artifact.CallablePromotionOutput,
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
+    generated_procedure: ?checked_artifact.SemanticInstantiationProcedureId = null,
 };
 
 const PromotedCallablePublicationContext = struct {
@@ -737,6 +750,91 @@ fn promotedProcedureProvenance(
     };
 }
 
+fn semanticInstantiationKeyForPromotedProcedure(
+    provenance: checked_artifact.PromotedProcedureProvenance,
+    source_fn_ty: canonical.CanonicalTypeKey,
+) ?checked_artifact.SemanticInstantiationProcedureKey {
+    return switch (provenance) {
+        .local_callable_root_result => null,
+        .local_const_root_callable_leaf => |local| .{ .const_instance_callable_leaf = .{
+            .instance = local.instance,
+            .value_path = local.value_path,
+            .source_fn_ty = source_fn_ty,
+        } },
+        .callable_binding_instance_result => |callable| .{ .callable_binding_promoted_leaf = .{
+            .instance = callable.instance,
+            .callable_path = callable.callable_path,
+            .source_fn_ty = source_fn_ty,
+        } },
+        .const_instance_callable_leaf => |instance| .{ .const_instance_callable_leaf = .{
+            .instance = instance.instance,
+            .value_path = instance.value_path,
+            .source_fn_ty = source_fn_ty,
+        } },
+        .private_capture_callable_leaf => |private| .{ .private_capture_callable_leaf = .{
+            .promoted_proc = private.promoted_proc,
+            .capture_path = private.capture_path,
+            .source_fn_ty = source_fn_ty,
+        } },
+    };
+}
+
+fn publishSemanticInstantiationProcedureForPromoted(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    reserved: checked_artifact.ReservedPromotedCallableWrapper,
+    source_fn_ty: canonical.CanonicalTypeKey,
+) Allocator.Error!?checked_artifact.SemanticInstantiationProcedureId {
+    const key = semanticInstantiationKeyForPromotedProcedure(reserved.provenance, source_fn_ty) orelse return null;
+    return try artifact.semantic_instantiation_procedures.publish(allocator, key, .{
+        .template = .{ .synthetic = .{ .template = reserved.template } },
+        .proc_value = reserved.proc_value,
+        .promoted = reserved.promoted_ref,
+    });
+}
+
+fn generatedProceduresForConstInstance(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    instance: checked_artifact.ConstInstantiationKey,
+) Allocator.Error![]const checked_artifact.SemanticInstantiationProcedureId {
+    var ids = std.ArrayList(checked_artifact.SemanticInstantiationProcedureId).empty;
+    errdefer ids.deinit(allocator);
+
+    for (artifact.semantic_instantiation_procedures.procedures.items) |record| {
+        switch (record.key) {
+            .const_instance_callable_leaf => |leaf| {
+                if (!checked_artifact.constInstantiationKeyEql(leaf.instance, instance)) continue;
+                try ids.append(allocator, record.id);
+            },
+            else => {},
+        }
+    }
+
+    return try ids.toOwnedSlice(allocator);
+}
+
+fn generatedProceduresForCallableBindingInstance(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    instance: checked_artifact.CallableBindingInstantiationKey,
+) Allocator.Error![]const checked_artifact.SemanticInstantiationProcedureId {
+    var ids = std.ArrayList(checked_artifact.SemanticInstantiationProcedureId).empty;
+    errdefer ids.deinit(allocator);
+
+    for (artifact.semantic_instantiation_procedures.procedures.items) |record| {
+        switch (record.key) {
+            .callable_binding_promoted_leaf => |leaf| {
+                if (!checked_artifact.callableBindingInstantiationKeyEql(leaf.instance, instance)) continue;
+                try ids.append(allocator, record.id);
+            },
+            else => {},
+        }
+    }
+
+    return try ids.toOwnedSlice(allocator);
+}
+
 fn ensureConstInstanceRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -775,6 +873,11 @@ fn ensureConstInstanceRequest(
                 .value = cloned.value,
                 .dependency_summary = dependency_summary,
                 .reification_plan = null,
+                .generated_procedures = try generatedProceduresForConstInstance(
+                    allocator,
+                    artifact,
+                    request.key,
+                ),
             });
         },
         .eval_template => |eval| {
@@ -841,6 +944,11 @@ fn ensureConstInstanceRequest(
                 .value = reified.value,
                 .dependency_summary = dependency_summary,
                 .reification_plan = reification_plan,
+                .generated_procedures = try generatedProceduresForConstInstance(
+                    allocator,
+                    artifact,
+                    request.key,
+                ),
             });
         },
     }
@@ -1584,6 +1692,11 @@ fn ensureCallableBindingInstanceRequest(
         result_plan,
         callable.proc_value,
     );
+    const generated_procedures = try generatedProceduresForCallableBindingInstance(
+        allocator,
+        artifact,
+        request.key,
+    );
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = request.key,
         .dependency_summary = dependency_summary,
@@ -1594,6 +1707,7 @@ fn ensureCallableBindingInstanceRequest(
             .promotion_plan = callable.promotion_plan,
             .promotion_output = callable.output,
         } },
+        .generated_procedures = generated_procedures,
     });
     return instance_ref;
 }
@@ -2627,6 +2741,7 @@ fn publishCallableResult(
         .proc_value = proc_value,
         .output = .{ .existing_procedure = proc_value },
         .promotion_plan = null,
+        .generated_procedure = null,
     };
 }
 
@@ -2707,6 +2822,12 @@ fn promoteFiniteCallableResult(
         .call_args = call_args,
     } });
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
+    const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
+        allocator,
+        artifact,
+        reserved,
+        selected.result_plan.source_fn_ty,
+    );
 
     const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .finite = .{
         .result_plan = result_plan_id,
@@ -2721,6 +2842,7 @@ fn promoteFiniteCallableResult(
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
+        .generated_procedure = generated_procedure,
     };
 }
 
@@ -2803,6 +2925,12 @@ fn publishErasedCallableResult(
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
     } });
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
+    const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
+        allocator,
+        artifact,
+        reserved,
+        erased.source_fn_ty,
+    );
 
     const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .erased = .{
         .result_plan = result_plan,
@@ -2816,6 +2944,7 @@ fn publishErasedCallableResult(
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
+        .generated_procedure = generated_procedure,
     };
 }
 
