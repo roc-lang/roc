@@ -9121,7 +9121,10 @@ pub const ConstInstantiationStore = struct {
         };
     }
 
-    pub fn verifySealed(self: *const ConstInstantiationStore) void {
+    pub fn verifySealed(
+        self: *const ConstInstantiationStore,
+        semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
+    ) void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.by_key.count() == self.instances.items.len);
@@ -9145,6 +9148,22 @@ pub const ConstInstantiationStore = struct {
                             "checked artifact invariant violated: constant instance {d} has no reification plan",
                             .{i},
                         );
+                    }
+                    for (instance.generated_procedures) |procedure| {
+                        const proc_index = @intFromEnum(procedure);
+                        if (proc_index >= semantic_instantiation_procedures.procedures.items.len) {
+                            std.debug.panic(
+                                "checked artifact invariant violated: constant instance {d} references missing generated procedure {d}",
+                                .{ i, proc_index },
+                            );
+                        }
+                        switch (semantic_instantiation_procedures.procedures.items[proc_index].state) {
+                            .sealed => {},
+                            .reserved => std.debug.panic(
+                                "checked artifact invariant violated: constant instance {d} references unsealed generated procedure {d}",
+                                .{ i, proc_index },
+                            ),
+                        }
                     }
                 },
                 .reserved, .evaluating => std.debug.panic(
@@ -10408,7 +10427,7 @@ pub const CheckedModuleArtifact = struct {
         self.comptime_plans.verifySealed(&self.callable_set_descriptors);
         self.comptime_dependencies.verifySealed();
         self.comptime_values.verifySealed();
-        self.const_instances.verifySealed();
+        self.const_instances.verifySealed(&self.semantic_instantiation_procedures);
         self.callable_binding_instances.verifySealed(
             &self.comptime_plans,
             &self.compile_time_roots,
