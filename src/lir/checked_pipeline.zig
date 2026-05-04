@@ -113,9 +113,11 @@ pub fn lowerArtifactsToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
-    switch (target.artifact_state) {
-        .published => artifacts.root.artifact.verifyPublished(),
-        .checking_finalization => artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
+    if (builtin.mode == .Debug) {
+        switch (target.artifact_state) {
+            .published => artifacts.root.artifact.verifyPublished(),
+            .checking_finalization => artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
+        }
     }
 
     const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
@@ -216,7 +218,7 @@ pub fn summarizeCompileTimeDependencies(
     }
     switch (target.artifact_state) {
         .published => checkedPipelineInvariant("compile-time dependency summary requires checking-finalization artifact state"),
-        .checking_finalization => artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
+        .checking_finalization => if (builtin.mode == .Debug) artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
     }
 
     const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("compile-time dependency summary requires mutable checked artifact sink");
@@ -482,7 +484,7 @@ fn publishErasedFnAbisForLowering(
             }
 
             for (solved.solve_sessions.items) |*session| {
-                session.representation_store.erased_fn_abis.verifyPublished();
+                if (builtin.mode == .Debug) session.representation_store.erased_fn_abis.verifyPublished();
                 for (session.representation_store.erased_fn_abis.abis) |abi| {
                     _ = try artifact_sink.erased_fn_abis.append(allocator, abi);
                 }

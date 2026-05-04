@@ -506,9 +506,13 @@ pub fn run(
     try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try finalizeValueTransformBoundaries(&program);
     try publishSessionExecutableTypePayloads(&program);
-    verifySealedLambdaSolvedProgram(&program);
+    if (@import("builtin").mode == .Debug) {
+        verifySealedLambdaSolvedProgram(&program);
+        for (program.solve_sessions.items) |*session| {
+            session.representation_store.verifySealed();
+        }
+    }
     for (program.solve_sessions.items) |*session| {
-        session.representation_store.verifySealed();
         session.state = .sealed;
     }
     try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);

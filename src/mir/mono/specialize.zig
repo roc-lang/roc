@@ -232,7 +232,7 @@ pub fn run(
         queue.markLowered(key);
     }
 
-    verifyProgram(&program);
+    if (@import("builtin").mode == .Debug) verifyProgram(&program);
     return program;
 }
 

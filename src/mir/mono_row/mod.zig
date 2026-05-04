@@ -438,7 +438,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
         .program = program,
         .shapes = shapes,
     };
-    verifyResult(&result);
+    if (verify.enabled()) verifyResult(&result);
     return result;
 }
 
