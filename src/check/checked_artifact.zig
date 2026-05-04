@@ -8080,6 +8080,146 @@ pub const CaptureSlotReificationPlanId = enum(u32) { _ };
 pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
+
+pub const ComptimeAvailabilityUseTemplate = union(enum) {
+    local_root: ComptimeRootId,
+    imported_value: TopLevelValueRef,
+    const_template: ConstUseTemplate,
+    procedure_binding: ProcedureUseTemplate,
+};
+
+pub const ComptimeConcreteValueUseTemplate = union(enum) {
+    const_use: ConstUseTemplate,
+    callable_binding_use: ProcedureUseTemplate,
+    procedure_callable: ProcedureUseTemplate,
+};
+
+pub const ComptimeDependencySummaryTemplate = struct {
+    availability_values: []const ComptimeAvailabilityUseTemplate = &.{},
+    concrete_value_templates: []const ComptimeConcreteValueUseTemplate = &.{},
+};
+
+pub const ComptimeAvailabilityUse = union(enum) {
+    local_root: ComptimeRootId,
+    imported_value: TopLevelValueRef,
+    const_template: ConstRef,
+    procedure_binding: ProcedureBindingRef,
+};
+
+pub const ComptimeConcreteValueUse = union(enum) {
+    const_instance: ConstInstantiationKey,
+    callable_binding_instance: CallableBindingInstantiationKey,
+    procedure_callable: canonical.ProcedureCallableRef,
+};
+
+pub const ComptimeDependencySummary = struct {
+    availability_values: []const ComptimeAvailabilityUse = &.{},
+    concrete_values: []const ComptimeConcreteValueUse = &.{},
+};
+
+pub const ComptimeDependencySummaryStoreView = struct {
+    owner: CheckedModuleArtifactKey,
+    templates: []const ComptimeDependencySummaryTemplate = &.{},
+    summaries: []const ComptimeDependencySummary = &.{},
+};
+
+pub const ComptimeDependencySummaryStore = struct {
+    owner: CheckedModuleArtifactKey = .{},
+    templates: std.ArrayList(ComptimeDependencySummaryTemplate) = .empty,
+    summaries: std.ArrayList(ComptimeDependencySummary) = .empty,
+
+    pub fn init(owner: CheckedModuleArtifactKey) ComptimeDependencySummaryStore {
+        return .{ .owner = owner };
+    }
+
+    pub fn view(self: *const ComptimeDependencySummaryStore) ComptimeDependencySummaryStoreView {
+        return .{
+            .owner = self.owner,
+            .templates = self.templates.items,
+            .summaries = self.summaries.items,
+        };
+    }
+
+    pub fn appendTemplate(
+        self: *ComptimeDependencySummaryStore,
+        allocator: Allocator,
+        template: ComptimeDependencySummaryTemplate,
+    ) Allocator.Error!ComptimeDependencySummaryTemplateId {
+        const id: ComptimeDependencySummaryTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+        const availability_values = try allocator.dupe(ComptimeAvailabilityUseTemplate, template.availability_values);
+        errdefer allocator.free(availability_values);
+        const concrete_value_templates = try allocator.dupe(ComptimeConcreteValueUseTemplate, template.concrete_value_templates);
+        errdefer allocator.free(concrete_value_templates);
+        try self.templates.append(allocator, .{
+            .availability_values = availability_values,
+            .concrete_value_templates = concrete_value_templates,
+        });
+        return id;
+    }
+
+    pub fn appendSummary(
+        self: *ComptimeDependencySummaryStore,
+        allocator: Allocator,
+        summary: ComptimeDependencySummary,
+    ) Allocator.Error!ComptimeDependencySummaryId {
+        const id: ComptimeDependencySummaryId = @enumFromInt(@as(u32, @intCast(self.summaries.items.len)));
+        const availability_values = try allocator.dupe(ComptimeAvailabilityUse, summary.availability_values);
+        errdefer allocator.free(availability_values);
+        const concrete_values = try allocator.dupe(ComptimeConcreteValueUse, summary.concrete_values);
+        errdefer allocator.free(concrete_values);
+        try self.summaries.append(allocator, .{
+            .availability_values = availability_values,
+            .concrete_values = concrete_values,
+        });
+        return id;
+    }
+
+    pub fn getTemplate(
+        self: *const ComptimeDependencySummaryStore,
+        id: ComptimeDependencySummaryTemplateId,
+    ) ComptimeDependencySummaryTemplate {
+        const idx = @intFromEnum(id);
+        if (idx >= self.templates.items.len) checkedArtifactInvariant("compile-time dependency template id is out of range", .{});
+        return self.templates.items[idx];
+    }
+
+    pub fn getSummary(
+        self: *const ComptimeDependencySummaryStore,
+        id: ComptimeDependencySummaryId,
+    ) ComptimeDependencySummary {
+        const idx = @intFromEnum(id);
+        if (idx >= self.summaries.items.len) checkedArtifactInvariant("compile-time dependency summary id is out of range", .{});
+        return self.summaries.items[idx];
+    }
+
+    pub fn verifySealed(self: *const ComptimeDependencySummaryStore) void {
+        if (builtin.mode != .Debug) return;
+
+        for (self.templates.items, 0..) |template, i| {
+            _ = template;
+            std.debug.assert(i <= std.math.maxInt(u32));
+        }
+        for (self.summaries.items, 0..) |summary, i| {
+            _ = summary;
+            std.debug.assert(i <= std.math.maxInt(u32));
+        }
+    }
+
+    pub fn deinit(self: *ComptimeDependencySummaryStore, allocator: Allocator) void {
+        for (self.templates.items) |template| {
+            allocator.free(template.availability_values);
+            allocator.free(template.concrete_value_templates);
+        }
+        for (self.summaries.items) |summary| {
+            allocator.free(summary.availability_values);
+            allocator.free(summary.concrete_values);
+        }
+        self.templates.deinit(allocator);
+        self.summaries.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 pub const ComptimeValuePathKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
@@ -9673,6 +9813,7 @@ pub const CheckedModuleArtifact = struct {
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
     comptime_plans: CompileTimePlanStore = .{},
+    comptime_dependencies: ComptimeDependencySummaryStore = .{},
     promoted_procedures: PromotedProcedureTable,
     const_templates: ConstTemplateTable,
     comptime_values: CompileTimeValueStore,
@@ -9822,6 +9963,7 @@ pub const CheckedModuleArtifact = struct {
         self.const_instances.deinit(allocator);
         self.const_templates.deinit(allocator);
         self.promoted_procedures.deinit(allocator);
+        self.comptime_dependencies.deinit(allocator);
         self.comptime_plans.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
@@ -10190,6 +10332,7 @@ pub const CheckedModuleArtifact = struct {
         );
         self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates, &self.checked_bodies);
         self.comptime_plans.verifySealed(&self.callable_set_descriptors);
+        self.comptime_dependencies.verifySealed();
         self.comptime_values.verifySealed();
         self.const_instances.verifySealed();
         self.callable_binding_instances.verifySealed(
@@ -10280,6 +10423,7 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     comptime_values: *const CompileTimeValueStore,
     comptime_plans: *const CompileTimePlanStore,
+    comptime_dependencies: ComptimeDependencySummaryStoreView,
     const_instances: ConstInstantiationStoreView,
     callable_binding_instances: CallableBindingInstantiationStoreView,
     semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
@@ -10320,6 +10464,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .interface_capabilities = &artifact.interface_capabilities,
         .comptime_values = &artifact.comptime_values,
         .comptime_plans = &artifact.comptime_plans,
+        .comptime_dependencies = artifact.comptime_dependencies.view(),
         .const_instances = artifact.const_instances.view(),
         .callable_binding_instances = artifact.callable_binding_instances.view(),
         .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures.view(),
@@ -10691,6 +10836,9 @@ pub fn publishFromTypedModule(
     var semantic_instantiation_procedures = SemanticInstantiationProcedureTable.init(artifact_key);
     errdefer semantic_instantiation_procedures.deinit(allocator);
 
+    var comptime_dependencies = ComptimeDependencySummaryStore.init(artifact_key);
+    errdefer comptime_dependencies.deinit(allocator);
+
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);
 
@@ -10818,6 +10966,7 @@ pub fn publishFromTypedModule(
         .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
+        .comptime_dependencies = comptime_dependencies,
         .promoted_procedures = .{},
         .const_templates = const_templates,
         .comptime_values = comptime_values,
@@ -10863,6 +11012,7 @@ test "artifact views are read-only projections" {
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .comptime_dependencies = ComptimeDependencySummaryStore.init(.{}),
         .promoted_procedures = .{},
         .const_templates = .{},
         .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
@@ -10875,6 +11025,7 @@ test "artifact views are read-only projections" {
         artifact.callable_binding_instances.deinit(std.testing.allocator);
         artifact.const_instances.deinit(std.testing.allocator);
         artifact.const_templates.deinit(std.testing.allocator);
+        artifact.comptime_dependencies.deinit(std.testing.allocator);
         artifact.comptime_values.deinit(std.testing.allocator);
         artifact.executable_type_payloads.deinit(std.testing.allocator);
         artifact.canonical_names.deinit();
