@@ -1188,6 +1188,16 @@ fn appendConcreteDependencySummary(
     });
 }
 
+fn appendEmptyConcreteDependencySummary(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = &.{},
+        .concrete_values = &.{},
+    });
+}
+
 const ConcreteDependencyCollector = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -2337,6 +2347,7 @@ const PrivateCaptureBuilder = struct {
         self.artifact.const_instances.fill(instance_ref, .{
             .schema = reified.schema,
             .value = reified.value,
+            .dependency_summary = try appendEmptyConcreteDependencySummary(self.allocator, self.artifact),
             .reification_plan = leaf.reification_plan,
         });
 
@@ -2401,6 +2412,7 @@ const PrivateCaptureBuilder = struct {
             self.artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
                 .value = reified.value,
+                .dependency_summary = try appendEmptyConcreteDependencySummary(self.allocator, self.artifact),
                 .reification_plan = leaf.reification_plan,
             });
             return .{ .const_instance = instance_ref };
