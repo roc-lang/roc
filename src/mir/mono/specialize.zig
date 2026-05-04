@@ -31,7 +31,7 @@ pub const MonoSpecializationReason = union(enum) {
     call_proc: checked_artifact.CheckedExprId,
     proc_value: checked_artifact.CheckedExprId,
     static_dispatch_target: checked_artifact.StaticDispatchPlanId,
-    comptime_dependency_summary: u32,
+    comptime_dependency_summary: checked_artifact.ComptimeDependencySummaryId,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     private_capture_callable_leaf: checked_artifact.PrivateCaptureNodeId,
     erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
@@ -4198,7 +4198,7 @@ test "mono specialization queue reserves once" {
     const request = MonoSpecializationRequest{
         .template = template,
         .requested_fn_ty = @enumFromInt(0),
-        .reason = .{ .comptime_dependency_summary = 0 },
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
     };
 
     const first = try queue.reserve(&concrete, request);
