@@ -3630,6 +3630,7 @@ pub const CallableEvalTemplate = struct {
     root: ComptimeRootId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
+    dependency_template: ComptimeDependencySummaryTemplateId,
 };
 
 pub const CallableEvalTemplateTableView = struct {
@@ -3647,6 +3648,7 @@ pub const CallableEvalTemplateTable = struct {
         root: ComptimeRootId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
         checked_fn_root: CheckedTypeId,
+        dependency_template: ComptimeDependencySummaryTemplateId,
     ) Allocator.Error!CallableEvalTemplateId {
         const old = self.templates;
         const next = try allocator.alloc(CallableEvalTemplate, old.len + 1);
@@ -3662,6 +3664,7 @@ pub const CallableEvalTemplateTable = struct {
             .root = root,
             .source_scheme = source_scheme,
             .checked_fn_root = checked_fn_root,
+            .dependency_template = dependency_template,
         };
         return id;
     }
@@ -7637,6 +7640,7 @@ pub const TopLevelValueTable = struct {
         checked_bodies: *const CheckedBodyStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
+        comptime_dependencies: *ComptimeDependencySummaryStore,
         procedure_bindings: *TopLevelProcedureBindingTable,
         const_templates: *ConstTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
@@ -7686,6 +7690,7 @@ pub const TopLevelValueTable = struct {
                     unreachable;
                 }
                 const checked_fn_root = root.checked_type;
+                const dependency_template = try comptime_dependencies.appendTemplate(allocator, .{});
                 const callable_template = try callable_eval_templates.append(
                     allocator,
                     module.moduleIndex(),
@@ -7693,6 +7698,7 @@ pub const TopLevelValueTable = struct {
                     root_id,
                     source_scheme,
                     checked_fn_root,
+                    dependency_template,
                 );
                 const binding = try procedure_bindings.appendCallableEval(
                     allocator,
@@ -10324,6 +10330,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(template.dependency_template) < self.comptime_dependencies.templates.items.len);
             _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
             };
@@ -10923,6 +10930,7 @@ pub fn publishFromTypedModule(
         &checked_bodies,
         &checked_procedure_templates,
         &callable_eval_templates,
+        &comptime_dependencies,
         &top_level_procedure_bindings,
         &const_templates,
         artifact_key,
