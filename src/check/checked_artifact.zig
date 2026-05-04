@@ -11288,10 +11288,9 @@ pub const CheckedModuleArtifact = struct {
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
                 .constant,
-                .callable_binding,
-                => switch (root.payload) {
+                .callable_binding => switch (root.payload) {
                     .pending => {},
-                    else => std.debug.panic("checked artifact invariant violated: compile-time root payload was filled before checking finalization completed", .{}),
+                    else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
                 .expect => switch (root.payload) {
                     .expect => {},

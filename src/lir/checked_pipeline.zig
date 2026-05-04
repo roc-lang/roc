@@ -76,10 +76,14 @@ pub const LoweredProgram = struct {
 pub const CompileTimeDependencySummaryResult = struct {
     allocator: Allocator,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
+    dependency_summaries: []const ?checked_artifact.ComptimeDependencySummaryId = &.{},
 
     pub fn deinit(self: *CompileTimeDependencySummaryResult) void {
         if (self.compile_time_payloads.len > 0) {
             self.allocator.free(self.compile_time_payloads);
+        }
+        if (self.dependency_summaries.len > 0) {
+            self.allocator.free(self.dependency_summaries);
         }
         self.* = .{ .allocator = self.allocator };
     }
@@ -252,7 +256,7 @@ pub fn summarizeCompileTimeDependencies(
     );
     errdefer if (compile_time_payloads.len > 0) allocator.free(compile_time_payloads);
 
-    try publishCompileTimeDependencySummariesFromSolved(
+    const dependency_summaries = try publishCompileTimeDependencySummariesFromSolved(
         allocator,
         artifacts.root.artifact,
         artifact_sink,
@@ -260,10 +264,12 @@ pub fn summarizeCompileTimeDependencies(
         selected_entrypoints,
         compile_time_payloads,
     );
+    errdefer if (dependency_summaries.len > 0) allocator.free(dependency_summaries);
 
     return .{
         .allocator = allocator,
         .compile_time_payloads = compile_time_payloads,
+        .dependency_summaries = dependency_summaries,
     };
 }
 
@@ -558,7 +564,7 @@ fn publishCompileTimeDependencySummariesFromSolved(
     solved: *const mir.LambdaSolved.Solve.Program,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     payloads: []const checked_artifact.CompileTimeEvaluationPayload,
-) Allocator.Error!void {
+) Allocator.Error![]const ?checked_artifact.ComptimeDependencySummaryId {
     if (selected_entrypoints.len != solved.root_procs.items.len or selected_entrypoints.len != payloads.len) {
         checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
     }
@@ -566,28 +572,30 @@ fn publishCompileTimeDependencySummariesFromSolved(
     var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved);
     defer collector.deinit();
 
-    for (selected_entrypoints, solved.root_procs.items, payloads) |entrypoint, root_proc, payload| {
-        const root_request = switch (entrypoint) {
-            .root => |root| root,
-            .const_instance,
-            .callable_binding_instance,
-            => continue,
-        };
-        const root = compileTimeRootForRequest(artifact, root_request);
-        const local_payload = switch (payload) {
-            .local_root => |local| local,
-            .const_instance,
-            .callable_binding_instance,
-            => checkedPipelineInvariant("compile-time dependency summary root had non-root payload"),
-        };
-        var summary = try collector.rootSummary(root_proc, local_payload);
+    const summary_ids = try allocator.alloc(?checked_artifact.ComptimeDependencySummaryId, selected_entrypoints.len);
+    errdefer allocator.free(summary_ids);
+    @memset(summary_ids, null);
+
+    for (selected_entrypoints, solved.root_procs.items, payloads, 0..) |entrypoint, root_proc, payload, i| {
+        var summary = try collector.entrypointSummary(root_proc, payload);
         defer summary.deinit(allocator);
         const summary_id = try artifact_sink.comptime_dependencies.appendSummary(allocator, .{
             .availability_values = summary.availability.items,
             .concrete_values = summary.concrete.items,
         });
-        artifact_sink.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
+        summary_ids[i] = summary_id;
+        switch (entrypoint) {
+            .root => |root_request| {
+                const root = compileTimeRootForRequest(artifact, root_request);
+                artifact_sink.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
+            },
+            .const_instance,
+            .callable_binding_instance,
+            => {},
+        }
     }
+
+    return summary_ids;
 }
 
 const CompileTimeRootSummary = struct {
@@ -636,10 +644,10 @@ const CompileTimeDependencySummaryBuilder = struct {
         self.proc_summary_ids.deinit();
     }
 
-    fn rootSummary(
+    fn entrypointSummary(
         self: *CompileTimeDependencySummaryBuilder,
         root_proc: canonical.MirProcedureRef,
-        payload: checked_artifact.CompileTimeRootPayload,
+        payload: checked_artifact.CompileTimeEvaluationPayload,
     ) Allocator.Error!CompileTimeRootSummary {
         var summary = CompileTimeRootSummary.init();
         errdefer summary.deinit(self.allocator);
@@ -647,7 +655,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         self.transitive_proc_visits.clearRetainingCapacity();
         const root_instance = self.procInstanceIdForMir(root_proc);
         try self.collectTransitiveProc(root_instance, &summary.availability, &summary.concrete);
-        try self.collectRootPayload(payload, &summary.availability, &summary.concrete);
+        try self.collectEntrypointPayload(payload, &summary.availability, &summary.concrete);
 
         return summary;
     }
@@ -730,17 +738,21 @@ const CompileTimeDependencySummaryBuilder = struct {
         return summary_id;
     }
 
-    fn collectRootPayload(
+    fn collectEntrypointPayload(
         self: *CompileTimeDependencySummaryBuilder,
-        payload: checked_artifact.CompileTimeRootPayload,
+        payload: checked_artifact.CompileTimeEvaluationPayload,
         availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         switch (payload) {
-            .pending => checkedPipelineInvariant("compile-time dependency summary reached pending root payload"),
-            .expect => {},
-            .const_graph => |plan| try self.collectConstGraphPlan(plan, availability, concrete),
-            .callable_result => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
+            .local_root => |root_payload| switch (root_payload) {
+                .pending => checkedPipelineInvariant("compile-time dependency summary reached pending root payload"),
+                .expect => {},
+                .const_graph => |plan| try self.collectConstGraphPlan(plan, availability, concrete),
+                .callable_result => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
+            },
+            .const_instance => |plan| try self.collectConstGraphPlan(plan, availability, concrete),
+            .callable_binding_instance => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
         }
     }
 
