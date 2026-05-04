@@ -1,6 +1,7 @@
 //! Lambda-solved MIR construction state.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const symbol_mod = @import("symbol");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
@@ -4525,9 +4526,12 @@ const BodySolver = struct {
     ) Allocator.Error!Ast.Expr.Data {
         const lowered_args = try self.lowerExprSpanWithValues(low_level.args);
         const source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty);
+        const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
+        var value_flow_edges = std.ArrayList(repr.LowLevelValueFlowEdge).empty;
+        defer value_flow_edges.deinit(self.allocator);
+        var box_boundary: ?repr.BoxBoundaryId = null;
         switch (low_level.op) {
             .box_box => {
-                const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
                 if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.box reached non-unary low-level expression");
                 const payload_value = arg_values[0];
                 const payload_info = self.value_store.values.items[@intFromEnum(payload_value)];
@@ -4545,12 +4549,18 @@ const BodySolver = struct {
                     .boundary_root = result_root,
                     .payload_plan = .unchanged,
                 });
+                box_boundary = boundary;
                 _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = result_root },
                     .to = .{ .local = payload_root },
                     .kind = .box_payload,
                 });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 0,
+                    .arg_projection = .whole_value,
+                    .result_projection = .box_payload,
+                } });
                 self.value_store.values.items[@intFromEnum(result_value)].boxed = .{
                     .box_root = result_root,
                     .payload_root = payload_root,
@@ -4559,7 +4569,6 @@ const BodySolver = struct {
                 };
             },
             .box_unbox => {
-                const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
                 if (arg_values.len != 1) lambdaInvariant("lambda-solved Box.unbox reached non-unary low-level expression");
                 const boxed_value = arg_values[0];
                 const boxed_info = self.value_store.values.items[@intFromEnum(boxed_value)];
@@ -4576,21 +4585,190 @@ const BodySolver = struct {
                     .boundary_root = self.valueRoot(result_value),
                     .payload_plan = .unchanged,
                 });
+                box_boundary = boundary;
                 _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(boxed_value) },
                     .to = .{ .local = self.valueRoot(result_value) },
                     .kind = .box_payload,
                 });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 0,
+                    .arg_projection = .box_payload,
+                    .result_projection = .whole_value,
+                } });
+            },
+            .list_get_unsafe,
+            .list_first,
+            .list_last,
+            => {
+                if (arg_values.len < 1) lambdaInvariant("lambda-solved list element low-level reached without a list argument");
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(arg_values[0]) },
+                    .to = .{ .local = self.valueRoot(result_value) },
+                    .kind = .list_elem,
+                });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result = .{
+                    .arg = 0,
+                    .projection = .list_elem,
+                } });
+            },
+            .list_append_unsafe,
+            .list_prepend,
+            .list_set,
+            => {
+                if (arg_values.len < 2) lambdaInvariant("lambda-solved list update low-level reached without enough arguments");
+                try self.publishValueAlias(arg_values[0], result_value);
+                const elem_arg_index: usize = if (low_level.op == .list_set) 2 else 1;
+                if (elem_arg_index >= arg_values.len) lambdaInvariant("lambda-solved list update low-level missing element argument");
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(result_value) },
+                    .to = .{ .local = self.valueRoot(arg_values[elem_arg_index]) },
+                    .kind = .list_elem,
+                });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 0,
+                    .arg_projection = .list_elem,
+                    .result_projection = .list_elem,
+                } });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = @intCast(elem_arg_index),
+                    .arg_projection = .whole_value,
+                    .result_projection = .list_elem,
+                } });
+            },
+            .list_concat => {
+                if (arg_values.len != 2) lambdaInvariant("lambda-solved List.concat low-level reached without two list arguments");
+                try self.publishValueAlias(arg_values[0], result_value);
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(arg_values[1]) },
+                    .to = .{ .local = self.valueRoot(result_value) },
+                    .kind = .value_alias,
+                });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 0,
+                    .arg_projection = .list_elem,
+                    .result_projection = .list_elem,
+                } });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 1,
+                    .arg_projection = .list_elem,
+                    .result_projection = .list_elem,
+                } });
+            },
+            .list_sublist,
+            .list_drop_at,
+            .list_drop_first,
+            .list_drop_last,
+            .list_take_first,
+            .list_take_last,
+            .list_reverse,
+            .list_reserve,
+            .list_release_excess_capacity,
+            => {
+                if (arg_values.len < 1) lambdaInvariant("lambda-solved list-result low-level reached without a list argument");
+                try self.publishValueAlias(arg_values[0], result_value);
+                try self.appendLowLevelProducedFromArgs(&value_flow_edges, &.{0}, .list_elem);
+            },
+            .list_split_first,
+            .list_split_last,
+            => {
+                if (arg_values.len < 1) lambdaInvariant("lambda-solved list split low-level reached without a list argument");
+                try self.appendLowLevelProducedFromArgs(&value_flow_edges, &.{0}, .whole_value);
+            },
+            .list_with_capacity => {
+                try value_flow_edges.append(self.allocator, .{ .fresh_result = .list_elem });
+            },
+            .str_concat,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_to_utf8,
+            .str_from_utf8,
+            .str_from_utf8_lossy,
+            .str_split_on,
+            .str_join_with,
+            .str_repeat,
+            .str_inspect,
+            => {
+                try self.appendLowLevelProducedFromArgs(&value_flow_edges, &.{0}, .whole_value);
+            },
+            .str_with_capacity,
+            .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .i64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            .num_to_str,
+            => {
+                try value_flow_edges.append(self.allocator, .{ .fresh_result = .whole_value });
             },
             else => {},
         }
+        const value_flow = try self.publishLowLevelValueFlowSignature(
+            low_level.op,
+            lowered_args.values,
+            result_value,
+            value_flow_edges.items,
+            box_boundary,
+        );
         return .{ .low_level = .{
             .op = low_level.op,
             .rc_effect = low_level.rc_effect,
+            .value_flow = value_flow,
             .args = lowered_args.exprs,
             .source_constraint_ty = source_constraint_ty,
         } };
+    }
+
+    fn publishLowLevelValueFlowSignature(
+        self: *BodySolver,
+        op: base.LowLevel,
+        args: repr.Span(repr.ValueInfoId),
+        result: repr.ValueInfoId,
+        edges: []const repr.LowLevelValueFlowEdge,
+        box_boundary: ?repr.BoxBoundaryId,
+    ) Allocator.Error!repr.LowLevelValueFlowSignatureId {
+        if (edges.len == 0 and box_boundary == null) {
+            return try self.value_store.addLowLevelValueFlowSignature(.{ .no_value_flow = .{
+                .op = op,
+                .args = args,
+                .result = result,
+            } });
+        }
+        return try self.value_store.addLowLevelValueFlowSignature(.{ .flows = .{
+            .op = op,
+            .args = args,
+            .result = result,
+            .edges = try self.value_store.addLowLevelValueFlowEdgeSpan(edges),
+            .box_boundary = box_boundary,
+        } });
+    }
+
+    fn appendLowLevelProducedFromArgs(
+        self: *BodySolver,
+        edges: *std.ArrayList(repr.LowLevelValueFlowEdge),
+        args: []const u32,
+        result_projection: repr.LowLevelProjectionPath,
+    ) Allocator.Error!void {
+        try edges.append(self.allocator, .{ .produced_from_args = .{
+            .args = try self.value_store.addLowLevelValueFlowArgIndexSpan(args),
+            .result_projection = result_projection,
+        } });
     }
 
     fn lowerStmtSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {

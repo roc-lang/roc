@@ -4563,6 +4563,7 @@ const BodyBuilder = struct {
                 );
             },
             .low_level => |low_level| blk: {
+                if (builtin.mode == .Debug) self.verifyLowLevelValueFlow(low_level.value_flow);
                 const args = try self.lowerExprIds(low_level.args);
                 break :blk try self.output.addExpr(
                     try self.lowerExecutableValueType(expr.ty, expr.value_info),
@@ -5460,6 +5461,13 @@ const BodyBuilder = struct {
                 .body = try self.lowerExpr(for_.body),
             } },
         );
+    }
+
+    fn verifyLowLevelValueFlow(self: *const BodyBuilder, value_flow: repr.LowLevelValueFlowSignatureId) void {
+        const index = @intFromEnum(value_flow);
+        if (index >= self.value_store.low_level_value_flows.items.len) {
+            executableInvariant("executable low-level expression referenced a missing lambda-solved value-flow signature");
+        }
     }
 
     fn lowerStmt(self: *BodyBuilder, stmt_id: LambdaSolved.Ast.StmtId) Allocator.Error!Ast.StmtId {

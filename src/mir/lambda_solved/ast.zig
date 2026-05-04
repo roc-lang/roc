@@ -201,6 +201,7 @@ pub const Expr = struct {
         low_level: struct {
             op: base.LowLevel,
             rc_effect: base.LowLevel.RcEffect,
+            value_flow: repr.LowLevelValueFlowSignatureId,
             args: Span(ExprId),
             source_constraint_ty: TypeVarId,
         },

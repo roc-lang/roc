@@ -1,6 +1,7 @@
 //! Lambda-solved MIR representation/value-flow records.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const symbol_mod = @import("symbol");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
@@ -17,6 +18,7 @@ pub const ValueInfoId = enum(u32) { _ };
 pub const BindingInfoId = enum(u32) { _ };
 pub const ProjectionInfoId = enum(u32) { _ };
 pub const CallSiteInfoId = enum(u32) { _ };
+pub const LowLevelValueFlowSignatureId = enum(u32) { _ };
 pub const JoinInfoId = enum(u32) { _ };
 pub const ReturnInfoId = enum(u32) { _ };
 pub const BoxBoundaryId = canonical.BoxBoundaryId;
@@ -151,6 +153,47 @@ pub fn Span(comptime _: type) type {
         }
     };
 }
+
+pub const LowLevelProjectionPath = union(enum) {
+    whole_value,
+    list_elem,
+    box_payload,
+    record_field: row.RecordFieldId,
+    tuple_elem: u32,
+    tag_payload: row.TagPayloadId,
+};
+
+pub const LowLevelValueFlowEdge = union(enum) {
+    arg_to_result: struct {
+        arg: u32,
+        projection: LowLevelProjectionPath,
+    },
+    arg_to_result_projection: struct {
+        arg: u32,
+        arg_projection: LowLevelProjectionPath,
+        result_projection: LowLevelProjectionPath,
+    },
+    produced_from_args: struct {
+        args: Span(u32),
+        result_projection: LowLevelProjectionPath,
+    },
+    fresh_result: LowLevelProjectionPath,
+};
+
+pub const LowLevelValueFlowSignature = union(enum) {
+    no_value_flow: struct {
+        op: base.LowLevel,
+        args: Span(ValueInfoId),
+        result: ValueInfoId,
+    },
+    flows: struct {
+        op: base.LowLevel,
+        args: Span(ValueInfoId),
+        result: ValueInfoId,
+        edges: Span(LowLevelValueFlowEdge),
+        box_boundary: ?BoxBoundaryId = null,
+    },
+};
 
 pub const CanonicalCallableSetKey = canonical.CanonicalCallableSetKey;
 pub const CaptureShapeKey = canonical.CaptureShapeKey;
@@ -2102,6 +2145,9 @@ pub const ValueInfoStore = struct {
     bindings: std.ArrayList(BindingInfo),
     projections: std.ArrayList(ProjectionInfo),
     call_sites: std.ArrayList(CallSiteInfo),
+    low_level_value_flows: std.ArrayList(LowLevelValueFlowSignature),
+    low_level_value_flow_edges: std.ArrayList(LowLevelValueFlowEdge),
+    low_level_value_flow_arg_indices: std.ArrayList(u32),
     joins: std.ArrayList(JoinInfo),
     returns: std.ArrayList(ReturnInfo),
     join_inputs: std.ArrayList(JoinInputInfo),
@@ -2115,6 +2161,9 @@ pub const ValueInfoStore = struct {
             .bindings = .empty,
             .projections = .empty,
             .call_sites = .empty,
+            .low_level_value_flows = .empty,
+            .low_level_value_flow_edges = .empty,
+            .low_level_value_flow_arg_indices = .empty,
             .joins = .empty,
             .returns = .empty,
             .join_inputs = .empty,
@@ -2142,6 +2191,9 @@ pub const ValueInfoStore = struct {
         self.join_inputs.deinit(self.allocator);
         self.returns.deinit(self.allocator);
         self.joins.deinit(self.allocator);
+        self.low_level_value_flow_arg_indices.deinit(self.allocator);
+        self.low_level_value_flow_edges.deinit(self.allocator);
+        self.low_level_value_flows.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
         self.bindings.deinit(self.allocator);
@@ -2171,6 +2223,51 @@ pub const ValueInfoStore = struct {
         const id: CallSiteInfoId = @enumFromInt(@as(u32, @intCast(self.call_sites.items.len)));
         try self.call_sites.append(self.allocator, call_site);
         return id;
+    }
+
+    pub fn addLowLevelValueFlowSignature(
+        self: *ValueInfoStore,
+        signature: LowLevelValueFlowSignature,
+    ) std.mem.Allocator.Error!LowLevelValueFlowSignatureId {
+        const id: LowLevelValueFlowSignatureId = @enumFromInt(@as(u32, @intCast(self.low_level_value_flows.items.len)));
+        try self.low_level_value_flows.append(self.allocator, signature);
+        return id;
+    }
+
+    pub fn addLowLevelValueFlowEdgeSpan(
+        self: *ValueInfoStore,
+        edges: []const LowLevelValueFlowEdge,
+    ) std.mem.Allocator.Error!Span(LowLevelValueFlowEdge) {
+        if (edges.len == 0) return Span(LowLevelValueFlowEdge).empty();
+        const start: u32 = @intCast(self.low_level_value_flow_edges.items.len);
+        try self.low_level_value_flow_edges.appendSlice(self.allocator, edges);
+        return .{ .start = start, .len = @intCast(edges.len) };
+    }
+
+    pub fn sliceLowLevelValueFlowEdgeSpan(
+        self: *const ValueInfoStore,
+        span: Span(LowLevelValueFlowEdge),
+    ) []const LowLevelValueFlowEdge {
+        if (span.len == 0) return &.{};
+        return self.low_level_value_flow_edges.items[span.start..][0..span.len];
+    }
+
+    pub fn addLowLevelValueFlowArgIndexSpan(
+        self: *ValueInfoStore,
+        args: []const u32,
+    ) std.mem.Allocator.Error!Span(u32) {
+        if (args.len == 0) return Span(u32).empty();
+        const start: u32 = @intCast(self.low_level_value_flow_arg_indices.items.len);
+        try self.low_level_value_flow_arg_indices.appendSlice(self.allocator, args);
+        return .{ .start = start, .len = @intCast(args.len) };
+    }
+
+    pub fn sliceLowLevelValueFlowArgIndexSpan(
+        self: *const ValueInfoStore,
+        span: Span(u32),
+    ) []const u32 {
+        if (span.len == 0) return &.{};
+        return self.low_level_value_flow_arg_indices.items[span.start..][0..span.len];
     }
 
     pub fn addJoin(self: *ValueInfoStore, join: JoinInfo) std.mem.Allocator.Error!JoinInfoId {
