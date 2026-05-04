@@ -8435,6 +8435,8 @@ pub const CaptureSlotReificationPlanId = enum(u32) { _ };
 pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
 pub const ComptimeDependencySummaryTemplateId = enum(u32) { _ };
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
+pub const ComptimeProcDependencySummaryId = enum(u32) { _ };
+pub const ComptimeCallSiteId = enum(u32) { _ };
 
 pub const CheckedConstBody = struct {
     id: CheckedConstBodyRef,
@@ -8531,11 +8533,69 @@ pub const ComptimeDependencySummary = struct {
     concrete_values: []const ComptimeConcreteValueUse = &.{},
 };
 
+pub const ComptimeCallDependency = union(enum) {
+    call_proc: canonical.ExecutableSpecializationKey,
+    call_value_finite: ComptimeFiniteCallValueDependency,
+    call_value_erased: ComptimeErasedCallValueDependency,
+};
+
+pub const ComptimeFiniteCallValueDependency = struct {
+    call_site: ComptimeCallSiteId,
+    callable_set: canonical.CanonicalCallableSetKey,
+    members: []const canonical.ExecutableSpecializationKey = &.{},
+};
+
+pub const ComptimeErasedCallValueDependency = struct {
+    call_site: ComptimeCallSiteId,
+    code: canonical.ErasedCallableCodeRef,
+    capture_availability: []const ComptimeAvailabilityUse = &.{},
+    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
+    provenance: []const canonical.BoxBoundaryId = &.{},
+};
+
+pub const ConstGraphDependency = struct {
+    plan: ConstGraphReificationPlanId,
+    availability_values: []const ComptimeAvailabilityUse = &.{},
+    concrete_values: []const ComptimeConcreteValueUse = &.{},
+    callable_leaves: []const CallableLeafDependency = &.{},
+};
+
+pub const CallableResultDependency = struct {
+    plan: CallableResultPlanId,
+    members: []const canonical.ExecutableSpecializationKey = &.{},
+    capture_availability: []const ComptimeAvailabilityUse = &.{},
+    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
+    erased: ?ErasedCallableDependency = null,
+};
+
+pub const CallableLeafDependency = union(enum) {
+    resolved_finite: FiniteCallableLeafInstance,
+    promoted_callable: CallableResultPlanId,
+    erased_boxed_callable: ErasedCallableDependency,
+};
+
+pub const ErasedCallableDependency = struct {
+    code: canonical.ErasedCallableCodeRef,
+    capture_availability: []const ComptimeAvailabilityUse = &.{},
+    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
+    provenance: []const canonical.BoxBoundaryId = &.{},
+};
+
+pub const ComptimeProcDependencySummary = struct {
+    proc: canonical.ExecutableSpecializationKey,
+    availability_values: []const ComptimeAvailabilityUse = &.{},
+    concrete_values: []const ComptimeConcreteValueUse = &.{},
+    call_deps: []const ComptimeCallDependency = &.{},
+    const_graph_deps: []const ConstGraphDependency = &.{},
+    callable_result_deps: []const CallableResultDependency = &.{},
+};
+
 pub const ComptimeDependencySummaryStoreView = struct {
     owner: CheckedModuleArtifactKey,
     root_requests: []const ?ComptimeDependencySummaryId = &.{},
     templates: []const ComptimeDependencySummaryTemplate = &.{},
     summaries: []const ComptimeDependencySummary = &.{},
+    proc_summaries: []const ComptimeProcDependencySummary = &.{},
 };
 
 pub const ComptimeDependencySummaryStore = struct {
@@ -8543,6 +8603,7 @@ pub const ComptimeDependencySummaryStore = struct {
     root_requests: []?ComptimeDependencySummaryId = &.{},
     templates: std.ArrayList(ComptimeDependencySummaryTemplate) = .empty,
     summaries: std.ArrayList(ComptimeDependencySummary) = .empty,
+    proc_summaries: std.ArrayList(ComptimeProcDependencySummary) = .empty,
 
     pub fn init(owner: CheckedModuleArtifactKey) ComptimeDependencySummaryStore {
         return .{ .owner = owner };
@@ -8554,6 +8615,7 @@ pub const ComptimeDependencySummaryStore = struct {
             .root_requests = self.root_requests,
             .templates = self.templates.items,
             .summaries = self.summaries.items,
+            .proc_summaries = self.proc_summaries.items,
         };
     }
 
@@ -8639,6 +8701,21 @@ pub const ComptimeDependencySummaryStore = struct {
         return id;
     }
 
+    /// Append an already-owned callable-aware procedure summary.
+    ///
+    /// The summary-only MIR-family path allocates the nested slices in this
+    /// record. The store takes ownership so it can remain an immutable checked
+    /// artifact input for later mono dependency reservation.
+    pub fn appendProcSummary(
+        self: *ComptimeDependencySummaryStore,
+        allocator: Allocator,
+        summary: ComptimeProcDependencySummary,
+    ) Allocator.Error!ComptimeProcDependencySummaryId {
+        const id: ComptimeProcDependencySummaryId = @enumFromInt(@as(u32, @intCast(self.proc_summaries.items.len)));
+        try self.proc_summaries.append(allocator, summary);
+        return id;
+    }
+
     pub fn getTemplate(
         self: *const ComptimeDependencySummaryStore,
         id: ComptimeDependencySummaryTemplateId,
@@ -8668,6 +8745,10 @@ pub const ComptimeDependencySummaryStore = struct {
             _ = summary;
             std.debug.assert(i <= std.math.maxInt(u32));
         }
+        for (self.proc_summaries.items, 0..) |summary, i| {
+            _ = summary;
+            std.debug.assert(i <= std.math.maxInt(u32));
+        }
         for (self.root_requests, 0..) |summary_id, i| {
             std.debug.assert(i <= std.math.maxInt(u32));
             const id = summary_id orelse {
@@ -8686,6 +8767,8 @@ pub const ComptimeDependencySummaryStore = struct {
     }
 
     pub fn deinit(self: *ComptimeDependencySummaryStore, allocator: Allocator) void {
+        for (self.proc_summaries.items) |*summary| deinitComptimeProcDependencySummary(allocator, summary);
+        self.proc_summaries.deinit(allocator);
         for (self.templates.items) |template| {
             allocator.free(template.availability_values);
             allocator.free(template.concrete_value_templates);
@@ -8700,6 +8783,91 @@ pub const ComptimeDependencySummaryStore = struct {
         self.* = .{};
     }
 };
+
+fn deinitComptimeProcDependencySummary(
+    allocator: Allocator,
+    summary: *ComptimeProcDependencySummary,
+) void {
+    deinitExecutableSpecializationKey(allocator, &summary.proc);
+    allocator.free(summary.availability_values);
+    allocator.free(summary.concrete_values);
+    for (summary.call_deps) |*dep| deinitComptimeCallDependency(allocator, dep);
+    allocator.free(summary.call_deps);
+    for (summary.const_graph_deps) |*dep| deinitConstGraphDependency(allocator, dep);
+    allocator.free(summary.const_graph_deps);
+    for (summary.callable_result_deps) |*dep| deinitCallableResultDependency(allocator, dep);
+    allocator.free(summary.callable_result_deps);
+}
+
+fn deinitComptimeCallDependency(allocator: Allocator, dep: *const ComptimeCallDependency) void {
+    switch (dep.*) {
+        .call_proc => |key| {
+            var owned_key = key;
+            deinitExecutableSpecializationKey(allocator, &owned_key);
+        },
+        .call_value_finite => |finite| deinitExecutableSpecializationKeySlice(allocator, finite.members),
+        .call_value_erased => |erased| deinitErasedCallableDependencyFields(
+            allocator,
+            erased.capture_availability,
+            erased.capture_concrete_values,
+            erased.provenance,
+        ),
+    }
+}
+
+fn deinitConstGraphDependency(allocator: Allocator, dep: *const ConstGraphDependency) void {
+    allocator.free(dep.availability_values);
+    allocator.free(dep.concrete_values);
+    for (dep.callable_leaves) |*leaf| deinitCallableLeafDependency(allocator, leaf);
+    allocator.free(dep.callable_leaves);
+}
+
+fn deinitCallableResultDependency(allocator: Allocator, dep: *const CallableResultDependency) void {
+    deinitExecutableSpecializationKeySlice(allocator, dep.members);
+    allocator.free(dep.capture_availability);
+    allocator.free(dep.capture_concrete_values);
+    if (dep.erased) |erased| deinitErasedCallableDependency(allocator, erased);
+}
+
+fn deinitCallableLeafDependency(allocator: Allocator, leaf: *const CallableLeafDependency) void {
+    switch (leaf.*) {
+        .resolved_finite,
+        .promoted_callable,
+        => {},
+        .erased_boxed_callable => |erased| deinitErasedCallableDependency(allocator, erased),
+    }
+}
+
+fn deinitErasedCallableDependency(allocator: Allocator, erased: ErasedCallableDependency) void {
+    deinitErasedCallableDependencyFields(
+        allocator,
+        erased.capture_availability,
+        erased.capture_concrete_values,
+        erased.provenance,
+    );
+}
+
+fn deinitErasedCallableDependencyFields(
+    allocator: Allocator,
+    availability: []const ComptimeAvailabilityUse,
+    concrete: []const ComptimeConcreteValueUse,
+    provenance: []const canonical.BoxBoundaryId,
+) void {
+    allocator.free(availability);
+    allocator.free(concrete);
+    allocator.free(provenance);
+}
+
+fn deinitExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const canonical.ExecutableSpecializationKey,
+) void {
+    for (keys) |key| {
+        var owned_key = key;
+        deinitExecutableSpecializationKey(allocator, &owned_key);
+    }
+    allocator.free(keys);
+}
 
 pub const ComptimeValuePathKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
