@@ -3628,7 +3628,7 @@ pub const CallableEvalTemplate = struct {
     root: ComptimeRootId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
-    dependency_template: ComptimeDependencySummaryTemplateId,
+    dependency_template: ?ComptimeDependencySummaryTemplateId = null,
 };
 
 pub const CallableEvalTemplateTableView = struct {
@@ -3646,7 +3646,6 @@ pub const CallableEvalTemplateTable = struct {
         root: ComptimeRootId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
         checked_fn_root: CheckedTypeId,
-        dependency_template: ComptimeDependencySummaryTemplateId,
     ) Allocator.Error!CallableEvalTemplateId {
         const old = self.templates;
         const next = try allocator.alloc(CallableEvalTemplate, old.len + 1);
@@ -3662,9 +3661,23 @@ pub const CallableEvalTemplateTable = struct {
             .root = root,
             .source_scheme = source_scheme,
             .checked_fn_root = checked_fn_root,
-            .dependency_template = dependency_template,
         };
         return id;
+    }
+
+    pub fn fillDependencyTemplate(
+        self: *CallableEvalTemplateTable,
+        id: CallableEvalTemplateId,
+        dependency_template: ComptimeDependencySummaryTemplateId,
+    ) void {
+        const idx = @intFromEnum(id);
+        if (idx >= self.templates.len) {
+            checkedArtifactInvariant("callable eval template id is out of range", .{});
+        }
+        if (self.templates[idx].dependency_template != null) {
+            checkedArtifactInvariant("callable eval template dependency was filled twice", .{});
+        }
+        self.templates[idx].dependency_template = dependency_template;
     }
 
     pub fn get(self: *const CallableEvalTemplateTable, id: CallableEvalTemplateId) CallableEvalTemplate {
@@ -4249,6 +4262,27 @@ fn sealConstEvalTemplatesForRoots(
             .nested_proc_sites = template.nested_proc_sites,
             .dependency_template = dependency_template,
         });
+    }
+}
+
+fn sealCallableEvalTemplatesForRoots(
+    allocator: Allocator,
+    callable_eval_templates: *CallableEvalTemplateTable,
+    comptime_dependencies: *ComptimeDependencySummaryStore,
+    entry_wrappers: *const EntryWrapperTable,
+    checked_procedure_templates: *const CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+) Allocator.Error!void {
+    for (callable_eval_templates.templates) |template| {
+        const wrapper = entryWrapperForRoot(entry_wrappers, template.root);
+        const checked_template = checked_procedure_templates.get(wrapper.template.template);
+        const dependency_template = try appendDependencyTemplateForCheckedTemplate(
+            allocator,
+            comptime_dependencies,
+            resolved_value_refs,
+            checked_template,
+        );
+        callable_eval_templates.fillDependencyTemplate(template.id, dependency_template);
     }
 }
 
@@ -7730,7 +7764,6 @@ pub const TopLevelValueTable = struct {
         checked_bodies: *const CheckedBodyStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
-        comptime_dependencies: *ComptimeDependencySummaryStore,
         procedure_bindings: *TopLevelProcedureBindingTable,
         const_templates: *ConstTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
@@ -7779,7 +7812,6 @@ pub const TopLevelValueTable = struct {
                     unreachable;
                 }
                 const checked_fn_root = root.checked_type;
-                const dependency_template = try comptime_dependencies.appendTemplate(allocator, .{});
                 const callable_template = try callable_eval_templates.append(
                     allocator,
                     module.moduleIndex(),
@@ -7787,7 +7819,6 @@ pub const TopLevelValueTable = struct {
                     root_id,
                     source_scheme,
                     checked_fn_root,
-                    dependency_template,
                 );
                 const binding = try procedure_bindings.appendCallableEval(
                     allocator,
@@ -8979,6 +9010,18 @@ fn buildProcedureBindingClosure(
             });
             errdefer freeConstSlice(allocator, checked_type_schemes);
 
+            const dependency_template = template.dependency_template orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("checked artifact invariant violated: callable eval template dependency was not sealed", .{});
+                }
+                unreachable;
+            };
+            const dependency_summary_templates = try singleton(allocator, ArtifactComptimeDependencySummaryTemplateRef, .{
+                .artifact = artifact_key,
+                .template = dependency_template,
+            });
+            errdefer freeConstSlice(allocator, dependency_summary_templates);
+
             const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
                 .artifact = artifact_key,
             });
@@ -8988,6 +9031,7 @@ fn buildProcedureBindingClosure(
                 .checked_type_roots = checked_type_roots,
                 .checked_type_schemes = checked_type_schemes,
                 .callable_eval_templates = callable_eval_template,
+                .dependency_summary_templates = dependency_summary_templates,
                 .interface_capabilities = interface_capabilities,
             };
         },
@@ -10630,6 +10674,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(template_id) < self.callable_eval_templates.templates.len);
                     std.debug.assert(exported.template_closure.callable_eval_templates.len > 0);
                     std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
+                    std.debug.assert(exported.template_closure.dependency_summary_templates.len > 0);
                     std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
             }
@@ -10713,7 +10758,10 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
             std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
-            std.debug.assert(@intFromEnum(template.dependency_template) < self.comptime_dependencies.templates.items.len);
+            const dependency_template = template.dependency_template orelse {
+                std.debug.panic("checked artifact invariant violated: callable eval template dependency was not sealed", .{});
+            };
+            std.debug.assert(@intFromEnum(dependency_template) < self.comptime_dependencies.templates.items.len);
             _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
             };
@@ -11322,7 +11370,6 @@ pub fn publishFromTypedModule(
         &checked_bodies,
         &checked_procedure_templates,
         &callable_eval_templates,
-        &comptime_dependencies,
         &top_level_procedure_bindings,
         &const_templates,
         artifact_key,
@@ -11358,6 +11405,15 @@ pub fn publishFromTypedModule(
 
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
+
+    try sealCallableEvalTemplatesForRoots(
+        allocator,
+        &callable_eval_templates,
+        &comptime_dependencies,
+        &entry_wrappers,
+        &checked_procedure_templates,
+        &resolved_value_refs,
+    );
 
     try sealConstEvalTemplatesForRoots(
         allocator,
