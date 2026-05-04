@@ -832,6 +832,7 @@ fn ensureConstInstanceRequest(
             const dependency_summary = try appendConcreteDependencySummaryForConstRequest(
                 allocator,
                 artifact,
+                import_views,
                 request,
                 reification_plan,
             );
@@ -860,6 +861,7 @@ fn sourceBindingForConstInstanceRequest(
 fn appendConcreteDependencySummaryForConstRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     request: checked_artifact.ConstInstantiationRequest,
     reification_plan: checked_artifact.ConstGraphReificationPlanId,
 ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
@@ -870,6 +872,24 @@ fn appendConcreteDependencySummaryForConstRequest(
     var collector = ConcreteDependencyCollector.init(allocator, artifact);
     defer collector.deinit();
     try collector.collectConstGraph(reification_plan);
+    const source = constTemplateSourceForRef(artifact, import_views, request.key.const_ref);
+    switch (source.template.state) {
+        .eval_template => |eval| {
+            const dependency_template = dependencyTemplateFromSource(source.dependencies, eval.dependency_template);
+            try appendConcreteDependencyTemplate(
+                allocator,
+                artifact,
+                import_views,
+                source.checked_types,
+                dependency_template,
+                &availability,
+                &collector.concrete,
+            );
+        },
+        .value_graph_template,
+        .reserved,
+        => compileTimeFinalizationInvariant("const eval request summary did not reference an eval template"),
+    }
     return try artifact.comptime_dependencies.appendSummary(allocator, .{
         .availability_values = availability.items,
         .concrete_values = collector.concrete.items,
@@ -1149,6 +1169,69 @@ fn checkedTypeKeyFromView(
     return checked_types.roots[index].key;
 }
 
+fn dependencyTemplateFromSource(
+    dependencies: checked_artifact.ComptimeDependencySummaryStoreView,
+    template_id: checked_artifact.ComptimeDependencySummaryTemplateId,
+) checked_artifact.ComptimeDependencySummaryTemplate {
+    const index = @intFromEnum(template_id);
+    if (index >= dependencies.templates.len) {
+        compileTimeFinalizationInvariant("dependency summary template id was out of range during concrete summary construction");
+    }
+    return dependencies.templates[index];
+}
+
+fn appendConcreteDependencyTemplate(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    source_checked_types: checked_artifact.CheckedTypeStoreView,
+    template: checked_artifact.ComptimeDependencySummaryTemplate,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+) Allocator.Error!void {
+    for (template.availability_values) |value| {
+        try availability.append(allocator, switch (value) {
+            .local_root => |root| .{ .local_root = root },
+            .imported_value => |imported| .{ .imported_value = imported },
+            .const_template => |const_use| .{ .const_template = const_use.const_ref },
+            .procedure_binding => |proc_use| .{ .procedure_binding = proc_use.binding },
+        });
+    }
+
+    for (template.concrete_value_templates) |value| {
+        switch (value) {
+            .const_use => |const_use| {
+                const payload = const_use.requested_source_ty_payload orelse {
+                    compileTimeFinalizationInvariant("concrete const dependency template had no checked payload");
+                };
+                try concrete.append(allocator, .{ .const_instance = .{
+                    .const_ref = const_use.const_ref,
+                    .requested_source_ty = checkedTypeKeyFromView(source_checked_types, payload),
+                } });
+            },
+            .callable_binding_use,
+            .procedure_callable,
+            => |proc_use| {
+                const payload = proc_use.source_fn_ty_payload orelse {
+                    compileTimeFinalizationInvariant("concrete procedure dependency template had no checked payload");
+                };
+                const requested_source_fn_ty = checkedTypeKeyFromView(source_checked_types, payload);
+                if (directCallableBindingInfo(artifact, import_views, proc_use.binding)) |direct| {
+                    try concrete.append(allocator, .{ .procedure_callable = .{
+                        .template = direct.direct.template,
+                        .source_fn_ty = requested_source_fn_ty,
+                    } });
+                } else {
+                    try concrete.append(allocator, .{ .callable_binding_instance = .{
+                        .binding = proc_use.binding,
+                        .requested_source_fn_ty = requested_source_fn_ty,
+                    } });
+                }
+            },
+        }
+    }
+}
+
 fn callableEvalEntryTemplateForRequest(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     import_views: []const checked_artifact.ImportedModuleView,
@@ -1198,11 +1281,82 @@ fn callableEvalEntryTemplateForRequest(
     };
 }
 
+const CallableEvalDependencyTemplateSource = struct {
+    template: checked_artifact.ComptimeDependencySummaryTemplate,
+    checked_types: checked_artifact.CheckedTypeStoreView,
+};
+
+fn callableEvalDependencyTemplateForRequest(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+) CallableEvalDependencyTemplateSource {
+    const owner_and_template = callableEvalOwnerAndTemplateForRequest(artifact, import_views, request);
+    const dependency_template = owner_and_template.template.dependency_template orelse {
+        compileTimeFinalizationInvariant("callable eval template dependency was not sealed before concrete summary construction");
+    };
+    return .{
+        .template = dependencyTemplateFromSource(owner_and_template.owner.dependencies, dependency_template),
+        .checked_types = owner_and_template.owner.checked_types,
+    };
+}
+
+const CallableEvalOwnerAndTemplate = struct {
+    owner: CallableEvalOwner,
+    template: checked_artifact.CallableEvalTemplate,
+};
+
+fn callableEvalOwnerAndTemplateForRequest(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+) CallableEvalOwnerAndTemplate {
+    return switch (request.key.binding) {
+        .top_level => |binding| blk: {
+            const owner = callableEvalOwnerForKey(artifact, import_views, artifact.key) orelse unreachable;
+            break :blk .{
+                .owner = owner,
+                .template = callableEvalTemplateForLocalBinding(owner.top_level_procedure_bindings, owner.callable_eval_templates, binding),
+            };
+        },
+        .platform_required => |required| blk: {
+            const owner = callableEvalOwnerForKey(artifact, import_views, required.artifact) orelse {
+                compileTimeFinalizationInvariant("platform-required callable eval dependency owner artifact was unavailable");
+            };
+            break :blk .{
+                .owner = owner,
+                .template = callableEvalTemplateForLocalBinding(owner.top_level_procedure_bindings, owner.callable_eval_templates, required.procedure_binding),
+            };
+        },
+        .imported => |imported| blk: {
+            const view = importedProcedureBindingView(import_views, imported) orelse {
+                compileTimeFinalizationInvariant("imported callable eval dependency binding was unavailable");
+            };
+            const template_id = switch (view.body) {
+                .callable_eval_template => |template| template,
+                .direct_template => compileTimeFinalizationInvariant("direct imported binding requested callable eval dependency template"),
+            };
+            const owner = callableEvalOwnerForKey(artifact, import_views, imported.artifact) orelse {
+                compileTimeFinalizationInvariant("imported callable eval dependency owner artifact was unavailable");
+            };
+            break :blk .{
+                .owner = owner,
+                .template = callableEvalTemplateForTemplate(owner.callable_eval_templates, template_id),
+            };
+        },
+        .hosted,
+        .promoted,
+        => compileTimeFinalizationInvariant("direct callable binding kind requested callable eval dependency template"),
+    };
+}
+
 const CallableEvalOwner = struct {
     key: checked_artifact.CheckedModuleArtifactKey,
+    checked_types: checked_artifact.CheckedTypeStoreView,
     top_level_procedure_bindings: *const checked_artifact.TopLevelProcedureBindingTable,
     callable_eval_templates: checked_artifact.CallableEvalTemplateTableView,
     entry_wrappers: *const checked_artifact.EntryWrapperTable,
+    dependencies: checked_artifact.ComptimeDependencySummaryStoreView,
 };
 
 fn callableEvalOwnerForKey(
@@ -1213,18 +1367,22 @@ fn callableEvalOwnerForKey(
     if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
         return .{
             .key = artifact.key,
+            .checked_types = artifact.checked_types.view(),
             .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
             .callable_eval_templates = artifact.callable_eval_templates.view(),
             .entry_wrappers = &artifact.entry_wrappers,
+            .dependencies = artifact.comptime_dependencies.view(),
         };
     }
     for (import_views) |view| {
         if (!std.mem.eql(u8, &view.key.bytes, &key.bytes)) continue;
         return .{
             .key = view.key,
+            .checked_types = view.checked_types,
             .top_level_procedure_bindings = view.top_level_procedure_bindings,
             .callable_eval_templates = view.callable_eval_templates,
             .entry_wrappers = view.entry_wrappers,
+            .dependencies = view.comptime_dependencies,
         };
     }
     return null;
@@ -1245,17 +1403,37 @@ fn callableEvalEntryTemplateForLocalBinding(
     return callableEvalEntryTemplateForTemplate(owner_key, templates, entry_wrappers, template_id);
 }
 
+fn callableEvalTemplateForLocalBinding(
+    bindings: *const checked_artifact.TopLevelProcedureBindingTable,
+    templates: checked_artifact.CallableEvalTemplateTableView,
+    binding_ref: checked_artifact.TopLevelProcedureBindingRef,
+) checked_artifact.CallableEvalTemplate {
+    const binding = bindings.get(binding_ref);
+    const template_id = switch (binding.body) {
+        .callable_eval_template => |template| template,
+        .direct_template => compileTimeFinalizationInvariant("direct local binding requested callable eval template"),
+    };
+    return callableEvalTemplateForTemplate(templates, template_id);
+}
+
+fn callableEvalTemplateForTemplate(
+    templates: checked_artifact.CallableEvalTemplateTableView,
+    template_id: checked_artifact.CallableEvalTemplateId,
+) checked_artifact.CallableEvalTemplate {
+    const raw = @intFromEnum(template_id);
+    if (raw >= templates.templates.len) {
+        compileTimeFinalizationInvariant("callable eval template id was out of range");
+    }
+    return templates.templates[raw];
+}
+
 fn callableEvalEntryTemplateForTemplate(
     owner_key: checked_artifact.CheckedModuleArtifactKey,
     templates: checked_artifact.CallableEvalTemplateTableView,
     entry_wrappers: *const checked_artifact.EntryWrapperTable,
     template_id: checked_artifact.CallableEvalTemplateId,
 ) canonical.ProcedureTemplateRef {
-    const raw = @intFromEnum(template_id);
-    if (raw >= templates.templates.len) {
-        compileTimeFinalizationInvariant("callable eval template id was out of range during concrete dependency preparation");
-    }
-    const template = templates.templates[raw];
+    const template = callableEvalTemplateForTemplate(templates, template_id);
     const wrapper = entry_wrappers.lookupByRoot(template.root) orelse {
         compileTimeFinalizationInvariant("callable eval template had no entry wrapper during concrete dependency preparation");
     };
@@ -1401,6 +1579,7 @@ fn ensureCallableBindingInstanceRequest(
     const dependency_summary = try appendConcreteDependencySummaryForCallableRequest(
         allocator,
         artifact,
+        import_views,
         request,
         result_plan,
         callable.proc_value,
@@ -1448,6 +1627,7 @@ fn sourceBindingForCallableBindingRequest(
 fn appendConcreteDependencySummaryForCallableRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
     request: checked_artifact.CallableBindingInstantiationRequest,
     result_plan: checked_artifact.CallableResultPlanId,
     published_proc: canonical.ProcedureCallableRef,
@@ -1460,6 +1640,16 @@ fn appendConcreteDependencySummaryForCallableRequest(
     defer collector.deinit();
     try collector.collectCallableResult(result_plan);
     try collector.appendProcedureCallable(published_proc);
+    const dependency_source = callableEvalDependencyTemplateForRequest(artifact, import_views, request);
+    try appendConcreteDependencyTemplate(
+        allocator,
+        artifact,
+        import_views,
+        dependency_source.checked_types,
+        dependency_source.template,
+        &availability,
+        &collector.concrete,
+    );
 
     return try artifact.comptime_dependencies.appendSummary(allocator, .{
         .availability_values = availability.items,
@@ -2015,8 +2205,10 @@ const ConcreteDependencyCollector = struct {
 
 const ConstTemplateSource = struct {
     template: checked_artifact.ConstTemplate,
+    checked_types: checked_artifact.CheckedTypeStoreView,
     values: *const checked_artifact.CompileTimeValueStore,
     plans: *const checked_artifact.CompileTimePlanStore,
+    dependencies: checked_artifact.ComptimeDependencySummaryStoreView,
 };
 
 fn constTemplateSourceForRef(
@@ -2027,16 +2219,20 @@ fn constTemplateSourceForRef(
     if (std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) {
         return .{
             .template = artifact.const_templates.get(ref),
+            .checked_types = artifact.checked_types.view(),
             .values = &artifact.comptime_values,
             .plans = &artifact.comptime_plans,
+            .dependencies = artifact.comptime_dependencies.view(),
         };
     }
     for (import_views) |view| {
         if (!std.mem.eql(u8, &ref.artifact.bytes, &view.key.bytes)) continue;
         return .{
             .template = view.const_templates.get(ref),
+            .checked_types = view.checked_types,
             .values = view.comptime_values,
             .plans = view.comptime_plans,
+            .dependencies = view.comptime_dependencies,
         };
     }
     compileTimeFinalizationInvariant("const instance request referenced unavailable const template artifact");
