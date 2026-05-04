@@ -262,6 +262,8 @@ const Lowerer = struct {
                 .next = next,
             } }),
             .return_ => |value| try self.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
+            .crash => |msg| try self.store.addCFStmt(.{ .crash = .{ .msg = try self.lowerProgramLiteral(msg) } }),
+            .runtime_error => try self.store.addCFStmt(.{ .runtime_error = {} }),
             .switch_ => |switch_| try self.lowerSwitch(switch_, next),
             .break_ => self.currentBreakTarget(),
             .for_list => |for_list| try self.lowerForList(for_list, next),

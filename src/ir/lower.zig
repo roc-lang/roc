@@ -297,10 +297,15 @@ const IrBuilder = struct {
             },
             .packed_erased_fn => |packed| try self.lowerPackedErasedFn(expr, packed, stmts),
             .call_erased => |call| try self.lowerCallErased(expr, call, stmts),
-            .const_instance,
-            .crash,
-            .runtime_error,
-            => irInvariant("IR lowering reached executable expression form whose IR lowering is still missing"),
+            .crash => |literal| blk: {
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal }));
+                break :blk try self.freshVar(try self.layoutForType(expr.ty));
+            },
+            .runtime_error => blk: {
+                try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error));
+                break :blk try self.freshVar(try self.layoutForType(expr.ty));
+            },
+            .const_instance => irInvariant("IR lowering received executable const_instance; executable MIR must materialize constants before IR"),
         };
 
         try self.expr_map.put(expr_id, lowered);
@@ -1428,8 +1433,7 @@ const IrBuilder = struct {
             .for_ => |for_| try self.appendForList(for_, stmts),
             .while_ => |while_| try self.appendWhile(while_, stmts),
             .break_ => try stmts.append(self.allocator, try self.output.store.addStmt(.break_)),
-            .crash,
-            => irInvariant("IR lowering reached statement control flow that needs block splitting"),
+            .crash => |literal| try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal })),
         }
     }
 

@@ -176,6 +176,8 @@ pub const Stmt = union(enum) {
     debug: Var,
     expect: Var,
     return_: Var,
+    crash: ProgramLiteralId,
+    runtime_error,
     break_,
     for_list: struct {
         elem: Var,
