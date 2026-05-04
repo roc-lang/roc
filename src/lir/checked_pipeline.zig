@@ -119,7 +119,7 @@ pub fn lowerArtifactsToLir(
     const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
     defer allocator.free(selected_entrypoints);
 
-    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints);
+    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .runnable);
     errdefer solved.deinit();
 
     try publishCallableSetDescriptorsForLowering(
@@ -225,7 +225,7 @@ pub fn summarizeCompileTimeDependencies(
     const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
     defer allocator.free(selected_entrypoints);
 
-    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints);
+    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .comptime_dependency_summary);
     defer solved.deinit();
 
     try publishCallableSetDescriptorsForLowering(
@@ -271,10 +271,12 @@ fn lowerArtifactsToLambdaSolved(
     allocator: Allocator,
     artifacts: ArtifactSet,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
+    mode: mir.Mono.Specialize.LoweringMode,
 ) Allocator.Error!mir.LambdaSolved.Solve.Program {
     var mono = try mir.Mono.Specialize.run(allocator, .{
         .root = artifacts.root,
         .imports = artifacts.imports,
+        .mode = mode,
     }, selected_entrypoints);
     errdefer mono.deinit();
 
@@ -784,6 +786,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             .runtime_error,
             => {},
             .const_instance => |const_instance| try self.appendConstInstanceDependency(const_instance, availability, concrete),
+            .const_ref => |key| try self.appendConstRefDependency(key, availability),
             .tag => |tag| {
                 for (self.sliceTagPayloadEval(tag.eval_order)) |payload| try self.collectExprImmediate(payload.value, value_store, representation_store, availability, concrete, call_deps);
             },
@@ -1010,7 +1013,15 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         try concrete.append(self.allocator, .{ .const_instance = const_instance.key });
-        const const_ref = const_instance.key.const_ref;
+        try self.appendConstRefDependency(const_instance.key, availability);
+    }
+
+    fn appendConstRefDependency(
+        self: *CompileTimeDependencySummaryBuilder,
+        key: checked_artifact.ConstInstantiationKey,
+        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    ) Allocator.Error!void {
+        const const_ref = key.const_ref;
         try availability.append(self.allocator, .{ .const_template = const_ref });
         switch (const_ref.owner) {
             .top_level_binding => |owner| {

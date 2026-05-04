@@ -3952,6 +3952,7 @@ const BodySolver = struct {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
+            .const_ref => |key| .{ .const_ref = key },
             .tag => |tag| blk: {
                 const eval_order = try self.lowerTagPayloadEvalSpan(tag.eval_order);
                 const assembly_order = try self.lowerTagPayloadAssemblySpan(tag.assembly_order);

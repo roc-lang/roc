@@ -155,6 +155,7 @@ pub const Expr = struct {
         bool_lit: bool,
         str_lit: ProgramLiteralId,
         const_instance: checked_artifact.ConstInstanceRef,
+        const_ref: checked_artifact.ConstInstantiationKey,
         tag: struct {
             union_shape: TagUnionShapeId,
             tag: TagId,

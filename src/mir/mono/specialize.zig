@@ -44,6 +44,12 @@ pub const MonoSpecializationReason = union(enum) {
 pub const Input = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
+    mode: LoweringMode = .runnable,
+};
+
+pub const LoweringMode = enum {
+    runnable,
+    comptime_dependency_summary,
 };
 
 pub const MonoSpecializationRequest = struct {
@@ -3082,8 +3088,13 @@ const BodyLowerer = struct {
             .requested_source_ty = requested_key,
         };
         const instance = constInstanceForKey(self.input, self.input.root.artifact.key, key) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
-            unreachable;
+            switch (self.input.mode) {
+                .comptime_dependency_summary => return try self.program.ast.addExpr(ty, .{ .const_ref = key }),
+                .runnable => {
+                    debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
+                    unreachable;
+                },
+            }
         };
         var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
         defer dependency_state.deinit();

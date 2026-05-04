@@ -150,6 +150,7 @@ pub const Expr = struct {
         bool_lit: bool,
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
+        const_ref: check.CheckedArtifact.ConstInstantiationKey,
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,

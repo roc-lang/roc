@@ -304,6 +304,7 @@ fn collectErasedAdapterKeys(
                 &visited_const_instances,
                 const_instance,
             ),
+            .const_ref => executableInvariant("executable adapter collection reached non-runnable compile-time dependency const_ref"),
             else => {},
         }
     }
@@ -4433,6 +4434,7 @@ const BodyBuilder = struct {
                     true,
                 );
             },
+            .const_ref => executableInvariant("executable lowering reached non-runnable compile-time dependency const_ref"),
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.assembly_order);
                 break :blk try self.output.addExpr(

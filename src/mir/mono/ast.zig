@@ -164,6 +164,7 @@ pub const Expr = struct {
             field_index: u16,
         },
         const_instance: checked_artifact.ConstInstanceRef,
+        const_ref: checked_artifact.ConstInstantiationKey,
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,

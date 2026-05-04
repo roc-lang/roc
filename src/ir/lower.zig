@@ -308,6 +308,7 @@ const IrBuilder = struct {
                 break :blk try self.freshVar(try self.layoutForType(expr.ty));
             },
             .const_instance => irInvariant("IR lowering received executable const_instance; executable MIR must materialize constants before IR"),
+            .const_ref => irInvariant("IR lowering received non-runnable compile-time dependency const_ref"),
         };
 
         try self.expr_map.put(expr_id, lowered);

@@ -511,6 +511,7 @@ const BodyFinalizer = struct {
             .bool_lit => |value| .{ .bool_lit = value },
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
+            .const_ref => |key| .{ .const_ref = key },
             .structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = try self.lowerExpr(eq.lhs),
                 .rhs = try self.lowerExpr(eq.rhs),
