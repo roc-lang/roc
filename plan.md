@@ -6717,7 +6717,7 @@ const SwitchContinuation = struct {
 
 The exact Zig names may differ, but the stage distinction must not. Branch
 result assignment, mutable overwrite, join-parameter transfer, and loop-element
-binding are different LIR facts. A single unqualified `set_local` operation is
+binding are distinct LIR operations. A single unqualified `set_local` operation is
 not enough information for correct ARC insertion, because it cannot distinguish
 an unassigned branch result slot from an owned mutable slot whose old value must
 be released.
