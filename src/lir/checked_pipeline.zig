@@ -1003,81 +1003,15 @@ fn finiteCallableResultPlan(
     callable: repr.CallableValueInfo,
     key: repr.CanonicalCallableSetKey,
 ) Allocator.Error!checked_artifact.CallableResultPlanId {
-    const representation_store = value_context.representation_store;
-    const descriptor = representation_store.callableSetDescriptor(key) orelse {
-        checkedPipelineInvariant("finite compile-time callable result has no descriptor");
+    var capture_builder = CaptureSlotPlanBuilder{
+        .allocator = allocator,
+        .artifact = artifact_sink,
+        .plans = plans,
+        .value_context = value_context,
+        .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
     };
-    if (descriptor.members.len == 0) {
-        checkedPipelineInvariant("finite compile-time callable result descriptor has no members");
-    }
-
-    const source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
-    const members = try allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
-    errdefer allocator.free(members);
-
-    for (descriptor.members, 0..) |member, i| {
-        if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
-            checkedPipelineInvariant("finite compile-time callable result descriptor mixes source function types");
-        }
-        if (member.capture_slots.len != 0) {
-            const slot_plans = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
-            errdefer allocator.free(slot_plans);
-            var capture_builder = CaptureSlotPlanBuilder{
-                .allocator = allocator,
-                .artifact = artifact_sink,
-                .plans = plans,
-                .value_context = value_context,
-                .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
-            };
-            defer capture_builder.deinit();
-            const construction = if (callable.construction_plan) |construction_id|
-                representation_store.callableConstructionPlan(construction_id)
-            else
-                null;
-            if (construction) |constructed| {
-                if (constructed.result != callable_value) {
-                    checkedPipelineInvariant("captured finite compile-time callable result construction is attached to a different value");
-                }
-                if (constructed.selected_member == member.member) {
-                    if (constructed.capture_values.len != member.capture_slots.len) {
-                        checkedPipelineInvariant("captured finite compile-time callable result capture arity disagrees with descriptor");
-                    }
-                    for (member.capture_slots, constructed.capture_values, 0..) |slot, capture_value, slot_i| {
-                        if (slot.slot != @as(u32, @intCast(slot_i))) {
-                            checkedPipelineInvariant("captured finite compile-time callable result capture slots are not canonical");
-                        }
-                        slot_plans[slot_i] = try capture_builder.planFor(slot.source_ty, capture_value);
-                    }
-                    members[i] = .{
-                        .member = member.member,
-                        .capture_slots = slot_plans,
-                    };
-                    continue;
-                }
-            }
-            for (member.capture_slots, 0..) |slot, slot_i| {
-                if (slot.slot != @as(u32, @intCast(slot_i))) {
-                    checkedPipelineInvariant("captured finite compile-time callable result capture slots are not canonical");
-                }
-                slot_plans[slot_i] = try capture_builder.planForExecutableSlot(slot.source_ty, slot.exec_value_ty);
-            }
-            members[i] = .{
-                .member = member.member,
-                .capture_slots = slot_plans,
-            };
-            continue;
-        }
-        members[i] = .{
-            .member = member.member,
-            .capture_slots = &.{},
-        };
-    }
-
-    return try plans.appendCallableResult(allocator, .{ .finite = .{
-        .source_fn_ty = source_fn_ty,
-        .callable_set_key = key,
-        .members = members,
-    } });
+    defer capture_builder.deinit();
+    return try capture_builder.finiteCallableResultPlanForValue(callable_value, callable, key);
 }
 
 fn erasedPromotedSignaturePayloadsForProcValue(
@@ -1586,12 +1520,16 @@ const CaptureSlotPlanBuilder = struct {
         return try self.planForOptional(source_ty, null);
     }
 
-    fn planForExecutableSlot(
+    fn planForInContext(
         self: *CaptureSlotPlanBuilder,
+        value_context: ConstValueContext,
         source_ty: canonical.CanonicalTypeKey,
-        exec_ty: canonical.CanonicalExecValueTypeKey,
+        value_info: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        return try self.planForOptionalExecutable(source_ty, null, exec_ty);
+        const previous = self.value_context;
+        self.value_context = value_context;
+        defer self.value_context = previous;
+        return try self.planFor(source_ty, value_info);
     }
 
     fn planForOptional(
@@ -1675,6 +1613,160 @@ const CaptureSlotPlanBuilder = struct {
         };
     }
 
+    fn finiteCallableResultPlanForValue(
+        self: *CaptureSlotPlanBuilder,
+        callable_value: repr.ValueInfoId,
+        callable: repr.CallableValueInfo,
+        key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!checked_artifact.CallableResultPlanId {
+        const representation_store = self.value_context.representation_store;
+        const descriptor = representation_store.callableSetDescriptor(key) orelse {
+            checkedPipelineInvariant("finite compile-time callable result has no descriptor");
+        };
+        if (descriptor.members.len == 0) {
+            checkedPipelineInvariant("finite compile-time callable result descriptor has no members");
+        }
+
+        const source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
+        const members = try self.allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
+        errdefer self.allocator.free(members);
+
+        for (descriptor.members, 0..) |member, i| {
+            if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
+                checkedPipelineInvariant("finite compile-time callable result descriptor mixes source function types");
+            }
+            if (member.capture_slots.len != 0) {
+                const slot_plans = try self.allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
+                errdefer self.allocator.free(slot_plans);
+                const construction_id = callable.construction_plan;
+                const construction = if (construction_id) |id|
+                    representation_store.callableConstructionPlan(id)
+                else
+                    null;
+                if (construction) |constructed| {
+                    if (constructed.result != callable_value) {
+                        checkedPipelineInvariant("captured finite compile-time callable result construction is attached to a different value");
+                    }
+                    if (constructed.selected_member == member.member) {
+                        try self.fillMemberCapturePlansFromConstruction(member, construction_id.?, constructed, slot_plans);
+                        members[i] = .{
+                            .member = member.member,
+                            .capture_slots = slot_plans,
+                        };
+                        continue;
+                    }
+                }
+                try self.fillMemberCapturePlansFromTargetProc(member, slot_plans);
+                members[i] = .{
+                    .member = member.member,
+                    .capture_slots = slot_plans,
+                };
+                continue;
+            }
+            members[i] = .{
+                .member = member.member,
+                .capture_slots = &.{},
+            };
+        }
+
+        return try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
+            .source_fn_ty = source_fn_ty,
+            .callable_set_key = key,
+            .members = members,
+        } });
+    }
+
+    fn fillMemberCapturePlansFromConstruction(
+        self: *CaptureSlotPlanBuilder,
+        member: repr.CanonicalCallableSetMember,
+        construction_id: repr.CallableSetConstructionPlanId,
+        constructed: repr.CallableSetConstructionPlan,
+        slot_plans: []checked_artifact.CaptureSlotReificationPlanId,
+    ) Allocator.Error!void {
+        if (constructed.capture_values.len != member.capture_slots.len or slot_plans.len != member.capture_slots.len) {
+            checkedPipelineInvariant("captured finite compile-time callable result capture arity disagrees with descriptor");
+        }
+        if (constructed.capture_transforms.len != member.capture_slots.len) {
+            checkedPipelineInvariant("captured finite compile-time callable result capture transform arity disagrees with descriptor");
+        }
+        for (member.capture_slots, constructed.capture_transforms, 0..) |slot, transform_id, slot_i| {
+            if (slot.slot != @as(u32, @intCast(slot_i))) {
+                checkedPipelineInvariant("captured finite compile-time callable result capture slots are not canonical");
+            }
+            const transform = self.value_context.representation_store.valueTransformBoundary(transform_id);
+            const capture = switch (transform.kind) {
+                .capture_value => |capture_id| self.value_context.representation_store.captureBoundary(capture_id),
+                else => checkedPipelineInvariant("captured finite compile-time callable result transform is not a capture transform"),
+            };
+            switch (capture.owner) {
+                .callable_set_construction => |owner| {
+                    if (owner.construction != construction_id or
+                        !repr.callableSetKeyEql(owner.selected_member.callable_set_key, constructed.callable_set_key) or
+                        owner.selected_member.member_index != constructed.selected_member)
+                    {
+                        checkedPipelineInvariant("captured finite compile-time callable result capture transform belongs to another construction");
+                    }
+                },
+                else => checkedPipelineInvariant("captured finite compile-time callable result capture transform has wrong owner"),
+            }
+            if (capture.slot != slot.slot) {
+                checkedPipelineInvariant("captured finite compile-time callable result capture transform slot disagrees with descriptor");
+            }
+            if (capture.source_capture_value != constructed.capture_values[slot_i]) {
+                checkedPipelineInvariant("captured finite compile-time callable result capture transform source value disagrees with construction");
+            }
+            const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(capture.target_instance)];
+            if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+                checkedPipelineInvariant("captured finite compile-time callable result target capture instance disagrees with descriptor member");
+            }
+            const target_context = constValueContextForInstance(self.value_context.solved, target_instance);
+            const target_info = target_context.value_store.values.items[@intFromEnum(capture.target_capture_value)];
+            if (!repr.canonicalTypeKeyEql(target_info.source_ty, slot.source_ty)) {
+                checkedPipelineInvariant("captured finite compile-time callable result target capture source type disagrees with descriptor");
+            }
+            if (target_info.exec_ty) |target_exec| {
+                if (!repr.canonicalExecValueTypeKeyEql(target_exec.key, slot.exec_value_ty)) {
+                    checkedPipelineInvariant("captured finite compile-time callable result target capture executable key disagrees with descriptor");
+                }
+            } else {
+                checkedPipelineInvariant("captured finite compile-time callable result target capture has no executable endpoint");
+            }
+            slot_plans[slot_i] = try self.planForInContext(target_context, slot.source_ty, capture.target_capture_value);
+        }
+    }
+
+    fn fillMemberCapturePlansFromTargetProc(
+        self: *CaptureSlotPlanBuilder,
+        member: repr.CanonicalCallableSetMember,
+        slot_plans: []checked_artifact.CaptureSlotReificationPlanId,
+    ) Allocator.Error!void {
+        if (slot_plans.len != member.capture_slots.len) {
+            checkedPipelineInvariant("finite executable callable result capture plan arity differs from descriptor");
+        }
+        const target_instance = procRepresentationInstanceForRoot(self.value_context.solved, member.source_proc);
+        const target_context = constValueContextForInstance(self.value_context.solved, target_instance);
+        const target_captures = target_context.value_store.sliceValueSpan(target_instance.public_roots.captures);
+        if (target_captures.len != member.capture_slots.len) {
+            checkedPipelineInvariant("finite executable callable result target capture arity differs from descriptor");
+        }
+        for (member.capture_slots, target_captures, 0..) |slot, target_capture, slot_i| {
+            if (slot.slot != @as(u32, @intCast(slot_i))) {
+                checkedPipelineInvariant("finite executable callable result capture slots are not canonical");
+            }
+            const target_info = target_context.value_store.values.items[@intFromEnum(target_capture)];
+            if (!repr.canonicalTypeKeyEql(target_info.source_ty, slot.source_ty)) {
+                checkedPipelineInvariant("finite executable callable result target capture source type disagrees with descriptor");
+            }
+            const target_endpoint = target_info.exec_ty orelse {
+                checkedPipelineInvariant("finite executable callable result target capture has no published executable endpoint");
+            };
+            if (!repr.canonicalExecValueTypeKeyEql(target_endpoint.key, slot.exec_value_ty)) {
+                checkedPipelineInvariant("finite executable callable result target capture executable key differs from descriptor");
+            }
+            slot_plans[slot_i] = try self.planForInContext(target_context, slot.source_ty, target_capture);
+        }
+    }
+
     fn callablePlanForExecutableKey(
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
@@ -1723,12 +1815,7 @@ const CaptureSlotPlanBuilder = struct {
             else blk: {
                 const out = try self.allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
                 errdefer self.allocator.free(out);
-                for (member.capture_slots, 0..) |slot, slot_i| {
-                    if (slot.slot != @as(u32, @intCast(slot_i))) {
-                        checkedPipelineInvariant("finite executable callable result capture slots are not canonical");
-                    }
-                    out[slot_i] = try self.planForExecutableSlot(slot.source_ty, slot.exec_value_ty);
-                }
+                try self.fillMemberCapturePlansFromTargetProc(member, out);
                 break :blk out;
             };
             members[i] = .{
@@ -1752,15 +1839,7 @@ const CaptureSlotPlanBuilder = struct {
         const callable = info.callable orelse checkedPipelineInvariant("function-typed capture leaf has no callable metadata");
         const emission = self.value_context.representation_store.callableEmissionPlan(callable.emission_plan);
         return switch (emission) {
-            .finite => |key| try finiteCallableResultPlan(
-                self.allocator,
-                self.artifact,
-                self.plans,
-                self.value_context,
-                value_info_id,
-                callable,
-                key,
-            ),
+            .finite => |key| try self.finiteCallableResultPlanForValue(value_info_id, callable, key),
             .already_erased => |erased| try alreadyErasedResultPlan(
                 self.allocator,
                 self.artifact,
