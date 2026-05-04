@@ -167,6 +167,11 @@ pub const ExecutablePrimitive = checked_artifact.ExecutablePrimitive;
 
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
+const RootTypeKey = struct {
+    root: RepRootId,
+    ty: type_mod.TypeVarId,
+};
+
 pub const SessionExecutableTypePayloadRef = struct {
     payload: SessionExecutableTypePayloadId,
 };
@@ -375,6 +380,28 @@ fn deinitSessionExecutableTypePayload(
         },
     }
     payload.* = undefined;
+}
+
+fn representationEdgeKindEql(a: RepresentationEdgeKind, b: RepresentationEdgeKind) bool {
+    return switch (a) {
+        .value_alias => switch (b) { .value_alias => true, else => false },
+        .value_move => switch (b) { .value_move => true, else => false },
+        .function_arg => |left| switch (b) { .function_arg => |right| left == right, else => false },
+        .function_return => switch (b) { .function_return => true, else => false },
+        .function_callable => switch (b) { .function_callable => true, else => false },
+        .record_field => |left| switch (b) { .record_field => |right| left == right, else => false },
+        .tuple_elem => |left| switch (b) { .tuple_elem => |right| left == right, else => false },
+        .tag_payload => |left| switch (b) { .tag_payload => |right| left == right, else => false },
+        .list_elem => switch (b) { .list_elem => true, else => false },
+        .box_payload => switch (b) { .box_payload => true, else => false },
+        .nominal_backing => |left| switch (b) {
+            .nominal_backing => |right| left.module_name == right.module_name and left.type_name == right.type_name,
+            else => false,
+        },
+        .branch_join => switch (b) { .branch_join => true, else => false },
+        .loop_phi => switch (b) { .loop_phi => true, else => false },
+        .mutable_version => switch (b) { .mutable_version => true, else => false },
+    };
 }
 
 pub const CallableMemberInstanceId = struct {
@@ -1734,6 +1761,7 @@ pub const RepresentationStore = struct {
     pub fn addSingletonProcValueCallable(
         self: *RepresentationStore,
         names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
         types: *const type_mod.Store,
         value_store: *const ValueInfoStore,
         result: ValueInfoId,
@@ -1745,6 +1773,7 @@ pub const RepresentationStore = struct {
         const capture_shape_key = try captureShapeKeyForValueSlice(
             self.allocator,
             names,
+            row_shapes,
             types,
             self,
             value_store,
@@ -1752,6 +1781,7 @@ pub const RepresentationStore = struct {
         );
         const capture_slots = try self.captureSlotsForValues(
             names,
+            row_shapes,
             types,
             value_store,
             capture_values,
@@ -1968,6 +1998,7 @@ pub const RepresentationStore = struct {
     pub fn captureSlotsForValues(
         self: *RepresentationStore,
         names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
         types: *const type_mod.Store,
         value_store: *const ValueInfoStore,
         values: []const ValueInfoId,
@@ -1980,7 +2011,7 @@ pub const RepresentationStore = struct {
             if (isEmptyCanonicalTypeKey(value_info.source_ty)) {
                 representationInvariant("lambda-solved capture slot reached callable-set construction without an explicit source type key");
             }
-            const exec_key = try execValueTypeKeyForValue(self.allocator, names, types, self, value_store, value);
+            const exec_key = try execValueTypeKeyForValue(self.allocator, names, row_shapes, types, self, value_store, value);
             slots[i] = .{
                 .slot = @intCast(i),
                 .source_ty = value_info.source_ty,
@@ -2250,6 +2281,7 @@ pub const ProcRepresentationInstance = struct {
 pub fn executableSpecializationKeyForProc(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
     types: *const type_mod.Store,
     representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
@@ -2263,16 +2295,16 @@ pub fn executableSpecializationKeyForProc(
         try allocator.alloc(CanonicalExecValueTypeKey, params.len);
     errdefer if (arg_keys.len > 0) allocator.free(arg_keys);
     for (params, 0..) |param, i| {
-        arg_keys[i] = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, param);
+        arg_keys[i] = try execValueTypeKeyForValue(allocator, names, row_shapes, types, representation_store, value_store, param);
     }
 
     return .{
         .base = proc.proc.proc_base,
         .requested_fn_ty = proc.callable.source_fn_ty,
         .exec_arg_tys = arg_keys,
-        .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, roots.ret),
+        .exec_ret_ty = try execValueTypeKeyForValue(allocator, names, row_shapes, types, representation_store, value_store, roots.ret),
         .callable_repr_mode = .direct,
-        .capture_shape_key = try captureShapeKeyForValues(allocator, names, types, representation_store, value_store, roots.captures),
+        .capture_shape_key = try captureShapeKeyForValues(allocator, names, row_shapes, types, representation_store, value_store, roots.captures),
     };
 }
 
@@ -2323,12 +2355,13 @@ pub fn deinitProcRepresentationInstance(
 pub fn execValueTypeKeyForValue(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
     types: *const type_mod.Store,
     representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
     value: ValueInfoId,
 ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
-    var builder = ExecValueTypeKeyBuilder.initForValues(allocator, names, types, representation_store, value_store);
+    var builder = ExecValueTypeKeyBuilder.initForValues(allocator, names, row_shapes, types, representation_store, value_store);
     defer builder.deinit();
     return try builder.keyForValue(value);
 }
@@ -2344,9 +2377,24 @@ pub fn execValueTypeKey(
     return try builder.key(root);
 }
 
+pub fn execValueTypeKeyForRootType(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
+    rep_root: RepRootId,
+    ty: type_mod.TypeVarId,
+) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+    var builder = ExecValueTypeKeyBuilder.initForRootTypes(allocator, names, row_shapes, types, representation_store);
+    defer builder.deinit();
+    return try builder.keyForRootType(rep_root, ty);
+}
+
 pub fn captureShapeKeyForValues(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
     types: *const type_mod.Store,
     representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
@@ -2355,6 +2403,7 @@ pub fn captureShapeKeyForValues(
     return try captureShapeKeyForValueSlice(
         allocator,
         names,
+        row_shapes,
         types,
         representation_store,
         value_store,
@@ -2365,6 +2414,7 @@ pub fn captureShapeKeyForValues(
 pub fn captureShapeKeyForValueSlice(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
     types: *const type_mod.Store,
     representation_store: *const RepresentationStore,
     value_store: *const ValueInfoStore,
@@ -2375,7 +2425,7 @@ pub fn captureShapeKeyForValueSlice(
     writeHashU32(&hasher, @intCast(values.len));
     for (values, 0..) |capture, i| {
         writeHashU32(&hasher, @intCast(i));
-        const key = try execValueTypeKeyForValue(allocator, names, types, representation_store, value_store, capture);
+        const key = try execValueTypeKeyForValue(allocator, names, row_shapes, types, representation_store, value_store, capture);
         hasher.update(&key.bytes);
     }
     return .{ .bytes = hasher.finalResult() };
@@ -2468,6 +2518,7 @@ const SessionExecutableTypePayloadBuilder = struct {
     payload_store: *SessionExecutableTypePayloadStore,
     value_store: ?*const ValueInfoStore,
     active_types: std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId),
+    active_root_types: std.AutoHashMap(RootTypeKey, SessionExecutableTypePayloadId),
     active_values: std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId),
 
     fn init(
@@ -2507,12 +2558,14 @@ const SessionExecutableTypePayloadBuilder = struct {
             .payload_store = payload_store,
             .value_store = value_store,
             .active_types = std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId).init(allocator),
+            .active_root_types = std.AutoHashMap(RootTypeKey, SessionExecutableTypePayloadId).init(allocator),
             .active_values = std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId).init(allocator),
         };
     }
 
     fn deinit(self: *SessionExecutableTypePayloadBuilder) void {
         self.active_values.deinit();
+        self.active_root_types.deinit();
         self.active_types.deinit();
     }
 
@@ -2525,6 +2578,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         const key = try execValueTypeKeyForValue(
             self.allocator,
             self.names,
+            self.row_shapes,
             self.types,
             self.representation_store,
             values,
@@ -2568,7 +2622,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         else if (self.valueHasFunctionType(info.logical_ty))
             return try self.endpointForCallableClass(info.solved_class orelse representationInvariant("session executable function value has no solved class"))
         else
-            try self.typePayload(info.logical_ty);
+            try self.rootTypePayload(info.root, info.logical_ty);
 
         self.payload_store.fill(self.allocator, id, payload);
         _ = self.active_values.remove(value);
@@ -2650,7 +2704,217 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.valueHasFunctionType(ty)) {
             return try self.endpointForCallableClass(self.representation_store.classForRoot(root));
         }
-        return try self.endpointForType(ty);
+
+        const key = try execValueTypeKeyForRootType(
+            self.allocator,
+            self.names,
+            self.row_shapes,
+            self.types,
+            self.representation_store,
+            root,
+            ty,
+        );
+        const root_ty = self.types.unlinkConst(ty);
+        const active_key = RootTypeKey{ .root = root, .ty = root_ty };
+        if (self.active_root_types.get(active_key)) |active| {
+            return .{ .ty = refFor(active), .key = key };
+        }
+        if (self.payload_store.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+
+        const id = try self.payload_store.reserve(self.allocator, key);
+        try self.active_root_types.put(active_key, id);
+        errdefer _ = self.active_root_types.remove(active_key);
+
+        const payload = try self.rootTypePayload(root, root_ty);
+        self.payload_store.fill(self.allocator, id, payload);
+        _ = self.active_root_types.remove(active_key);
+        return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn rootTypePayload(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        const root = self.types.unlinkConst(ty);
+        return switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("session executable root type payload reached unresolved lambda-solved type"),
+            .nominal => |nominal| blk: {
+                const backing_root = self.structuralChildRoot(rep_root, .{ .nominal_backing = nominal.nominal });
+                const backing = try self.endpointForRootType(backing_root, nominal.backing);
+                break :blk .{ .nominal = .{
+                    .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
+                    .backing = backing.ty,
+                    .backing_key = backing.key,
+                } };
+            },
+            .content => |content| try self.rootContentPayload(rep_root, content),
+        };
+    }
+
+    fn rootContentPayload(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        content: type_mod.Content,
+    ) std.mem.Allocator.Error!SessionExecutableTypePayload {
+        return switch (content) {
+            .primitive => |prim| .{ .primitive = executablePrimitive(prim) },
+            .list => |elem| .{ .list = try self.childForRootType(self.structuralChildRoot(rep_root, .list_elem), elem) },
+            .box => |elem| .{ .box = try self.childForRootType(self.structuralChildRoot(rep_root, .box_payload), elem) },
+            .tuple => |span| .{ .tuple = try self.tuplePayloadForRootTypeSpan(rep_root, span) },
+            .record => |record| .{ .record = try self.recordPayloadForRootTypeSpan(rep_root, record.fields) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagUnionPayloadForRootTypeSpan(rep_root, tag_union.tags) },
+            .func => representationInvariant("session executable root type payload requires callable representation for function type"),
+        };
+    }
+
+    fn tuplePayloadForRootTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        span: type_mod.Span(type_mod.TypeVarId),
+    ) std.mem.Allocator.Error![]const SessionExecutableTupleElemPayload {
+        const items = self.types.sliceTypeVarSpan(span);
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(SessionExecutableTupleElemPayload, items.len);
+        errdefer self.allocator.free(out);
+        for (items, 0..) |item, i| {
+            const child_root = self.structuralChildRoot(rep_root, .{ .tuple_elem = @intCast(i) });
+            const child = try self.endpointForRootType(child_root, item);
+            out[i] = .{
+                .index = @intCast(i),
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn recordPayloadForRootTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        span: type_mod.Span(type_mod.Field),
+    ) std.mem.Allocator.Error!SessionExecutableRecordPayload {
+        const fields = self.types.sliceFields(span);
+        if (fields.len == 0) {
+            const shape = try self.row_shapes.internRecordShapeFromLabels(&.{});
+            return .{ .shape = shape, .fields = &.{} };
+        }
+
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.name;
+
+        const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != fields.len) representationInvariant("session executable root record payload shape arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            const field_id = shape_fields[i];
+            const child_root = self.structuralChildRoot(rep_root, .{ .record_field = field_id });
+            const child = try self.endpointForRootType(child_root, field.ty);
+            out[i] = .{
+                .field = field_id,
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return .{ .shape = shape, .fields = out };
+    }
+
+    fn tagUnionPayloadForRootTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        span: type_mod.Span(type_mod.Tag),
+    ) std.mem.Allocator.Error!SessionExecutableTagUnionPayload {
+        const tags = self.types.sliceTags(span);
+        if (tags.len == 0) {
+            const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(&.{});
+            return .{ .shape = shape, .variants = &.{} };
+        }
+
+        const descriptors = try self.allocator.alloc(row.Store.TagShapeDescriptor, tags.len);
+        defer self.allocator.free(descriptors);
+        for (tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = @intCast(self.types.sliceTypeVarSpan(tag.args).len),
+            };
+        }
+
+        const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+        const shape_tags = self.row_shapes.tagUnionTags(shape);
+        if (shape_tags.len != tags.len) representationInvariant("session executable root tag payload shape arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, tags.len);
+        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (out) |variant| {
+                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
+            }
+            self.allocator.free(out);
+        }
+
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .tag = shape_tags[i],
+                .payloads = try self.tagPayloadsForRootTypeSpan(rep_root, shape_tags[i], tag.args),
+            };
+        }
+        return .{ .shape = shape, .variants = out };
+    }
+
+    fn tagPayloadsForRootTypeSpan(
+        self: *SessionExecutableTypePayloadBuilder,
+        rep_root: RepRootId,
+        tag: row.TagId,
+        span: type_mod.Span(type_mod.TypeVarId),
+    ) std.mem.Allocator.Error![]const SessionExecutableTagPayload {
+        const args = self.types.sliceTypeVarSpan(span);
+        if (args.len == 0) return &.{};
+        const shape_payloads = self.row_shapes.tagPayloads(tag);
+        if (shape_payloads.len != args.len) representationInvariant("session executable root tag payload arity mismatch");
+
+        const out = try self.allocator.alloc(SessionExecutableTagPayload, args.len);
+        errdefer self.allocator.free(out);
+        for (shape_payloads, args, 0..) |shape_payload, arg, i| {
+            const child_root = self.structuralChildRoot(rep_root, .{ .tag_payload = shape_payload });
+            const child = try self.endpointForRootType(child_root, arg);
+            out[i] = .{
+                .payload = shape_payload,
+                .ty = child.ty,
+                .key = child.key,
+            };
+        }
+        return out;
+    }
+
+    fn structuralChildRoot(
+        self: *SessionExecutableTypePayloadBuilder,
+        parent: RepRootId,
+        kind: RepresentationEdgeKind,
+    ) RepRootId {
+        for (self.representation_store.representation_edges.items) |edge| {
+            const from = switch (edge.from) {
+                .local => |root| root,
+                .procedure_public => continue,
+            };
+            if (from != parent) continue;
+            if (!representationEdgeKindEql(edge.kind, kind)) continue;
+            return switch (edge.to) {
+                .local => |root| root,
+                .procedure_public => representationInvariant("session executable root payload child edge targets procedure-public root"),
+            };
+        }
+        representationInvariant("session executable root payload has no published structural child root");
     }
 
     fn typePayload(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayload {
@@ -2849,7 +3113,6 @@ const SessionExecutableTypePayloadBuilder = struct {
     ) bool {
         const root = self.types.unlinkConst(ty);
         return switch (self.types.getNode(root)) {
-            .nominal => |nominal| self.valueHasFunctionType(nominal.backing),
             .content => |content| switch (content) {
                 .func => true,
                 else => false,
@@ -3337,11 +3600,13 @@ pub fn callableSetKeyForMembers(
 const ExecValueTypeKeyBuilder = struct {
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
+    row_shapes: ?*row.Store = null,
     types: *const type_mod.Store,
     representation_store: ?*const RepresentationStore = null,
     value_store: ?*const ValueInfoStore = null,
     hasher: std.crypto.hash.sha2.Sha256,
     active: std.AutoHashMap(type_mod.TypeVarId, u32),
+    active_root_types: std.AutoHashMap(RootTypeKey, u32),
     active_values: std.AutoHashMap(ValueInfoId, u32),
 
     fn init(
@@ -3355,6 +3620,27 @@ const ExecValueTypeKeyBuilder = struct {
             .types = types,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+            .active_root_types = std.AutoHashMap(RootTypeKey, u32).init(allocator),
+            .active_values = std.AutoHashMap(ValueInfoId, u32).init(allocator),
+        };
+    }
+
+    fn initForRootTypes(
+        allocator: std.mem.Allocator,
+        names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
+        types: *const type_mod.Store,
+        representation_store: *const RepresentationStore,
+    ) ExecValueTypeKeyBuilder {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .row_shapes = row_shapes,
+            .types = types,
+            .representation_store = representation_store,
+            .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
+            .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+            .active_root_types = std.AutoHashMap(RootTypeKey, u32).init(allocator),
             .active_values = std.AutoHashMap(ValueInfoId, u32).init(allocator),
         };
     }
@@ -3362,6 +3648,7 @@ const ExecValueTypeKeyBuilder = struct {
     fn initForValues(
         allocator: std.mem.Allocator,
         names: *const canonical.CanonicalNameStore,
+        row_shapes: *row.Store,
         types: *const type_mod.Store,
         representation_store: *const RepresentationStore,
         value_store: *const ValueInfoStore,
@@ -3369,17 +3656,20 @@ const ExecValueTypeKeyBuilder = struct {
         return .{
             .allocator = allocator,
             .names = names,
+            .row_shapes = row_shapes,
             .types = types,
             .representation_store = representation_store,
             .value_store = value_store,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = std.AutoHashMap(type_mod.TypeVarId, u32).init(allocator),
+            .active_root_types = std.AutoHashMap(RootTypeKey, u32).init(allocator),
             .active_values = std.AutoHashMap(ValueInfoId, u32).init(allocator),
         };
     }
 
     fn deinit(self: *ExecValueTypeKeyBuilder) void {
         self.active_values.deinit();
+        self.active_root_types.deinit();
         self.active.deinit();
     }
 
@@ -3391,6 +3681,15 @@ const ExecValueTypeKeyBuilder = struct {
     fn keyForValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
         if (try self.redirectedValueKey(value)) |key| return key;
         try self.writeValue(value);
+        return .{ .bytes = self.hasher.finalResult() };
+    }
+
+    fn keyForRootType(
+        self: *ExecValueTypeKeyBuilder,
+        rep_root: RepRootId,
+        ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        try self.writeRootType(rep_root, ty);
         return .{ .bytes = self.hasher.finalResult() };
     }
 
@@ -3447,14 +3746,14 @@ const ExecValueTypeKeyBuilder = struct {
         } else if (info.boxed) |boxed| {
             try self.writeBoxedValue(info.logical_ty, boxed);
         } else if (info.aggregate) |aggregate| {
-            try self.writeAggregateValue(info.logical_ty, aggregate);
+            try self.writeAggregateValue(info.root, info.logical_ty, aggregate);
         } else if (info.value_alias_source) |source| {
             try self.writeValue(source);
         } else if (info.join_info) |join_id| {
             const key = try self.joinValueKey(value, join_id);
             self.writeCanonicalExecValueTypeKey(key);
         } else {
-            try self.writeType(info.logical_ty);
+            try self.writeRootType(info.root, info.logical_ty);
         }
         _ = self.active_values.remove(value);
     }
@@ -3470,7 +3769,8 @@ const ExecValueTypeKeyBuilder = struct {
             self.writeCanonicalExecValueTypeKey(payload_key);
             return;
         }
-        try self.writeType(logical_ty);
+        const payload_ty = try self.logicalBoxPayloadType(logical_ty);
+        try self.writeRootType(boxed.payload_root, payload_ty);
     }
 
     fn writeCallableValue(self: *ExecValueTypeKeyBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!void {
@@ -3497,6 +3797,7 @@ const ExecValueTypeKeyBuilder = struct {
 
     fn writeAggregateValue(
         self: *ExecValueTypeKeyBuilder,
+        value_root: RepRootId,
         logical_ty: TypeVarId,
         aggregate: AggregateValueInfo,
     ) std.mem.Allocator.Error!void {
@@ -3537,19 +3838,14 @@ const ExecValueTypeKeyBuilder = struct {
             .tag => |tag| {
                 self.writeTag("tag_value");
                 self.writeU32(@intFromEnum(tag.union_shape));
-                self.writeU32(@intFromEnum(tag.tag));
-                self.writeU32(@intCast(tag.payloads.len));
-                for (tag.payloads) |payload| {
-                    self.writeU32(@intFromEnum(payload.payload));
-                    const payload_key = try self.valueKeySnapshot(payload.value);
-                    self.writeCanonicalExecValueTypeKey(payload_key);
-                }
+                try self.writeTagUnionRootPayloadKeys(value_root, logical_ty, tag);
             },
             .list => |list| {
                 self.writeTag("list_value");
                 if (list.elems.len == 0) {
                     self.writeTag("empty");
-                    try self.writeType(logical_ty);
+                    const elem_ty = try self.logicalListElemType(logical_ty);
+                    try self.writeRootType(list.elem_root, elem_ty);
                     return;
                 }
                 const first_key = try self.valueKeySnapshot(list.elems[0]);
@@ -3567,7 +3863,277 @@ const ExecValueTypeKeyBuilder = struct {
     fn valueKeySnapshot(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
         const representations = self.representation_store orelse representationInvariant("executable value type key snapshot has no representation store");
         const values = self.value_store orelse representationInvariant("executable value type key snapshot has no value store");
-        return try execValueTypeKeyForValue(self.allocator, self.names, self.types, representations, values, value);
+        const row_shapes = self.row_shapes orelse representationInvariant("executable value type key snapshot has no row-shape store");
+        return try execValueTypeKeyForValue(self.allocator, self.names, row_shapes, self.types, representations, values, value);
+    }
+
+    fn writeRootType(
+        self: *ExecValueTypeKeyBuilder,
+        rep_root: RepRootId,
+        id: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error!void {
+        const root = self.types.unlinkConst(id);
+        const active_key = RootTypeKey{ .root = rep_root, .ty = root };
+        if (self.active_root_types.get(active_key)) |slot| {
+            self.writeTag("root_cycle");
+            self.writeU32(slot);
+            return;
+        }
+
+        if (self.valueHasFunctionType(root)) {
+            try self.writeCallableClass(self.representationStore().classForRoot(rep_root));
+            return;
+        }
+
+        const slot: u32 = @intCast(self.active_root_types.count());
+        try self.active_root_types.put(active_key, slot);
+        switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("executable value type key reached unresolved lambda-solved root type"),
+            .nominal => |nominal| {
+                self.writeTag("nominal");
+                self.writeBytes(self.names.moduleNameText(nominal.nominal.module_name));
+                self.writeBytes(self.names.typeNameText(nominal.nominal.type_name));
+                self.hasher.update(&nominal.source_ty.bytes);
+                self.writeBool(nominal.is_opaque);
+                try self.writeRootType(
+                    self.structuralChildRoot(rep_root, .{ .nominal_backing = nominal.nominal }),
+                    nominal.backing,
+                );
+            },
+            .content => |content| try self.writeRootContent(rep_root, content),
+        }
+        _ = self.active_root_types.remove(active_key);
+    }
+
+    fn writeRootContent(
+        self: *ExecValueTypeKeyBuilder,
+        rep_root: RepRootId,
+        content: type_mod.Content,
+    ) std.mem.Allocator.Error!void {
+        switch (content) {
+            .primitive => |prim| {
+                self.writeTag("primitive");
+                self.writeU32(@as(u32, @intCast(@intFromEnum(prim))));
+            },
+            .list => |elem| {
+                self.writeTag("list");
+                try self.writeRootType(self.structuralChildRoot(rep_root, .list_elem), elem);
+            },
+            .box => |elem| {
+                self.writeTag("box");
+                try self.writeRootType(self.structuralChildRoot(rep_root, .box_payload), elem);
+            },
+            .tuple => |items| {
+                self.writeTag("tuple");
+                const elems = self.types.sliceTypeVarSpan(items);
+                self.writeU32(@intCast(elems.len));
+                for (elems, 0..) |elem, i| {
+                    try self.writeRootType(self.structuralChildRoot(rep_root, .{ .tuple_elem = @intCast(i) }), elem);
+                }
+            },
+            .record => |record| {
+                self.writeTag("record");
+                const fields = self.types.sliceFields(record.fields);
+                self.writeU32(@intCast(fields.len));
+                const shape = try self.recordShapeForTypeFields(fields);
+                const shape_fields = self.rowShapes().recordShapeFields(shape);
+                if (shape_fields.len != fields.len) representationInvariant("executable value type key record shape arity mismatch");
+                for (fields, shape_fields) |field, field_id| {
+                    self.writeBytes(self.names.recordFieldLabelText(field.name));
+                    try self.writeRootType(self.structuralChildRoot(rep_root, .{ .record_field = field_id }), field.ty);
+                }
+            },
+            .tag_union => |tag_union| {
+                self.writeTag("tag_union");
+                const tags = self.types.sliceTags(tag_union.tags);
+                self.writeU32(@intCast(tags.len));
+                const shape = try self.tagUnionShapeForTypeTags(tags);
+                const shape_tags = self.rowShapes().tagUnionTags(shape);
+                if (shape_tags.len != tags.len) representationInvariant("executable value type key tag shape arity mismatch");
+                for (tags, shape_tags) |tag, tag_id| {
+                    self.writeBytes(self.names.tagLabelText(tag.name));
+                    const args = self.types.sliceTypeVarSpan(tag.args);
+                    self.writeU32(@intCast(args.len));
+                    const shape_payloads = self.rowShapes().tagPayloads(tag_id);
+                    if (shape_payloads.len != args.len) representationInvariant("executable value type key tag payload arity mismatch");
+                    for (args, shape_payloads) |arg, payload_id| {
+                        try self.writeRootType(self.structuralChildRoot(rep_root, .{ .tag_payload = payload_id }), arg);
+                    }
+                }
+            },
+            .func => representationInvariant("executable value type key requires callable representation for function root"),
+        }
+    }
+
+    fn writeCallableClass(
+        self: *ExecValueTypeKeyBuilder,
+        class: RepresentationClassId,
+    ) std.mem.Allocator.Error!void {
+        const emission = self.representationStore().callableClassEmission(class) orelse {
+            representationInvariant("executable value type key function root has no callable class emission");
+        };
+        switch (self.representationStore().callableEmissionPlan(emission)) {
+            .finite => |key| {
+                self.writeTag("callable_set");
+                self.writeCanonicalCallableSetKey(key);
+            },
+            .already_erased => |erased| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(erased.sig_key);
+            },
+            .erase_proc_value => |erase| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(erase.erased_fn_sig_key);
+            },
+            .erase_finite_set => |erase| {
+                self.writeTag("erased_fn");
+                self.writeErasedFnSigKey(erase.adapter.erased_fn_sig_key);
+            },
+        }
+    }
+
+    fn writeTagUnionRootPayloadKeys(
+        self: *ExecValueTypeKeyBuilder,
+        value_root: RepRootId,
+        logical_ty: TypeVarId,
+        tag_value: anytype,
+    ) std.mem.Allocator.Error!void {
+        _ = value_root;
+        const source_tags = try self.logicalTagUnionTags(logical_ty);
+        const shape_tags = self.rowShapes().tagUnionTags(tag_value.union_shape);
+        if (shape_tags.len != source_tags.len) representationInvariant("executable value type key tag shape/logical arity mismatch");
+        self.writeU32(@intCast(shape_tags.len));
+        for (shape_tags) |shape_tag| {
+            const tag_info = self.rowShapes().tag(shape_tag);
+            const tag_index: usize = @intCast(tag_info.logical_index);
+            if (tag_index >= source_tags.len) representationInvariant("executable value type key tag logical index exceeded arity");
+            self.writeU32(@intFromEnum(shape_tag));
+            const args = self.types.sliceTypeVarSpan(source_tags[tag_index].args);
+            const payloads = self.rowShapes().tagPayloads(shape_tag);
+            if (payloads.len != args.len) representationInvariant("executable value type key tag payload arity mismatch");
+            self.writeU32(@intCast(payloads.len));
+            for (payloads, args) |payload_id, arg| {
+                self.writeU32(@intFromEnum(payload_id));
+                try self.writeRootType(self.tagPayloadRoot(tag_value, payload_id), arg);
+            }
+        }
+    }
+
+    fn logicalListElemType(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalListElemType(nominal.backing),
+            .content => |content| switch (content) {
+                .list => |elem| elem,
+                else => representationInvariant("executable value type key list payload attached to non-list type"),
+            },
+            else => representationInvariant("executable value type key list payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalBoxPayloadType(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalBoxPayloadType(nominal.backing),
+            .content => |content| switch (content) {
+                .box => |payload| payload,
+                else => representationInvariant("executable value type key boxed payload attached to non-box type"),
+            },
+            else => representationInvariant("executable value type key boxed payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalTagUnionTags(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error![]const type_mod.Tag {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalTagUnionTags(nominal.backing),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| self.types.sliceTags(tag_union.tags),
+                else => representationInvariant("executable value type key tag payload attached to non-tag-union type"),
+            },
+            else => representationInvariant("executable value type key tag payload attached to unresolved type"),
+        };
+    }
+
+    fn tagPayloadRoot(self: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) RepRootId {
+        _ = self;
+        for (tag_value.payload_roots) |payload_root| {
+            if (payload_root.payload == payload) return payload_root.root;
+        }
+        representationInvariant("executable value type key tag payload root metadata omitted a payload");
+    }
+
+    fn structuralChildRoot(
+        self: *ExecValueTypeKeyBuilder,
+        parent: RepRootId,
+        kind: RepresentationEdgeKind,
+    ) RepRootId {
+        for (self.representationStore().representation_edges.items) |edge| {
+            const from = switch (edge.from) {
+                .local => |root| root,
+                .procedure_public => continue,
+            };
+            if (from != parent) continue;
+            if (!representationEdgeKindEql(edge.kind, kind)) continue;
+            return switch (edge.to) {
+                .local => |root| root,
+                .procedure_public => representationInvariant("executable value type key structural child edge targets procedure-public root"),
+            };
+        }
+        representationInvariant("executable value type key root has no published structural child root");
+    }
+
+    fn recordShapeForTypeFields(
+        self: *ExecValueTypeKeyBuilder,
+        fields: []const type_mod.Field,
+    ) std.mem.Allocator.Error!row.RecordShapeId {
+        if (fields.len == 0) return try self.rowShapes().internRecordShapeFromLabels(&.{});
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.name;
+        return try self.rowShapes().internRecordShapeFromLabels(labels);
+    }
+
+    fn tagUnionShapeForTypeTags(
+        self: *ExecValueTypeKeyBuilder,
+        tags: []const type_mod.Tag,
+    ) std.mem.Allocator.Error!row.TagUnionShapeId {
+        if (tags.len == 0) return try self.rowShapes().internTagUnionShapeFromDescriptors(&.{});
+        const descriptors = try self.allocator.alloc(row.Store.TagShapeDescriptor, tags.len);
+        defer self.allocator.free(descriptors);
+        for (tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = @intCast(self.types.sliceTypeVarSpan(tag.args).len),
+            };
+        }
+        return try self.rowShapes().internTagUnionShapeFromDescriptors(descriptors);
+    }
+
+    fn rowShapes(self: *ExecValueTypeKeyBuilder) *row.Store {
+        return self.row_shapes orelse representationInvariant("executable value type key root traversal has no row-shape store");
+    }
+
+    fn representationStore(self: *ExecValueTypeKeyBuilder) *const RepresentationStore {
+        return self.representation_store orelse representationInvariant("executable value type key root traversal has no representation store");
+    }
+
+    fn valueHasFunctionType(
+        self: *ExecValueTypeKeyBuilder,
+        ty: type_mod.TypeVarId,
+    ) bool {
+        const root = self.types.unlinkConst(ty);
+        return switch (self.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            else => false,
+        };
     }
 
     fn writeType(self: *ExecValueTypeKeyBuilder, id: type_mod.TypeVarId) std.mem.Allocator.Error!void {

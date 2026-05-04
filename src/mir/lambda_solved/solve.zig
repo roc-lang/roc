@@ -748,6 +748,7 @@ fn sealProcRepresentationInstances(
         const executable_key = try repr.executableSpecializationKeyForProc(
             program.allocator,
             &program.canonical_names,
+            &program.row_shapes,
             &program.types,
             &program.solve_sessions.items[session_index].representation_store,
             &program.value_stores.items[value_store_index],
@@ -1490,7 +1491,6 @@ const CallableEmissionAssigner = struct {
                 .func => true,
                 else => false,
             },
-            .nominal => |nominal| self.valueHasFunctionType(nominal.backing),
             else => false,
         };
     }
@@ -1579,6 +1579,7 @@ const CallableEmissionAssigner = struct {
         const capture_shape_key = try repr.captureShapeKeyForValueSlice(
             self.allocator,
             &self.program.canonical_names,
+            &self.program.row_shapes,
             &self.program.types,
             self.representationStoreFor(target_record),
             target_value_store,
@@ -1589,6 +1590,7 @@ const CallableEmissionAssigner = struct {
         const executable_key = try repr.executableSpecializationKeyForProc(
             self.allocator,
             &self.program.canonical_names,
+            &self.program.row_shapes,
             &self.program.types,
             self.representationStoreFor(target_record),
             target_value_store,
@@ -1711,6 +1713,7 @@ const CallableEmissionAssigner = struct {
         }
         return try target_store.captureSlotsForValues(
             &self.program.canonical_names,
+            &self.program.row_shapes,
             &self.program.types,
             target_value_store,
             values,
@@ -3639,7 +3642,7 @@ const BodySolver = struct {
     input: *const Lifted.Ast.Store,
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
-    row_shapes: *const MonoRow.Store,
+    row_shapes: *MonoRow.Store,
     type_importer: *TypeImporter,
     concrete_source_types: *const ConcreteSourceType.Store,
     representation_store: *repr.RepresentationStore,
@@ -4055,6 +4058,7 @@ const BodySolver = struct {
                 });
                 const callable = try self.representation_store.addSingletonProcValueCallable(
                     self.canonical_names,
+                    self.row_shapes,
                     self.type_importer.output,
                     self.value_store,
                     value,
@@ -4862,11 +4866,20 @@ const BodySolver = struct {
         errdefer if (payload_roots.len > 0) self.allocator.free(payload_roots);
         var next_payload_root: usize = 0;
         for (self.row_shapes.tagUnionTags(union_shape)) |shape_tag| {
+            const shape_tag_info = self.row_shapes.tag(shape_tag);
+            const source_tags = try self.logicalTagUnionTags(self.value_store.values.items[@intFromEnum(value)].logical_ty);
+            const tag_index: usize = @intCast(shape_tag_info.logical_index);
+            if (tag_index >= source_tags.len) lambdaInvariant("lambda-solved tag aggregate structural root tag index exceeded logical tags");
+            const tag_args = self.type_importer.output.sliceTypeVarSpan(source_tags[tag_index].args);
             for (self.row_shapes.tagPayloads(shape_tag)) |shape_payload| {
+                const payload_info = self.row_shapes.tagPayload(shape_payload);
+                const payload_index: usize = @intCast(payload_info.logical_index);
+                if (payload_index >= tag_args.len) lambdaInvariant("lambda-solved tag aggregate structural root payload index exceeded logical args");
                 payload_roots[next_payload_root] = .{
                     .payload = shape_payload,
                     .root = self.representation_store.reserveRoot(),
                 };
+                try self.publishStructuralRootEdges(payload_roots[next_payload_root].root, tag_args[payload_index]);
                 next_payload_root += 1;
             }
         }
@@ -4886,9 +4899,14 @@ const BodySolver = struct {
         const elem_values = self.value_store.sliceValueSpan(elems);
         const owned_elems = try self.allocator.dupe(repr.ValueInfoId, elem_values);
         errdefer if (owned_elems.len > 0) self.allocator.free(owned_elems);
+        const elem_root = self.representation_store.reserveRoot();
+        try self.publishStructuralRootEdges(
+            elem_root,
+            try self.logicalListElemType(self.value_store.values.items[@intFromEnum(value)].logical_ty),
+        );
 
         try self.publishAggregate(value, .{ .list = .{
-            .elem_root = self.representation_store.reserveRoot(),
+            .elem_root = elem_root,
             .elems = owned_elems,
         } });
     }
@@ -5054,7 +5072,183 @@ const BodySolver = struct {
             .instance = self.instance,
             .value = value,
         } });
+        try self.publishStructuralRootEdges(root, ty);
         return value;
+    }
+
+    fn publishStructuralRootEdges(
+        self: *BodySolver,
+        root: repr.RepRootId,
+        ty: Type.TypeVarId,
+    ) Allocator.Error!void {
+        var active = std.AutoHashMap(Type.TypeVarId, repr.RepRootId).init(self.allocator);
+        defer active.deinit();
+        try self.publishStructuralRootEdgesRec(root, ty, &active);
+    }
+
+    fn publishStructuralRootEdgesRec(
+        self: *BodySolver,
+        rep_root: repr.RepRootId,
+        ty: Type.TypeVarId,
+        active: *std.AutoHashMap(Type.TypeVarId, repr.RepRootId),
+    ) Allocator.Error!void {
+        const root_ty = self.type_importer.output.unlinkConst(ty);
+        if (active.get(root_ty) != null) return;
+        try active.put(root_ty, rep_root);
+        defer _ = active.remove(root_ty);
+
+        switch (self.type_importer.output.getNode(root_ty)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => lambdaInvariant("lambda-solved structural root publication reached unresolved type"),
+            .nominal => |nominal| {
+                _ = try self.publishStructuralChildRoot(
+                    rep_root,
+                    .{ .nominal_backing = nominal.nominal },
+                    nominal.backing,
+                    active,
+                );
+            },
+            .content => |content| switch (content) {
+                .primitive,
+                .func,
+                => {},
+                .list => |elem| {
+                    _ = try self.publishStructuralChildRoot(rep_root, .list_elem, elem, active);
+                },
+                .box => |payload| {
+                    _ = try self.publishStructuralChildRoot(rep_root, .box_payload, payload, active);
+                },
+                .tuple => |span| {
+                    const elems = self.type_importer.output.sliceTypeVarSpan(span);
+                    for (elems, 0..) |elem, i| {
+                        _ = try self.publishStructuralChildRoot(
+                            rep_root,
+                            .{ .tuple_elem = @intCast(i) },
+                            elem,
+                            active,
+                        );
+                    }
+                },
+                .record => |record| {
+                    const fields = self.type_importer.output.sliceFields(record.fields);
+                    const shape = try self.recordShapeForTypeFields(fields);
+                    const shape_fields = self.row_shapes.recordShapeFields(shape);
+                    if (shape_fields.len != fields.len) {
+                        lambdaInvariant("lambda-solved structural record root shape arity mismatch");
+                    }
+                    for (fields, shape_fields) |field, field_id| {
+                        _ = try self.publishStructuralChildRoot(
+                            rep_root,
+                            .{ .record_field = field_id },
+                            field.ty,
+                            active,
+                        );
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.type_importer.output.sliceTags(tag_union.tags);
+                    const shape = try self.tagUnionShapeForTypeTags(tags);
+                    const shape_tags = self.row_shapes.tagUnionTags(shape);
+                    if (shape_tags.len != tags.len) {
+                        lambdaInvariant("lambda-solved structural tag root shape arity mismatch");
+                    }
+                    for (tags, shape_tags) |tag, tag_id| {
+                        const args = self.type_importer.output.sliceTypeVarSpan(tag.args);
+                        const payloads = self.row_shapes.tagPayloads(tag_id);
+                        if (payloads.len != args.len) {
+                            lambdaInvariant("lambda-solved structural tag root payload arity mismatch");
+                        }
+                        for (args, payloads) |arg, payload_id| {
+                            _ = try self.publishStructuralChildRoot(
+                                rep_root,
+                                .{ .tag_payload = payload_id },
+                                arg,
+                                active,
+                            );
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    fn publishStructuralChildRoot(
+        self: *BodySolver,
+        parent: repr.RepRootId,
+        kind: repr.RepresentationEdgeKind,
+        child_ty: Type.TypeVarId,
+        active: *std.AutoHashMap(Type.TypeVarId, repr.RepRootId),
+    ) Allocator.Error!repr.RepRootId {
+        const child_root_ty = self.type_importer.output.unlinkConst(child_ty);
+        const child_root = if (active.get(child_root_ty)) |existing|
+            existing
+        else
+            self.representation_store.reserveRoot();
+
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = parent },
+            .to = .{ .local = child_root },
+            .kind = kind,
+        });
+
+        if (active.get(child_root_ty) == null) {
+            try self.publishStructuralRootEdgesRec(child_root, child_ty, active);
+        }
+        return child_root;
+    }
+
+    fn recordShapeForTypeFields(
+        self: *BodySolver,
+        fields: []const Type.Field,
+    ) Allocator.Error!MonoRow.RecordShapeId {
+        if (fields.len == 0) return try self.row_shapes.internRecordShapeFromLabels(&.{});
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.name;
+        return try self.row_shapes.internRecordShapeFromLabels(labels);
+    }
+
+    fn tagUnionShapeForTypeTags(
+        self: *BodySolver,
+        tags: []const Type.Tag,
+    ) Allocator.Error!MonoRow.TagUnionShapeId {
+        if (tags.len == 0) return try self.row_shapes.internTagUnionShapeFromDescriptors(&.{});
+        const descriptors = try self.allocator.alloc(MonoRow.Store.TagShapeDescriptor, tags.len);
+        defer self.allocator.free(descriptors);
+        for (tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = @intCast(self.type_importer.output.sliceTypeVarSpan(tag.args).len),
+            };
+        }
+        return try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+    }
+
+    fn logicalListElemType(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const root = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .nominal => |nominal| try self.logicalListElemType(nominal.backing),
+            .content => |content| switch (content) {
+                .list => |elem| elem,
+                else => lambdaInvariant("lambda-solved list structural root attached to non-list type"),
+            },
+            else => lambdaInvariant("lambda-solved list structural root attached to unresolved type"),
+        };
+    }
+
+    fn logicalTagUnionTags(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error![]const Type.Tag {
+        const root = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .nominal => |nominal| try self.logicalTagUnionTags(nominal.backing),
+            .content => |content| switch (content) {
+                .tag_union => |tag_union| self.type_importer.output.sliceTags(tag_union.tags),
+                else => lambdaInvariant("lambda-solved tag structural root attached to non-tag-union type"),
+            },
+            else => lambdaInvariant("lambda-solved tag structural root attached to unresolved type"),
+        };
     }
 
     fn sourcePayloadForKey(
