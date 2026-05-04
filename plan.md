@@ -8692,6 +8692,14 @@ const ConstTemplate = union(enum) {
 
 const ConstEvalTemplate = struct {
     body: CheckedConstBodyRef,
+    /// Compile-time-only procedure template used to lower this constant body at
+    /// a concrete requested result type. This is an interpreter entry template,
+    /// not a runtime top-level thunk, runtime initializer, public procedure
+    /// binding, or runtime zero-argument wrapper. Imported modules must expose
+    /// it through the const-template closure so a consuming artifact can
+    /// instantiate the constant without source lookup, source scanning, or
+    /// imported-module root re-execution.
+    entry_template: ProcedureTemplateRef,
     source_scheme: CanonicalTypeSchemeKey,
     resolved_value_refs: ResolvedValueRefTableRef,
     static_dispatch_plans: StaticDispatchPlanTableRef,
@@ -10354,6 +10362,20 @@ seals it during its own checking finalization; it must not mutate the imported
 artifact's `CompileTimeValueStore`, rerun imported compile-time roots, create the
 instance during post-check lowering, or discover private dependencies by looking
 through source declarations.
+
+For an exported `ConstEvalTemplate`, that private closure must include the
+compile-time-only `entry_template` named by the template, the checked procedure
+template row for that entry, the checked const body, the entry template's
+resolved-value refs, static-dispatch plans, nested-procedure sites, checked type
+roots/schemes, dependency summary template, interface capabilities, and every
+private promoted procedure, private capture node, callable-result plan,
+callable-promotion plan, constant reification plan, and semantic-instantiation
+procedure row reachable from those records. The importing artifact may lower
+that entry template only as a checking-finalization interpreter root for a
+concrete `ConstInstantiationRequest`. It must not expose the entry as a runtime
+procedure, runtime top-level constant thunk, runtime zero-argument wrapper,
+runtime global initializer, runtime top-level closure object, or runtime global
+callable object.
 
 `ImportedTemplateClosureView` is a serialized semantic closure, not a source
 module. It contains only the checked bodies, checked type roots, checked type
