@@ -509,6 +509,11 @@ fn evaluateConstantRoot(
         .const_ref => |ref| ref,
         .procedure_binding => compileTimeFinalizationInvariant("constant root top-level value was a procedure binding"),
     };
+    const requested_source_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+    const const_instance_key = checked_artifact.ConstInstantiationKey{
+        .const_ref = const_ref,
+        .requested_source_ty = requested_source_ty,
+    };
 
     const result = try evalCompileTimeRoot(interpreter, lir_root);
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
@@ -523,7 +528,13 @@ fn evaluateConstantRoot(
         .layouts = &lowered.lir_result.layouts,
         .lowered = lowered,
         .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
-        .source_binding = pattern,
+        .promotion_context = .{
+            .source_binding = pattern,
+            .base = .{ .local_const_root = .{
+                .root = root.id,
+                .instance = const_instance_key,
+            } },
+        },
     };
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
     const dependency_summary = try appendConcreteDependencySummaryForConstRoot(
@@ -535,12 +546,8 @@ fn evaluateConstantRoot(
 
     try artifact.comptime_values.bind(pattern, reified.schema, reified.value);
 
-    const requested_source_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
     const instance_ref = try artifact.const_instances.reserveRequest(allocator, &artifact.checked_types, .{
-        .key = .{
-            .const_ref = const_ref,
-            .requested_source_ty = requested_source_ty,
-        },
+        .key = const_instance_key,
         .requested_source_ty_payload = root.checked_type,
     });
     artifact.const_instances.fill(instance_ref, .{
@@ -574,6 +581,10 @@ fn evaluateCallableBindingRoot(
     defer interpreter.dropValue(result.value, ret_layout);
 
     const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+    const promotion_context = PromotedCallablePublicationContext{
+        .source_binding = pattern,
+        .base = .{ .local_callable_root = root.id },
+    };
     const callable = switch (artifact.comptime_plans.callableResult(result_plan)) {
         .finite => blk: {
             const selected_callable = selectFiniteCallableResult(
@@ -588,7 +599,7 @@ fn evaluateCallableBindingRoot(
                 allocator,
                 artifact,
                 lowered,
-                pattern,
+                promotion_context,
                 root.checked_type,
                 result_plan,
                 selected_callable,
@@ -598,7 +609,7 @@ fn evaluateCallableBindingRoot(
             allocator,
             artifact,
             lowered,
-            pattern,
+            promotion_context,
             root.checked_type,
             ret_layout,
             result.value,
@@ -668,6 +679,55 @@ const PublishedCallableResult = struct {
     output: checked_artifact.CallablePromotionOutput,
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
 };
+
+const PromotedCallablePublicationContext = struct {
+    source_binding: ?checked_artifact.CheckedPatternId,
+    base: PromotedCallableProvenanceBase,
+};
+
+const PromotedCallableProvenanceBase = union(enum) {
+    local_callable_root: checked_artifact.ComptimeRootId,
+    local_const_root: struct {
+        root: checked_artifact.ComptimeRootId,
+        instance: checked_artifact.ConstInstantiationKey,
+    },
+    callable_binding_instance: checked_artifact.CallableBindingInstantiationKey,
+    const_instance: checked_artifact.ConstInstantiationKey,
+    private_capture: checked_artifact.PromotedProcedureRef,
+};
+
+fn promotedProcedureProvenance(
+    context: PromotedCallablePublicationContext,
+    result_plan: checked_artifact.CallableResultPlanId,
+) checked_artifact.PromotedProcedureProvenance {
+    return switch (context.base) {
+        .local_callable_root => |root| .{ .local_callable_root_result = .{
+            .root = root,
+            .result_plan = result_plan,
+        } },
+        .local_const_root => |local| .{ .local_const_root_callable_leaf = .{
+            .root = local.root,
+            .instance = local.instance,
+            .result_plan = result_plan,
+            .value_path = comptimeValuePathKeyForCallableResult(result_plan),
+        } },
+        .callable_binding_instance => |instance| .{ .callable_binding_instance_result = .{
+            .instance = instance,
+            .result_plan = result_plan,
+            .callable_path = promotedCallablePathKeyForCallableResult(result_plan),
+        } },
+        .const_instance => |instance| .{ .const_instance_callable_leaf = .{
+            .instance = instance,
+            .result_plan = result_plan,
+            .value_path = comptimeValuePathKeyForCallableResult(result_plan),
+        } },
+        .private_capture => |promoted_proc| .{ .private_capture_callable_leaf = .{
+            .promoted_proc = promoted_proc,
+            .result_plan = result_plan,
+            .capture_path = privateCapturePathKeyForCallableResult(result_plan),
+        } },
+    };
+}
 
 const DirectCallableBindingInfo = struct {
     direct: checked_artifact.DirectProcedureBinding,
@@ -1219,13 +1279,13 @@ fn publishCallableResult(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-    source_binding: checked_artifact.CheckedPatternId,
+    context: PromotedCallablePublicationContext,
     checked_fn_root: checked_artifact.CheckedTypeId,
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!PublishedCallableResult {
     if (selected.planned_member.capture_slots.len != 0) {
-        return try promoteFiniteCallableResult(allocator, artifact, lowered, source_binding, checked_fn_root, result_plan_id, selected);
+        return try promoteFiniteCallableResult(allocator, artifact, lowered, context, checked_fn_root, result_plan_id, selected);
     }
     if (selected.descriptor_member.capture_slots.len != 0) {
         compileTimeFinalizationInvariant("descriptor member for no-capture callable result had captures");
@@ -1254,7 +1314,7 @@ fn promoteFiniteCallableResult(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-    source_binding: checked_artifact.CheckedPatternId,
+    context: PromotedCallablePublicationContext,
     checked_fn_root: checked_artifact.CheckedTypeId,
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
@@ -1262,9 +1322,10 @@ fn promoteFiniteCallableResult(
     const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
     const reserved = try artifact.reservePromotedCallableWrapper(
         allocator,
-        source_binding,
+        context.source_binding,
         checked_fn_root,
         checked_fn_scheme,
+        promotedProcedureProvenance(context, result_plan_id),
     );
 
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
@@ -1278,7 +1339,10 @@ fn promoteFiniteCallableResult(
         .layouts = &lowered.lir_result.layouts,
         .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
         .owner = reserved.promoted_ref,
-        .source_binding = source_binding,
+        .promotion_context = .{
+            .source_binding = context.source_binding,
+            .base = .{ .private_capture = reserved.promoted_ref },
+        },
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
         .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
     };
@@ -1332,7 +1396,7 @@ fn publishErasedCallableResult(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-    source_binding: checked_artifact.CheckedPatternId,
+    context: PromotedCallablePublicationContext,
     checked_fn_root: checked_artifact.CheckedTypeId,
     ret_layout: layout_mod.Idx,
     ret_value: Value,
@@ -1342,9 +1406,10 @@ fn publishErasedCallableResult(
     const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
     const reserved = try artifact.reservePromotedCallableWrapper(
         allocator,
-        source_binding,
+        context.source_binding,
         checked_fn_root,
         checked_fn_scheme,
+        promotedProcedureProvenance(context, result_plan),
     );
 
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
@@ -1355,7 +1420,10 @@ fn publishErasedCallableResult(
         .layouts = &lowered.lir_result.layouts,
         .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
         .owner = reserved.promoted_ref,
-        .source_binding = source_binding,
+        .promotion_context = .{
+            .source_binding = context.source_binding,
+            .base = .{ .private_capture = reserved.promoted_ref },
+        },
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
         .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
     };
@@ -1883,7 +1951,7 @@ const PrivateCaptureBuilder = struct {
     layouts: *const layout_mod.Store,
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
     owner: ?checked_artifact.PromotedProcedureRef,
-    source_binding: ?checked_artifact.CheckedPatternId,
+    promotion_context: ?PromotedCallablePublicationContext,
     next_private_const: u32 = 0,
     active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
     erased_active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId),
@@ -2059,7 +2127,7 @@ const PrivateCaptureBuilder = struct {
             .layouts = self.layouts,
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
-            .source_binding = self.source_binding,
+            .promotion_context = self.promotion_context,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
 
@@ -2114,7 +2182,7 @@ const PrivateCaptureBuilder = struct {
             .layouts = self.layouts,
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
-            .source_binding = self.source_binding,
+            .promotion_context = self.promotion_context,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
         if (try constGraphContainsCallableSlots(self.allocator, &self.artifact.comptime_plans, leaf.reification_plan)) {
@@ -2161,7 +2229,7 @@ const PrivateCaptureBuilder = struct {
         result_plan: checked_artifact.CallableResultPlanId,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.FiniteCallableLeafInstance {
-        const source_binding = self.source_binding orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires source binding provenance");
+        const context = self.promotion_context orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires explicit promoted procedure provenance");
         const published = switch (self.artifact.comptime_plans.callableResult(result_plan)) {
             .finite => blk: {
                 const selected = selectFiniteCallableResult(
@@ -2179,7 +2247,7 @@ const PrivateCaptureBuilder = struct {
                     self.allocator,
                     self.artifact,
                     self.lowered,
-                    source_binding,
+                    context,
                     checked_fn_root,
                     result_plan,
                     selected,
@@ -2193,7 +2261,7 @@ const PrivateCaptureBuilder = struct {
                     self.allocator,
                     self.artifact,
                     self.lowered,
-                    source_binding,
+                    context,
                     checked_fn_root,
                     physical.layout_idx,
                     physical.value,
@@ -2553,6 +2621,44 @@ fn callableSetMember(
     return null;
 }
 
+fn comptimeValuePathKeyForCallableResult(
+    result_plan: checked_artifact.CallableResultPlanId,
+) checked_artifact.ComptimeValuePathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashPathTag(&hasher, "comptime-value-callable-result");
+    hashPathU32(&hasher, @intFromEnum(result_plan));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn promotedCallablePathKeyForCallableResult(
+    result_plan: checked_artifact.CallableResultPlanId,
+) checked_artifact.PromotedCallablePathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashPathTag(&hasher, "promoted-callable-result");
+    hashPathU32(&hasher, @intFromEnum(result_plan));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn privateCapturePathKeyForCallableResult(
+    result_plan: checked_artifact.CallableResultPlanId,
+) checked_artifact.PrivateCapturePathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashPathTag(&hasher, "private-capture-callable-result");
+    hashPathU32(&hasher, @intFromEnum(result_plan));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn hashPathTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
+    hashPathU32(hasher, @intCast(tag.len));
+    hasher.update(tag);
+}
+
+fn hashPathU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
 fn compileTimeRootForRequest(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     request: checked_artifact.RootRequest,
@@ -2605,7 +2711,7 @@ const ComptimeReifier = struct {
     layouts: *const layout_mod.Store,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
-    source_binding: ?checked_artifact.CheckedPatternId = null,
+    promotion_context: ?PromotedCallablePublicationContext = null,
 
     fn reifyPlan(
         self: *ComptimeReifier,
@@ -2767,7 +2873,7 @@ const ComptimeReifier = struct {
             .layouts = self.layouts,
             .callable_set_descriptors = self.callable_set_descriptors,
             .owner = null,
-            .source_binding = self.source_binding,
+            .promotion_context = self.promotion_context,
             .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(self.allocator),
             .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(self.allocator),
         };
@@ -2811,7 +2917,7 @@ const ComptimeReifier = struct {
 
         const artifact = self.artifact orelse reifierInvariant("captured callable leaf reification requires mutable checked artifact");
         const lowered = self.lowered orelse reifierInvariant("captured callable leaf reification requires lowered LIR context");
-        const source_binding = self.source_binding orelse reifierInvariant("captured callable leaf reification requires source binding provenance");
+        const context = self.promotion_context orelse reifierInvariant("captured callable leaf reification requires explicit promoted procedure provenance");
         const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
             reifierInvariant("captured callable leaf source function type was not published in checked type store");
         };
@@ -2819,7 +2925,7 @@ const ComptimeReifier = struct {
             self.allocator,
             artifact,
             lowered,
-            source_binding,
+            context,
             checked_fn_root,
             result_plan,
             selected,

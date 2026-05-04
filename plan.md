@@ -553,7 +553,9 @@ const PromotedCallableWrapper = struct {
     promoted_proc: ProcedureValueRef,
     proc_base_key: ProcBaseKeyRef,
     callable_node: PromotedCallableNodeId,
-    source_binding: PatternId,
+    source_binding: ?PatternId,
+    source_fn_ty: CanonicalTypeKey,
+    provenance: PromotedProcedureProvenance,
     checked_fn_root: CheckedTypeId,
     body_plan: PromotedCallableBodyPlanId,
 };
@@ -8616,9 +8618,122 @@ const PromotedProcedure = struct {
     proc_base_key: ProcBaseKeyRef,
     template: CheckedProcedureTemplateId,
     callable_node: PromotedCallableNodeId,
-    source_binding: PatternId,
+    source_binding: ?PatternId,
     source_fn_ty: CanonicalTypeKey,
     provenance: PromotedProcedureProvenance,
+};
+
+const PromotedProcedureProvenance = union(enum) {
+    /// A concrete top-level callable root returned this callable directly.
+    ///
+    /// Example:
+    ///
+    /// ```roc
+    /// make_adder = |n| |x| x + n
+    ///
+    /// add_one : I64 -> I64
+    /// add_one = make_adder(1)
+    /// ```
+    ///
+    /// Evaluating `add_one` at `I64 -> I64` may return a finite callable value
+    /// with captured `n = 1`. The promoted procedure is owned by the artifact
+    /// evaluating the callable root, and `root` names that checked root.
+    local_callable_root_result: struct {
+        root: ComptimeRootId,
+        result_plan: CallableResultPlanId,
+    },
+
+    /// A local top-level constant root produced a concrete constant instance,
+    /// and a callable leaf inside that constant instance needed promotion.
+    ///
+    /// Example:
+    ///
+    /// ```roc
+    /// table : { f : I64 -> I64 }
+    /// table = { f: |x| x + 1 }
+    /// ```
+    ///
+    /// The semantic owner is the concrete `ConstInstantiationKey`, not the
+    /// source pattern alone. The pattern is optional debug/source information.
+    local_const_root_callable_leaf: struct {
+        root: ComptimeRootId,
+        instance: ConstInstantiationKey,
+        result_plan: CallableResultPlanId,
+        value_path: ComptimeValuePathKey,
+    },
+
+    /// A concrete callable binding instantiation returned a callable that needed
+    /// promotion. This is the imported/generic case where the requesting
+    /// artifact owns the promoted procedure even if the source binding belongs
+    /// to another artifact.
+    ///
+    /// Example:
+    ///
+    /// ```roc
+    /// # module A
+    /// make_adder = |n| |x| x + n
+    /// add_one = make_adder(1)
+    ///
+    /// # module B
+    /// main = add_one(41)
+    /// ```
+    ///
+    /// If B requests `add_one` at `I64 -> I64`, B must not store A's raw
+    /// `PatternId` as semantic identity. It stores the concrete
+    /// `CallableBindingInstantiationKey` plus the callable path instead.
+    callable_binding_instance_result: struct {
+        instance: CallableBindingInstantiationKey,
+        result_plan: CallableResultPlanId,
+        callable_path: PromotedCallablePathKey,
+    },
+
+    /// A concrete constant instantiation produced a callable leaf that needed
+    /// promotion. This is mandatory for imported generic constants.
+    ///
+    /// Example:
+    ///
+    /// ```roc
+    /// # module A
+    /// table = { f: |x| x }
+    ///
+    /// # module B
+    /// main = table.f(1)
+    /// ```
+    ///
+    /// B owns the concrete `{ f : I64 -> I64 }` instance and any promoted
+    /// procedure needed by its `f` leaf. B must not use A's raw local ids as
+    /// semantic keys.
+    const_instance_callable_leaf: struct {
+        instance: ConstInstantiationKey,
+        result_plan: CallableResultPlanId,
+        value_path: ComptimeValuePathKey,
+    },
+
+    /// A callable leaf was discovered while materializing the private capture
+    /// graph of another promoted procedure.
+    ///
+    /// Example:
+    ///
+    /// ```roc
+    /// make_boxed_adder : I64 -> (I64 -> I64)
+    /// make_boxed_adder = |n| {
+    ///     boxed_n = Box.box(n)
+    ///
+    ///     |x| x + Box.unbox(boxed_n)
+    /// }
+    ///
+    /// add_one : I64 -> I64
+    /// add_one = make_boxed_adder(1)
+    /// ```
+    ///
+    /// If promoting `add_one` materializes private capture data that itself
+    /// contains callable leaves, those nested promoted procedures are keyed by
+    /// the owning promoted procedure plus a private capture path.
+    private_capture_callable_leaf: struct {
+        promoted_proc: PromotedProcedureRef,
+        result_plan: CallableResultPlanId,
+        capture_path: PrivateCapturePathKey,
+    },
 };
 ```
 
@@ -8660,6 +8775,15 @@ procedure value may not appear in `TopLevelValueTable`, `ResolvedValueRef`, a
 private capture `callable_leaf`, or an imported artifact view unless its
 `PromotedProcedure` row and checked template are already present in the same
 published artifact.
+
+`source_binding` is optional debug/source attachment only. It is not semantic
+identity, and it must never contain a raw `PatternId` from another artifact.
+Local root promotion should fill it when there is an owning local source
+pattern. Imported/generic concrete instantiation may leave it null. The required
+semantic identity is `PromotedProcedureProvenance`, whose cases are all
+requester-owned or artifact-qualified. If a promoted procedure cannot name one
+of those provenance cases, promotion is invalid: debug builds assert immediately
+and release builds use `unreachable`.
 
 Concrete instantiation can create procedure templates. For example, instantiating
 `table = { f: |x| x }` at `{ f : I64 -> I64 }` may need a sealed synthetic
@@ -11491,7 +11615,7 @@ const SyntheticOrigin = union(enum) {
     },
     promoted_callable: struct {
         artifact: CheckedModuleArtifactKey,
-        source_binding: PatternId,
+        provenance: PromotedProcedureProvenance,
         callable_node: PromotedCallableNodeId,
         source_fn_ty: CanonicalTypeKey,
     },
@@ -11501,8 +11625,8 @@ const SyntheticOrigin = union(enum) {
 No synthetic procedure identity may be keyed only by display name, generated
 symbol, expression id, side-table id, or a payload-free origin kind.
 `promoted_callable` identity is keyed by the checked artifact that owns the
-promotion, the source binding that produced the callable result, the stable
-promoted callable node, and the canonical source function type. This is the
+promotion, the explicit `PromotedProcedureProvenance`, the stable promoted
+callable node, and the canonical source function type. This is the
 only synthetic-origin path for compile-time callable promotion; later stages
 must not recover promoted-procedure identity from `TopLevelValueTable`, symbol
 spelling, private capture graph shape, or callable body syntax.

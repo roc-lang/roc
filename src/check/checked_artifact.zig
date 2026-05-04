@@ -3423,7 +3423,9 @@ pub const PromotedCallableWrapper = struct {
     promoted_proc: canonical.ProcedureValueRef,
     proc_base_key: canonical.ProcBaseKeyRef,
     callable_node: canonical.PromotedCallableNodeId,
-    source_binding: CheckedPatternId,
+    source_binding: ?CheckedPatternId,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    provenance: PromotedProcedureProvenance,
     checked_fn_root: CheckedTypeId,
     body_plan: canonical.PromotedCallableBodyPlanId,
 };
@@ -3482,8 +3484,13 @@ pub const PromotedCallableWrapperTable = struct {
             if (@intFromEnum(wrapper.checked_fn_root) >= checked_types.roots.len) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper checked function root is out of range", .{});
             }
-            if (@intFromEnum(wrapper.source_binding) >= checked_bodies.patterns.len) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper source binding is out of range", .{});
+            if (wrapper.source_binding) |source_binding| {
+                if (@intFromEnum(source_binding) >= checked_bodies.patterns.len) {
+                    std.debug.panic("checked artifact invariant violated: promoted callable wrapper source binding is out of range", .{});
+                }
+            }
+            if (!std.mem.eql(u8, &wrapper.source_fn_ty.bytes, &checked_types.roots[@intFromEnum(wrapper.checked_fn_root)].key.bytes)) {
+                std.debug.panic("checked artifact invariant violated: promoted callable wrapper source function type differs from checked root", .{});
             }
             if (@intFromEnum(wrapper.body_plan) >= body_plans.plans.len) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper body plan is out of range", .{});
@@ -7886,10 +7893,40 @@ pub const TopLevelValueTable = struct {
     }
 };
 
+pub const PromotedProcedureProvenance = union(enum) {
+    local_callable_root_result: struct {
+        root: ComptimeRootId,
+        result_plan: CallableResultPlanId,
+    },
+    local_const_root_callable_leaf: struct {
+        root: ComptimeRootId,
+        instance: ConstInstantiationKey,
+        result_plan: CallableResultPlanId,
+        value_path: ComptimeValuePathKey,
+    },
+    callable_binding_instance_result: struct {
+        instance: CallableBindingInstantiationKey,
+        result_plan: CallableResultPlanId,
+        callable_path: PromotedCallablePathKey,
+    },
+    const_instance_callable_leaf: struct {
+        instance: ConstInstantiationKey,
+        result_plan: CallableResultPlanId,
+        value_path: ComptimeValuePathKey,
+    },
+    private_capture_callable_leaf: struct {
+        promoted_proc: PromotedProcedureRef,
+        result_plan: CallableResultPlanId,
+        capture_path: PrivateCapturePathKey,
+    },
+};
+
 pub const PromotedProcedure = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
-    source_binding: CheckedPatternId,
+    source_binding: ?CheckedPatternId,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    provenance: PromotedProcedureProvenance,
 };
 
 pub const ReservedPromotedCallableWrapper = struct {
@@ -7898,6 +7935,8 @@ pub const ReservedPromotedCallableWrapper = struct {
     template: canonical.ProcedureTemplateRef,
     wrapper: canonical.PromotedCallableWrapperId,
     body_plan: canonical.PromotedCallableBodyPlanId,
+    source_fn_ty: canonical.CanonicalTypeKey,
+    provenance: PromotedProcedureProvenance,
 };
 
 pub const PromotedProcedureTable = struct {
@@ -7943,6 +7982,7 @@ pub const PromotedProcedureTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         templates: *const CheckedProcedureTemplateTable,
         checked_bodies: *const CheckedBodyStore,
+        wrappers: *const PromotedCallableWrapperTable,
     ) void {
         if (builtin.mode != .Debug) return;
 
@@ -7961,8 +8001,10 @@ pub const PromotedProcedureTable = struct {
             if (!std.mem.eql(u8, &procedure.template.artifact.bytes, &artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure template belongs to a different artifact", .{});
             }
-            if (@intFromEnum(procedure.source_binding) >= checked_bodies.patterns.len) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure source binding is out of range", .{});
+            if (procedure.source_binding) |source_binding| {
+                if (@intFromEnum(source_binding) >= checked_bodies.patterns.len) {
+                    std.debug.panic("checked artifact invariant violated: promoted procedure source binding is out of range", .{});
+                }
             }
             if (procedure.proc.proc_base != procedure.template.proc_base) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure proc base differs from its template", .{});
@@ -7976,7 +8018,18 @@ pub const PromotedProcedureTable = struct {
                 std.debug.panic("checked artifact invariant violated: promoted procedure table references a template with a different proc base", .{});
             }
             switch (template.body) {
-                .promoted_callable_wrapper => {},
+                .promoted_callable_wrapper => |wrapper_id| {
+                    const wrapper = wrappers.get(wrapper_id);
+                    if (!std.mem.eql(u8, &wrapper.source_fn_ty.bytes, &procedure.source_fn_ty.bytes)) {
+                        std.debug.panic("checked artifact invariant violated: promoted procedure source function type differs from wrapper", .{});
+                    }
+                    if (!optionalCheckedPatternIdEql(wrapper.source_binding, procedure.source_binding)) {
+                        std.debug.panic("checked artifact invariant violated: promoted procedure source binding differs from wrapper", .{});
+                    }
+                    if (!promotedProcedureProvenanceEql(wrapper.provenance, procedure.provenance)) {
+                        std.debug.panic("checked artifact invariant violated: promoted procedure provenance differs from wrapper", .{});
+                    }
+                },
                 else => std.debug.panic("checked artifact invariant violated: promoted procedure table row does not point at a promoted callable wrapper", .{}),
             }
         }
@@ -10285,6 +10338,50 @@ fn promotedProcedureRefEql(a: PromotedProcedureRef, b: PromotedProcedureRef) boo
     return a.module_idx == b.module_idx and canonical.procedureValueRefEql(a.proc, b.proc);
 }
 
+fn optionalCheckedPatternIdEql(a: ?CheckedPatternId, b: ?CheckedPatternId) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return a.? == b.?;
+}
+
+fn promotedProcedureProvenanceEql(
+    a: PromotedProcedureProvenance,
+    b: PromotedProcedureProvenance,
+) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .local_callable_root_result => |left| blk: {
+            const right = b.local_callable_root_result;
+            break :blk left.root == right.root and left.result_plan == right.result_plan;
+        },
+        .local_const_root_callable_leaf => |left| blk: {
+            const right = b.local_const_root_callable_leaf;
+            break :blk left.root == right.root and
+                constInstantiationKeyEql(left.instance, right.instance) and
+                left.result_plan == right.result_plan and
+                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes);
+        },
+        .callable_binding_instance_result => |left| blk: {
+            const right = b.callable_binding_instance_result;
+            break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
+                left.result_plan == right.result_plan and
+                std.mem.eql(u8, &left.callable_path.bytes, &right.callable_path.bytes);
+        },
+        .const_instance_callable_leaf => |left| blk: {
+            const right = b.const_instance_callable_leaf;
+            break :blk constInstantiationKeyEql(left.instance, right.instance) and
+                left.result_plan == right.result_plan and
+                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes);
+        },
+        .private_capture_callable_leaf => |left| blk: {
+            const right = b.private_capture_callable_leaf;
+            break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
+                left.result_plan == right.result_plan and
+                std.mem.eql(u8, &left.capture_path.bytes, &right.capture_path.bytes);
+        },
+    };
+}
+
 fn promotedCaptureIdEql(a: PromotedCaptureId, b: PromotedCaptureId) bool {
     return promotedProcedureRefEql(a.promoted_proc, b.promoted_proc) and a.capture_index == b.capture_index;
 }
@@ -10410,9 +10507,10 @@ pub const CheckedModuleArtifact = struct {
     pub fn appendPromotedCallableWrapper(
         self: *CheckedModuleArtifact,
         allocator: Allocator,
-        source_binding: CheckedPatternId,
+        source_binding: ?CheckedPatternId,
         checked_fn_root: CheckedTypeId,
         checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+        provenance: PromotedProcedureProvenance,
         body_plan: PromotedCallableBodyPlan,
     ) Allocator.Error!PromotedProcedureRef {
         const reserved = try self.reservePromotedCallableWrapper(
@@ -10420,6 +10518,7 @@ pub const CheckedModuleArtifact = struct {
             source_binding,
             checked_fn_root,
             checked_fn_scheme,
+            provenance,
         );
         self.promoted_callable_body_plans.fill(reserved.body_plan, body_plan);
         try self.publishPromotedCallableWrapper(allocator, reserved);
@@ -10429,9 +10528,10 @@ pub const CheckedModuleArtifact = struct {
     pub fn reservePromotedCallableWrapper(
         self: *CheckedModuleArtifact,
         allocator: Allocator,
-        source_binding: CheckedPatternId,
+        source_binding: ?CheckedPatternId,
         checked_fn_root: CheckedTypeId,
         checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+        provenance: PromotedProcedureProvenance,
     ) Allocator.Error!ReservedPromotedCallableWrapper {
         const body_plan_id = try self.promoted_callable_body_plans.reserve(allocator);
         const wrapper_id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.promoted_callable_wrappers.wrappers.len)));
@@ -10453,6 +10553,7 @@ pub const CheckedModuleArtifact = struct {
             .proc_base = proc_base,
             .template = template_id,
         };
+        const source_fn_ty = self.checked_types.roots[@intFromEnum(checked_fn_root)].key;
 
         const appended_wrapper = try self.promoted_callable_wrappers.append(allocator, .{
             .id = wrapper_id,
@@ -10460,6 +10561,8 @@ pub const CheckedModuleArtifact = struct {
             .proc_base_key = proc_base,
             .callable_node = @enumFromInt(@intFromEnum(wrapper_id)),
             .source_binding = source_binding,
+            .source_fn_ty = source_fn_ty,
+            .provenance = provenance,
             .checked_fn_root = checked_fn_root,
             .body_plan = body_plan_id,
         });
@@ -10489,6 +10592,8 @@ pub const CheckedModuleArtifact = struct {
             .template = template_ref,
             .wrapper = wrapper_id,
             .body_plan = body_plan_id,
+            .source_fn_ty = source_fn_ty,
+            .provenance = provenance,
         };
     }
 
@@ -10521,6 +10626,8 @@ pub const CheckedModuleArtifact = struct {
             .proc = reserved.proc_value,
             .template = reserved.template,
             .source_binding = wrapper.source_binding,
+            .source_fn_ty = reserved.source_fn_ty,
+            .provenance = reserved.provenance,
         });
         if (!promotedProcedureRefEql(published, reserved.promoted_ref)) {
             checkedArtifactInvariant("published promoted procedure ref differed from reserved ref", .{});
@@ -10977,7 +11084,12 @@ pub const CheckedModuleArtifact = struct {
             &self.checked_bodies,
             &self.promoted_callable_body_plans,
         );
-        self.promoted_procedures.verifyPublished(self.key, &self.checked_procedure_templates, &self.checked_bodies);
+        self.promoted_procedures.verifyPublished(
+            self.key,
+            &self.checked_procedure_templates,
+            &self.checked_bodies,
+            &self.promoted_callable_wrappers,
+        );
         self.comptime_plans.verifySealed(&self.callable_set_descriptors);
         self.comptime_dependencies.verifySealed();
         self.comptime_values.verifySealed();
