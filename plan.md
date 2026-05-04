@@ -6644,22 +6644,22 @@ semantic procedure-summary pass. It computes where explicit `incref`, `decref`,
 and `free` statements belong from LIR uses, branch joins, call boundaries,
 runtime mutation sites, and refcounted layout metadata.
 
-LIR writes must expose their ownership meaning explicitly. ARC insertion must
+LIR writes must expose their ARC write meaning explicitly. ARC insertion must
 not infer write meaning from source syntax, statement position, control-flow
 shape, or naming conventions.
 
 The minimum required LIR write modes are:
 
 ```zig
-const SetLocalMode = union(enum) {
+const SetLocalWriteMode = union(enum) {
     /// First assignment into a branch/result join local on this control-flow
-    /// path. There is no previous owned value to release on this path.
+    /// path. There is no previous live refcounted value to release on this path.
     initialize_join_result,
 
-    /// Ordinary mutable overwrite of a local that already owns a live value on
-    /// this path. ARC insertion must release the previous owned value before the
-    /// new value is installed.
-    overwrite_owned,
+    /// Ordinary mutable overwrite of a local that already has a live value on
+    /// this path. ARC insertion must release the previous refcounted value
+    /// before the new value is installed.
+    replace_existing,
 
     /// Assignment into a join-point parameter when a `jump` transfers values to
     /// a `join`. The jump carries the source values explicitly; ARC insertion
@@ -6668,12 +6668,12 @@ const SetLocalMode = union(enum) {
     initialize_join_param,
 };
 
-const ForListElementMode = enum {
-    /// The loop element is a borrowed view of the iterable storage for the
-    /// duration of the iteration. If it is copied into an owned local, returned,
-    /// boxed, captured, inserted into another aggregate, or otherwise escapes,
-    /// the ordinary ARC rules at that use emit the required `incref`.
-    borrowed_from_iterable,
+const ForListElementSource = enum {
+    /// The loop element aliases iterable element storage for the duration of
+    /// the iteration. If it is copied into a retained local, returned, boxed,
+    /// captured, inserted into another aggregate, or otherwise escapes, the
+    /// ordinary ARC rules at that use emit the required `incref`.
+    aliases_iterable_element,
 };
 
 const SwitchContinuation = struct {

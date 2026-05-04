@@ -186,7 +186,7 @@ const Inserter = struct {
 
                 var current_start = start;
                 switch (assign.mode) {
-                    .overwrite_owned => current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start),
+                    .replace_existing => current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start),
                     .initialize_join_result, .initialize_join_param => {},
                 }
                 self.addOwnedIfRc(owned, assign.target);
@@ -253,7 +253,7 @@ const Inserter = struct {
             },
             .jump => |jump_stmt| {
                 if (self.store.getLocalSpan(jump_stmt.args).len != 0) {
-                    arcInvariant("ARC insertion reached join arguments before explicit join-parameter ownership lowering");
+                    arcInvariant("ARC insertion reached join arguments before explicit join-parameter ARC lowering");
                 }
                 if (options.loop_keep) |keep| return try self.releaseDifference(owned, keep, start);
                 return start;
@@ -372,8 +372,8 @@ const Inserter = struct {
         owned: *OwnedSet,
         options: RewriteOptions,
     ) ResourceError!LIR.CFStmtId {
-        if (for_stmt.elem_mode != .borrowed_from_iterable) {
-            arcInvariant("ARC insertion reached unknown for_list element ownership mode");
+        if (for_stmt.elem_source != .aliases_iterable_element) {
+            arcInvariant("ARC insertion reached unknown for_list element ARC source");
         }
 
         var loop_keep = try owned.clone();
@@ -389,7 +389,7 @@ const Inserter = struct {
 
         self.store.getCFStmtPtr(start).* = .{ .for_list = .{
             .elem = for_stmt.elem,
-            .elem_mode = for_stmt.elem_mode,
+            .elem_source = for_stmt.elem_source,
             .iterable = for_stmt.iterable,
             .iterable_elem_layout = for_stmt.iterable_elem_layout,
             .body = body,

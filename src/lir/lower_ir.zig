@@ -251,7 +251,7 @@ const Lowerer = struct {
             .set => |set| try self.store.addCFStmt(.{ .set_local = .{
                 .target = try self.lowerVar(set.target),
                 .value = try self.lowerVar(set.value),
-                .mode = .overwrite_owned,
+                .mode = .replace_existing,
                 .next = next,
             } }),
             .debug => |value| try self.store.addCFStmt(.{ .debug = .{
@@ -278,7 +278,7 @@ const Lowerer = struct {
         defer self.restoreBreakTargets(break_start);
         return try self.store.addCFStmt(.{ .for_list = .{
             .elem = try self.localForVar(for_list.elem),
-            .elem_mode = .borrowed_from_iterable,
+            .elem_source = .aliases_iterable_element,
             .iterable = try self.lowerVar(for_list.iterable),
             .iterable_elem_layout = try self.lowerLayoutRef(for_list.elem.layout),
             .body = try self.lowerBlockWithContinuation(for_list.body, null, loop_continue),

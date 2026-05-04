@@ -158,17 +158,17 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 };
 
-/// Ownership meaning of a `set_local` write. ARC insertion consumes this
+/// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
-pub const SetLocalMode = enum {
+pub const SetLocalWriteMode = enum {
     initialize_join_result,
-    overwrite_owned,
+    replace_existing,
     initialize_join_param,
 };
 
-/// Ownership meaning of the hidden element binding inside a `for_list`.
-pub const ForListElementMode = enum {
-    borrowed_from_iterable,
+/// Explicit ARC source of the hidden element binding inside a `for_list`.
+pub const ForListElementSource = enum {
+    aliases_iterable_element,
 };
 
 /// Single canonical statement/control-flow language for all lowered code.
@@ -222,7 +222,7 @@ pub const CFStmt = union(enum) {
     set_local: struct {
         target: LocalId,
         value: LocalId,
-        mode: SetLocalMode,
+        mode: SetLocalWriteMode,
         next: CFStmtId,
     },
     debug: struct {
@@ -259,7 +259,7 @@ pub const CFStmt = union(enum) {
     },
     for_list: struct {
         elem: LocalId,
-        elem_mode: ForListElementMode,
+        elem_source: ForListElementSource,
         iterable: LocalId,
         iterable_elem_layout: layout.Idx,
         body: CFStmtId,
