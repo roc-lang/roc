@@ -28,7 +28,8 @@ pub const ArtifactSet = struct {
 };
 
 pub const RootRequestSet = struct {
-    requests: []const checked_artifact.RootRequest,
+    requests: []const checked_artifact.RootRequest = &.{},
+    compile_time_requests: []const checked_artifact.CompileTimeEvaluationRequest = &.{},
     purpose: RootPurpose = .runtime,
     compile_time_plan_sink: ?*checked_artifact.CompileTimePlanStore = null,
     compile_time_artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
@@ -53,7 +54,7 @@ pub const LoweredProgram = struct {
     lir_result: LowerIr.Result,
     main_proc: LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
-    compile_time_root_payloads: []checked_artifact.CompileTimeRootPayload = &.{},
+    compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
@@ -65,8 +66,8 @@ pub const LoweredProgram = struct {
         if (self.erased_callable_code_map.len > 0) {
             self.lir_result.store.allocator.free(self.erased_callable_code_map);
         }
-        if (self.compile_time_root_payloads.len > 0) {
-            self.lir_result.store.allocator.free(self.compile_time_root_payloads);
+        if (self.compile_time_payloads.len > 0) {
+            self.lir_result.store.allocator.free(self.compile_time_payloads);
         }
         self.lir_result.deinit();
     }
@@ -103,11 +104,13 @@ pub fn lowerArtifactsToLir(
 
     const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
     defer allocator.free(selected_roots);
+    const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
+    defer allocator.free(selected_entrypoints);
 
     var mono = try mir.Mono.Specialize.run(allocator, .{
         .root = artifacts.root,
         .imports = artifacts.imports,
-    }, selected_roots);
+    }, selected_entrypoints);
     errdefer mono.deinit();
 
     var row_finalized = try mir.MonoRow.run(allocator, mono);
@@ -137,14 +140,14 @@ pub fn lowerArtifactsToLir(
         target.artifact_state,
     );
 
-    const compile_time_root_payloads = try publishCompileTimeRootPayloads(
+    const compile_time_payloads = try publishCompileTimePayloads(
         allocator,
         artifacts.root.artifact,
         &solved,
-        selected_roots,
+        selected_entrypoints,
         roots,
     );
-    errdefer if (compile_time_root_payloads.len > 0) allocator.free(compile_time_root_payloads);
+    errdefer if (compile_time_payloads.len > 0) allocator.free(compile_time_payloads);
 
     var executable = try mir.Executable.Build.run(
         allocator,
@@ -196,7 +199,7 @@ pub fn lowerArtifactsToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
-        .compile_time_root_payloads = compile_time_root_payloads,
+        .compile_time_payloads = compile_time_payloads,
         .erased_callable_code_map = erased_callable_code_map,
     };
 }
@@ -394,13 +397,13 @@ fn publishErasedFnAbisForLowering(
     }
 }
 
-fn publishCompileTimeRootPayloads(
+fn publishCompileTimePayloads(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     solved: *const mir.LambdaSolved.Solve.Program,
-    selected_roots: []const checked_artifact.RootRequest,
+    selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     roots: RootRequestSet,
-) Allocator.Error![]checked_artifact.CompileTimeRootPayload {
+) Allocator.Error![]checked_artifact.CompileTimeEvaluationPayload {
     if (roots.purpose != .compile_time) return &.{};
 
     const plan_sink = roots.compile_time_plan_sink orelse checkedPipelineInvariant("compile-time lowering requires a compile-time plan sink");
@@ -408,11 +411,11 @@ fn publishCompileTimeRootPayloads(
     if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
         checkedPipelineInvariant("compile-time lowering artifact sink does not match root artifact");
     }
-    if (selected_roots.len != solved.root_procs.items.len) {
+    if (selected_entrypoints.len != solved.root_procs.items.len) {
         checkedPipelineInvariant("compile-time lowering root count changed before plan publication");
     }
 
-    const payloads = try allocator.alloc(checked_artifact.CompileTimeRootPayload, selected_roots.len);
+    const payloads = try allocator.alloc(checked_artifact.CompileTimeEvaluationPayload, selected_entrypoints.len);
     errdefer allocator.free(payloads);
 
     var const_builder = ConstGraphPlanBuilder{
@@ -425,19 +428,35 @@ fn publishCompileTimeRootPayloads(
     };
     defer const_builder.deinit();
 
-    for (selected_roots, solved.root_procs.items, 0..) |root_request, root_proc, i| {
-        const root = compileTimeRootForRequest(artifact, root_request);
+    for (selected_entrypoints, solved.root_procs.items, 0..) |entrypoint, root_proc, i| {
         const value_context = constValueContextForRoot(solved, root_proc);
-        payloads[i] = switch (root.kind) {
-            .constant => .{ .const_graph = try const_builder.planFor(root.checked_type, value_context, value_context.ret) },
-            .callable_binding => .{ .callable_result = try callableResultPlanForRoot(
+        payloads[i] = switch (entrypoint) {
+            .root => |root_request| root_payload: {
+                const root = compileTimeRootForRequest(artifact, root_request);
+                break :root_payload .{ .local_root = switch (root.kind) {
+                    .constant => .{ .const_graph = try const_builder.planFor(root.checked_type, value_context, value_context.ret) },
+                    .callable_binding => .{ .callable_result = try callableResultPlanForRoot(
+                        allocator,
+                        artifact_sink,
+                        plan_sink,
+                        solved,
+                        root_proc,
+                    ) },
+                    .expect => .expect,
+                } };
+            },
+            .const_instance => |request| .{ .const_instance = try const_builder.planFor(
+                request.requested_source_ty_payload,
+                value_context,
+                value_context.ret,
+            ) },
+            .callable_binding_instance => .{ .callable_binding_instance = try callableResultPlanForRoot(
                 allocator,
                 artifact_sink,
                 plan_sink,
                 solved,
                 root_proc,
             ) },
-            .expect => .expect,
         };
     }
 
@@ -2570,6 +2589,38 @@ fn filterRootsForPurpose(
     }
 
     return try selected.toOwnedSlice(allocator);
+}
+
+fn entrypointsForPurpose(
+    allocator: Allocator,
+    selected_roots: []const checked_artifact.RootRequest,
+    requests: RootRequestSet,
+) Allocator.Error![]checked_artifact.LoweringEntrypointRequest {
+    var entrypoints = std.ArrayList(checked_artifact.LoweringEntrypointRequest).empty;
+    errdefer entrypoints.deinit(allocator);
+
+    for (selected_roots) |root| {
+        try entrypoints.append(allocator, .{ .root = root });
+    }
+
+    switch (requests.purpose) {
+        .runtime => {
+            if (requests.compile_time_requests.len != 0) {
+                checkedPipelineInvariant("runtime lowering received compile-time evaluation requests");
+            }
+        },
+        .compile_time => {
+            for (requests.compile_time_requests) |request| {
+                try entrypoints.append(allocator, switch (request) {
+                    .local_root => |root| .{ .root = root },
+                    .const_instance => |const_request| .{ .const_instance = const_request },
+                    .callable_binding_instance => |callable_request| .{ .callable_binding_instance = callable_request },
+                });
+            }
+        },
+    }
+
+    return try entrypoints.toOwnedSlice(allocator);
 }
 
 fn rootMatchesPurpose(root: checked_artifact.RootRequest, purpose: RootPurpose) bool {

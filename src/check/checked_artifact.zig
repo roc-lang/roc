@@ -369,6 +369,24 @@ pub const RootRequest = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
 };
 
+pub const LoweringEntrypointRequest = union(enum) {
+    root: RootRequest,
+    const_instance: ConstInstantiationRequest,
+    callable_binding_instance: CallableBindingInstantiationRequest,
+};
+
+pub const CompileTimeEvaluationRequest = union(enum) {
+    local_root: RootRequest,
+    const_instance: ConstInstantiationRequest,
+    callable_binding_instance: CallableBindingInstantiationRequest,
+};
+
+pub const CompileTimeEvaluationPayload = union(enum) {
+    local_root: CompileTimeRootPayload,
+    const_instance: ConstGraphReificationPlanId,
+    callable_binding_instance: CallableResultPlanId,
+};
+
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
 

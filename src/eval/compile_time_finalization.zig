@@ -57,7 +57,7 @@ fn finalize(
     defer runtime_env.deinit();
 
     for (ordered_roots) |root_request| {
-        const single_root = [_]checked_artifact.RootRequest{root_request};
+        const single_root = [_]checked_artifact.CompileTimeEvaluationRequest{.{ .local_root = root_request }};
         var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
             allocator,
             .{
@@ -65,7 +65,7 @@ fn finalize(
                 .imports = import_views,
             },
             .{
-                .requests = &single_root,
+                .compile_time_requests = &single_root,
                 .purpose = .compile_time,
                 .compile_time_plan_sink = &artifact.comptime_plans,
                 .compile_time_artifact_sink = artifact,
@@ -89,13 +89,16 @@ fn finalize(
             compileTimeFinalizationInvariant("single compile-time root lowering did not produce exactly one LIR root");
         }
 
-        if (lowered.compile_time_root_payloads.len != 1) {
+        if (lowered.compile_time_payloads.len != 1) {
             compileTimeFinalizationInvariant("single compile-time root lowering did not publish exactly one root payload");
         }
 
         const root = compileTimeRootForRequest(artifact, root_request);
         const lir_root = lowered.lir_result.root_procs.items[0];
-        const payload = lowered.compile_time_root_payloads[0];
+        const payload = switch (lowered.compile_time_payloads[0]) {
+            .local_root => |local| local,
+            else => compileTimeFinalizationInvariant("local compile-time root lowering did not publish a local-root payload"),
+        };
         artifact.compile_time_roots.fillPayload(root.id, payload);
         switch (root.kind) {
             .constant => try evaluateConstantRoot(

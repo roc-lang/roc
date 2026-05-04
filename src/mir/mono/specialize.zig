@@ -28,6 +28,8 @@ pub const MonoProcHandle = enum(u32) { _ };
 
 pub const MonoSpecializationReason = union(enum) {
     root: checked_artifact.RootRequest,
+    const_instance: checked_artifact.ConstInstantiationRequest,
+    callable_binding_instance: checked_artifact.CallableBindingInstantiationRequest,
     call_proc: checked_artifact.CheckedExprId,
     proc_value: checked_artifact.CheckedExprId,
     static_dispatch_target: checked_artifact.StaticDispatchPlanId,
@@ -167,7 +169,7 @@ pub const Program = struct {
 pub fn run(
     allocator: Allocator,
     input: Input,
-    roots: []const checked_artifact.RootRequest,
+    roots: []const checked_artifact.LoweringEntrypointRequest,
 ) Allocator.Error!Program {
     var program = Program.init(allocator);
     errdefer program.deinit();
@@ -182,21 +184,23 @@ pub fn run(
         input.root.relation_artifacts,
     );
 
-    for (roots) |root| {
-        const requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(
-            input.root.artifact.key,
-            input.root.artifact.checked_types.view(),
-            root.checked_type,
-        );
-        const template = templateForRoot(input, root, &program.concrete_source_types, requested_fn_ty) orelse continue;
+    for (roots, 0..) |root, root_index| {
+        const seed = try specializationSeedForEntrypoint(
+            allocator,
+            input,
+            &program,
+            &name_resolver,
+            root,
+            @intCast(root_index),
+        ) orelse continue;
         const request = MonoSpecializationRequest{
-            .template = template,
-            .requested_fn_ty = requested_fn_ty,
-            .reason = .{ .root = root },
+            .template = seed.template,
+            .requested_fn_ty = seed.requested_fn_ty,
+            .reason = seed.reason,
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, canonical.mirProcedureRefFromMono(reserved.proc));
-        try program.root_metadata.append(allocator, rootMetadataFromChecked(root));
+        try program.root_metadata.append(allocator, seed.metadata);
     }
 
     while (queue.pending.items.len != 0) {
@@ -376,6 +380,208 @@ fn exportedConstEvalTemplateContains(
         }
     }
     return false;
+}
+
+const EntrypointSeed = struct {
+    template: canonical.ProcedureTemplateRef,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    metadata: ids.RootMetadata,
+    reason: MonoSpecializationReason,
+};
+
+fn specializationSeedForEntrypoint(
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    entrypoint: checked_artifact.LoweringEntrypointRequest,
+    order: u32,
+) Allocator.Error!?EntrypointSeed {
+    return switch (entrypoint) {
+        .root => |root| root_seed: {
+            const requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(
+                input.root.artifact.key,
+                input.root.artifact.checked_types.view(),
+                root.checked_type,
+            );
+            const template = templateForRoot(input, root, &program.concrete_source_types, requested_fn_ty) orelse break :root_seed null;
+            break :root_seed .{
+                .template = template,
+                .requested_fn_ty = requested_fn_ty,
+                .metadata = rootMetadataFromChecked(root),
+                .reason = .{ .root = root },
+            };
+        },
+        .const_instance => |request| const_seed: {
+            const template = constEvalEntryTemplateForRequest(input, request) orelse {
+                invariantViolation("mono specialization compile-time const instance did not name an eval template");
+            };
+            break :const_seed .{
+                .template = template,
+                .requested_fn_ty = try compileTimeEntryFunctionTypeForReturn(
+                    allocator,
+                    input,
+                    program,
+                    name_resolver,
+                    request.requested_source_ty_payload,
+                ),
+                .metadata = compileTimeMetadata(order, .compile_time_constant),
+                .reason = .{ .const_instance = request },
+            };
+        },
+        .callable_binding_instance => |request| callable_seed: {
+            const template = callableEvalEntryTemplateForRequest(input, request) orelse {
+                invariantViolation("mono specialization compile-time callable binding instance did not name a callable eval template");
+            };
+            break :callable_seed .{
+                .template = template,
+                .requested_fn_ty = try compileTimeFunctionTypeForRequest(
+                    allocator,
+                    input,
+                    program,
+                    name_resolver,
+                    request.requested_source_fn_ty_payload,
+                ),
+                .metadata = compileTimeMetadata(order, .compile_time_callable),
+                .reason = .{ .callable_binding_instance = request },
+            };
+        },
+    };
+}
+
+fn compileTimeMetadata(order: u32, kind: ids.RootKind) ids.RootMetadata {
+    return .{
+        .order = order,
+        .kind = kind,
+        .abi = .compile_time,
+        .exposure = .private,
+    };
+}
+
+fn compileTimeEntryFunctionTypeForReturn(
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    return_ty: checked_artifact.CheckedTypeId,
+) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+    const ret_ref = try program.concrete_source_types.registerArtifactRoot(
+        input.root.artifact.key,
+        input.root.artifact.checked_types.view(),
+        return_ty,
+    );
+    var materializer = TypeInstantiator.init(
+        allocator,
+        input,
+        program,
+        input.root.artifact.checked_types.view(),
+        name_resolver,
+        input.root.artifact.key,
+    );
+    defer materializer.deinit();
+    const local_ret = try materializer.materializeConcreteRef(ret_ref);
+    const local_fn = try program.concrete_source_types.reservePendingLocalRoot();
+    program.concrete_source_types.fillLocalRoot(local_fn, .{ .function = .{
+        .kind = .pure,
+        .args = &.{},
+        .ret = local_ret,
+        .needs_instantiation = false,
+    } });
+    var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+        allocator,
+        &program.canonical_names,
+        program.concrete_source_types.local_payloads.items,
+    );
+    defer key_builder.deinit();
+    return try program.concrete_source_types.sealLocalRoot(local_fn, try key_builder.keyForRoot(local_fn));
+}
+
+fn compileTimeFunctionTypeForRequest(
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+    name_resolver: *ArtifactNames.ArtifactNameResolver,
+    requested_fn_ty: checked_artifact.CheckedTypeId,
+) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+    const concrete = try program.concrete_source_types.registerArtifactRoot(
+        input.root.artifact.key,
+        input.root.artifact.checked_types.view(),
+        requested_fn_ty,
+    );
+    var materializer = TypeInstantiator.init(
+        allocator,
+        input,
+        program,
+        input.root.artifact.checked_types.view(),
+        name_resolver,
+        input.root.artifact.key,
+    );
+    defer materializer.deinit();
+    const local_root = try materializer.materializeConcreteRef(concrete);
+    var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+        allocator,
+        &program.canonical_names,
+        program.concrete_source_types.local_payloads.items,
+    );
+    defer key_builder.deinit();
+    return try program.concrete_source_types.sealLocalRoot(local_root, try key_builder.keyForRoot(local_root));
+}
+
+fn constEvalEntryTemplateForRequest(
+    input: Input,
+    request: checked_artifact.ConstInstantiationRequest,
+) ?canonical.ProcedureTemplateRef {
+    const templates = constTemplatesForKey(input, request.key.const_ref.artifact) orelse {
+        debug.invariant(false, "mono specialization invariant violated: const instance template artifact was not available");
+        unreachable;
+    };
+    const template = templates.get(request.key.const_ref);
+    return switch (template.state) {
+        .eval_template => |eval| eval.entry_template,
+        .value_graph_template => null,
+        .reserved => {
+            debug.invariant(false, "mono specialization invariant violated: const instance reached unsealed template");
+            unreachable;
+        },
+    };
+}
+
+fn callableEvalEntryTemplateForRequest(
+    input: Input,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+) ?canonical.ProcedureTemplateRef {
+    const owner_and_binding = switch (request.key.binding) {
+        .top_level => |binding| .{
+            .owner = input.root.artifact.key,
+            .binding = binding,
+        },
+        .platform_required => |required| .{
+            .owner = required.artifact,
+            .binding = required.procedure_binding,
+        },
+        .imported => |imported| {
+            const view = importedProcedureBindingViewForRef(input, imported) orelse {
+                debug.invariant(false, "mono specialization invariant violated: imported callable eval binding was not available");
+                unreachable;
+            };
+            return switch (view.body) {
+                .callable_eval_template => |template_id| callableEvalEntryTemplateForKey(input, imported.artifact, template_id),
+                .direct_template => null,
+            };
+        },
+        .hosted,
+        .promoted,
+        => return null,
+    };
+    const bindings = topLevelProcedureBindingsForKey(input, owner_and_binding.owner) orelse {
+        debug.invariant(false, "mono specialization invariant violated: callable eval binding owner artifact was not available");
+        unreachable;
+    };
+    const binding = bindings.get(owner_and_binding.binding);
+    return switch (binding.body) {
+        .callable_eval_template => |template_id| callableEvalEntryTemplateForKey(input, owner_and_binding.owner, template_id),
+        .direct_template => null,
+    };
 }
 
 fn executableSyntheticProcForReserved(
@@ -4016,6 +4222,121 @@ fn topLevelProcedureBindingsForKey(
         }
     }
     return null;
+}
+
+fn constTemplatesForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.ConstTemplateTable {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return &input.root.artifact.const_templates;
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.const_templates;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.const_templates;
+        }
+    }
+    return null;
+}
+
+fn callableEvalTemplatesForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.CallableEvalTemplateTableView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return input.root.artifact.callable_eval_templates.view();
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.callable_eval_templates;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.callable_eval_templates;
+        }
+    }
+    return null;
+}
+
+fn entryWrappersForKey(
+    input: Input,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.EntryWrapperTable {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &key.bytes)) {
+        return &input.root.artifact.entry_wrappers;
+    }
+    for (input.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) {
+            return imported.entry_wrappers;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) {
+            return related.entry_wrappers;
+        }
+    }
+    return null;
+}
+
+fn callableEvalEntryTemplateForKey(
+    input: Input,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    template_id: checked_artifact.CallableEvalTemplateId,
+) canonical.ProcedureTemplateRef {
+    const templates = callableEvalTemplatesForKey(input, owner) orelse {
+        debug.invariant(false, "mono specialization invariant violated: callable eval template owner artifact was not available");
+        unreachable;
+    };
+    const raw = @intFromEnum(template_id);
+    if (raw >= templates.templates.len) {
+        debug.invariant(false, "mono specialization invariant violated: callable eval template id was out of range");
+        unreachable;
+    }
+    const template = templates.templates[raw];
+    const entry_wrappers = entryWrappersForKey(input, owner) orelse {
+        debug.invariant(false, "mono specialization invariant violated: callable eval template entry wrapper owner artifact was not available");
+        unreachable;
+    };
+    const wrapper = entry_wrappers.lookupByRoot(template.root) orelse {
+        debug.invariant(false, "mono specialization invariant violated: callable eval template had no entry wrapper");
+        unreachable;
+    };
+    return wrapper.template;
+}
+
+fn importedProcedureBindingViewForRef(
+    input: Input,
+    binding: checked_artifact.ImportedProcedureBindingRef,
+) ?checked_artifact.ImportedProcedureBindingView {
+    for (input.imports) |imported| {
+        if (!std.mem.eql(u8, &imported.key.bytes, &binding.artifact.bytes)) continue;
+        for (imported.exported_procedure_bindings.bindings) |view| {
+            if (importedProcedureBindingRefEql(view.binding, binding)) return view;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (!std.mem.eql(u8, &related.key.bytes, &binding.artifact.bytes)) continue;
+        for (related.exported_procedure_bindings.bindings) |view| {
+            if (importedProcedureBindingRefEql(view.binding, binding)) return view;
+        }
+    }
+    return null;
+}
+
+fn importedProcedureBindingRefEql(
+    a: checked_artifact.ImportedProcedureBindingRef,
+    b: checked_artifact.ImportedProcedureBindingRef,
+) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.module_idx == b.module_idx and
+        a.def == b.def and
+        a.pattern == b.pattern;
 }
 
 fn callableBindingInstancesForKey(
