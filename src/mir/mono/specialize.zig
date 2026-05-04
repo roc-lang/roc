@@ -8,13 +8,14 @@
 const std = @import("std");
 const check = @import("check");
 const base = @import("base");
+const can = @import("can");
 const symbol_mod = @import("symbol");
 
 const Ast = @import("ast.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
 const ArtifactNames = @import("../artifact_names.zig");
 const Hosted = @import("../hosted.zig");
-const ids = @import("../ids.zig");
+const mir_ids = @import("../ids.zig");
 const LowerType = @import("lower_type.zig");
 const Type = @import("type.zig");
 const debug = @import("../debug_verify.zig");
@@ -23,9 +24,12 @@ const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
+const CIR = can.CIR;
 
+/// Public `MonoProcHandle` declaration.
 pub const MonoProcHandle = enum(u32) { _ };
 
+/// Public `MonoSpecializationReason` declaration.
 pub const MonoSpecializationReason = union(enum) {
     root: checked_artifact.RootRequest,
     const_instance: checked_artifact.ConstInstantiationRequest,
@@ -41,29 +45,34 @@ pub const MonoSpecializationReason = union(enum) {
     erased_finite_capture_member: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 };
 
+/// Public `Input` declaration.
 pub const Input = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
     mode: LoweringMode = .runnable,
 };
 
+/// Public `LoweringMode` declaration.
 pub const LoweringMode = enum {
     runnable,
     comptime_dependency_summary,
 };
 
+/// Public `MonoSpecializationRequest` declaration.
 pub const MonoSpecializationRequest = struct {
     template: canonical.ProcedureTemplateRef,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
 };
 
+/// Public `ReservedState` declaration.
 pub const ReservedState = enum {
     reserved,
     lowering,
     lowered,
 };
 
+/// Public `ReservedMonoProc` declaration.
 pub const ReservedMonoProc = struct {
     proc: canonical.MonoSpecializedProcRef,
     local_handle: MonoProcHandle,
@@ -71,6 +80,7 @@ pub const ReservedMonoProc = struct {
     state: ReservedState,
 };
 
+/// Public `Proc` declaration.
 pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
     proc: canonical.MirProcedureRef,
@@ -79,19 +89,21 @@ pub const Proc = struct {
     body: Ast.DefId,
 };
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     root_artifact_key: checked_artifact.CheckedModuleArtifactKey,
     canonical_names: canonical.CanonicalNameStore,
     concrete_source_types: ConcreteSourceType.Store,
-    literal_pool: ids.ProgramLiteralPool,
+    literal_pool: mir_ids.ProgramLiteralPool,
     symbols: symbol_mod.Store,
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
-    executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
+    executable_synthetic_procs: std.ArrayList(mir_ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
-    root_metadata: std.ArrayList(ids.RootMetadata),
+    root_metadata: std.ArrayList(mir_ids.RootMetadata),
+    bool_source_ty: ?canonical.CanonicalTypeKey,
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -99,7 +111,7 @@ pub const Program = struct {
             .root_artifact_key = .{},
             .canonical_names = canonical.CanonicalNameStore.init(allocator),
             .concrete_source_types = ConcreteSourceType.Store.init(allocator),
-            .literal_pool = ids.ProgramLiteralPool.init(allocator),
+            .literal_pool = mir_ids.ProgramLiteralPool.init(allocator),
             .symbols = symbol_mod.Store.init(allocator),
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
@@ -107,6 +119,7 @@ pub const Program = struct {
             .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
+            .bool_source_ty = null,
         };
     }
 
@@ -142,7 +155,7 @@ pub const Program = struct {
 
     pub fn addExecutableSyntheticProc(
         self: *Program,
-        proc: ids.ExecutableSyntheticProc,
+        proc: mir_ids.ExecutableSyntheticProc,
     ) Allocator.Error!void {
         for (self.executable_synthetic_procs.items) |existing| {
             if (canonical.mirProcedureRefEql(existing.source_proc, proc.source_proc)) return;
@@ -171,8 +184,71 @@ pub const Program = struct {
     pub fn addSyntheticSymbol(self: *Program) Allocator.Error!Ast.Symbol {
         return try self.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
+
+    pub fn addSpecializedLocalFnSymbol(self: *Program, source: Ast.Symbol) Allocator.Error!Ast.Symbol {
+        return try self.symbols.add(base.Ident.Idx.NONE, .{ .specialized_local_fn = .{
+            .source_symbol = @intFromEnum(source),
+        } });
+    }
+
+    pub fn boolSourceTypeKey(self: *Program) Allocator.Error!canonical.CanonicalTypeKey {
+        if (self.bool_source_ty) |key| return key;
+
+        const builtin_module = try self.canonical_names.internModuleName("Builtin");
+        const bool_name = try self.canonical_names.internTypeName("Bool");
+        const false_label = try self.canonical_names.internTagLabel("False");
+        const true_label = try self.canonical_names.internTagLabel("True");
+
+        const empty_root = try self.concrete_source_types.reservePendingLocalRoot();
+        self.concrete_source_types.fillLocalRoot(empty_root, .empty_tag_union);
+        var empty_key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+            self.allocator,
+            &self.canonical_names,
+            self.concrete_source_types.local_payloads.items,
+        );
+        defer empty_key_builder.deinit();
+        _ = try self.concrete_source_types.sealLocalRoot(empty_root, try empty_key_builder.keyForRoot(empty_root));
+
+        const tags = try self.allocator.alloc(checked_artifact.CheckedTag, 2);
+        tags[0] = .{ .name = false_label, .args = &.{} };
+        tags[1] = .{ .name = true_label, .args = &.{} };
+
+        const union_root = try self.concrete_source_types.reservePendingLocalRoot();
+        self.concrete_source_types.fillLocalRoot(union_root, .{ .tag_union = .{
+            .tags = tags,
+            .ext = empty_root,
+        } });
+        var union_key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+            self.allocator,
+            &self.canonical_names,
+            self.concrete_source_types.local_payloads.items,
+        );
+        defer union_key_builder.deinit();
+        _ = try self.concrete_source_types.sealLocalRoot(union_root, try union_key_builder.keyForRoot(union_root));
+
+        const bool_root = try self.concrete_source_types.reservePendingLocalRoot();
+        self.concrete_source_types.fillLocalRoot(bool_root, .{ .nominal = .{
+            .name = bool_name,
+            .origin_module = builtin_module,
+            .builtin = .bool,
+            .is_opaque = false,
+            .backing = union_root,
+            .args = &.{},
+        } });
+        var bool_key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+            self.allocator,
+            &self.canonical_names,
+            self.concrete_source_types.local_payloads.items,
+        );
+        defer bool_key_builder.deinit();
+        const bool_key = try bool_key_builder.keyForRoot(bool_root);
+        _ = try self.concrete_source_types.sealLocalRoot(bool_root, bool_key);
+        self.bool_source_ty = bool_key;
+        return bool_key;
+    }
 };
 
+/// Public `run` function.
 pub fn run(
     allocator: Allocator,
     input: Input,
@@ -201,7 +277,7 @@ pub fn run(
             @intCast(root_index),
         ) orelse continue;
         const request = MonoSpecializationRequest{
-            .template = seed.template,
+            .template = try name_resolver.procedureTemplateRef(seed.template),
             .requested_fn_ty = seed.requested_fn_ty,
             .reason = seed.reason,
         };
@@ -243,6 +319,7 @@ const CheckedTemplateLookup = struct {
     resolved_value_refs: *const checked_artifact.ResolvedValueRefTable,
     nested_proc_sites: *const checked_artifact.NestedProcSiteTable,
     hosted_procs: *const checked_artifact.HostedProcTable,
+    intrinsic_wrappers: *const checked_artifact.IntrinsicWrapperTable,
     promoted_callable_wrappers: *const checked_artifact.PromotedCallableWrapperTable,
     promoted_callable_body_plans: *const checked_artifact.PromotedCallableBodyPlanTable,
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
@@ -265,6 +342,7 @@ fn checkedTemplateForKey(
             .resolved_value_refs = &input.root.artifact.resolved_value_refs,
             .nested_proc_sites = &input.root.artifact.nested_proc_sites,
             .hosted_procs = &input.root.artifact.hosted_procs,
+            .intrinsic_wrappers = &input.root.artifact.intrinsic_wrappers,
             .promoted_callable_wrappers = &input.root.artifact.promoted_callable_wrappers,
             .promoted_callable_body_plans = &input.root.artifact.promoted_callable_body_plans,
             .executable_type_payloads = &input.root.artifact.executable_type_payloads,
@@ -279,9 +357,7 @@ fn checkedTemplateForKey(
     for (input.imports) |imported| {
         if (!std.mem.eql(u8, &imported.key.bytes, &template_ref.artifact.bytes)) continue;
         for (imported.exported_procedure_templates.templates) |exported| {
-            if (exported.template.proc_base == template_ref.proc_base and
-                exported.template.template == template_ref.template)
-            {
+            if (exported.template.template == template_ref.template) {
                 return .{
                     .artifact = imported.key,
                     .checked_types = imported.checked_types,
@@ -289,6 +365,7 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = imported.resolved_value_refs,
                     .nested_proc_sites = imported.nested_proc_sites,
                     .hosted_procs = imported.hosted_procs,
+                    .intrinsic_wrappers = imported.intrinsic_wrappers,
                     .promoted_callable_wrappers = imported.promoted_callable_wrappers,
                     .promoted_callable_body_plans = imported.promoted_callable_body_plans,
                     .executable_type_payloads = imported.executable_type_payloads,
@@ -308,6 +385,7 @@ fn checkedTemplateForKey(
                 .resolved_value_refs = imported.resolved_value_refs,
                 .nested_proc_sites = imported.nested_proc_sites,
                 .hosted_procs = imported.hosted_procs,
+                .intrinsic_wrappers = imported.intrinsic_wrappers,
                 .promoted_callable_wrappers = imported.promoted_callable_wrappers,
                 .promoted_callable_body_plans = imported.promoted_callable_body_plans,
                 .executable_type_payloads = imported.executable_type_payloads,
@@ -325,9 +403,7 @@ fn checkedTemplateForKey(
     for (input.root.relation_artifacts) |related| {
         if (!std.mem.eql(u8, &related.key.bytes, &template_ref.artifact.bytes)) continue;
         for (related.exported_procedure_templates.templates) |exported| {
-            if (exported.template.proc_base == template_ref.proc_base and
-                exported.template.template == template_ref.template)
-            {
+            if (exported.template.template == template_ref.template) {
                 return .{
                     .artifact = related.key,
                     .checked_types = related.checked_types,
@@ -335,6 +411,7 @@ fn checkedTemplateForKey(
                     .resolved_value_refs = related.resolved_value_refs,
                     .nested_proc_sites = related.nested_proc_sites,
                     .hosted_procs = related.hosted_procs,
+                    .intrinsic_wrappers = related.intrinsic_wrappers,
                     .promoted_callable_wrappers = related.promoted_callable_wrappers,
                     .promoted_callable_body_plans = related.promoted_callable_body_plans,
                     .executable_type_payloads = related.executable_type_payloads,
@@ -354,6 +431,7 @@ fn checkedTemplateForKey(
                 .resolved_value_refs = related.resolved_value_refs,
                 .nested_proc_sites = related.nested_proc_sites,
                 .hosted_procs = related.hosted_procs,
+                .intrinsic_wrappers = related.intrinsic_wrappers,
                 .promoted_callable_wrappers = related.promoted_callable_wrappers,
                 .promoted_callable_body_plans = related.promoted_callable_body_plans,
                 .executable_type_payloads = related.executable_type_payloads,
@@ -379,7 +457,11 @@ fn exportedConstEvalTemplateContains(
     for (exported_const_templates.templates) |exported| {
         switch (exported.template.state) {
             .eval_template => |eval| {
-                if (canonical.procedureTemplateRefEql(eval.entry_template, template_ref)) return true;
+                if (std.mem.eql(u8, &eval.entry_template.artifact.bytes, &template_ref.artifact.bytes) and
+                    eval.entry_template.template == template_ref.template)
+                {
+                    return true;
+                }
             },
             .value_graph_template,
             .reserved,
@@ -392,7 +474,7 @@ fn exportedConstEvalTemplateContains(
 const EntrypointSeed = struct {
     template: canonical.ProcedureTemplateRef,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
-    metadata: ids.RootMetadata,
+    metadata: mir_ids.RootMetadata,
     reason: MonoSpecializationReason,
 };
 
@@ -456,7 +538,7 @@ fn specializationSeedForEntrypoint(
     };
 }
 
-fn compileTimeMetadata(order: u32, kind: ids.RootKind) ids.RootMetadata {
+fn compileTimeMetadata(order: u32, kind: mir_ids.RootKind) mir_ids.RootMetadata {
     return .{
         .order = order,
         .kind = kind,
@@ -557,7 +639,11 @@ fn callableEvalEntryTemplateForRequest(
     input: Input,
     request: checked_artifact.CallableBindingInstantiationRequest,
 ) ?canonical.ProcedureTemplateRef {
-    const owner_and_binding = switch (request.key.binding) {
+    const OwnerAndBinding = struct {
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        binding: checked_artifact.TopLevelProcedureBindingRef,
+    };
+    const owner_and_binding: OwnerAndBinding = switch (request.key.binding) {
         .top_level => |binding| .{
             .owner = input.root.artifact.key,
             .binding = binding,
@@ -595,7 +681,7 @@ fn executableSyntheticProcForReserved(
     key: canonical.MonoSpecializationKey,
     reserved: ReservedMonoProc,
     template_lookup: CheckedTemplateLookup,
-) ?ids.ExecutableSyntheticProc {
+) ?mir_ids.ExecutableSyntheticProc {
     return switch (template_lookup.template.body) {
         .promoted_callable_wrapper => |wrapper_id| blk: {
             const wrapper = template_lookup.promoted_callable_wrappers.get(wrapper_id);
@@ -605,7 +691,7 @@ fn executableSyntheticProcForReserved(
                     if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &key.requested_mono_fn_ty.bytes)) {
                         invariantViolation("erased promoted callable wrapper source function type disagrees with mono specialization request");
                     }
-                    break :erased_blk ids.ExecutableSyntheticProc{
+                    break :erased_blk mir_ids.ExecutableSyntheticProc{
                         .artifact = template_lookup.artifact,
                         .source_proc = canonical.mirProcedureRefFromMono(reserved.proc),
                         .template = key.template,
@@ -703,7 +789,7 @@ fn reserveExecutableSyntheticProcDependencies(
     program: *Program,
     queue: *Queue,
     owner_artifact: checked_artifact.CheckedModuleArtifactKey,
-    synthetic: ids.ExecutableSyntheticProc,
+    synthetic: mir_ids.ExecutableSyntheticProc,
 ) Allocator.Error!void {
     var state = ExecutableSyntheticDependencyState.init(allocator);
     defer state.deinit();
@@ -832,20 +918,6 @@ fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
         .nominal => |nominal| try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, nominal.backing),
         .recursive_ref => |ref| try reserveErasedCaptureExecutableMaterializationNodeDependencies(input, program, queue, state, owner_artifact, plans, ref),
     }
-}
-
-fn reservePrivateCaptureRefDependencies(
-    input: Input,
-    program: *Program,
-    queue: *Queue,
-    state: *ExecutableSyntheticDependencyState,
-    capture: checked_artifact.PrivateCaptureRef,
-) Allocator.Error!void {
-    const plans = comptimePlansForKey(input, capture.artifact) orelse {
-        debug.invariant(false, "mono dependency reservation invariant violated: private capture artifact was not available");
-        unreachable;
-    };
-    try reservePrivateCaptureNodeDependencies(input, program, queue, state, capture.artifact, plans, capture.node);
 }
 
 fn reservePrivateCaptureNodeDependencies(
@@ -1110,6 +1182,12 @@ const TypeInstantiator = struct {
     materialized_concrete_roots: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
     concrete_template_refs: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
 
+    const ConcreteRecordFieldEntry = struct {
+        name: canonical.RecordFieldLabelId,
+        owner: ConcreteSourceType.ConcreteSourceTypeRef,
+        ty: checked_artifact.CheckedTypeId,
+    };
+
     fn init(
         allocator: Allocator,
         input: Input,
@@ -1147,6 +1225,50 @@ const TypeInstantiator = struct {
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         try self.unifyTemplateWithConcrete(template_fn_root, requested_fn_ty);
+    }
+
+    fn fork(self: *const TypeInstantiator) Allocator.Error!TypeInstantiator {
+        var child = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            self.template_types,
+            self.name_resolver,
+            self.template_artifact,
+        );
+        errdefer child.deinit();
+
+        try child.substitutions.ensureTotalCapacity(self.substitutions.count());
+        var substitutions = self.substitutions.iterator();
+        while (substitutions.next()) |entry| {
+            child.substitutions.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        try child.lowered_template.ensureTotalCapacity(self.lowered_template.count());
+        var lowered = self.lowered_template.iterator();
+        while (lowered.next()) |entry| {
+            child.lowered_template.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        try child.materialized_template_roots.ensureTotalCapacity(self.materialized_template_roots.count());
+        var materialized_template = self.materialized_template_roots.iterator();
+        while (materialized_template.next()) |entry| {
+            child.materialized_template_roots.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        try child.materialized_concrete_roots.ensureTotalCapacity(self.materialized_concrete_roots.count());
+        var materialized_concrete = self.materialized_concrete_roots.iterator();
+        while (materialized_concrete.next()) |entry| {
+            child.materialized_concrete_roots.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        try child.concrete_template_refs.ensureTotalCapacity(self.concrete_template_refs.count());
+        var concrete_template = self.concrete_template_refs.iterator();
+        while (concrete_template.next()) |entry| {
+            child.concrete_template_refs.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        return child;
     }
 
     fn lowerTemplateType(self: *TypeInstantiator, id: checked_artifact.CheckedTypeId) Allocator.Error!Type.TypeId {
@@ -1196,6 +1318,7 @@ const TypeInstantiator = struct {
 
         const payload = try self.materializeTemplatePayload(self.templatePayload(id));
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        try self.sealMaterializedLocalRoot(local_root);
         return local_root;
     }
 
@@ -1205,7 +1328,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex, .rigid => invariantViolation("mono specialization reached an unmapped generic type variable while materializing a concrete source type"),
+            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
+            .rigid => invariantViolation("mono specialization reached an unmapped rigid type variable while materializing a concrete source type"),
             .alias => |alias| .{ .alias = .{
                 .name = try self.name_resolver.typeName(self.template_artifact, alias.name),
                 .origin_module = try self.name_resolver.moduleName(self.template_artifact, alias.origin_module),
@@ -1215,7 +1339,7 @@ const TypeInstantiator = struct {
             .record_unbound => |fields| .{ .record_unbound = try self.materializeTemplateRecordFields(fields) },
             .record => |record| .{ .record = .{
                 .fields = try self.materializeTemplateRecordFields(record.fields),
-                .ext = try self.materializeTemplateType(record.ext),
+                .ext = try self.materializeTemplateRecordExt(record.ext),
             } },
             .tuple => |items| .{ .tuple = try self.materializeTemplateTypeIds(items) },
             .nominal => |nominal| .{ .nominal = .{
@@ -1235,9 +1359,31 @@ const TypeInstantiator = struct {
             .empty_record => .empty_record,
             .tag_union => |tag_union| .{ .tag_union = .{
                 .tags = try self.materializeTemplateTags(tag_union.tags),
-                .ext = try self.materializeTemplateType(tag_union.ext),
+                .ext = try self.materializeTemplateTagUnionExt(tag_union.ext),
             } },
             .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn materializeTemplateRecordExt(
+        self: *TypeInstantiator,
+        ext: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        if (self.substitutions.get(ext)) |concrete| return try self.materializeConcreteRecordExt(concrete);
+        return switch (self.templatePayload(ext)) {
+            .flex => |flex| try self.materializeEmptyRecordRowTail(flex),
+            else => try self.materializeTemplateType(ext),
+        };
+    }
+
+    fn materializeTemplateTagUnionExt(
+        self: *TypeInstantiator,
+        ext: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        if (self.substitutions.get(ext)) |concrete| return try self.materializeConcreteTagUnionExt(concrete);
+        return switch (self.templatePayload(ext)) {
+            .flex => |flex| try self.materializeEmptyTagUnionRowTail(flex),
+            else => try self.materializeTemplateType(ext),
         };
     }
 
@@ -1297,7 +1443,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex, .rigid => invariantViolation("mono specialization reached an unmapped generic type variable"),
+            .flex => |flex| self.lowerUnconstrainedFlexType(flex),
+            .rigid => invariantViolation("mono specialization reached an unmapped rigid type variable"),
             .alias => |alias| .{ .link = try self.lowerTemplateType(alias.backing) },
             .record_unbound => |fields| .{ .record = .{ .fields = try self.lowerTemplateRecordFieldsOnly(fields) } },
             .record => |record| .{ .record = .{ .fields = try self.lowerTemplateRecord(record) } },
@@ -1376,9 +1523,11 @@ const TypeInstantiator = struct {
             return;
         }
 
-        switch (self.templatePayload(ext)) {
+        const ext_payload = self.templatePayload(ext);
+        switch (ext_payload) {
             .alias => |alias| try self.collectTemplateRecordFields(&.{}, alias.backing, out),
             .empty_record => {},
+            .flex => |flex| self.verifyClosableRowTail(flex),
             .record_unbound => |ext_fields| {
                 for (ext_fields) |field| {
                     try out.append(self.allocator, .{
@@ -1401,6 +1550,7 @@ const TypeInstantiator = struct {
         switch (payload) {
             .alias => |alias| try self.collectConcreteRecordFields(try self.concreteChildRef(ref, alias.backing), out),
             .empty_record => {},
+            .flex => |flex| self.verifyClosableRowTail(flex),
             .record_unbound => |fields| {
                 for (fields) |field| {
                     try out.append(self.allocator, .{
@@ -1420,6 +1570,51 @@ const TypeInstantiator = struct {
             },
             else => invariantViolation("mono specialization concrete record extension resolved to a non-record type"),
         }
+    }
+
+    fn collectConcreteRecordFieldEntries(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(ConcreteRecordFieldEntry),
+    ) Allocator.Error!void {
+        const payload = self.concretePayload(ref);
+        switch (payload) {
+            .alias => |alias| try self.collectConcreteRecordFieldEntries(try self.concreteChildRef(ref, alias.backing), out),
+            .empty_record => {},
+            .flex => |flex| self.verifyClosableRowTail(flex),
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
+                        .owner = ref,
+                        .ty = field.ty,
+                    });
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
+                        .owner = ref,
+                        .ty = field.ty,
+                    });
+                }
+                try self.collectConcreteRecordFieldEntries(try self.concreteChildRef(ref, record.ext), out);
+            },
+            else => invariantViolation("mono specialization concrete record extension resolved to a non-record type"),
+        }
+    }
+
+    fn templateRecordExtIsClosed(
+        self: *TypeInstantiator,
+        ext: checked_artifact.CheckedTypeId,
+    ) bool {
+        if (self.substitutions.get(ext)) |_| return false;
+        return switch (self.templatePayload(ext)) {
+            .alias => |alias| self.templateRecordExtIsClosed(alias.backing),
+            .empty_record => true,
+            else => false,
+        };
     }
 
     fn lowerTemplateTagUnion(
@@ -1447,8 +1642,10 @@ const TypeInstantiator = struct {
         out: *std.ArrayList(Type.Tag),
     ) Allocator.Error!void {
         for (tags) |tag| {
+            const name = try self.name_resolver.tagLabel(self.template_artifact, tag.name);
+            if (containsTagName(out.items, name)) continue;
             try out.append(self.allocator, .{
-                .name = try self.name_resolver.tagLabel(self.template_artifact, tag.name),
+                .name = name,
                 .args = try self.lowerTemplateTypeIds(tag.args),
             });
         }
@@ -1458,9 +1655,12 @@ const TypeInstantiator = struct {
             return;
         }
 
-        switch (self.templatePayload(ext)) {
+        const ext_payload = self.templatePayload(ext);
+        switch (ext_payload) {
             .alias => |alias| try self.collectTemplateTags(&.{}, alias.backing, out),
+            .nominal => |nominal| try self.collectTemplateTags(&.{}, nominal.backing, out),
             .empty_tag_union => {},
+            .flex => |flex| self.verifyClosableRowTail(flex),
             .tag_union => |ext_tags| try self.collectTemplateTags(ext_tags.tags, ext_tags.ext, out),
             else => invariantViolation("mono specialization tag-union extension resolved to a non-tag-union type"),
         }
@@ -1471,20 +1671,32 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         out: *std.ArrayList(Type.Tag),
     ) Allocator.Error!void {
-        switch (self.concretePayload(ref)) {
+        const payload = self.concretePayload(ref);
+        switch (payload) {
             .alias => |alias| try self.collectConcreteTags(try self.concreteChildRef(ref, alias.backing), out),
             .empty_tag_union => {},
+            .flex => |flex| self.verifyClosableRowTail(flex),
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| {
+                    const name = try self.tagNameForConcreteRef(ref, tag.name);
+                    if (containsTagName(out.items, name)) continue;
                     try out.append(self.allocator, .{
-                        .name = try self.tagNameForConcreteRef(ref, tag.name),
+                        .name = name,
                         .args = try self.lowerConcreteTypeIds(ref, tag.args),
                     });
                 }
                 try self.collectConcreteTags(try self.concreteChildRef(ref, tag_union.ext), out);
             },
+            .nominal => |nominal| try self.collectConcreteTags(try self.concreteChildRef(ref, nominal.backing), out),
             else => invariantViolation("mono specialization concrete tag-union extension resolved to a non-tag-union type"),
         }
+    }
+
+    fn containsTagName(tags: []const Type.Tag, name: canonical.TagLabelId) bool {
+        for (tags) |tag| {
+            if (tag.name == name) return true;
+        }
+        return false;
     }
 
     fn lowerConcreteTypeIds(
@@ -1670,8 +1882,47 @@ const TypeInstantiator = struct {
         concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         concrete_record: checked_artifact.CheckedRecordType,
     ) Allocator.Error!void {
+        if (self.templateRecordExtIsClosed(template.ext)) {
+            try self.unifyClosedRecordFields(template.fields, concrete_ref);
+            return;
+        }
         try self.unifyRecordFields(template.fields, concrete_ref, concrete_record.fields);
         try self.unifyTemplateWithConcrete(template.ext, try self.concreteChildRef(concrete_ref, concrete_record.ext));
+    }
+
+    fn unifyClosedRecordFields(
+        self: *TypeInstantiator,
+        template_fields: []const checked_artifact.CheckedRecordField,
+        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        var concrete_fields = std.ArrayList(ConcreteRecordFieldEntry).empty;
+        defer concrete_fields.deinit(self.allocator);
+        try self.collectConcreteRecordFieldEntries(concrete, &concrete_fields);
+
+        const consumed = try self.allocator.alloc(bool, concrete_fields.items.len);
+        defer self.allocator.free(consumed);
+        @memset(consumed, false);
+
+        for (template_fields) |field| {
+            const expected_name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name);
+            var matched: ?usize = null;
+            for (concrete_fields.items, 0..) |entry, i| {
+                if (!consumed[i] and entry.name == expected_name) {
+                    matched = i;
+                    break;
+                }
+            }
+            const index = matched orelse {
+                invariantViolation("mono specialization record field was missing in concrete type");
+            };
+            consumed[index] = true;
+            const entry = concrete_fields.items[index];
+            try self.unifyTemplateWithConcrete(field.ty, try self.concreteChildRef(entry.owner, entry.ty));
+        }
+
+        for (consumed) |was_consumed| {
+            if (!was_consumed) invariantViolation("mono specialization closed record concrete type had an extra field");
+        }
     }
 
     fn unifyRecordFieldSet(
@@ -1833,7 +2084,86 @@ const TypeInstantiator = struct {
 
         const payload = try self.materializeConcretePayload(ref, self.concretePayload(ref));
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        try self.sealMaterializedLocalRoot(local_root);
         return local_root;
+    }
+
+    fn sealMaterializedLocalRootRef(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
+            self.allocator,
+            &self.program.canonical_names,
+            self.program.concrete_source_types.local_payloads.items,
+        );
+        defer key_builder.deinit();
+        return try self.program.concrete_source_types.sealLocalRoot(root, try key_builder.keyForRoot(root));
+    }
+
+    fn sealMaterializedLocalRoot(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        _ = try self.sealMaterializedLocalRootRef(root);
+    }
+
+    fn materializeEmptyRecordRowTail(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        self.verifyClosableRowTail(flex);
+        return try self.materializeSyntheticPayload(.empty_record);
+    }
+
+    fn materializeEmptyTagUnionRowTail(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        self.verifyClosableRowTail(flex);
+        return try self.materializeSyntheticPayload(.empty_tag_union);
+    }
+
+    fn materializeUnconstrainedFlexType(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        self.verifyUnconstrainedFlex(flex);
+        return .empty_record;
+    }
+
+    fn lowerUnconstrainedFlexType(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) Type.Content {
+        self.verifyUnconstrainedFlex(flex);
+        return .{ .record = .{ .fields = &.{} } };
+    }
+
+    fn materializeSyntheticPayload(
+        self: *TypeInstantiator,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        self.program.concrete_source_types.fillLocalRoot(root, payload);
+        try self.sealMaterializedLocalRoot(root);
+        return root;
+    }
+
+    fn verifyClosableRowTail(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) void {
+        self.verifyUnconstrainedFlex(flex);
+    }
+
+    fn verifyUnconstrainedFlex(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) void {
+        _ = self;
+        if (flex.constraints.len == 0) return;
+        invariantViolation("mono specialization reached a constrained flex variable where a concrete runtime type was required");
     }
 
     fn materializeConcretePayload(
@@ -1843,7 +2173,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
-            .flex, .rigid => invariantViolation("mono specialization reached an unsolved generic variable in a concrete source type"),
+            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
+            .rigid => invariantViolation("mono specialization reached an unsolved rigid type variable in a concrete source type"),
             .alias => |alias| .{ .alias = .{
                 .name = try self.typeNameForConcreteRef(ref, alias.name),
                 .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
@@ -1853,7 +2184,7 @@ const TypeInstantiator = struct {
             .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFields(ref, fields) },
             .record => |record| .{ .record = .{
                 .fields = try self.materializeConcreteRecordFields(ref, record.fields),
-                .ext = try self.materializeConcreteRef(try self.concreteChildRef(ref, record.ext)),
+                .ext = try self.materializeConcreteRecordExt(try self.concreteChildRef(ref, record.ext)),
             } },
             .tuple => |items| .{ .tuple = try self.materializeConcreteTypeIds(ref, items) },
             .nominal => |nominal| .{ .nominal = .{
@@ -1873,9 +2204,29 @@ const TypeInstantiator = struct {
             .empty_record => .empty_record,
             .tag_union => |tag_union| .{ .tag_union = .{
                 .tags = try self.materializeConcreteTags(ref, tag_union.tags),
-                .ext = try self.materializeConcreteRef(try self.concreteChildRef(ref, tag_union.ext)),
+                .ext = try self.materializeConcreteTagUnionExt(try self.concreteChildRef(ref, tag_union.ext)),
             } },
             .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn materializeConcreteRecordExt(
+        self: *TypeInstantiator,
+        ext: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        return switch (self.concretePayload(ext)) {
+            .flex => |flex| try self.materializeEmptyRecordRowTail(flex),
+            else => try self.materializeConcreteRef(ext),
+        };
+    }
+
+    fn materializeConcreteTagUnionExt(
+        self: *TypeInstantiator,
+        ext: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        return switch (self.concretePayload(ext)) {
+            .flex => |flex| try self.materializeEmptyTagUnionRowTail(flex),
+            else => try self.materializeConcreteRef(ext),
         };
     }
 
@@ -1929,16 +2280,6 @@ const TypeInstantiator = struct {
             };
         }
         return out;
-    }
-
-    fn artifactPayload(self: *const TypeInstantiator, ref: checked_artifact.ArtifactCheckedTypeRef) checked_artifact.CheckedTypePayload {
-        const checked_types = checkedTypesForKey(self.input, ref.artifact) orelse {
-            debug.invariant(false, "mono specialization invariant violated: concrete type artifact was not available");
-            unreachable;
-        };
-        const raw = @intFromEnum(ref.ty);
-        if (raw >= checked_types.payloads.len) invariantViolation("mono specialization concrete type id was outside published payloads");
-        return checked_types.payloads[raw];
     }
 
     fn recordFieldNameForConcreteRef(
@@ -2032,6 +2373,22 @@ const PrivateCaptureLoweringKey = struct {
     checked_ty: checked_artifact.CheckedTypeId,
 };
 
+const LocalProcDecl = struct {
+    pattern: checked_artifact.CheckedPatternId,
+    expr: checked_artifact.CheckedExprId,
+    owner_generated_stmts: *std.ArrayList(Ast.StmtId),
+};
+
+const LocalProcDeclRestore = struct {
+    binder: checked_artifact.PatternBinderId,
+    previous: ?LocalProcDecl,
+};
+
+const LocalProcInstanceKey = struct {
+    binder: checked_artifact.PatternBinderId,
+    source_fn_ty: canonical.CanonicalTypeKey,
+};
+
 const BodyLowerer = struct {
     allocator: Allocator,
     input: Input,
@@ -2041,6 +2398,9 @@ const BodyLowerer = struct {
     name_resolver: *ArtifactNames.ArtifactNameResolver,
     queue: *Queue,
     local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
+    local_symbol_types: std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteTypeInfo),
+    local_proc_decls: std.AutoHashMap(checked_artifact.PatternBinderId, LocalProcDecl),
+    local_proc_instances: std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol),
     lowered_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId),
     active_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, void),
 
@@ -2062,6 +2422,9 @@ const BodyLowerer = struct {
             .name_resolver = name_resolver,
             .queue = queue,
             .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
+            .local_symbol_types = std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteTypeInfo).init(allocator),
+            .local_proc_decls = std.AutoHashMap(checked_artifact.PatternBinderId, LocalProcDecl).init(allocator),
+            .local_proc_instances = std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol).init(allocator),
             .lowered_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId).init(allocator),
             .active_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, void).init(allocator),
         };
@@ -2070,6 +2433,9 @@ const BodyLowerer = struct {
     fn deinit(self: *BodyLowerer) void {
         self.active_private_captures.deinit();
         self.lowered_private_captures.deinit();
+        self.local_proc_instances.deinit();
+        self.local_proc_decls.deinit();
+        self.local_symbol_types.deinit();
         self.local_symbols.deinit();
     }
 
@@ -2081,8 +2447,302 @@ const BodyLowerer = struct {
         return switch (self.template_lookup.template.body) {
             .checked_body => |body_id| try self.lowerCheckedBody(reserved, fn_ty, body_id),
             .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperDef(reserved, fn_ty, wrapper_id),
+            .intrinsic_wrapper => |wrapper_id| try self.lowerIntrinsicWrapperDef(reserved, fn_ty, wrapper_id),
             .promoted_callable_wrapper => |wrapper_id| try self.lowerPromotedCallableWrapperDef(reserved, fn_ty, wrapper_id),
         };
+    }
+
+    fn lowerIntrinsicWrapperDef(
+        self: *BodyLowerer,
+        reserved: ReservedMonoProc,
+        fn_ty: Type.TypeId,
+        wrapper_id: canonical.IntrinsicWrapperId,
+    ) Allocator.Error!Ast.DefId {
+        const wrapper = self.template_lookup.intrinsic_wrappers.get(wrapper_id);
+        if (wrapper.checked_fn_root != self.template_lookup.template.checked_fn_root) {
+            invariantViolation("mono body lowering reached intrinsic wrapper with mismatched checked function root");
+        }
+
+        const fn_content = self.program.types.getType(fn_ty);
+        const func = switch (fn_content) {
+            .func => |func| func,
+            else => invariantViolation("mono body lowering expected intrinsic wrapper type to be a function"),
+        };
+        const source_ty = reserved.proc.specialization.requested_mono_fn_ty;
+        const params = try self.lowerIntrinsicParamBundle(func.args);
+        defer if (params.exprs.len > 0) self.allocator.free(params.exprs);
+        const body = switch (wrapper.intrinsic) {
+            .str_inspect => blk: {
+                if (params.exprs.len != 1) {
+                    invariantViolation("mono body lowering expected Str.inspect intrinsic to have exactly one argument");
+                }
+                break :blk try self.lowerStrInspectIntrinsic(func.ret, params.exprs[0], func.args[0]);
+            },
+            .structural_eq => blk: {
+                if (params.exprs.len != 2) {
+                    invariantViolation("mono body lowering expected structural-equality intrinsic to have exactly two arguments");
+                }
+                break :blk try self.program.ast.addExpr(func.ret, .{ .structural_eq = .{
+                    .lhs = params.exprs[0],
+                    .rhs = params.exprs[1],
+                } });
+            },
+        };
+        const bind = Ast.TypedSymbol{
+            .ty = fn_ty,
+            .source_ty = source_ty,
+            .symbol = try self.program.addProcSymbol(reserved.local_handle),
+        };
+        return try self.program.ast.addDef(.{
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .debug_name = null,
+            .value = .{ .fn_ = .{
+                .source_fn_ty = source_ty,
+                .recursive = false,
+                .bind = bind,
+                .args = params.args,
+                .body = body,
+            } },
+        });
+    }
+
+    const IntrinsicParamBundle = struct {
+        args: Ast.Span(Ast.TypedSymbol),
+        exprs: []const Ast.ExprId,
+    };
+
+    fn lowerIntrinsicParamBundle(
+        self: *BodyLowerer,
+        arg_tys: []const Type.TypeId,
+    ) Allocator.Error!IntrinsicParamBundle {
+        if (arg_tys.len == 0) return .{
+            .args = Ast.Span(Ast.TypedSymbol).empty(),
+            .exprs = &.{},
+        };
+        const args = try self.allocator.alloc(Ast.TypedSymbol, arg_tys.len);
+        defer self.allocator.free(args);
+        const exprs = try self.allocator.alloc(Ast.ExprId, arg_tys.len);
+        errdefer self.allocator.free(exprs);
+
+        for (arg_tys, 0..) |arg_ty, i| {
+            const symbol = try self.program.addSyntheticSymbol();
+            args[i] = .{
+                .ty = arg_ty,
+                .source_ty = .{},
+                .symbol = symbol,
+            };
+            exprs[i] = try self.program.ast.addExpr(arg_ty, .{ .var_ = symbol });
+        }
+
+        return .{
+            .args = try self.program.ast.addTypedSymbolSpan(args),
+            .exprs = exprs,
+        };
+    }
+
+    fn lowerStrInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.program.types.getType(arg_ty)) {
+            .primitive => |prim| switch (prim) {
+                .str => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .str_inspect, arg_expr),
+                .bool => try self.lowerBoolInspectIntrinsic(ret_ty, arg_expr),
+                .u8,
+                .i8,
+                .u16,
+                .i16,
+                .u32,
+                .i32,
+                .u64,
+                .i64,
+                .u128,
+                .i128,
+                .f32,
+                .f64,
+                .dec,
+                => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .num_to_str, arg_expr),
+                .erased => invariantViolation("Str.inspect intrinsic cannot inspect erased values directly"),
+            },
+            .tuple => |items| try self.lowerTupleInspectIntrinsic(ret_ty, arg_expr, items),
+            .record => |record| try self.lowerRecordInspectIntrinsic(ret_ty, arg_expr, record.fields),
+            .tag_union => |tag_union| try self.lowerTagUnionInspectIntrinsic(ret_ty, arg_expr, arg_ty, tag_union.tags),
+            else => invariantViolation("Str.inspect intrinsic reached unsupported mono argument type"),
+        };
+    }
+
+    fn lowerUnaryIntrinsicLowLevel(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        op: base.LowLevel,
+        arg_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const args = [_]Ast.ExprId{arg_expr};
+        return try self.program.ast.addExpr(ret_ty, .{ .low_level = .{
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.program.ast.addExprSpan(&args),
+            .source_constraint_ty = ret_ty,
+        } });
+    }
+
+    fn lowerBoolInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const true_expr = try self.program.ast.addExpr(ret_ty, .{ .str_lit = try self.program.literal_pool.intern("True") });
+        const false_expr = try self.program.ast.addExpr(ret_ty, .{ .str_lit = try self.program.literal_pool.intern("False") });
+        return try self.program.ast.addExpr(ret_ty, .{ .if_ = .{
+            .cond = arg_expr,
+            .then_body = true_expr,
+            .else_body = false_expr,
+        } });
+    }
+
+    fn lowerTupleInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        items: []const Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        var current = try self.lowerStringLiteralExpr(ret_ty, "(");
+        for (items, 0..) |item_ty, i| {
+            if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
+            const item_expr = try self.program.ast.addExpr(item_ty, .{ .tuple_access = .{
+                .tuple = arg_expr,
+                .elem_index = @intCast(i),
+            } });
+            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, item_expr, item_ty);
+            current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
+        }
+        return try self.lowerStrConcatBytes(ret_ty, current, ")");
+    }
+
+    fn lowerRecordInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        fields: []const Type.Field,
+    ) Allocator.Error!Ast.ExprId {
+        if (fields.len == 0) return try self.lowerStringLiteralExpr(ret_ty, "{}");
+
+        var current = try self.lowerStringLiteralExpr(ret_ty, "{ ");
+        for (fields, 0..) |field, i| {
+            if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
+            current = try self.lowerStrConcatBytes(ret_ty, current, self.program.canonical_names.recordFieldLabelText(field.name));
+            current = try self.lowerStrConcatBytes(ret_ty, current, ": ");
+            const field_expr = try self.program.ast.addExpr(field.ty, .{ .access = .{
+                .record = arg_expr,
+                .field = field.name,
+                .field_index = @intCast(i),
+            } });
+            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, field_expr, field.ty);
+            current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
+        }
+        return try self.lowerStrConcatBytes(ret_ty, current, " }");
+    }
+
+    fn lowerTagUnionInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_ty: Type.TypeId,
+        tags: []const Type.Tag,
+    ) Allocator.Error!Ast.ExprId {
+        if (tags.len == 0) invariantViolation("Str.inspect intrinsic reached an uninhabited tag union");
+
+        var branches = std.ArrayList(Ast.Branch).empty;
+        defer branches.deinit(self.allocator);
+        for (tags, 0..) |tag, tag_index| {
+            const payload_pats = try self.allocator.alloc(Ast.PatId, tag.args.len);
+            defer self.allocator.free(payload_pats);
+            const payload_exprs = try self.allocator.alloc(Ast.ExprId, tag.args.len);
+            defer self.allocator.free(payload_exprs);
+
+            for (tag.args, 0..) |payload_ty, payload_index| {
+                const symbol = try self.program.addSyntheticSymbol();
+                payload_pats[payload_index] = try self.program.ast.addPat(.{
+                    .ty = payload_ty,
+                    .data = .{ .var_ = symbol },
+                });
+                payload_exprs[payload_index] = try self.program.ast.addExpr(payload_ty, .{ .var_ = symbol });
+            }
+
+            const pat = try self.program.ast.addPat(.{
+                .ty = arg_ty,
+                .data = .{ .tag = .{
+                    .name = tag.name,
+                    .discriminant = @intCast(tag_index),
+                    .args = try self.program.ast.addPatSpan(payload_pats),
+                } },
+            });
+
+            try branches.append(self.allocator, .{
+                .pat = pat,
+                .body = try self.lowerTagInspectBranch(ret_ty, tag, payload_exprs),
+            });
+        }
+
+        return try self.program.ast.addExpr(ret_ty, .{ .match_ = .{
+            .cond = arg_expr,
+            .branches = try self.program.ast.addBranchSpan(branches.items),
+            .is_try_suffix = false,
+        } });
+    }
+
+    fn lowerTagInspectBranch(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        tag: Type.Tag,
+        payload_exprs: []const Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const tag_name = self.program.canonical_names.tagLabelText(tag.name);
+        if (tag.args.len != payload_exprs.len) invariantViolation("Str.inspect tag payload count disagreed with tag type");
+        if (tag.args.len == 0) return try self.lowerStringLiteralExpr(ret_ty, tag_name);
+
+        var current = try self.lowerStringLiteralExpr(ret_ty, tag_name);
+        current = try self.lowerStrConcatBytes(ret_ty, current, "(");
+        for (tag.args, payload_exprs, 0..) |payload_ty, payload_expr, i| {
+            if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
+            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, payload_expr, payload_ty);
+            current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
+        }
+        return try self.lowerStrConcatBytes(ret_ty, current, ")");
+    }
+
+    fn lowerStringLiteralExpr(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        bytes: []const u8,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.program.ast.addExpr(ret_ty, .{ .str_lit = try self.program.literal_pool.intern(bytes) });
+    }
+
+    fn lowerStrConcatBytes(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs_bytes: []const u8,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.lowerStrConcatExpr(ret_ty, lhs, try self.lowerStringLiteralExpr(ret_ty, rhs_bytes));
+    }
+
+    fn lowerStrConcatExpr(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const args = [_]Ast.ExprId{ lhs, rhs };
+        return try self.program.ast.addExpr(ret_ty, .{ .low_level = .{
+            .op = .str_concat,
+            .rc_effect = base.LowLevel.str_concat.rcEffect(),
+            .args = try self.program.ast.addExprSpan(&args),
+            .source_constraint_ty = ret_ty,
+        } });
     }
 
     fn lowerPromotedCallableWrapperDef(
@@ -2336,7 +2996,11 @@ const BodyLowerer = struct {
             invariantViolation("private finite callable leaf source function type disagrees with materialization type");
         }
         const template = checkedTemplateFromCallableTemplate(leaf.proc_value.template);
-        const concrete = try self.concreteSourceTypeForCheckedKey(template.artifact, source_ty);
+        const artifact = artifactKeyForRef(self.input, template.artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: private callable leaf template artifact was not available");
+            unreachable;
+        };
+        const concrete = try self.concreteSourceTypeForCheckedKey(artifact, source_ty);
         const proc = try self.reserveCallableProcedure(
             leaf.proc_value,
             concrete,
@@ -2535,7 +3199,8 @@ const BodyLowerer = struct {
         if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
             invariantViolation("callable procedure reservation source function type disagrees with requested mono type");
         }
-        const template = checkedTemplateFromCallableTemplate(callable.template);
+        const remapped_callable = try self.name_resolver.procedureCallableRef(callable);
+        const template = checkedTemplateFromCallableTemplate(remapped_callable.template);
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
             .template = template,
             .requested_fn_ty = requested_fn_ty,
@@ -2543,7 +3208,7 @@ const BodyLowerer = struct {
         });
         return .{
             .proc = reserved.proc.proc,
-            .callable = callable,
+            .callable = remapped_callable,
         };
     }
 
@@ -2607,7 +3272,7 @@ const BodyLowerer = struct {
         symbol_name: canonical.ExternalSymbolNameId,
         arg_patterns: []const checked_artifact.CheckedPatternId,
     ) Allocator.Error!Ast.DefId {
-        const args = try self.lowerParamSpan(arg_patterns);
+        const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
         const hosted = try self.hostedProcForReserved(reserved.proc.proc, symbol_name);
         return try self.program.ast.addDef(.{
             .proc = canonical.mirProcedureRefFromMono(reserved.proc),
@@ -2657,8 +3322,9 @@ const BodyLowerer = struct {
         arg_patterns: []const checked_artifact.CheckedPatternId,
         body_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.DefId {
-        const args = try self.lowerParamSpan(arg_patterns);
-        const body = try self.lowerExpr(body_expr);
+        const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
+        const ret_ty = try self.returnTypeFromConcreteFunction(reserved.requested_fn_ty);
+        const body = try self.lowerExprConcreteExpected(body_expr, ret_ty);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
             .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -2677,17 +3343,85 @@ const BodyLowerer = struct {
         });
     }
 
-    fn lowerParamSpan(
+    const ConcreteTypeInfo = struct {
+        ty: Type.TypeId,
+        source_ty: canonical.CanonicalTypeKey,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    };
+
+    const ExprExpectedType = union(enum) {
+        checked: checked_artifact.CheckedTypeId,
+        concrete: ConcreteTypeInfo,
+    };
+
+    fn lowerParamSpanFromFunction(
         self: *BodyLowerer,
         patterns: []const checked_artifact.CheckedPatternId,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!Ast.Span(Ast.TypedSymbol) {
+        const param_types = try self.paramTypesFromConcreteFunction(source_fn);
+        defer self.allocator.free(param_types);
+        if (patterns.len != param_types.len) {
+            invariantViolation("mono body lowering procedure parameter count disagreed with requested function type");
+        }
         if (patterns.len == 0) return Ast.Span(Ast.TypedSymbol).empty();
         const args = try self.allocator.alloc(Ast.TypedSymbol, patterns.len);
         defer self.allocator.free(args);
-        for (patterns, 0..) |pattern, i| {
-            args[i] = try self.lowerParamPattern(pattern);
+        for (patterns, param_types, 0..) |pattern, param_ty, i| {
+            args[i] = try self.lowerParamPatternWithType(pattern, param_ty);
         }
         return try self.program.ast.addTypedSymbolSpan(args);
+    }
+
+    fn paramTypesFromConcreteFunction(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error![]ConcreteTypeInfo {
+        var current = source_fn;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| {
+                    current = try self.type_instantiator.concreteChildRef(current, alias.backing);
+                },
+                .function => |function| {
+                    const out = try self.allocator.alloc(ConcreteTypeInfo, function.args.len);
+                    errdefer self.allocator.free(out);
+                    for (function.args, 0..) |arg, i| {
+                        const arg_ref = try self.type_instantiator.concreteChildRef(current, arg);
+                        out[i] = .{
+                            .ty = try self.type_instantiator.lowerConcreteRef(arg_ref),
+                            .source_ty = self.program.concrete_source_types.key(arg_ref),
+                            .source_ref = arg_ref,
+                        };
+                    }
+                    return out;
+                },
+                else => invariantViolation("mono body lowering expected requested procedure type to be a function"),
+            }
+        }
+    }
+
+    fn returnTypeFromConcreteFunction(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteTypeInfo {
+        var current = source_fn;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| {
+                    current = try self.type_instantiator.concreteChildRef(current, alias.backing);
+                },
+                .function => |function| {
+                    const ret_ref = try self.type_instantiator.concreteChildRef(current, function.ret);
+                    return .{
+                        .ty = try self.type_instantiator.lowerConcreteRef(ret_ref),
+                        .source_ty = self.program.concrete_source_types.key(ret_ref),
+                        .source_ref = ret_ref,
+                    };
+                },
+                else => invariantViolation("mono body lowering expected requested procedure type to be a function"),
+            }
+        }
     }
 
     fn lowerParamPattern(
@@ -2696,9 +3430,31 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.TypedSymbol {
         const pattern = self.checkedPattern(pattern_id);
         const binder = self.binderForSimplePattern(pattern.data);
+        const source_ref = try self.type_instantiator.concreteRefForTemplateType(pattern.ty);
+        const concrete_ty = ConcreteTypeInfo{
+            .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
+            .source_ty = self.program.concrete_source_types.key(source_ref),
+            .source_ref = source_ref,
+        };
+        try self.recordConcreteTypeForBinder(binder, concrete_ty);
         return .{
-            .ty = try self.type_instantiator.lowerTemplateType(pattern.ty),
-            .source_ty = try self.sourceTypeKey(pattern.ty),
+            .ty = concrete_ty.ty,
+            .source_ty = concrete_ty.source_ty,
+            .symbol = try self.symbolForBinder(binder),
+        };
+    }
+
+    fn lowerParamPatternWithType(
+        self: *BodyLowerer,
+        pattern_id: checked_artifact.CheckedPatternId,
+        param_ty: ConcreteTypeInfo,
+    ) Allocator.Error!Ast.TypedSymbol {
+        const pattern = self.checkedPattern(pattern_id);
+        const binder = self.binderForSimplePattern(pattern.data);
+        try self.recordConcreteTypeForBinder(binder, param_ty);
+        return .{
+            .ty = param_ty.ty,
+            .source_ty = param_ty.source_ty,
             .symbol = try self.symbolForBinder(binder),
         };
     }
@@ -2725,21 +3481,96 @@ const BodyLowerer = struct {
         return symbol;
     }
 
+    fn recordConcreteTypeForBinder(
+        self: *BodyLowerer,
+        binder: checked_artifact.PatternBinderId,
+        ty: ConcreteTypeInfo,
+    ) Allocator.Error!void {
+        try self.local_symbol_types.put(binder, ty);
+    }
+
+    fn concreteTypeForLookupExpr(
+        self: *const BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) ?ConcreteTypeInfo {
+        const expr = self.checkedExpr(expr_id);
+        const ref_id = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved orelse return null,
+            else => return null,
+        };
+        const record = self.resolvedValueRef(ref_id);
+        const binder = switch (record.ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            => |local| local.binder,
+            else => return null,
+        };
+        return self.local_symbol_types.get(binder);
+    }
+
     fn lowerExpr(
         self: *BodyLowerer,
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
+        if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| {
+            return try self.lowerExprConcreteExpected(expr_id, lookup_ty);
+        }
+        return try self.lowerExprExpected(expr_id, self.checkedExpr(expr_id).ty);
+    }
+
+    fn lowerExprExpected(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        expected_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.lowerExprWithExpected(expr_id, .{ .checked = expected_ty });
+    }
+
+    fn lowerExprConcreteExpected(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        expected_ty: ConcreteTypeInfo,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.lowerExprWithExpected(expr_id, .{ .concrete = expected_ty });
+    }
+
+    fn expectedTypeInfo(
+        self: *BodyLowerer,
+        expected_ty: ExprExpectedType,
+    ) Allocator.Error!ConcreteTypeInfo {
+        return switch (expected_ty) {
+            .checked => |checked_ty| blk: {
+                const source_ref = try self.type_instantiator.concreteRefForTemplateType(checked_ty);
+                break :blk .{
+                    .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
+                    .source_ty = self.program.concrete_source_types.key(source_ref),
+                    .source_ref = source_ref,
+                };
+            },
+            .concrete => |concrete| concrete,
+        };
+    }
+
+    fn lowerExprWithExpected(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        expected_ty: ExprExpectedType,
+    ) Allocator.Error!Ast.ExprId {
         const expr = self.checkedExpr(expr_id);
-        const ty = try self.type_instantiator.lowerTemplateType(expr.ty);
-        const source_ty = try self.sourceTypeKey(expr.ty);
+        const expected_info = try self.expectedTypeInfo(expected_ty);
+        try self.type_instantiator.unifyTemplateWithConcrete(expr.ty, expected_info.source_ref);
+        const ty = expected_info.ty;
+        const source_ty = expected_info.source_ty;
         const lowered = switch (expr.data) {
-            .num => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
-            .typed_int => |num| try self.program.ast.addExpr(ty, .{ .int_lit = num.value.toI128() }),
+            .num => |num| try self.lowerIntegerLiteralExpr(ty, num.value),
+            .typed_int => |num| try self.lowerIntegerLiteralExpr(ty, num.value),
             .frac_f32 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f32_lit = frac.value }),
             .frac_f64 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f64_lit = frac.value }),
-            .dec => |dec| try self.program.ast.addExpr(ty, .{ .dec_lit = dec.value.num }),
-            .dec_small => |dec| try self.program.ast.addExpr(ty, .{ .dec_lit = dec.value.toRocDec().num }),
-            .typed_frac => |frac| try self.program.ast.addExpr(ty, .{ .dec_lit = frac.value.toI128() }),
+            .dec => |dec| try self.lowerScaledDecimalLiteralExpr(ty, dec.value.num),
+            .dec_small => |dec| try self.lowerScaledDecimalLiteralExpr(ty, dec.value.toRocDec().num),
+            .typed_frac => |frac| try self.lowerScaledDecimalLiteralExpr(ty, frac.value.toI128()),
             .str_segment => |literal| try self.program.ast.addExpr(ty, .{ .str_lit = try self.lowerCheckedStringLiteral(literal) }),
             .str => |segments| try self.lowerStringExpr(ty, segments),
             .bytes_literal => |literal| try self.lowerBytesLiteral(ty, literal),
@@ -2749,22 +3580,22 @@ const BodyLowerer = struct {
             .list => |items| try self.lowerList(ty, items),
             .empty_list => try self.program.ast.addExpr(ty, .{ .list = Ast.Span(Ast.ExprId).empty() }),
             .tuple => |items| try self.lowerTuple(ty, items),
-            .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr),
+            .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr, expected_ty),
             .record => |record| try self.lowerRecord(ty, record),
             .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
             .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .local_function, lambda.args, lambda.body),
             .call => |call| try self.lowerCall(ty, expr_id, call),
             .structural_eq => |eq| try self.lowerStructuralEq(ty, eq),
             .unary_not => |child| blk: {
-                const value = try self.lowerExpr(child);
+                const value = try self.lowerBoolConditionExpr(child);
                 break :blk try self.program.ast.addExpr(ty, .{ .bool_not = value });
             },
-            .if_ => |if_| try self.lowerIf(ty, if_.branches, if_.final_else),
-            .match_ => |match_| try self.lowerMatch(ty, match_),
-            .tag => |tag| try self.lowerTag(ty, try self.tagLabel(tag.name), tag.args),
+            .if_ => |if_| try self.lowerIf(ty, if_.branches, if_.final_else, expected_ty),
+            .match_ => |match_| try self.lowerMatch(ty, match_, expected_ty),
+            .tag => |tag| try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), tag.args),
             .zero_argument_tag => |tag| blk: {
                 _ = tag.closure_name;
-                break :blk try self.lowerTag(ty, try self.tagLabel(tag.name), &.{});
+                break :blk try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
             .closure => |closure| try self.lowerCheckedClosureExpr(ty, expr_id, closure),
             .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, try self.recordFieldLabel(access.field_name)),
@@ -2778,13 +3609,13 @@ const BodyLowerer = struct {
             .return_ => |ret| blk: {
                 _ = ret.lambda;
                 _ = ret.context;
-                const child = try self.lowerExpr(ret.expr);
+                const child = try self.lowerExprWithExpected(ret.expr, expected_ty);
                 break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
             },
             .binop => |binop| try self.lowerBinop(ty, binop),
             .unary_minus => |child| try self.lowerUnaryMinus(ty, child),
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
-            .run_low_level => |run| try self.lowerRunLowLevel(ty, run.op, run.args),
+            .run_low_level => |run_low_level| try self.lowerRunLowLevel(ty, run_low_level.op, run_low_level.args),
             .nominal => |nominal| blk: {
                 _ = nominal.backing_type;
                 const backing = try self.lowerExpr(nominal.backing_expr);
@@ -2799,7 +3630,7 @@ const BodyLowerer = struct {
                 break :blk try self.program.ast.addExpr(ty, .{ .inspect = value });
             },
             .expect => |child| blk: {
-                const condition = try self.lowerExpr(child);
+                const condition = try self.lowerBoolConditionExpr(child);
                 const expect_stmt = try self.program.ast.addStmt(.{ .expect = condition });
                 const stmts = try self.program.ast.addStmtSpan(&.{expect_stmt});
                 const unit = try self.program.ast.addExpr(ty, .unit);
@@ -2814,6 +3645,76 @@ const BodyLowerer = struct {
         };
         self.program.ast.setExprSourceTy(lowered, source_ty);
         return lowered;
+    }
+
+    fn lowerBoolConditionExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.checkedExpr(expr_id);
+        const bool_ty = try self.ensurePrimitiveBoolType();
+        const bool_source_ty = try self.program.boolSourceTypeKey();
+        const lowered = switch (expr.data) {
+            .tag => |tag| try self.lowerTag(bool_ty, null, try self.tagLabel(tag.name), tag.args),
+            .zero_argument_tag => |tag| blk: {
+                _ = tag.closure_name;
+                break :blk try self.lowerTag(bool_ty, null, try self.tagLabel(tag.name), &.{});
+            },
+            .unary_not => |child| blk: {
+                const value = try self.lowerBoolConditionExpr(child);
+                break :blk try self.program.ast.addExpr(bool_ty, .{ .bool_not = value });
+            },
+            else => return try self.lowerExpr(expr_id),
+        };
+        self.program.ast.setExprSourceTy(lowered, bool_source_ty);
+        return lowered;
+    }
+
+    fn ensurePrimitiveBoolType(self: *BodyLowerer) Allocator.Error!Type.TypeId {
+        return try self.program.types.internResolved(.{ .primitive = .bool });
+    }
+
+    fn lowerIntegerLiteralExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: CIR.IntValue,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .u8,
+                .i8,
+                .u16,
+                .i16,
+                .u32,
+                .i32,
+                .u64,
+                .i64,
+                .u128,
+                .i128,
+                => try self.program.ast.addExpr(ty, .{ .int_lit = @as(i128, @bitCast(value.bytes)) }),
+                .f32 => try self.program.ast.addExpr(ty, .{ .frac_f32_lit = @floatCast(intValueToF64(value)) }),
+                .f64 => try self.program.ast.addExpr(ty, .{ .frac_f64_lit = intValueToF64(value) }),
+                .dec => try self.program.ast.addExpr(ty, .{ .dec_lit = intValueToScaledDec(value) }),
+                else => invariantViolation("mono body lowering reached integer literal with non-numeric primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached integer literal with non-primitive result type"),
+        };
+    }
+
+    fn lowerScaledDecimalLiteralExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        scaled_value: i128,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addExpr(ty, .{ .frac_f32_lit = @floatCast(scaledDecToF64(scaled_value)) }),
+                .f64 => try self.program.ast.addExpr(ty, .{ .frac_f64_lit = scaledDecToF64(scaled_value) }),
+                .dec => try self.program.ast.addExpr(ty, .{ .dec_lit = scaled_value }),
+                else => invariantViolation("mono body lowering reached decimal literal with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached decimal literal with non-primitive result type"),
+        };
     }
 
     fn lowerStringExpr(
@@ -2868,8 +3769,11 @@ const BodyLowerer = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
-            .local_proc,
-            => |local| try self.program.ast.addExpr(ty, .{ .var_ = try self.symbolForBinder(local.binder) }),
+            => |local| if (self.local_proc_decls.contains(local.binder))
+                try self.lowerLocalProcLookup(ty, record, local)
+            else
+                try self.program.ast.addExpr(ty, .{ .var_ = try self.symbolForBinder(local.binder) }),
+            .local_proc => |local| try self.lowerLocalProcLookup(ty, record, local),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -2886,6 +3790,141 @@ const BodyLowerer = struct {
             } }),
             .platform_required_declaration => invariantViolation("mono body lowering reached platform-required declaration lookup as a runtime value"),
         };
+    }
+
+    fn lowerLocalProcLookup(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        record: checked_artifact.ResolvedValueRefRecord,
+        local: checked_artifact.LocalBindingRef,
+    ) Allocator.Error!Ast.ExprId {
+        const symbol = try self.ensureLocalProcInstance(local.binder, record.checked_ty);
+        return try self.program.ast.addExpr(ty, .{ .var_ = symbol });
+    }
+
+    fn ensureLocalProcInstance(
+        self: *BodyLowerer,
+        binder: checked_artifact.PatternBinderId,
+        use_checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Ast.Symbol {
+        const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(use_checked_ty);
+        return try self.ensureLocalProcInstanceForConcrete(binder, concrete_fn);
+    }
+
+    fn ensureLocalProcInstanceForConcrete(
+        self: *BodyLowerer,
+        binder: checked_artifact.PatternBinderId,
+        concrete_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!Ast.Symbol {
+        const source_fn_ty = self.program.concrete_source_types.key(concrete_fn);
+        const key = LocalProcInstanceKey{
+            .binder = binder,
+            .source_fn_ty = source_fn_ty,
+        };
+        const decl = self.local_proc_decls.get(binder) orelse {
+            invariantViolation("mono body lowering reached local procedure lookup without a published local procedure declaration");
+        };
+        if (self.local_proc_instances.get(key)) |existing| return existing;
+
+        const source_symbol = try self.symbolForBinder(binder);
+        const instance_symbol = try self.program.addSpecializedLocalFnSymbol(source_symbol);
+        try self.local_proc_instances.put(key, instance_symbol);
+        errdefer _ = self.local_proc_instances.remove(key);
+
+        const local_fn = try self.lowerLocalProcInstance(decl, concrete_fn, source_fn_ty, instance_symbol);
+        const stmt = try self.program.ast.addStmt(.{ .local_fn = local_fn });
+        try decl.owner_generated_stmts.append(self.allocator, stmt);
+        return instance_symbol;
+    }
+
+    fn lowerLocalProcInstance(
+        self: *BodyLowerer,
+        decl: LocalProcDecl,
+        concrete_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+        source_fn_ty: canonical.CanonicalTypeKey,
+        instance_symbol: Ast.Symbol,
+    ) Allocator.Error!Ast.LetFn {
+        const lambda = self.localProcLambda(decl.expr);
+
+        var instantiator = try self.type_instantiator.fork();
+        defer instantiator.deinit();
+        try instantiator.unifyTemplateWithConcrete(self.checkedExpr(decl.expr).ty, concrete_fn);
+
+        const previous = self.type_instantiator;
+        self.type_instantiator = &instantiator;
+        defer self.type_instantiator = previous;
+
+        const fn_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(decl.expr).ty);
+        return .{
+            .site = self.nestedProcSite(decl.expr, lambda.kind),
+            .source_fn_ty = source_fn_ty,
+            .recursive = false,
+            .bind = .{
+                .ty = fn_ty,
+                .source_ty = source_fn_ty,
+                .symbol = instance_symbol,
+            },
+            .args = try self.lowerParamSpanFromFunction(lambda.args, concrete_fn),
+            .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(concrete_fn)),
+        };
+    }
+
+    const LocalProcLambda = struct {
+        kind: checked_artifact.NestedProcKind,
+        args: []const checked_artifact.CheckedPatternId,
+        body: checked_artifact.CheckedExprId,
+    };
+
+    fn localProcLambda(self: *BodyLowerer, expr_id: checked_artifact.CheckedExprId) LocalProcLambda {
+        const expr = self.checkedExpr(expr_id);
+        return switch (expr.data) {
+            .lambda => |lambda| .{
+                .kind = .local_function,
+                .args = lambda.args,
+                .body = lambda.body,
+            },
+            .closure => |closure| blk: {
+                const lambda_expr = self.checkedExpr(closure.lambda);
+                switch (lambda_expr.data) {
+                    .lambda => |lambda| break :blk .{
+                        .kind = .closure,
+                        .args = lambda.args,
+                        .body = lambda.body,
+                    },
+                    else => invariantViolation("mono body lowering expected local closure declaration to reference a checked lambda"),
+                }
+            },
+            else => invariantViolation("mono body lowering expected local procedure declaration to reference a lambda-like expression"),
+        };
+    }
+
+    fn localProcDeclForStatement(
+        self: *BodyLowerer,
+        statement: checked_artifact.CheckedStatement,
+    ) ?struct { pattern: checked_artifact.CheckedPatternId, expr: checked_artifact.CheckedExprId } {
+        return switch (statement.data) {
+            .decl => |decl| switch (self.checkedExpr(decl.expr).data) {
+                .lambda, .closure => .{ .pattern = decl.pattern, .expr = decl.expr },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn restoreLocalProcDecls(
+        self: *BodyLowerer,
+        restorations: []const LocalProcDeclRestore,
+    ) void {
+        var i = restorations.len;
+        while (i > 0) {
+            i -= 1;
+            const restore = restorations[i];
+            if (restore.previous) |previous| {
+                self.local_proc_decls.put(restore.binder, previous) catch unreachable;
+            } else {
+                _ = self.local_proc_decls.remove(restore.binder);
+            }
+        }
     }
 
     fn lowerConstUse(
@@ -2938,9 +3977,50 @@ const BodyLowerer = struct {
         ty: Type.TypeId,
         statements: []const checked_artifact.CheckedStatementId,
         final_expr: checked_artifact.CheckedExprId,
+        final_expected_ty: ExprExpectedType,
     ) Allocator.Error!Ast.ExprId {
-        const stmt_span = try self.lowerStmtSpan(statements);
-        const final = try self.lowerExpr(final_expr);
+        var generated_local_fns = std.ArrayList(Ast.StmtId).empty;
+        defer generated_local_fns.deinit(self.allocator);
+
+        var restorations = std.ArrayList(LocalProcDeclRestore).empty;
+        defer restorations.deinit(self.allocator);
+        var restored_decls = false;
+        errdefer if (!restored_decls) self.restoreLocalProcDecls(restorations.items);
+
+        for (statements) |statement_id| {
+            const statement = self.checkedStatement(statement_id);
+            const decl = self.localProcDeclForStatement(statement) orelse continue;
+            const binder = self.binderForSimplePattern(self.checkedPattern(decl.pattern).data);
+            const previous = try self.local_proc_decls.fetchPut(binder, .{
+                .pattern = decl.pattern,
+                .expr = decl.expr,
+                .owner_generated_stmts = &generated_local_fns,
+            });
+            try restorations.append(self.allocator, .{
+                .binder = binder,
+                .previous = if (previous) |entry| entry.value else null,
+            });
+        }
+
+        var lowered_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer lowered_stmts.deinit(self.allocator);
+        for (statements) |statement_id| {
+            const statement = self.checkedStatement(statement_id);
+            if (self.localProcDeclForStatement(statement) != null) continue;
+            try lowered_stmts.append(self.allocator, try self.lowerStmt(statement_id));
+        }
+
+        const final = try self.lowerExprWithExpected(final_expr, final_expected_ty);
+        const generated_count = generated_local_fns.items.len;
+        const normal_count = lowered_stmts.items.len;
+        const combined = try self.allocator.alloc(Ast.StmtId, generated_count + normal_count);
+        defer self.allocator.free(combined);
+        @memcpy(combined[0..generated_count], generated_local_fns.items);
+        @memcpy(combined[generated_count..], lowered_stmts.items);
+        const stmt_span = try self.program.ast.addStmtSpan(combined);
+
+        self.restoreLocalProcDecls(restorations.items);
+        restored_decls = true;
         return try self.program.ast.addExpr(ty, .{ .block = .{
             .stmts = stmt_span,
             .final_expr = final,
@@ -3040,9 +4120,10 @@ const BodyLowerer = struct {
         arg_patterns: []const checked_artifact.CheckedPatternId,
         body_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const args = try self.lowerParamSpan(arg_patterns);
-        const body = try self.lowerExpr(body_expr);
-        const source_fn_ty = try self.sourceFnTypeKey(site_expr);
+        const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(site_expr).ty);
+        const args = try self.lowerParamSpanFromFunction(arg_patterns, source_fn_ref);
+        const body = try self.lowerExprConcreteExpected(body_expr, try self.returnTypeFromConcreteFunction(source_fn_ref));
+        const source_fn_ty = self.program.concrete_source_types.key(source_fn_ref);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
             .site = self.nestedProcSite(site_expr, site_kind),
             .source_fn_ty = source_fn_ty,
@@ -3075,11 +4156,26 @@ const BodyLowerer = struct {
         _ = call.called_via;
         if (self.procedureUseForExpr(call.func)) |proc_use| {
             const args = try self.lowerExprSpan(call.args);
-            const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
-            const requested_source_fn_ty = try self.sourceFnTypeKey(call.func);
-            const proc = try self.reserveProcedureUse(proc_use, self.checkedExpr(call.func).ty, .{ .call_proc = call_expr });
+            const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
+            const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+            const requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn);
+            const proc = try self.reserveProcedureUse(proc_use, call.source_fn_ty_payload, .{ .call_proc = call_expr });
             return try self.program.ast.addExpr(ty, .{ .call_proc = .{
                 .proc = proc,
+                .args = args,
+                .requested_fn_ty = func_ty,
+                .requested_source_fn_ty = requested_source_fn_ty,
+            } });
+        }
+        if (try self.localProcUseForExpr(call.func)) |local_proc| {
+            const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
+            const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+            const requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn);
+            const symbol = try self.ensureLocalProcInstanceForConcrete(local_proc.binder, concrete_fn);
+            const func = try self.program.ast.addExpr(func_ty, .{ .var_ = symbol });
+            const args = try self.lowerExprSpan(call.args);
+            return try self.program.ast.addExpr(ty, .{ .call_value = .{
+                .func = func,
                 .args = args,
                 .requested_fn_ty = func_ty,
                 .requested_source_fn_ty = requested_source_fn_ty,
@@ -3088,8 +4184,9 @@ const BodyLowerer = struct {
 
         const func = try self.lowerExpr(call.func);
         const args = try self.lowerExprSpan(call.args);
-        const func_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(call.func).ty);
-        const requested_source_fn_ty = try self.sourceFnTypeKey(call.func);
+        const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
+        const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+        const requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn);
         return try self.program.ast.addExpr(ty, .{ .call_value = .{
             .func = func,
             .args = args,
@@ -3138,7 +4235,7 @@ const BodyLowerer = struct {
         const target = try self.lookupMethodTarget(owner, method);
 
         if (target) |method_target| {
-            const template = method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template");
+            const template = try self.name_resolver.procedureTemplateRef(method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template"));
             const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
             const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
                 .template = template,
@@ -3193,14 +4290,15 @@ const BodyLowerer = struct {
         ty: Type.TypeId,
         branches: []const checked_artifact.CheckedIfBranch,
         final_else: checked_artifact.CheckedExprId,
+        expected_result_ty: ExprExpectedType,
     ) Allocator.Error!Ast.ExprId {
-        var current = try self.lowerExpr(final_else);
+        var current = try self.lowerExprWithExpected(final_else, expected_result_ty);
         var i = branches.len;
         while (i > 0) {
             i -= 1;
             current = try self.program.ast.addExpr(ty, .{ .if_ = .{
-                .cond = try self.lowerExpr(branches[i].cond),
-                .then_body = try self.lowerExpr(branches[i].body),
+                .cond = try self.lowerBoolConditionExpr(branches[i].cond),
+                .then_body = try self.lowerExprWithExpected(branches[i].body, expected_result_ty),
                 .else_body = current,
             } });
         }
@@ -3211,6 +4309,7 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ty: Type.TypeId,
         match_: anytype,
+        expected_result_ty: ExprExpectedType,
     ) Allocator.Error!Ast.ExprId {
         const cond = try self.lowerExpr(match_.cond);
         if (match_.branches.len == 0) invariantViolation("mono body lowering received a checked match with no branches");
@@ -3223,8 +4322,8 @@ const BodyLowerer = struct {
             for (branch.patterns) |branch_pattern| {
                 try branches.append(self.allocator, .{
                     .pat = try self.lowerPatternWithRemaps(cond_ty, branch_pattern.pattern, branch_pattern.binder_remaps),
-                    .guard = if (branch_pattern.degenerate or branch.guard == null) null else try self.lowerExpr(branch.guard.?),
-                    .body = if (branch_pattern.degenerate) try self.program.ast.addExpr(ty, .runtime_error) else try self.lowerExpr(branch.value),
+                    .guard = if (branch_pattern.degenerate or branch.guard == null) null else try self.lowerBoolConditionExpr(branch.guard.?),
+                    .body = if (branch_pattern.degenerate) try self.program.ast.addExpr(ty, .runtime_error) else try self.lowerExprWithExpected(branch.value, expected_result_ty),
                     .degenerate = branch_pattern.degenerate,
                 });
             }
@@ -3240,15 +4339,27 @@ const BodyLowerer = struct {
     fn lowerTag(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        source_ref: ?ConcreteSourceType.ConcreteSourceTypeRef,
         name: canonical.TagLabelId,
         args: []const checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
+        if (self.boolLiteralForTagName(ty, name)) |literal| {
+            if (args.len != 0) invariantViolation("mono body lowering Bool tag constructor cannot have a payload");
+            return try self.program.ast.addExpr(ty, .{ .bool_lit = literal });
+        }
+
         const tag_info = self.tagInfoForUnionType(ty, name);
         if (tag_info.payload_count != args.len) invariantViolation("mono body lowering tag constructor arity did not match its resolved type");
+        const payload_types = try self.concreteTagPayloadInfosForUnionType(
+            source_ref orelse invariantViolation("mono body lowering tag constructor had no concrete source type"),
+            name,
+        );
+        defer if (payload_types.len != 0) self.allocator.free(payload_types);
+        if (payload_types.len != args.len) invariantViolation("mono body lowering concrete tag payload arity did not match resolved type");
         return try self.program.ast.addExpr(ty, .{ .tag = .{
             .name = name,
             .discriminant = tag_info.discriminant,
-            .args = try self.lowerExprSpan(args),
+            .args = try self.lowerExprSpanConcrete(args, payload_types),
             .constructor_ty = ty,
         } });
     }
@@ -3327,17 +4438,17 @@ const BodyLowerer = struct {
             .@"and" => blk: {
                 const false_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = false });
                 break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
-                    .cond = try self.lowerExpr(binop.lhs),
-                    .then_body = try self.lowerExpr(binop.rhs),
+                    .cond = try self.lowerBoolConditionExpr(binop.lhs),
+                    .then_body = try self.lowerBoolConditionExpr(binop.rhs),
                     .else_body = false_expr,
                 } });
             },
             .@"or" => blk: {
                 const true_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = true });
                 break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
-                    .cond = try self.lowerExpr(binop.lhs),
+                    .cond = try self.lowerBoolConditionExpr(binop.lhs),
                     .then_body = true_expr,
-                    .else_body = try self.lowerExpr(binop.rhs),
+                    .else_body = try self.lowerBoolConditionExpr(binop.rhs),
                 } });
             },
         };
@@ -3410,6 +4521,11 @@ const BodyLowerer = struct {
             },
             .applied_tag => |tag| blk: {
                 const tag_name = try self.tagLabel(tag.name);
+                if (self.boolLiteralForTagName(ty, tag_name)) |literal| {
+                    if (tag.args.len != 0) invariantViolation("mono body lowering Bool tag pattern cannot have a payload");
+                    break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .bool_lit = literal } });
+                }
+
                 const tag_info = self.tagInfoForUnionType(ty, tag_name);
                 if (tag_info.payload_count != tag.args.len) invariantViolation("mono body lowering tag pattern arity did not match its resolved type");
                 const args = try self.allocator.alloc(Ast.PatId, tag.args.len);
@@ -3490,6 +4606,7 @@ const BodyLowerer = struct {
             .frac_f64_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = value } }),
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
+            .runtime_error => invariantViolation("mono body lowering reached runtime_error checked pattern"),
             .pending => invariantViolation("mono body lowering reached an unresolved checked pattern"),
         };
         self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = source_ty;
@@ -3554,6 +4671,23 @@ const BodyLowerer = struct {
         payload_types: []const Type.TypeId,
     };
 
+    fn boolLiteralForTagName(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        name: canonical.TagLabelId,
+    ) ?bool {
+        switch (self.program.types.getType(ty)) {
+            .primitive => |prim| {
+                if (prim != .bool) return null;
+                const text = self.program.canonical_names.tagLabelText(name);
+                if (std.mem.eql(u8, text, "True")) return true;
+                if (std.mem.eql(u8, text, "False")) return false;
+                invariantViolation("mono body lowering Bool constructor was neither True nor False");
+            },
+            else => return null,
+        }
+    }
+
     fn tagInfoForUnionType(
         self: *BodyLowerer,
         union_ty: Type.TypeId,
@@ -3572,6 +4706,48 @@ const BodyLowerer = struct {
             },
             else => invariantViolation("mono body lowering expected a resolved tag-union type"),
         };
+    }
+
+    fn concreteTagPayloadInfosForUnionType(
+        self: *BodyLowerer,
+        union_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.TagLabelId,
+    ) Allocator.Error![]const ConcreteTypeInfo {
+        return switch (self.type_instantiator.concretePayload(union_ref)) {
+            .alias => |alias| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteChildRef(union_ref, alias.backing), name),
+            .nominal => |nominal| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteChildRef(union_ref, nominal.backing), name),
+            .tag_union => |tag_union| blk: {
+                if (try self.type_instantiator.findConcreteTag(union_ref, tag_union.tags, name)) |tag| {
+                    break :blk try self.concreteTypeInfosForChildren(union_ref, tag.args);
+                }
+                break :blk try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteChildRef(union_ref, tag_union.ext), name);
+            },
+            .empty_tag_union => invariantViolation("mono body lowering concrete tag constructor was missing from source union type"),
+            .flex => |flex| {
+                self.type_instantiator.verifyClosableRowTail(flex);
+                invariantViolation("mono body lowering concrete tag constructor was missing from closed source union tail");
+            },
+            else => invariantViolation("mono body lowering expected concrete source tag-union type"),
+        };
+    }
+
+    fn concreteTypeInfosForChildren(
+        self: *BodyLowerer,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        children: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const ConcreteTypeInfo {
+        if (children.len == 0) return &.{};
+        const out = try self.allocator.alloc(ConcreteTypeInfo, children.len);
+        errdefer self.allocator.free(out);
+        for (children, 0..) |child, i| {
+            const source_ref = try self.type_instantiator.concreteChildRef(parent, child);
+            out[i] = .{
+                .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
+                .source_ty = self.program.concrete_source_types.key(source_ref),
+                .source_ref = source_ref,
+            };
+        }
+        return out;
     }
 
     fn recordFieldIndex(
@@ -3603,17 +4779,19 @@ const BodyLowerer = struct {
         return try self.program.ast.addExprSpan(lowered);
     }
 
-    fn lowerStmtSpan(
+    fn lowerExprSpanConcrete(
         self: *BodyLowerer,
-        statements: []const checked_artifact.CheckedStatementId,
-    ) Allocator.Error!Ast.Span(Ast.StmtId) {
-        if (statements.len == 0) return Ast.Span(Ast.StmtId).empty();
-        const lowered = try self.allocator.alloc(Ast.StmtId, statements.len);
+        exprs: []const checked_artifact.CheckedExprId,
+        expected_types: []const ConcreteTypeInfo,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (exprs.len != expected_types.len) invariantViolation("mono body lowering expression span arity did not match concrete expected types");
+        if (exprs.len == 0) return Ast.Span(Ast.ExprId).empty();
+        const lowered = try self.allocator.alloc(Ast.ExprId, exprs.len);
         defer self.allocator.free(lowered);
-        for (statements, 0..) |statement, i| {
-            lowered[i] = try self.lowerStmt(statement);
+        for (exprs, expected_types, 0..) |expr, expected_ty, i| {
+            lowered[i] = try self.lowerExprConcreteExpected(expr, expected_ty);
         }
-        return try self.program.ast.addStmtSpan(lowered);
+        return try self.program.ast.addExprSpan(lowered);
     }
 
     fn lowerStmt(
@@ -3627,17 +4805,17 @@ const BodyLowerer = struct {
                 if (try self.lowerLocalFunctionDecl(bind, decl.expr)) |local_fn| {
                     break :blk try self.program.ast.addStmt(.{ .local_fn = local_fn });
                 }
-                const body = try self.lowerExpr(decl.expr);
+                const body = try self.lowerExprExpected(decl.expr, self.checkedPattern(decl.pattern).ty);
                 break :blk try self.program.ast.addStmt(.{ .decl = .{ .bind = bind, .body = body } });
             },
             .var_ => |var_| blk: {
                 const bind = try self.lowerParamPattern(var_.pattern);
-                const body = try self.lowerExpr(var_.expr);
+                const body = try self.lowerExprExpected(var_.expr, self.checkedPattern(var_.pattern).ty);
                 break :blk try self.program.ast.addStmt(.{ .var_decl = .{ .bind = bind, .body = body } });
             },
             .reassign => |reassign| blk: {
                 const bind = try self.lowerParamPattern(reassign.pattern);
-                const body = try self.lowerExpr(reassign.expr);
+                const body = try self.lowerExprExpected(reassign.expr, self.checkedPattern(reassign.pattern).ty);
                 break :blk try self.program.ast.addStmt(.{ .reassign = .{
                     .target = bind.symbol,
                     .body = body,
@@ -3645,13 +4823,13 @@ const BodyLowerer = struct {
             },
             .dbg => |expr| try self.program.ast.addStmt(.{ .debug = try self.lowerExpr(expr) }),
             .expr => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(expr) }),
-            .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerExpr(expr) }),
+            .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerBoolConditionExpr(expr) }),
             .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
             .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerExpr(ret.expr) }),
             .break_ => try self.program.ast.addStmt(.break_),
             .for_ => |for_| try self.lowerForStmt(for_.pattern, for_.expr, for_.body),
             .while_ => |while_| try self.program.ast.addStmt(.{ .while_ = .{
-                .cond = try self.lowerExpr(while_.cond),
+                .cond = try self.lowerBoolConditionExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),
             } }),
             .import_,
@@ -3686,24 +4864,28 @@ const BodyLowerer = struct {
     ) Allocator.Error!?Ast.LetFn {
         const expr = self.checkedExpr(expr_id);
         return switch (expr.data) {
-            .lambda => |lambda| .{
-                .site = self.nestedProcSite(expr_id, .local_function),
-                .source_fn_ty = try self.sourceFnTypeKey(expr_id),
-                .recursive = false,
-                .bind = bind,
-                .args = try self.lowerParamSpan(lambda.args),
-                .body = try self.lowerExpr(lambda.body),
+            .lambda => |lambda| blk: {
+                const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(expr.ty);
+                break :blk .{
+                    .site = self.nestedProcSite(expr_id, .local_function),
+                    .source_fn_ty = self.program.concrete_source_types.key(source_fn_ref),
+                    .recursive = false,
+                    .bind = bind,
+                    .args = try self.lowerParamSpanFromFunction(lambda.args, source_fn_ref),
+                    .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(source_fn_ref)),
+                };
             },
             .closure => |closure| blk: {
+                const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(expr.ty);
                 const lambda_expr = self.checkedExpr(closure.lambda);
                 switch (lambda_expr.data) {
                     .lambda => |lambda| break :blk .{
                         .site = self.nestedProcSite(expr_id, .closure),
-                        .source_fn_ty = try self.sourceFnTypeKey(expr_id),
+                        .source_fn_ty = self.program.concrete_source_types.key(source_fn_ref),
                         .recursive = false,
                         .bind = bind,
-                        .args = try self.lowerParamSpan(lambda.args),
-                        .body = try self.lowerExpr(lambda.body),
+                        .args = try self.lowerParamSpanFromFunction(lambda.args, source_fn_ref),
+                        .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(source_fn_ref)),
                     },
                     else => invariantViolation("mono body lowering expected local closure declaration to reference a checked lambda"),
                 }
@@ -3715,7 +4897,7 @@ const BodyLowerer = struct {
     fn lowerCheckedStringLiteral(
         self: *BodyLowerer,
         literal: checked_artifact.CheckedStringLiteralId,
-    ) Allocator.Error!ids.ProgramLiteralId {
+    ) Allocator.Error!mir_ids.ProgramLiteralId {
         return try self.program.literal_pool.intern(self.checkedStringLiteral(literal));
     }
 
@@ -3820,14 +5002,6 @@ const BodyLowerer = struct {
         invariantViolation("mono body lowering could not find published nested procedure site for closure/local function");
     }
 
-    fn sourceFnTypeKey(
-        self: *BodyLowerer,
-        expr_id: checked_artifact.CheckedExprId,
-    ) Allocator.Error!canonical.CanonicalTypeKey {
-        const concrete = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(expr_id).ty);
-        return self.program.concrete_source_types.key(concrete);
-    }
-
     fn sourceTypeKey(
         self: *BodyLowerer,
         checked_ty: checked_artifact.CheckedTypeId,
@@ -3859,6 +5033,30 @@ const BodyLowerer = struct {
         };
     }
 
+    fn localProcUseForExpr(
+        self: *const BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?struct { binder: checked_artifact.PatternBinderId } {
+        const expr = self.checkedExpr(expr_id);
+        const ref_id = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved orelse return null,
+            else => return null,
+        };
+        const record = self.resolvedValueRef(ref_id);
+        return switch (record.ref) {
+            .local_proc => |local| .{ .binder = local.binder },
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            => |local| if (self.local_proc_decls.contains(local.binder))
+                .{ .binder = local.binder }
+            else
+                null,
+            else => null,
+        };
+    }
+
     fn reserveProcedureUse(
         self: *BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
@@ -3866,7 +5064,7 @@ const BodyLowerer = struct {
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(checked_fn_ty);
-        const template = try self.procedureTemplateForUse(use, requested_fn_ty);
+        const template = try self.name_resolver.procedureTemplateRef(try self.procedureTemplateForUse(use, requested_fn_ty));
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
             .template = template,
             .requested_fn_ty = requested_fn_ty,
@@ -4020,6 +5218,37 @@ fn promotedProcedureTemplate(
         if (canonical.procedureValueRefEql(procedure.proc, ref.proc)) return procedure.template;
     }
     return null;
+}
+
+const dec_scale: i128 = 1_000_000_000_000_000_000;
+
+fn intValueToScaledDec(value: CIR.IntValue) i128 {
+    return switch (value.kind) {
+        .i128 => {
+            const raw = @as(i128, @bitCast(value.bytes));
+            return std.math.mul(i128, raw, dec_scale) catch
+                invariantViolation("mono body lowering reached integer literal outside Dec range after type checking");
+        },
+        .u128 => {
+            const raw = @as(u128, @bitCast(value.bytes));
+            const max_dec_int: u128 = @intCast(@divTrunc(std.math.maxInt(i128), dec_scale));
+            if (raw > max_dec_int) {
+                invariantViolation("mono body lowering reached unsigned integer literal outside Dec range after type checking");
+            }
+            return @as(i128, @intCast(raw)) * dec_scale;
+        },
+    };
+}
+
+fn intValueToF64(value: CIR.IntValue) f64 {
+    return switch (value.kind) {
+        .i128 => @floatFromInt(@as(i128, @bitCast(value.bytes))),
+        .u128 => @floatFromInt(@as(u128, @bitCast(value.bytes))),
+    };
+}
+
+fn scaledDecToF64(value: i128) f64 {
+    return @as(f64, @floatFromInt(value)) / 1_000_000_000_000_000_000.0;
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
@@ -4338,7 +5567,7 @@ fn templateForRoot(
     }
 }
 
-fn rootMetadataFromChecked(root: checked_artifact.RootRequest) ids.RootMetadata {
+fn rootMetadataFromChecked(root: checked_artifact.RootRequest) mir_ids.RootMetadata {
     return .{
         .order = root.order,
         .kind = switch (root.kind) {
@@ -4798,8 +6027,7 @@ fn verifyProgram(program: *const Program) void {
     for (program.root_procs.items) |root| {
         var found = false;
         for (program.procs.items) |proc| {
-            if (canonical.mirProcedureRefEql(proc.proc, root))
-            {
+            if (canonical.mirProcedureRefEql(proc.proc, root)) {
                 found = true;
                 break;
             }
@@ -4816,6 +6044,7 @@ fn verifyProgram(program: *const Program) void {
     }
 }
 
+/// Public `Queue` declaration.
 pub const Queue = struct {
     allocator: Allocator,
     requested: std.AutoHashMap(canonical.MonoSpecializationKey, ReservedMonoProc),

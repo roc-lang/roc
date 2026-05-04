@@ -626,7 +626,6 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
-
     }
 
     /// Set the I/O implementation (or reset to OS default).

@@ -2289,7 +2289,6 @@ pub const BuildEnv = struct {
         pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
             return self.all_module_envs[1..];
         }
-
     };
 };
 

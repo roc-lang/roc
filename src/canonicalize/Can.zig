@@ -54,6 +54,7 @@ pub const ModuleInitContext = struct {
     explicit_root_names: []const []const u8 = &.{},
 };
 
+/// Public `ExplicitRootDef` declaration.
 pub const ExplicitRootDef = struct {
     name: []const u8,
     ident: Ident.Idx,
@@ -382,6 +383,7 @@ fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
     return self.lookupAvailableModuleEnv(ident) != null;
 }
 
+/// Public `explicitRootDefByName` function.
 pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
     for (self.explicit_root_defs.items) |root| {
         if (std.mem.eql(u8, root.name, name)) return root.def_idx;

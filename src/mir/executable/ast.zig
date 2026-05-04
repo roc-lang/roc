@@ -6,27 +6,41 @@ const check = @import("check");
 const row = @import("../mono_row/mod.zig");
 const solved = @import("../lambda_solved/mod.zig");
 const type_mod = @import("type.zig");
-const ids = @import("../ids.zig");
+const mir_ids = @import("../ids.zig");
 
 const canonical = check.CanonicalNames;
 const repr = solved.Representation;
 
 pub const TypeId = type_mod.TypeId;
-pub const ProgramLiteralId = ids.ProgramLiteralId;
+pub const ProgramLiteralId = mir_ids.ProgramLiteralId;
+/// Public `ExprId` declaration.
 pub const ExprId = enum(u32) { _ };
+/// Public `PatId` declaration.
 pub const PatId = enum(u32) { _ };
+/// Public `DefId` declaration.
 pub const DefId = enum(u32) { _ };
+/// Public `StmtId` declaration.
 pub const StmtId = enum(u32) { _ };
+/// Public `BranchId` declaration.
 pub const BranchId = enum(u32) { _ };
+/// Public `ExecutableProcId` declaration.
 pub const ExecutableProcId = enum(u32) { _ };
+/// Public `ExecutableValueRef` declaration.
 pub const ExecutableValueRef = enum(u32) { _ };
+/// Public `BridgeId` declaration.
 pub const BridgeId = enum(u32) { _ };
+/// Public `PatternDecisionPlanId` declaration.
 pub const PatternDecisionPlanId = enum(u32) { _ };
+/// Public `PatternPathValuePlanId` declaration.
 pub const PatternPathValuePlanId = enum(u32) { _ };
+/// Public `DecisionNodeId` declaration.
 pub const DecisionNodeId = enum(u32) { _ };
+/// Public `DecisionLeafId` declaration.
 pub const DecisionLeafId = enum(u32) { _ };
+/// Public `RecordRestProjectionId` declaration.
 pub const RecordRestProjectionId = enum(u32) { _ };
 
+/// Public `Span` function.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -38,11 +52,13 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public `TypedValue` declaration.
 pub const TypedValue = struct {
     ty: TypeId,
     value: ExecutableValueRef,
 };
 
+/// Public `RecordFieldExpr` declaration.
 pub const RecordFieldExpr = struct {
     field: row.RecordFieldId,
     expr: ExprId,
@@ -50,6 +66,7 @@ pub const RecordFieldExpr = struct {
     value: ExecutableValueRef,
 };
 
+/// Public `TagPayloadExpr` declaration.
 pub const TagPayloadExpr = struct {
     payload: row.TagPayloadId,
     expr: ExprId,
@@ -57,6 +74,7 @@ pub const TagPayloadExpr = struct {
     value: ExecutableValueRef,
 };
 
+/// Public `Pat` declaration.
 pub const Pat = struct {
     ty: TypeId,
     data: Data,
@@ -93,17 +111,25 @@ pub const Pat = struct {
     };
 };
 
+/// Public `TagPayloadPattern` declaration.
 pub const TagPayloadPattern = struct {
     payload: row.TagPayloadId,
     pattern: PatId,
 };
 
-pub const RecordFieldPattern = row.Ast.RecordFieldPattern;
+/// Public `RecordFieldPattern` declaration.
+pub const RecordFieldPattern = struct {
+    field: row.RecordFieldId,
+    pattern: PatId,
+};
+
+/// Public `ListRestPattern` declaration.
 pub const ListRestPattern = struct {
     index: u32,
     pattern: ?PatId = null,
 };
 
+/// Public `Branch` declaration.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
@@ -111,10 +137,12 @@ pub const Branch = struct {
     degenerate: bool = false,
 };
 
+/// Public `DirectCallArg` declaration.
 pub const DirectCallArg = struct {
     value: ExecutableValueRef,
 };
 
+/// Public `CallDirectPlan` declaration.
 pub const CallDirectPlan = struct {
     source: canonical.ProcedureValueRef,
     executable_specialization_key: repr.ExecutableSpecializationKey,
@@ -124,18 +152,21 @@ pub const CallDirectPlan = struct {
 
 pub const CallableSetMemberRef = repr.CallableSetMemberRef;
 
+/// Public `CaptureValueRef` declaration.
 pub const CaptureValueRef = struct {
     slot: u32,
     value: ExecutableValueRef,
     exec_ty: TypeId,
 };
 
+/// Public `CallableCaptureRecord` declaration.
 pub const CallableCaptureRecord = struct {
     capture_shape_key: repr.CaptureShapeKey,
     values: Span(CaptureValueRef),
     record_tmp: ExecutableValueRef,
 };
 
+/// Public `BridgePlan` declaration.
 pub const BridgePlan = union(enum) {
     direct,
     zst,
@@ -157,6 +188,7 @@ pub const BridgePlan = union(enum) {
     },
 };
 
+/// Public `CallableSetValue` declaration.
 pub const CallableSetValue = struct {
     construction_plan: ?repr.CallableSetConstructionPlanId = null,
     callable_set_key: repr.CanonicalCallableSetKey,
@@ -164,6 +196,7 @@ pub const CallableSetValue = struct {
     capture_record: ?CallableCaptureRecord = null,
 };
 
+/// Public `CallableMatchBranch` declaration.
 pub const CallableMatchBranch = struct {
     member: CallableSetMemberRef,
     source_fn_ty: canonical.CanonicalTypeKey,
@@ -175,6 +208,7 @@ pub const CallableMatchBranch = struct {
     body: ExprId,
 };
 
+/// Public `SourceMatch` declaration.
 pub const SourceMatch = struct {
     scrutinee_exprs: Span(ExprId),
     scrutinees: Span(ExecutableValueRef),
@@ -182,11 +216,13 @@ pub const SourceMatch = struct {
     branches: Span(BranchId),
 };
 
+/// Public `ValueTransformTagBranch` declaration.
 pub const ValueTransformTagBranch = struct {
     discriminant: u16,
     body: ExprId,
 };
 
+/// Public `ValueTransformList` declaration.
 pub const ValueTransformList = struct {
     source: ExecutableValueRef,
     source_elem: ExecutableValueRef,
@@ -195,6 +231,7 @@ pub const ValueTransformList = struct {
     body: ExprId,
 };
 
+/// Public `PatternDecisionPlan` declaration.
 pub const PatternDecisionPlan = struct {
     scrutinees: Span(ExecutableValueRef),
     path_value_plans: Span(PatternPathValuePlanId),
@@ -203,17 +240,20 @@ pub const PatternDecisionPlan = struct {
     branches: Span(BranchId),
 };
 
+/// Public `PatternPathValuePlan` declaration.
 pub const PatternPathValuePlan = struct {
     path: PatternPath,
     source: PatternPathValueSource,
     ty: TypeId,
 };
 
+/// Public `PatternPath` declaration.
 pub const PatternPath = struct {
     scrutinee: u32,
     steps: Span(PatternPathStep),
 };
 
+/// Public `PatternPathStep` declaration.
 pub const PatternPathStep = union(enum) {
     tag_payload_record: row.TagId,
     tag_payload: row.TagPayloadId,
@@ -225,6 +265,7 @@ pub const PatternPathStep = union(enum) {
     nominal_payload,
 };
 
+/// Public `PatternPathValueSource` declaration.
 pub const PatternPathValueSource = union(enum) {
     scrutinee: u32,
     tag_payload_record: struct {
@@ -255,6 +296,7 @@ pub const PatternPathValueSource = union(enum) {
     nominal_payload: PatternPathValuePlanId,
 };
 
+/// Public `RecordRestProjection` declaration.
 pub const RecordRestProjection = struct {
     parent: PatternPathValuePlanId,
     source_shape: row.RecordShapeId,
@@ -262,6 +304,7 @@ pub const RecordRestProjection = struct {
     projected_fields: Span(RecordRestProjectedField),
 };
 
+/// Public `RecordRestProjectedField` declaration.
 pub const RecordRestProjectedField = struct {
     source_field: row.RecordFieldId,
     result_field: row.RecordFieldId,
@@ -269,32 +312,38 @@ pub const RecordRestProjectedField = struct {
     result_logical_index: u32,
 };
 
+/// Public `ListElementProbe` declaration.
 pub const ListElementProbe = struct {
     index: u32,
     from_end: bool = false,
 };
 
+/// Public `ListRestProbe` declaration.
 pub const ListRestProbe = struct {
     start: u32,
     from_end_count: u32,
 };
 
+/// Public `DecisionNode` declaration.
 pub const DecisionNode = union(enum) {
     leaf: DecisionLeafId,
-    test: DecisionTestNode,
+    decision_test: DecisionTestNode,
 };
 
+/// Public `DecisionTestNode` declaration.
 pub const DecisionTestNode = struct {
     path_value: PatternPathValuePlanId,
     edges: Span(DecisionEdge),
     default: ?DecisionNodeId,
 };
 
+/// Public `DecisionEdge` declaration.
 pub const DecisionEdge = struct {
-    test: PatternTest,
+    pattern_test: PatternTest,
     next: DecisionNodeId,
 };
 
+/// Public `PatternTest` declaration.
 pub const PatternTest = union(enum) {
     tag: row.TagId,
     bool_literal: bool,
@@ -308,6 +357,7 @@ pub const PatternTest = union(enum) {
     guard: ExprId,
 };
 
+/// Public `DecisionLeaf` declaration.
 pub const DecisionLeaf = struct {
     branch: BranchId,
     degenerate: bool,
@@ -317,12 +367,14 @@ pub const DecisionLeaf = struct {
     bindings: Span(PatternBinding),
 };
 
+/// Public `PatternBinding` declaration.
 pub const PatternBinding = struct {
     binder: ExecutableValueRef,
     source: PatternPathValuePlanId,
     ty: TypeId,
 };
 
+/// Public `PackedErasedFn` declaration.
 pub const PackedErasedFn = struct {
     sig_key: repr.ErasedFnSigKey,
     code: ExecutableProcId,
@@ -331,6 +383,7 @@ pub const PackedErasedFn = struct {
     capture_shape: repr.CaptureShapeKey,
 };
 
+/// Public `Expr` declaration.
 pub const Expr = struct {
     ty: TypeId,
     value: ExecutableValueRef,
@@ -429,6 +482,7 @@ pub const Expr = struct {
     };
 };
 
+/// Public `Stmt` declaration.
 pub const Stmt = union(enum) {
     decl: struct {
         value: ExecutableValueRef,
@@ -455,27 +509,32 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Public `FnDef` declaration.
 pub const FnDef = struct {
     args: Span(TypedValue),
     body: ExprId,
 };
 
+/// Public `HostedFnDef` declaration.
 pub const HostedFnDef = struct {
     args: Span(TypedValue),
     ret_ty: TypeId,
     hosted: @import("../hosted.zig").Proc,
 };
 
+/// Public `DefVal` declaration.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
 };
 
+/// Public `ProcOrigin` declaration.
 pub const ProcOrigin = union(enum) {
     source: canonical.MirProcedureRef,
     erased_adapter: repr.ErasedAdapterKey,
 };
 
+/// Public `Def` declaration.
 pub const Def = struct {
     proc: ExecutableProcId,
     origin: ProcOrigin,
@@ -483,6 +542,7 @@ pub const Def = struct {
     value: DefVal,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     next_value_ref: u32 = 0,

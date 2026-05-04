@@ -25,6 +25,7 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 
+/// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
     compiled_buffer: struct {
@@ -77,6 +78,7 @@ pub const ModuleEnvStorage = union(enum) {
     }
 };
 
+/// Public `CheckedModuleArtifactKey` declaration.
 pub const CheckedModuleArtifactKey = struct {
     source_hash: [32]u8 = [_]u8{0} ** 32,
     compiler_artifact_hash: [32]u8 = [_]u8{0} ** 32,
@@ -115,6 +117,7 @@ pub const CheckedModuleArtifactKey = struct {
     }
 };
 
+/// Public `ModuleIdentity` declaration.
 pub const ModuleIdentity = struct {
     module_idx: u32,
     module_name: canonical.ModuleNameId,
@@ -123,6 +126,7 @@ pub const ModuleIdentity = struct {
     kind: ModuleEnv.ModuleKind,
 };
 
+/// Public `ImportIdentity` declaration.
 pub const ImportIdentity = struct {
     import_idx: CIR.Import.Idx,
     resolved_module_idx: ?u32,
@@ -193,6 +197,7 @@ fn artifactRef(key: CheckedModuleArtifactKey) canonical.ArtifactRef {
     return .{ .bytes = key.bytes };
 }
 
+/// Public `PlatformRequirementContextKey` declaration.
 pub const PlatformRequirementContextKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 
@@ -208,6 +213,7 @@ pub const PlatformRequirementContextKey = struct {
     }
 };
 
+/// Public `CheckingContextIdentity` declaration.
 pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
@@ -245,12 +251,14 @@ pub const CheckingContextIdentity = struct {
     }
 };
 
+/// Public `PublishImportArtifact` declaration.
 pub const PublishImportArtifact = struct {
     module_idx: u32,
     key: CheckedModuleArtifactKey,
     view: ImportedModuleView,
 };
 
+/// Public `PublishInputs` declaration.
 pub const PublishInputs = struct {
     module_env_storage: ModuleEnvStorage,
     imports: []const PublishImportArtifact = &.{},
@@ -260,6 +268,7 @@ pub const PublishInputs = struct {
     compile_time_finalizer: CompileTimeFinalizer,
 };
 
+/// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
     context: ?*anyopaque = null,
     finalize: *const fn (
@@ -279,6 +288,7 @@ pub const CompileTimeFinalizer = struct {
     }
 };
 
+/// Public `ExplicitRootRequestInput` declaration.
 pub const ExplicitRootRequestInput = struct {
     kind: RootRequestKind,
     source: RootSource,
@@ -286,6 +296,7 @@ pub const ExplicitRootRequestInput = struct {
     exposure: RootExposure,
 };
 
+/// Public `ExportTable` declaration.
 pub const ExportTable = struct {
     defs: []CIR.Def.Idx = &.{},
 
@@ -299,20 +310,24 @@ pub const ExportTable = struct {
     }
 };
 
+/// Public `ExportTableView` declaration.
 pub const ExportTableView = struct {
     defs: []const CIR.Def.Idx = &.{},
 };
 
+/// Public `ProvidesEntry` declaration.
 pub const ProvidesEntry = struct {
     source_name: canonical.ExportNameId,
     ffi_symbol: canonical.ExternalSymbolNameId,
 };
 
+/// Public `RequiresEntry` declaration.
 pub const RequiresEntry = struct {
     platform_name: canonical.ExportNameId,
     declared_source_ty: canonical.CanonicalTypeSchemeKey,
 };
 
+/// Public `ProvidesRequiresMetadata` declaration.
 pub const ProvidesRequiresMetadata = struct {
     provides: []ProvidesEntry = &.{},
     requires: []RequiresEntry = &.{},
@@ -324,6 +339,7 @@ pub const ProvidesRequiresMetadata = struct {
     }
 };
 
+/// Public `RootRequestKind` declaration.
 pub const RootRequestKind = enum {
     runtime_entrypoint,
     provided_export,
@@ -336,6 +352,7 @@ pub const RootRequestKind = enum {
     compile_time_callable,
 };
 
+/// Public `RootAbi` declaration.
 pub const RootAbi = enum {
     roc,
     platform,
@@ -344,6 +361,7 @@ pub const RootAbi = enum {
     compile_time,
 };
 
+/// Public `RootExposure` declaration.
 pub const RootExposure = enum {
     private,
     exported,
@@ -351,6 +369,7 @@ pub const RootExposure = enum {
     hosted,
 };
 
+/// Public `RootSource` declaration.
 pub const RootSource = union(enum) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
@@ -358,6 +377,7 @@ pub const RootSource = union(enum) {
     required_binding: u32,
 };
 
+/// Public `RootRequest` declaration.
 pub const RootRequest = struct {
     order: u32,
     module_idx: u32,
@@ -369,24 +389,28 @@ pub const RootRequest = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
 };
 
+/// Public `LoweringEntrypointRequest` declaration.
 pub const LoweringEntrypointRequest = union(enum) {
     root: RootRequest,
     const_instance: ConstInstantiationRequest,
     callable_binding_instance: CallableBindingInstantiationRequest,
 };
 
+/// Public `CompileTimeEvaluationRequest` declaration.
 pub const CompileTimeEvaluationRequest = union(enum) {
     local_root: RootRequest,
     const_instance: ConstInstantiationRequest,
     callable_binding_instance: CallableBindingInstantiationRequest,
 };
 
+/// Public `CompileTimeEvaluationPayload` declaration.
 pub const CompileTimeEvaluationPayload = union(enum) {
     local_root: CompileTimeRootPayload,
     const_instance: ConstGraphReificationPlanId,
     callable_binding_instance: CallableResultPlanId,
 };
 
+/// Public `RootRequestTable` declaration.
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
 
@@ -779,6 +803,25 @@ fn isHostedProcedureExpr(expr: CIR.Expr) bool {
     };
 }
 
+fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IntrinsicId {
+    const def = module.def(def_idx);
+    const expr_ident = switch (def.expr.data) {
+        .e_anno_only => |anno| anno.ident,
+        else => return null,
+    };
+    const expr_name = module.getIdent(expr_ident);
+    if (std.mem.eql(u8, expr_name, "Builtin.Str.inspect")) return .str_inspect;
+    if (std.mem.endsWith(u8, expr_name, ".is_eq")) return .structural_eq;
+
+    if (def.patternName()) |pattern_ident| {
+        const pattern_name = module.getIdent(pattern_ident);
+        if (std.mem.eql(u8, pattern_name, "Builtin.Str.inspect")) return .str_inspect;
+        if (std.mem.endsWith(u8, pattern_name, ".is_eq")) return .structural_eq;
+    }
+
+    return null;
+}
+
 pub const CheckedBodyId = checked_ids.CheckedBodyId;
 pub const CheckedExprId = checked_ids.CheckedExprId;
 pub const CheckedPatternId = checked_ids.CheckedPatternId;
@@ -786,13 +829,16 @@ pub const CheckedStatementId = checked_ids.CheckedStatementId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
+/// Public `PatternBinderId` declaration.
 pub const PatternBinderId = enum(u32) { _ };
 
+/// Public `CheckedTypeRoot` declaration.
 pub const CheckedTypeRoot = struct {
     id: CheckedTypeId,
     key: canonical.CanonicalTypeKey,
 };
 
+/// Public `CheckedTypeScheme` declaration.
 pub const CheckedTypeScheme = struct {
     id: CheckedTypeSchemeId,
     key: canonical.CanonicalTypeSchemeKey,
@@ -800,6 +846,7 @@ pub const CheckedTypeScheme = struct {
     generalized_vars: []const CheckedTypeId = &.{},
 };
 
+/// Public `CheckedStaticDispatchConstraint` declaration.
 pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
     fn_ty: CheckedTypeId,
@@ -808,37 +855,44 @@ pub const CheckedStaticDispatchConstraint = struct {
     num_literal: ?types.NumeralInfo = null,
 };
 
+/// Public `CheckedTypeVariable` declaration.
 pub const CheckedTypeVariable = struct {
     name: ?[]const u8 = null,
     constraints: []const CheckedStaticDispatchConstraint = &.{},
 };
 
+/// Public `CheckedRecordField` declaration.
 pub const CheckedRecordField = struct {
     name: canonical.RecordFieldLabelId,
     ty: CheckedTypeId,
 };
 
+/// Public `CheckedRecordType` declaration.
 pub const CheckedRecordType = struct {
     fields: []const CheckedRecordField,
     ext: CheckedTypeId,
 };
 
+/// Public `CheckedTag` declaration.
 pub const CheckedTag = struct {
     name: canonical.TagLabelId,
     args: []const CheckedTypeId = &.{},
 };
 
+/// Public `CheckedTagUnionType` declaration.
 pub const CheckedTagUnionType = struct {
     tags: []const CheckedTag,
     ext: CheckedTypeId,
 };
 
+/// Public `CheckedFunctionKind` declaration.
 pub const CheckedFunctionKind = enum {
     pure,
     effectful,
     unbound,
 };
 
+/// Public `CheckedFunctionType` declaration.
 pub const CheckedFunctionType = struct {
     kind: CheckedFunctionKind,
     args: []const CheckedTypeId = &.{},
@@ -846,6 +900,7 @@ pub const CheckedFunctionType = struct {
     needs_instantiation: bool,
 };
 
+/// Public `CheckedBuiltinNominal` declaration.
 pub const CheckedBuiltinNominal = enum {
     bool,
     str,
@@ -866,6 +921,7 @@ pub const CheckedBuiltinNominal = enum {
     box,
 };
 
+/// Public `CheckedAliasType` declaration.
 pub const CheckedAliasType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
@@ -873,6 +929,7 @@ pub const CheckedAliasType = struct {
     args: []const CheckedTypeId = &.{},
 };
 
+/// Public `CheckedNominalType` declaration.
 pub const CheckedNominalType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
@@ -882,6 +939,7 @@ pub const CheckedNominalType = struct {
     args: []const CheckedTypeId = &.{},
 };
 
+/// Public `CheckedTypePayload` declaration.
 pub const CheckedTypePayload = union(enum) {
     pending,
     flex: CheckedTypeVariable,
@@ -897,12 +955,14 @@ pub const CheckedTypePayload = union(enum) {
     empty_tag_union,
 };
 
+/// Public `CheckedTypeStoreView` declaration.
 pub const CheckedTypeStoreView = struct {
     roots: []const CheckedTypeRoot = &.{},
     schemes: []const CheckedTypeScheme = &.{},
     payloads: []const CheckedTypePayload = &.{},
 };
 
+/// Public `CheckedTypeStore` declaration.
 pub const CheckedTypeStore = struct {
     roots: []CheckedTypeRoot = &.{},
     schemes: []CheckedTypeScheme = &.{},
@@ -933,11 +993,19 @@ pub const CheckedTypeStore = struct {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
             if (isExprNodeTag(tag)) {
-                _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.exprType(@enumFromInt(node_idx)));
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+                _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.exprType(expr_idx));
+                switch (module.expr(expr_idx).data) {
+                    .e_call => |call| if (call.constraint_fn_var) |constraint_fn_var| {
+                        _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, constraint_fn_var);
+                    },
+                    else => {},
+                }
             } else if (isPatternNodeTag(tag)) {
                 _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.patternType(@enumFromInt(node_idx)));
             }
         }
+        try appendStaticDispatchTypeRoots(allocator, module, names, &roots, &payloads, &active);
 
         for (module.allDefs()) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.defType(def_idx));
@@ -1066,6 +1134,45 @@ pub const CheckedTypeStore = struct {
     }
 };
 
+fn appendStaticDispatchTypeRoots(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    roots: *std.ArrayList(CheckedTypeRoot),
+    payloads: *std.ArrayList(CheckedTypePayload),
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+) Allocator.Error!void {
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        const tag = module.nodeTag(@enumFromInt(node_idx));
+        switch (tag) {
+            .expr_dispatch_call,
+            .expr_type_dispatch_call,
+            .expr_method_eq,
+            => {},
+            else => continue,
+        }
+
+        const expr = module.expr(@enumFromInt(node_idx));
+        switch (expr.data) {
+            .e_dispatch_call => |dispatch_call| {
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.exprType(dispatch_call.receiver));
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, dispatch_call.constraint_fn_var);
+            },
+            .e_type_dispatch_call => |dispatch_call| {
+                const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno));
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, dispatch_call.constraint_fn_var);
+            },
+            .e_method_eq => |eq| {
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.exprType(eq.lhs));
+                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, eq.constraint_fn_var);
+            },
+            else => unreachable,
+        }
+    }
+}
+
 fn syntheticFunctionTypeKey(
     store: *const CheckedTypeStore,
     kind: CheckedFunctionKind,
@@ -1101,17 +1208,20 @@ fn appendCheckedTypeRoot(
 ) Allocator.Error!CheckedTypeId {
     const resolved = module.typeStoreConst().resolveVar(var_);
     const resolved_var = resolved.var_;
-    const key = try canonical_type_keys.fromVar(
+    if (active.get(resolved_var)) |id| return id;
+
+    const key_info = try canonical_type_keys.fromVarInfo(
         allocator,
         module.typeStoreConst(),
         module.identStoreConst(),
         resolved_var,
     );
-    if (findCheckedTypeRoot(roots.items, key)) |id| return id;
-    if (active.get(resolved_var)) |id| return id;
+    if (!key_info.contains_identity_variables) {
+        if (findCheckedTypeRoot(roots.items, key_info.key)) |id| return id;
+    }
 
     const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
-    try roots.append(allocator, .{ .id = id, .key = key });
+    try roots.append(allocator, .{ .id = id, .key = key_info.key });
     errdefer _ = roots.pop();
     try payloads.append(allocator, .pending);
     errdefer _ = payloads.pop();
@@ -1127,7 +1237,6 @@ fn appendCheckedTypeRoot(
         active,
         resolved.desc.content,
     );
-    _ = active.remove(resolved_var);
 
     deinitCheckedTypePayload(allocator, &payloads.items[@intFromEnum(id)]);
     payloads.items[@intFromEnum(id)] = payload;
@@ -1150,10 +1259,13 @@ fn copyCheckedTypePayload(
             }
             unreachable;
         },
-        .flex => |flex| .{ .flex = .{
-            .name = try copyOptionalIdentText(allocator, module, flex.name),
-            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, roots, payloads, active, flex.constraints),
-        } },
+        .flex => |flex| if (flexDefaultsToDec(module, flex))
+            try copyDefaultDecPayload(allocator, module, names, roots, payloads, active)
+        else
+            .{ .flex = .{
+                .name = try copyOptionalIdentText(allocator, module, flex.name),
+                .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, roots, payloads, active, flex.constraints),
+            } },
         .rigid => |rigid| .{ .rigid = .{
             .name = try copyIdentText(allocator, module, rigid.name),
             .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, roots, payloads, active, rigid.constraints),
@@ -1166,6 +1278,58 @@ fn copyCheckedTypePayload(
         } },
         .structure => |flat| try copyCheckedFlatType(allocator, module, names, roots, payloads, active, flat),
     };
+}
+
+fn flexDefaultsToDec(module: TypedCIR.Module, flex: types.Flex) bool {
+    const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
+    for (constraints) |constraint| {
+        if (constraint.origin == .from_numeral) return true;
+    }
+    return false;
+}
+
+fn copyDefaultDecPayload(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    roots: *std.ArrayList(CheckedTypeRoot),
+    payloads: *std.ArrayList(CheckedTypePayload),
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+) Allocator.Error!CheckedTypePayload {
+    _ = active;
+    const backing = try appendSyntheticCheckedTypeRoot(
+        allocator,
+        roots,
+        payloads,
+        canonical_type_keys.emptyTagUnion(),
+        .empty_tag_union,
+    );
+    const module_env = module.moduleEnvConst();
+    return .{ .nominal = .{
+        .name = try names.internTypeIdent(module.identStoreConst(), module_env.idents.dec_type),
+        .origin_module = try names.internModuleIdent(module.identStoreConst(), module_env.idents.builtin_module),
+        .builtin = .dec,
+        .is_opaque = true,
+        .backing = backing,
+        .args = &.{},
+    } };
+}
+
+fn appendSyntheticCheckedTypeRoot(
+    allocator: Allocator,
+    roots: *std.ArrayList(CheckedTypeRoot),
+    payloads: *std.ArrayList(CheckedTypePayload),
+    key: canonical.CanonicalTypeKey,
+    payload: CheckedTypePayload,
+) Allocator.Error!CheckedTypeId {
+    if (findCheckedTypeRoot(roots.items, key)) |existing| return existing;
+
+    const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
+    try roots.append(allocator, .{ .id = id, .key = key });
+    errdefer _ = roots.pop();
+    try payloads.append(allocator, payload);
+    errdefer _ = payloads.pop();
+    return id;
 }
 
 fn copyCheckedFlatType(
@@ -1410,67 +1574,80 @@ fn findCheckedTypeScheme(schemes: []const CheckedTypeScheme, key: canonical.Cano
     return null;
 }
 
+/// Public `CheckedBody` declaration.
 pub const CheckedBody = struct {
     id: CheckedBodyId,
     root_expr: CheckedExprId,
     owner_template: canonical.ProcedureTemplateRef,
 };
 
+/// Public `CheckedPatternBinder` declaration.
 pub const CheckedPatternBinder = struct {
     id: PatternBinderId,
     pattern: CheckedPatternId,
 };
 
+/// Public `CheckedStringLiteralId` declaration.
 pub const CheckedStringLiteralId = enum(u32) { _ };
 
+/// Public `CheckedRecordExprField` declaration.
 pub const CheckedRecordExprField = struct {
     label: canonical.RecordFieldLabelId,
     value: CheckedExprId,
 };
 
+/// Public `CheckedIfBranch` declaration.
 pub const CheckedIfBranch = struct {
     cond: CheckedExprId,
     body: CheckedExprId,
 };
 
+/// Public `CheckedMatchBranchPattern` declaration.
 pub const CheckedMatchBranchPattern = struct {
     pattern: CheckedPatternId,
     degenerate: bool,
     binder_remaps: []const CheckedAlternativeBinderRemap,
 };
 
+/// Public `CheckedAlternativeBinderRemap` declaration.
 pub const CheckedAlternativeBinderRemap = struct {
     candidate_binder: PatternBinderId,
     representative_binder: PatternBinderId,
 };
 
+/// Public `CheckedMatchBranch` declaration.
 pub const CheckedMatchBranch = struct {
     patterns: []const CheckedMatchBranchPattern,
     value: CheckedExprId,
     guard: ?CheckedExprId,
 };
 
+/// Public `CheckedCapture` declaration.
 pub const CheckedCapture = struct {
     pattern: CheckedPatternId,
     scope_depth: u32,
 };
 
+/// Public `CheckedRecordDestructKind` declaration.
 pub const CheckedRecordDestructKind = union(enum) {
     required: CheckedPatternId,
     sub_pattern: CheckedPatternId,
     rest: CheckedPatternId,
 };
 
+/// Public `CheckedRecordDestruct` declaration.
 pub const CheckedRecordDestruct = struct {
     label: canonical.RecordFieldLabelId,
     kind: CheckedRecordDestructKind,
 };
 
+/// Public `CheckedListRestPattern` declaration.
 pub const CheckedListRestPattern = struct {
     index: u32,
     pattern: ?CheckedPatternId,
 };
 
+/// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
@@ -1492,6 +1669,7 @@ pub const CheckedStatementData = union(enum) {
     runtime_error,
 };
 
+/// Public `CheckedPatternData` declaration.
 pub const CheckedPatternData = union(enum) {
     pending,
     assign: PatternBinderId,
@@ -1532,6 +1710,7 @@ pub const CheckedPatternData = union(enum) {
     runtime_error,
 };
 
+/// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
     pending,
     num: struct {
@@ -1587,6 +1766,7 @@ pub const CheckedExprData = union(enum) {
         func: CheckedExprId,
         args: []const CheckedExprId,
         called_via: base.CalledVia,
+        source_fn_ty_payload: CheckedTypeId,
     },
     record: struct {
         fields: []const CheckedRecordExprField,
@@ -1667,11 +1847,13 @@ pub const CheckedExprData = union(enum) {
     },
 };
 
+/// Public `CheckedReturnContext` declaration.
 pub const CheckedReturnContext = enum {
     return_expr,
     try_suffix,
 };
 
+/// Public `CheckedExpr` declaration.
 pub const CheckedExpr = struct {
     id: CheckedExprId,
     ty: CheckedTypeId,
@@ -1679,6 +1861,7 @@ pub const CheckedExpr = struct {
     data: CheckedExprData,
 };
 
+/// Public `CheckedPattern` declaration.
 pub const CheckedPattern = struct {
     id: CheckedPatternId,
     ty: CheckedTypeId,
@@ -1686,12 +1869,14 @@ pub const CheckedPattern = struct {
     data: CheckedPatternData,
 };
 
+/// Public `CheckedStatement` declaration.
 pub const CheckedStatement = struct {
     id: CheckedStatementId,
     source_region: base.Region,
     data: CheckedStatementData,
 };
 
+/// Public `CheckedBodyStoreView` declaration.
 pub const CheckedBodyStoreView = struct {
     bodies: []const CheckedBody = &.{},
     exprs: []const CheckedExpr = &.{},
@@ -1702,6 +1887,7 @@ pub const CheckedBodyStoreView = struct {
     pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
 };
 
+/// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
     bodies: []CheckedBody = &.{},
     exprs: []CheckedExpr = &.{},
@@ -1819,6 +2005,7 @@ pub const CheckedBodyStore = struct {
             .string_builder = &string_builder,
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
+            .checked_types = checked_types,
         };
 
         node_idx = 0;
@@ -1871,8 +2058,8 @@ pub const CheckedBodyStore = struct {
         return self.exprs[@intFromEnum(id)];
     }
 
-    pub fn exprIdForSource(self: *const CheckedBodyStore, expr: CIR.Expr.Idx) ?CheckedExprId {
-        const raw = @intFromEnum(expr);
+    pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
+        const raw = @intFromEnum(source_expr);
         if (raw >= self.expr_by_node.len) return null;
         return self.expr_by_node[raw];
     }
@@ -1909,10 +2096,11 @@ pub const CheckedBodyStore = struct {
                 }
                 unreachable;
             };
-            switch (&self.exprs[@intFromEnum(checked_expr)].data) {
-                .dispatch_call => |slot| slot.* = entry.value_ptr.*,
-                .method_eq => |slot| slot.* = entry.value_ptr.*,
-                .type_dispatch_call => |slot| slot.* = entry.value_ptr.*,
+            const data = &self.exprs[@intFromEnum(checked_expr)].data;
+            switch (data.*) {
+                .dispatch_call => data.* = .{ .dispatch_call = entry.value_ptr.* },
+                .method_eq => data.* = .{ .method_eq = entry.value_ptr.* },
+                .type_dispatch_call => data.* = .{ .type_dispatch_call = entry.value_ptr.* },
                 else => {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
@@ -1942,10 +2130,14 @@ pub const CheckedBodyStore = struct {
                 unreachable;
             };
             std.debug.assert(ref_id == indexed);
-            switch (&self.exprs[@intFromEnum(record.expr)].data) {
-                .lookup_local => |lookup| lookup.resolved = ref_id,
-                .lookup_external => |slot| slot.* = ref_id,
-                .lookup_required => |slot| slot.* = ref_id,
+            const data = &self.exprs[@intFromEnum(record.expr)].data;
+            switch (data.*) {
+                .lookup_local => |lookup| data.* = .{ .lookup_local = .{
+                    .pattern = lookup.pattern,
+                    .resolved = ref_id,
+                } },
+                .lookup_external => data.* = .{ .lookup_external = ref_id },
+                .lookup_required => data.* = .{ .lookup_required = ref_id },
                 else => {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(
@@ -2048,6 +2240,7 @@ const CheckedBodyPayloadCopier = struct {
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
+    checked_types: *const CheckedTypeStore,
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -2090,6 +2283,10 @@ const CheckedBodyPayloadCopier = struct {
                 .func = self.checkedExpr(call.func),
                 .args = try self.copyExprSpan(call.args),
                 .called_via = call.called_via,
+                .source_fn_ty_payload = try self.checkedTypeForRequiredVar(
+                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
+                    "checked call function constraint type root was not published",
+                ),
             } },
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
@@ -2442,7 +2639,8 @@ const CheckedBodyPayloadCopier = struct {
             .nominal => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
             .nominal_external => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
             .record_destructure => |record| {
-                for (self.module.sliceRecordDestructs(record.destructs)) |destruct| {
+                for (self.module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const destruct = self.module.getRecordDestruct(destruct_idx);
                     switch (destruct.kind) {
                         .Required,
                         .SubPattern,
@@ -2517,6 +2715,20 @@ const CheckedBodyPayloadCopier = struct {
             std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
         unreachable;
+    }
+
+    fn checkedTypeForRequiredVar(
+        self: *@This(),
+        var_: Var,
+        comptime message: []const u8,
+    ) Allocator.Error!CheckedTypeId {
+        const key = try canonical_type_keys.fromVar(
+            self.allocator,
+            self.module.typeStoreConst(),
+            self.module.identStoreConst(),
+            var_,
+        );
+        return self.checked_types.rootForKey(key) orelse checkedArtifactInvariant(message, .{});
     }
 
     fn checkedPattern(self: *const @This(), pattern: CIR.Pattern.Idx) CheckedPatternId {
@@ -2695,12 +2907,64 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
     return std.mem.startsWith(u8, @tagName(tag), "statement_");
 }
 
+/// Public `CheckedProcedureBody` declaration.
 pub const CheckedProcedureBody = union(enum) {
     checked_body: CheckedBodyId,
     promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
+    intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
 };
 
+/// Public `IntrinsicId` declaration.
+pub const IntrinsicId = enum {
+    str_inspect,
+    structural_eq,
+};
+
+/// Public `IntrinsicWrapper` declaration.
+pub const IntrinsicWrapper = struct {
+    id: canonical.IntrinsicWrapperId,
+    template: canonical.ProcedureTemplateRef,
+    checked_fn_root: CheckedTypeId,
+    intrinsic: IntrinsicId,
+};
+
+/// Public `IntrinsicWrapperTable` declaration.
+pub const IntrinsicWrapperTable = struct {
+    wrappers: []IntrinsicWrapper = &.{},
+
+    pub fn append(
+        self: *IntrinsicWrapperTable,
+        allocator: Allocator,
+        template: canonical.ProcedureTemplateRef,
+        checked_fn_root: CheckedTypeId,
+        intrinsic: IntrinsicId,
+    ) Allocator.Error!canonical.IntrinsicWrapperId {
+        const id: canonical.IntrinsicWrapperId = @enumFromInt(@as(u32, @intCast(self.wrappers.len)));
+        const next = try allocator.alloc(IntrinsicWrapper, self.wrappers.len + 1);
+        @memcpy(next[0..self.wrappers.len], self.wrappers);
+        next[self.wrappers.len] = .{
+            .id = id,
+            .template = template,
+            .checked_fn_root = checked_fn_root,
+            .intrinsic = intrinsic,
+        };
+        allocator.free(self.wrappers);
+        self.wrappers = next;
+        return id;
+    }
+
+    pub fn get(self: *const IntrinsicWrapperTable, id: canonical.IntrinsicWrapperId) IntrinsicWrapper {
+        return self.wrappers[@intFromEnum(id)];
+    }
+
+    pub fn deinit(self: *IntrinsicWrapperTable, allocator: Allocator) void {
+        allocator.free(self.wrappers);
+        self.* = .{};
+    }
+};
+
+/// Public `EntryWrapper` declaration.
 pub const EntryWrapper = struct {
     id: canonical.EntryWrapperId,
     root: ComptimeRootId,
@@ -2709,6 +2973,7 @@ pub const EntryWrapper = struct {
     body_expr: CheckedExprId,
 };
 
+/// Public `EntryWrapperTable` declaration.
 pub const EntryWrapperTable = struct {
     wrappers: []EntryWrapper = &.{},
 
@@ -2753,12 +3018,14 @@ pub const EntryWrapperTable = struct {
     }
 };
 
+/// Public `PromotedWrapperParam` declaration.
 pub const PromotedWrapperParam = struct {
     index: u32,
     checked_ty: CheckedTypeId,
     source_ty: canonical.CanonicalTypeKey,
 };
 
+/// Public `PrivateCaptureRef` declaration.
 pub const PrivateCaptureRef = struct {
     artifact: CheckedModuleArtifactKey,
     owner: PromotedCaptureId,
@@ -2766,68 +3033,82 @@ pub const PrivateCaptureRef = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
 };
 
+/// Public `PrivateCaptureInstantiationKey` declaration.
 pub const PrivateCaptureInstantiationKey = struct {
     capture_ref: PrivateCaptureRef,
     requested_source_ty: canonical.CanonicalTypeKey,
 };
 
+/// Public `PromotedWrapperArg` declaration.
 pub const PromotedWrapperArg = union(enum) {
     param: u32,
     private_capture: PrivateCaptureRef,
 };
 
+/// Public `ExecutableValueTransformPlanId` declaration.
 pub const ExecutableValueTransformPlanId = enum(u32) { _ };
+/// Public `SessionExecutableValueTransformId` declaration.
 pub const SessionExecutableValueTransformId = enum(u32) { _ };
 
+/// Public `PublishedExecutableValueTransformRef` declaration.
 pub const PublishedExecutableValueTransformRef = struct {
     artifact: CheckedModuleArtifactKey,
     transform: ExecutableValueTransformPlanId,
 };
 
+/// Public `ExecutableValueTransformRef` declaration.
 pub const ExecutableValueTransformRef = union(enum) {
     session: SessionExecutableValueTransformId,
     published: PublishedExecutableValueTransformRef,
 };
 
+/// Public `ExecutableValueEndpoint` declaration.
 pub const ExecutableValueEndpoint = struct {
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ValueTransformRecordField` declaration.
 pub const ValueTransformRecordField = struct {
     field: canonical.RecordFieldLabelId,
     transform: ExecutableValueTransformPlanId,
 };
 
+/// Public `ValueTransformTupleElem` declaration.
 pub const ValueTransformTupleElem = struct {
     index: u32,
     transform: ExecutableValueTransformPlanId,
 };
 
+/// Public `ValueTransformTagPayloadEdge` declaration.
 pub const ValueTransformTagPayloadEdge = struct {
     source_payload_index: u32,
     target_payload_index: u32,
     transform: ExecutableValueTransformPlanId,
 };
 
+/// Public `ValueTransformTagCase` declaration.
 pub const ValueTransformTagCase = struct {
     source_tag: canonical.TagLabelId,
     target_tag: canonical.TagLabelId,
     payloads: []const ValueTransformTagPayloadEdge = &.{},
 };
 
+/// Public `BoxPayloadTransformKind` declaration.
 pub const BoxPayloadTransformKind = enum {
     payload_to_box,
     box_to_payload,
     box_to_box,
 };
 
+/// Public `BoxPayloadTransformPlan` declaration.
 pub const BoxPayloadTransformPlan = struct {
     boundary: canonical.BoxBoundaryId,
     kind: BoxPayloadTransformKind,
     payload: ExecutableValueTransformPlanId,
 };
 
+/// Public `ExecutableValueTransformOp` declaration.
 pub const ExecutableValueTransformOp = union(enum) {
     identity,
     structural_bridge: ExecutableStructuralBridgePlan,
@@ -2847,6 +3128,7 @@ pub const ExecutableValueTransformOp = union(enum) {
     already_erased_callable: AlreadyErasedCallableTransformPlan,
 };
 
+/// Public `ExecutableStructuralBridgePlan` declaration.
 pub const ExecutableStructuralBridgePlan = union(enum) {
     direct,
     zst,
@@ -2866,17 +3148,20 @@ pub const ExecutableStructuralBridgePlan = union(enum) {
     },
 };
 
+/// Public `CallableToErasedTransformPlan` declaration.
 pub const CallableToErasedTransformPlan = union(enum) {
     finite_value: FiniteCallableValueToErasedPlan,
     proc_value: ProcValueToErasedPlan,
 };
 
+/// Public `FiniteCallableValueToErasedPlan` declaration.
 pub const FiniteCallableValueToErasedPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
     adapter_key: canonical.ErasedAdapterKey,
 };
 
+/// Public `ProcValueToErasedPlan` declaration.
 pub const ProcValueToErasedPlan = struct {
     proc_value: canonical.ProcedureCallableRef,
     erased_fn_sig_key: canonical.ErasedFnSigKey,
@@ -2885,15 +3170,18 @@ pub const ProcValueToErasedPlan = struct {
     capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
+/// Public `AlreadyErasedCallableTransformPlan` declaration.
 pub const AlreadyErasedCallableTransformPlan = struct {
     sig_key: canonical.ErasedFnSigKey,
 };
 
+/// Public `ValueTransformProvenance` declaration.
 pub const ValueTransformProvenance = union(enum) {
     none,
     box_erasure: []const canonical.BoxBoundaryId,
 };
 
+/// Public `ExecutableValueTransformPlan` declaration.
 pub const ExecutableValueTransformPlan = struct {
     from: ExecutableValueEndpoint,
     to: ExecutableValueEndpoint,
@@ -2901,6 +3189,7 @@ pub const ExecutableValueTransformPlan = struct {
     op: ExecutableValueTransformOp,
 };
 
+/// Public `ExecutableValueTransformPlanStore` declaration.
 pub const ExecutableValueTransformPlanStore = struct {
     plans: []ExecutableValueTransformPlan = &.{},
 
@@ -2955,13 +3244,16 @@ pub const ExecutableValueTransformPlanStore = struct {
     }
 };
 
+/// Public `ExecutableTypePayloadId` declaration.
 pub const ExecutableTypePayloadId = enum(u32) { _ };
 
+/// Public `ExecutableTypePayloadRef` declaration.
 pub const ExecutableTypePayloadRef = struct {
     artifact: canonical.ArtifactRef,
     payload: ExecutableTypePayloadId,
 };
 
+/// Public `ExecutablePrimitive` declaration.
 pub const ExecutablePrimitive = enum {
     bool,
     str,
@@ -2981,34 +3273,40 @@ pub const ExecutablePrimitive = enum {
     erased,
 };
 
+/// Public `ExecutableTypePayloadChild` declaration.
 pub const ExecutableTypePayloadChild = struct {
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableRecordFieldPayload` declaration.
 pub const ExecutableRecordFieldPayload = struct {
     field: canonical.RecordFieldLabelId,
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableTupleElemPayload` declaration.
 pub const ExecutableTupleElemPayload = struct {
     index: u32,
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableTagPayload` declaration.
 pub const ExecutableTagPayload = struct {
     index: u32,
     ty: ExecutableTypePayloadRef,
     key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableTagVariantPayload` declaration.
 pub const ExecutableTagVariantPayload = struct {
     tag: canonical.TagLabelId,
     payloads: []const ExecutableTagPayload = &.{},
 };
 
+/// Public `ExecutableNominalPayload` declaration.
 pub const ExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
@@ -3016,17 +3314,20 @@ pub const ExecutableNominalPayload = struct {
     backing_key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableCallableSetMemberPayload` declaration.
 pub const ExecutableCallableSetMemberPayload = struct {
     member: canonical.CallableSetMemberId,
     payload_ty: ?ExecutableTypePayloadRef = null,
     payload_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
 };
 
+/// Public `ExecutableCallableSetPayload` declaration.
 pub const ExecutableCallableSetPayload = struct {
     key: canonical.CanonicalCallableSetKey,
     members: []const ExecutableCallableSetMemberPayload = &.{},
 };
 
+/// Public `ExecutableErasedFnPayload` declaration.
 pub const ExecutableErasedFnPayload = struct {
     sig_key: canonical.ErasedFnSigKey,
     capture_shape_key: canonical.CaptureShapeKey,
@@ -3034,6 +3335,7 @@ pub const ExecutableErasedFnPayload = struct {
     capture_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
 };
 
+/// Public `ExecutableTypePayload` declaration.
 pub const ExecutableTypePayload = union(enum) {
     pending,
     primitive: ExecutablePrimitive,
@@ -3049,11 +3351,13 @@ pub const ExecutableTypePayload = union(enum) {
     recursive_ref: ExecutableTypePayloadId,
 };
 
+/// Public `ExecutableTypePayloadEntry` declaration.
 pub const ExecutableTypePayloadEntry = struct {
     key: canonical.CanonicalExecValueTypeKey,
     payload: ExecutableTypePayload,
 };
 
+/// Public `ExecutableTypePayloadStore` declaration.
 pub const ExecutableTypePayloadStore = struct {
     entries: []ExecutableTypePayloadEntry = &.{},
     by_key: std.AutoHashMap(canonical.CanonicalExecValueTypeKey, ExecutableTypePayloadId),
@@ -3190,6 +3494,7 @@ pub const ExecutableTypePayloadStore = struct {
     }
 };
 
+/// Public `CallableSetDescriptorStore` declaration.
 pub const CallableSetDescriptorStore = struct {
     descriptors: []const canonical.CanonicalCallableSetDescriptor = &.{},
 
@@ -3309,17 +3614,20 @@ fn cloneCallableSetMembers(
     return members;
 }
 
+/// Public `ExecutableProcedureParamPayload` declaration.
 pub const ExecutableProcedureParamPayload = struct {
     param: PromotedWrapperParam,
     exec_ty: ExecutableTypePayloadRef,
     exec_ty_key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ExecutableHiddenCapturePayload` declaration.
 pub const ExecutableHiddenCapturePayload = struct {
     exec_ty: ExecutableTypePayloadRef,
     exec_ty_key: canonical.CanonicalExecValueTypeKey,
 };
 
+/// Public `ErasedPromotedProcedureExecutableSignaturePayloads` declaration.
 pub const ErasedPromotedProcedureExecutableSignaturePayloads = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     param_exec_tys: []const ExecutableTypePayloadRef = &.{},
@@ -3334,6 +3642,7 @@ pub const ErasedPromotedProcedureExecutableSignaturePayloads = struct {
     capture_shape_key: canonical.CaptureShapeKey,
 };
 
+/// Public `ErasedPromotedProcedureExecutableSignature` declaration.
 pub const ErasedPromotedProcedureExecutableSignature = struct {
     specialization_key: canonical.ExecutableSpecializationKey,
     source_fn_ty: canonical.CanonicalTypeKey,
@@ -3347,6 +3656,7 @@ pub const ErasedPromotedProcedureExecutableSignature = struct {
     hidden_capture: ?ExecutableHiddenCapturePayload = null,
 };
 
+/// Public `FinitePromotedWrapperBodyPlan` declaration.
 pub const FinitePromotedWrapperBodyPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
@@ -3359,47 +3669,56 @@ pub const FinitePromotedWrapperBodyPlan = struct {
     call_args: []const PromotedWrapperArg = &.{},
 };
 
+/// Public `ErasedHiddenCaptureArgPlan` declaration.
 pub const ErasedHiddenCaptureArgPlan = union(enum) {
     none,
     materialized_capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
+/// Public `ErasedCaptureExecutableMaterializationPlan` declaration.
 pub const ErasedCaptureExecutableMaterializationPlan = union(enum) {
     none,
     zero_sized_typed: canonical.CanonicalExecValueTypeKey,
     node: ErasedCaptureExecutableMaterializationNodeId,
 };
 
+/// Public `NoReachableCallableSlotsProof` declaration.
 pub const NoReachableCallableSlotsProof = enum {
     checked_artifact_verified,
 };
 
+/// Public `PureConstInstanceRef` declaration.
 pub const PureConstInstanceRef = struct {
     const_instance: ConstInstanceRef,
     no_reachable_callable_slots: NoReachableCallableSlotsProof,
 };
 
+/// Public `PureComptimeValueRef` declaration.
 pub const PureComptimeValueRef = struct {
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
     no_reachable_callable_slots: NoReachableCallableSlotsProof,
 };
 
+/// Public `ErasedCaptureExecutableMaterializationRecordField` declaration.
 pub const ErasedCaptureExecutableMaterializationRecordField = struct {
     field: canonical.RecordFieldLabelId,
     value: ErasedCaptureExecutableMaterializationPlan,
 };
 
+/// Public `ErasedCaptureExecutableMaterializationTagPayload` declaration.
 pub const ErasedCaptureExecutableMaterializationTagPayload = struct {
     index: u32,
     value: ErasedCaptureExecutableMaterializationPlan,
 };
 
+/// Public `ErasedCaptureExecutableMaterializationTagNode` declaration.
 pub const ErasedCaptureExecutableMaterializationTagNode = struct {
     tag: canonical.TagLabelId,
     payloads: []const ErasedCaptureExecutableMaterializationTagPayload,
 };
 
+/// Public `MaterializedFiniteCallableSetValue` declaration.
 pub const MaterializedFiniteCallableSetValue = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
@@ -3407,6 +3726,7 @@ pub const MaterializedFiniteCallableSetValue = struct {
     captures: []const ErasedCaptureExecutableMaterializationPlan = &.{},
 };
 
+/// Public `MaterializedErasedCallableValue` declaration.
 pub const MaterializedErasedCallableValue = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
@@ -3415,6 +3735,7 @@ pub const MaterializedErasedCallableValue = struct {
     provenance: []const canonical.BoxBoundaryId,
 };
 
+/// Public `ErasedCaptureExecutableMaterializationNode` declaration.
 pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
     pending,
     const_instance: ConstInstanceRef,
@@ -3434,6 +3755,7 @@ pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
     recursive_ref: ErasedCaptureExecutableMaterializationNodeId,
 };
 
+/// Public `ErasedPromotedWrapperBodyPlan` declaration.
 pub const ErasedPromotedWrapperBodyPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     params: []const PromotedWrapperParam = &.{},
@@ -3447,12 +3769,14 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
     provenance: []const canonical.BoxBoundaryId,
 };
 
+/// Public `PromotedCallableBodyPlan` declaration.
 pub const PromotedCallableBodyPlan = union(enum) {
     pending,
     finite: FinitePromotedWrapperBodyPlan,
     erased: ErasedPromotedWrapperBodyPlan,
 };
 
+/// Public `PromotedCallableBodyPlanTable` declaration.
 pub const PromotedCallableBodyPlanTable = struct {
     plans: []PromotedCallableBodyPlan = &.{},
 
@@ -3508,7 +3832,6 @@ pub const PromotedCallableBodyPlanTable = struct {
     pub fn verifyPublished(
         self: *const PromotedCallableBodyPlanTable,
         plans: *const CompileTimePlanStore,
-        callable_set_descriptors: *const CallableSetDescriptorStore,
         executable_type_payloads: *const ExecutableTypePayloadStore,
         executable_value_transforms: *const ExecutableValueTransformPlanStore,
         erased_fn_abis: *const canonical.ErasedFnAbiStore,
@@ -3518,7 +3841,6 @@ pub const PromotedCallableBodyPlanTable = struct {
 
         for (self.plans) |plan| verifyPromotedCallableBodyPlan(
             plans,
-            callable_set_descriptors,
             executable_type_payloads,
             executable_value_transforms,
             erased_fn_abis,
@@ -3534,6 +3856,7 @@ pub const PromotedCallableBodyPlanTable = struct {
     }
 };
 
+/// Public `PromotedCallableWrapper` declaration.
 pub const PromotedCallableWrapper = struct {
     id: canonical.PromotedCallableWrapperId,
     promoted_proc: canonical.ProcedureValueRef,
@@ -3546,6 +3869,7 @@ pub const PromotedCallableWrapper = struct {
     body_plan: canonical.PromotedCallableBodyPlanId,
 };
 
+/// Public `PromotedCallableWrapperTable` declaration.
 pub const PromotedCallableWrapperTable = struct {
     wrappers: []PromotedCallableWrapper = &.{},
 
@@ -3620,28 +3944,34 @@ pub const PromotedCallableWrapperTable = struct {
     }
 };
 
+/// Public `StaticDispatchPlanTableRef` declaration.
 pub const StaticDispatchPlanTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
 };
 
+/// Public `ResolvedValueRefTableRef` declaration.
 pub const ResolvedValueRefTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
 };
 
+/// Public `ResolvedValueRefId` declaration.
 pub const ResolvedValueRefId = enum(u32) { _ };
 
+/// Public `LocalBindingRef` declaration.
 pub const LocalBindingRef = struct {
     binder: PatternBinderId,
 };
 
+/// Public `TopLevelBindingRef` declaration.
 pub const TopLevelBindingRef = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
 };
 
+/// Public `ImportedTopLevelValueRef` declaration.
 pub const ImportedTopLevelValueRef = struct {
     artifact: CheckedModuleArtifactKey,
     module_idx: u32,
@@ -3649,6 +3979,7 @@ pub const ImportedTopLevelValueRef = struct {
     pattern: CheckedPatternId,
 };
 
+/// Public `HostedProcRef` declaration.
 pub const HostedProcRef = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
@@ -3656,28 +3987,33 @@ pub const HostedProcRef = struct {
     template: canonical.ProcedureTemplateRef,
 };
 
+/// Public `TopLevelValueRef` declaration.
 pub const TopLevelValueRef = struct {
     artifact: CheckedModuleArtifactKey,
     pattern: CheckedPatternId,
 };
 
+/// Public `RequiredAppProcedureRef` declaration.
 pub const RequiredAppProcedureRef = struct {
     artifact: CheckedModuleArtifactKey,
     app_value: TopLevelValueRef,
     procedure_binding: TopLevelProcedureBindingRef,
 };
 
+/// Public `PromotedProcedureRef` declaration.
 pub const PromotedProcedureRef = struct {
     module_idx: u32,
     proc: canonical.ProcedureValueRef,
 };
 
+/// Public `ConstUseTemplate` declaration.
 pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
     requested_source_ty_template: canonical.CanonicalTypeKey,
     requested_source_ty_payload: ?CheckedTypeId = null,
 };
 
+/// Public `ProcedureBindingRef` declaration.
 pub const ProcedureBindingRef = union(enum) {
     top_level: TopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
@@ -3686,24 +4022,30 @@ pub const ProcedureBindingRef = union(enum) {
     promoted: PromotedProcedureRef,
 };
 
+/// Public `TopLevelProcedureBindingRef` declaration.
 pub const TopLevelProcedureBindingRef = enum(u32) { _ };
+/// Public `CallableEvalTemplateId` declaration.
 pub const CallableEvalTemplateId = enum(u32) { _ };
 
+/// Public `DirectProcedureBinding` declaration.
 pub const DirectProcedureBinding = struct {
     proc_value: canonical.ProcedureValueRef,
     template: canonical.CallableProcedureTemplateRef,
 };
 
+/// Public `ProcedureBindingBody` declaration.
 pub const ProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
     callable_eval_template: CallableEvalTemplateId,
 };
 
+/// Public `TopLevelProcedureBinding` declaration.
 pub const TopLevelProcedureBinding = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
     body: ProcedureBindingBody,
 };
 
+/// Public `TopLevelProcedureBindingTable` declaration.
 pub const TopLevelProcedureBindingTable = struct {
     bindings: []TopLevelProcedureBinding = &.{},
 
@@ -3763,6 +4105,7 @@ pub const TopLevelProcedureBindingTable = struct {
     }
 };
 
+/// Public `CallableEvalTemplate` declaration.
 pub const CallableEvalTemplate = struct {
     id: CallableEvalTemplateId,
     module_idx: u32,
@@ -3772,10 +4115,12 @@ pub const CallableEvalTemplate = struct {
     checked_fn_root: CheckedTypeId,
 };
 
+/// Public `CallableEvalTemplateTableView` declaration.
 pub const CallableEvalTemplateTableView = struct {
     templates: []const CallableEvalTemplate = &.{},
 };
 
+/// Public `CallableEvalTemplateTable` declaration.
 pub const CallableEvalTemplateTable = struct {
     templates: []CallableEvalTemplate = &.{},
 
@@ -3820,6 +4165,7 @@ pub const CallableEvalTemplateTable = struct {
     }
 };
 
+/// Public `ImportedProcedureBindingRef` declaration.
 pub const ImportedProcedureBindingRef = struct {
     artifact: CheckedModuleArtifactKey,
     module_idx: u32,
@@ -3827,12 +4173,14 @@ pub const ImportedProcedureBindingRef = struct {
     pattern: CheckedPatternId,
 };
 
+/// Public `ProcedureUseTemplate` declaration.
 pub const ProcedureUseTemplate = struct {
     binding: ProcedureBindingRef,
     source_fn_ty_template: canonical.CanonicalTypeKey,
     source_fn_ty_payload: ?CheckedTypeId = null,
 };
 
+/// Public `ResolvedValueRef` declaration.
 pub const ResolvedValueRef = union(enum) {
     local_param: LocalBindingRef,
     local_value: LocalBindingRef,
@@ -3852,6 +4200,7 @@ pub const ResolvedValueRef = union(enum) {
     promoted_top_level_proc: ProcedureUseTemplate,
 };
 
+/// Public `ResolvedValueRefRecord` declaration.
 pub const ResolvedValueRefRecord = struct {
     expr: CheckedExprId,
     ref: ResolvedValueRef,
@@ -3859,6 +4208,7 @@ pub const ResolvedValueRefRecord = struct {
     scope_depth: u32,
 };
 
+/// Public `ResolvedValueRefTable` declaration.
 pub const ResolvedValueRefTable = struct {
     records: []ResolvedValueRefRecord = &.{},
     by_checked_expr: []?ResolvedValueRefId = &.{},
@@ -3995,12 +4345,12 @@ fn classifyValueRef(
     const expr = module.expr(expr_idx);
     return switch (expr.data) {
         .e_lookup_local => |local| classifyLocalValueRef(
-                module,
-                local.pattern_idx,
-                hosted_procs,
-                top_level_values,
-                checked_bodies,
-            ),
+            module,
+            local.pattern_idx,
+            hosted_procs,
+            top_level_values,
+            checked_bodies,
+        ),
         .e_lookup_external => |external| classifyImportedValueRef(
             module,
             external.module_idx,
@@ -4228,6 +4578,67 @@ fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?Impo
     return null;
 }
 
+fn collectPublishedExportDefs(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+) Allocator.Error![]CIR.Def.Idx {
+    const module_env = module.moduleEnvConst();
+    var defs = std.ArrayList(CIR.Def.Idx).empty;
+    errdefer defs.deinit(allocator);
+
+    const node_count = module.nodeCount();
+    const seen = try allocator.alloc(bool, node_count);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+        try appendPublishedExportDef(allocator, &defs, seen, def_idx);
+    }
+
+    var exposed_iter = module_env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        if (entry.node_idx == 0) continue;
+
+        const raw_node_idx: u32 = entry.node_idx;
+        if (raw_node_idx >= node_count) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: exposed item {s} points at out-of-range node {d}",
+                    .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
+                );
+            }
+            unreachable;
+        }
+
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (module.nodeTag(node_idx) != .def) continue;
+        try appendPublishedExportDef(allocator, &defs, seen, @enumFromInt(raw_node_idx));
+    }
+
+    return try defs.toOwnedSlice(allocator);
+}
+
+fn appendPublishedExportDef(
+    allocator: Allocator,
+    defs: *std.ArrayList(CIR.Def.Idx),
+    seen: []bool,
+    def_idx: CIR.Def.Idx,
+) Allocator.Error!void {
+    const raw = @intFromEnum(def_idx);
+    if (raw >= seen.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: published export def {d} is outside the module node store",
+                .{raw},
+            );
+        }
+        unreachable;
+    }
+    if (seen[raw]) return;
+    seen[raw] = true;
+    try defs.append(allocator, def_idx);
+}
+
 fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u32) ?PublishImportArtifact {
     for (imports) |import_artifact| {
         if (import_artifact.module_idx == module_idx) return import_artifact;
@@ -4365,6 +4776,7 @@ fn sealCheckedProcedureTemplateRefs(
                 const wrapper = entry_wrappers.get(wrapper_id);
                 try collector.collectExpr(wrapper.body_expr);
             },
+            .intrinsic_wrapper => {},
             .promoted_callable_wrapper => {},
         }
 
@@ -4527,7 +4939,8 @@ const CheckedTemplateRefCollector = struct {
             .expect => |child| try self.collectExpr(child),
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
-                try self.collectExpr(ret.lambda);
+                // `ret.lambda` is the enclosing lambda context for early-return
+                // lowering, not an owned child expression.
             },
             .for_ => |for_| {
                 try self.collectPattern(for_.pattern);
@@ -4625,7 +5038,8 @@ const CheckedTemplateRefCollector = struct {
             .expect => |child| try self.collectExpr(child),
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
-                try self.collectExpr(ret.lambda);
+                // `ret.lambda` is the enclosing lambda context for early-return
+                // lowering, not an owned child expression.
             },
             .for_ => |for_| {
                 try self.collectPattern(for_.pattern);
@@ -4650,22 +5064,26 @@ const CheckedTemplateRefCollector = struct {
     }
 };
 
+/// Public `TopLevelUseSummaryRef` declaration.
 pub const TopLevelUseSummaryRef = struct {
     start: u32 = 0,
     len: u32 = 0,
 };
 
+/// Public `NestedProcSiteTableRef` declaration.
 pub const NestedProcSiteTableRef = struct {
     start: u32 = 0,
     len: u32 = 0,
 };
 
+/// Public `NestedProcKind` declaration.
 pub const NestedProcKind = enum {
     local_function,
     closure,
     desugared_closure,
 };
 
+/// Public `NestedProcPathComponent` declaration.
 pub const NestedProcPathComponent = union(enum) {
     expr: CheckedExprId,
     pattern: CheckedPatternId,
@@ -4674,6 +5092,7 @@ pub const NestedProcPathComponent = union(enum) {
     desugar: u32,
 };
 
+/// Public `NestedProcSite` declaration.
 pub const NestedProcSite = struct {
     site: canonical.NestedProcSiteId,
     owner_template: canonical.ProcedureTemplateRef,
@@ -4683,6 +5102,7 @@ pub const NestedProcSite = struct {
     checked_pattern: ?CheckedPatternId,
 };
 
+/// Public `NestedProcSiteTable` declaration.
 pub const NestedProcSiteTable = struct {
     sites: []NestedProcSite = &.{},
     template_refs: []canonical.NestedProcSiteId = &.{},
@@ -4702,7 +5122,9 @@ pub const NestedProcSiteTable = struct {
             switch (template.body) {
                 .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
                 .entry_wrapper => |wrapper_id| try builder.scanEntryWrapper(entry_wrappers.get(wrapper_id), template),
-                .promoted_callable_wrapper => {},
+                .intrinsic_wrapper,
+                .promoted_callable_wrapper,
+                => {},
             }
             template.nested_proc_sites = .{
                 .start = start,
@@ -4730,6 +5152,7 @@ pub const NestedProcSiteTable = struct {
     }
 };
 
+/// Public `ProcTarget` declaration.
 pub const ProcTarget = union(enum) {
     roc,
     hosted,
@@ -4739,6 +5162,7 @@ pub const ProcTarget = union(enum) {
     promoted_callable,
 };
 
+/// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
     template_id: canonical.CheckedProcedureTemplateId,
@@ -4752,6 +5176,7 @@ pub const CheckedProcedureTemplate = struct {
     target: ProcTarget,
 };
 
+/// Public `CheckedProcedureTemplateTable` declaration.
 pub const CheckedProcedureTemplateTable = struct {
     templates: []CheckedProcedureTemplate = &.{},
     by_def: []?canonical.ProcedureTemplateRef = &.{},
@@ -4763,6 +5188,7 @@ pub const CheckedProcedureTemplateTable = struct {
         owner_artifact: canonical.ArtifactRef,
         checked_types: *const CheckedTypeStore,
         checked_bodies: *CheckedBodyStore,
+        intrinsic_wrappers: *IntrinsicWrapperTable,
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
@@ -4781,10 +5207,11 @@ pub const CheckedProcedureTemplateTable = struct {
                 try names.internExportIdent(module.identStoreConst(), name)
             else
                 null;
+            const intrinsic = intrinsicForProcedureDef(module, def_idx);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
                 .export_name = export_name,
-                .kind = if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
+                .kind = if (intrinsic != null) .intrinsic_wrapper else if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
                 .ordinal = @intFromEnum(def_idx),
                 .source_def_idx = @intFromEnum(def_idx),
             });
@@ -4813,25 +5240,35 @@ pub const CheckedProcedureTemplateTable = struct {
                 module.identStoreConst(),
                 module.defType(def_idx),
             );
-            const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("checked artifact invariant violated: checked procedure body root expression was not published", .{});
-                }
-                unreachable;
+            const body: CheckedProcedureBody = if (intrinsic) |intrinsic_id| blk: {
+                const wrapper_id = try intrinsic_wrappers.append(allocator, template_ref, checked_fn_root, intrinsic_id);
+                break :blk .{ .intrinsic_wrapper = wrapper_id };
+            } else blk: {
+                const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("checked artifact invariant violated: checked procedure body root expression was not published", .{});
+                    }
+                    unreachable;
+                };
+                break :blk .{ .checked_body = try checked_bodies.appendBody(allocator, root_expr, template_ref) };
             };
-            const body = try checked_bodies.appendBody(allocator, root_expr, template_ref);
 
             try templates.append(allocator, .{
                 .proc_base = proc_base,
                 .template_id = template_id,
-                .body = .{ .checked_body = body },
+                .body = body,
                 .checked_fn_scheme = checked_fn_scheme,
                 .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
-                .target = if (isHostedProcedureExpr(def.expr.data)) .hosted else .roc,
+                .target = if (intrinsic != null)
+                    .intrinsic
+                else if (isHostedProcedureExpr(def.expr.data))
+                    .hosted
+                else
+                    .roc,
             });
         }
 
@@ -4934,6 +5371,7 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 };
 
+/// Public `CheckedProcedureTemplateTableView` declaration.
 pub const CheckedProcedureTemplateTableView = struct {
     templates: []const CheckedProcedureTemplate = &.{},
 };
@@ -5081,7 +5519,8 @@ const NestedProcSiteBuilder = struct {
             .expect => |child| try self.scanExpr(child, owner, false),
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
-                try self.scanExpr(ret.lambda, owner, true);
+                // `ret.lambda` is the enclosing lambda context for early-return
+                // lowering, not an owned child expression.
             },
             .field_access => |field| try self.scanExpr(field.receiver, owner, false),
             .structural_eq => |eq| {
@@ -5202,7 +5641,8 @@ const NestedProcSiteBuilder = struct {
             .expect => |child| try self.scanExpr(child, owner, false),
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
-                try self.scanExpr(ret.lambda, owner, true);
+                // `ret.lambda` is the enclosing lambda context for early-return
+                // lowering, not an owned child expression.
             },
             .for_ => |for_| {
                 try self.scanPattern(for_.pattern, owner);
@@ -5227,6 +5667,7 @@ const NestedProcSiteBuilder = struct {
     }
 };
 
+/// Public `HostedProc` declaration.
 pub const HostedProc = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
@@ -5237,6 +5678,7 @@ pub const HostedProc = struct {
     template: canonical.ProcedureTemplateRef,
 };
 
+/// Public `HostedProcTable` declaration.
 pub const HostedProcTable = struct {
     procs: []HostedProc = &.{},
 
@@ -5345,6 +5787,7 @@ pub const HostedProcTable = struct {
     }
 };
 
+/// Public `PlatformAppRelationKey` declaration.
 pub const PlatformAppRelationKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 
@@ -5359,10 +5802,14 @@ pub const PlatformAppRelationKey = struct {
     }
 };
 
+/// Public `PlatformRequiredDeclarationId` declaration.
 pub const PlatformRequiredDeclarationId = enum(u32) { _ };
+/// Public `PlatformRequiredBindingId` declaration.
 pub const PlatformRequiredBindingId = enum(u32) { _ };
+/// Public `PlatformRequirementRelationId` declaration.
 pub const PlatformRequirementRelationId = enum(u32) { _ };
 
+/// Public `PlatformRequiredDeclaration` declaration.
 pub const PlatformRequiredDeclaration = struct {
     id: PlatformRequiredDeclarationId,
     module_idx: u32,
@@ -5372,6 +5819,7 @@ pub const PlatformRequiredDeclaration = struct {
     type_anno: CIR.TypeAnno.Idx,
 };
 
+/// Public `PlatformRequiredDeclarationTable` declaration.
 pub const PlatformRequiredDeclarationTable = struct {
     declarations: []PlatformRequiredDeclaration = &.{},
 
@@ -5443,11 +5891,13 @@ pub const PlatformRequiredDeclarationTable = struct {
     }
 };
 
+/// Public `PlatformRequiredValueUse` declaration.
 pub const PlatformRequiredValueUse = union(enum) {
     const_value: ConstUseTemplate,
     procedure_value: ProcedureUseTemplate,
 };
 
+/// Public `PlatformRequiredBindingInput` declaration.
 pub const PlatformRequiredBindingInput = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
@@ -5457,6 +5907,7 @@ pub const PlatformRequiredBindingInput = struct {
     value_use: PlatformRequiredValueUse,
 };
 
+/// Public `PlatformAppRelation` declaration.
 pub const PlatformAppRelation = struct {
     key: PlatformAppRelationKey,
     requirement_context: PlatformRequirementContextKey,
@@ -5476,6 +5927,7 @@ pub const PlatformAppRelation = struct {
     }
 };
 
+/// Public `PlatformRequiredBinding` declaration.
 pub const PlatformRequiredBinding = struct {
     id: PlatformRequiredBindingId,
     relation: PlatformAppRelationKey,
@@ -5488,6 +5940,7 @@ pub const PlatformRequiredBinding = struct {
     value_use: PlatformRequiredValueUse,
 };
 
+/// Public `PlatformRequiredBindingTable` declaration.
 pub const PlatformRequiredBindingTable = struct {
     bindings: []PlatformRequiredBinding = &.{},
 
@@ -5629,6 +6082,7 @@ pub const PlatformRequiredBindingTable = struct {
     }
 };
 
+/// Public `platformRequirementContextKey` function.
 pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
         artifact.module_identity,
@@ -5636,6 +6090,7 @@ pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Pla
     );
 }
 
+/// Public `buildPlatformAppRelation` function.
 pub fn buildPlatformAppRelation(
     allocator: Allocator,
     platform_declaration_artifact: *const CheckedModuleArtifact,
@@ -5755,10 +6210,9 @@ fn appTopLevelValueByName(
 fn topLevelDefSourceName(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    def: CIR.Def,
+    def: TypedCIR.Def,
 ) Allocator.Error!canonical.ExportNameId {
-    const pattern = module.moduleEnvConst().store.getPattern(def.pattern);
-    switch (pattern) {
+    switch (def.pattern.data) {
         .assign => |assign| return try names.internExportIdent(module.identStoreConst(), assign.ident),
         else => {
             if (builtin.mode == .Debug) {
@@ -5812,12 +6266,18 @@ fn publishRequiresMetadata(
     return requires;
 }
 
+/// Public `BoxPayloadCapabilityId` declaration.
 pub const BoxPayloadCapabilityId = enum(u32) { _ };
+/// Public `OpaqueAtomicProofId` declaration.
 pub const OpaqueAtomicProofId = enum(u32) { _ };
+/// Public `HostedRepresentationCapabilityId` declaration.
 pub const HostedRepresentationCapabilityId = enum(u32) { _ };
+/// Public `PlatformRepresentationCapabilityId` declaration.
 pub const PlatformRepresentationCapabilityId = enum(u32) { _ };
+/// Public `ExportedNominalRepresentationId` declaration.
 pub const ExportedNominalRepresentationId = enum(u32) { _ };
 
+/// Public `BoxPayloadCapabilityEntry` declaration.
 pub const BoxPayloadCapabilityEntry = struct {
     id: BoxPayloadCapabilityId,
     nominal: canonical.NominalTypeKey,
@@ -5828,6 +6288,7 @@ pub const BoxPayloadCapabilityEntry = struct {
     is_opaque: bool,
 };
 
+/// Public `OpaqueAtomicProofEntry` declaration.
 pub const OpaqueAtomicProofEntry = struct {
     id: OpaqueAtomicProofId,
     nominal: canonical.NominalTypeKey,
@@ -5836,6 +6297,7 @@ pub const OpaqueAtomicProofEntry = struct {
     proof: NoReachableCallableSlotsProof,
 };
 
+/// Public `HostedRepresentationCapability` declaration.
 pub const HostedRepresentationCapability = struct {
     id: HostedRepresentationCapabilityId,
     external_symbol_name: canonical.ExternalSymbolNameId,
@@ -5843,6 +6305,7 @@ pub const HostedRepresentationCapability = struct {
     template: canonical.ProcedureTemplateRef,
 };
 
+/// Public `PlatformRepresentationCapability` declaration.
 pub const PlatformRepresentationCapability = struct {
     id: PlatformRepresentationCapabilityId,
     requirement: PlatformRequiredDeclarationId,
@@ -5850,6 +6313,7 @@ pub const PlatformRepresentationCapability = struct {
     declared_source_ty: canonical.CanonicalTypeSchemeKey,
 };
 
+/// Public `ExportedNominalRepresentation` declaration.
 pub const ExportedNominalRepresentation = struct {
     id: ExportedNominalRepresentationId,
     nominal: canonical.NominalTypeKey,
@@ -5858,6 +6322,7 @@ pub const ExportedNominalRepresentation = struct {
     opaque_atomic_proof: ?OpaqueAtomicProofId = null,
 };
 
+/// Public `ModuleInterfaceCapabilities` declaration.
 pub const ModuleInterfaceCapabilities = struct {
     boxed_payload_templates: []const BoxPayloadCapabilityEntry = &.{},
     opaque_atomic_proofs: []const OpaqueAtomicProofEntry = &.{},
@@ -6308,18 +6773,25 @@ fn checkedTagsHaveNoReachableCallableSlots(
     return true;
 }
 
+/// Public `ComptimeSchemaId` declaration.
 pub const ComptimeSchemaId = enum(u32) { _ };
+/// Public `ComptimeValueId` declaration.
 pub const ComptimeValueId = enum(u32) { _ };
+/// Public `ComptimeRootId` declaration.
 pub const ComptimeRootId = enum(u32) { _ };
+/// Public `ComptimeDependencySummaryRequestId` declaration.
 pub const ComptimeDependencySummaryRequestId = enum(u32) { _ };
+/// Public `ConstGraphReificationPlanId` declaration.
 pub const ConstGraphReificationPlanId = enum(u32) { _ };
 
+/// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
     constant,
     callable_binding,
     expect,
 };
 
+/// Public `CompileTimeRootPayload` declaration.
 pub const CompileTimeRootPayload = union(enum) {
     pending,
     const_graph: ConstGraphReificationPlanId,
@@ -6327,6 +6799,7 @@ pub const CompileTimeRootPayload = union(enum) {
     expect,
 };
 
+/// Public `CompileTimeRoot` declaration.
 pub const CompileTimeRoot = struct {
     id: ComptimeRootId,
     module_idx: u32,
@@ -6339,6 +6812,7 @@ pub const CompileTimeRoot = struct {
     payload: CompileTimeRootPayload,
 };
 
+/// Public `CompileTimeRootTable` declaration.
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
 
@@ -6356,7 +6830,7 @@ pub const CompileTimeRootTable = struct {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const stmt = module_env.store.getStatement(statement_idx);
             if (stmt != .s_expect) continue;
-            try appendRoot(&roots, allocator, .{
+            try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .expect,
                 .source = .{ .statement = statement_idx },
@@ -6373,7 +6847,7 @@ pub const CompileTimeRootTable = struct {
 
             const source_ty = module.defType(def_idx);
             const is_callable = sourceTypeIsFunction(module, source_ty);
-            try appendRoot(&roots, allocator, .{
+            try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = if (is_callable) .callable_binding else .constant,
                 .source = .{ .def = def_idx },
@@ -6388,8 +6862,8 @@ pub const CompileTimeRootTable = struct {
     }
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) ?ComptimeRootId {
-        for (self.roots) |root| {
-            if (root.pattern != null and root.pattern.? == pattern) return root.id;
+        for (self.roots) |entry| {
+            if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
         }
         return null;
     }
@@ -6426,22 +6900,22 @@ pub const CompileTimeRootTable = struct {
         payload: CompileTimeRootPayload,
     };
 
-    fn appendRoot(
+    fn appendCompileTimeRoot(
         roots: *std.ArrayList(CompileTimeRoot),
         allocator: Allocator,
-        root: RootWithoutId,
+        entry: RootWithoutId,
     ) Allocator.Error!void {
         const id: ComptimeRootId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
         try roots.append(allocator, .{
             .id = id,
-            .module_idx = root.module_idx,
-            .kind = root.kind,
-            .source = root.source,
-            .pattern = root.pattern,
-            .expr = root.expr,
-            .checked_type = root.checked_type,
+            .module_idx = entry.module_idx,
+            .kind = entry.kind,
+            .source = entry.source,
+            .pattern = entry.pattern,
+            .expr = entry.expr,
+            .checked_type = entry.checked_type,
             .dependency_summary_request = @enumFromInt(@intFromEnum(id)),
-            .payload = root.payload,
+            .payload = entry.payload,
         });
     }
 };
@@ -6483,10 +6957,12 @@ fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: C
     };
 }
 
+/// Public `FiniteCallableLeafInstance` declaration.
 pub const FiniteCallableLeafInstance = struct {
     proc_value: canonical.ProcedureCallableRef,
 };
 
+/// Public `ErasedCallableLeafInstance` declaration.
 pub const ErasedCallableLeafInstance = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
@@ -6495,37 +6971,44 @@ pub const ErasedCallableLeafInstance = struct {
     capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
+/// Public `CallableLeafInstance` declaration.
 pub const CallableLeafInstance = union(enum) {
     finite: FiniteCallableLeafInstance,
     erased_boxed: ErasedCallableLeafInstance,
 };
 
+/// Public `CallableLeafReificationPlan` declaration.
 pub const CallableLeafReificationPlan = union(enum) {
     finite: CallableResultPlanId,
     erased_boxed: CallableResultPlanId,
     already_resolved: CallableLeafInstance,
 };
 
+/// Public `ConstRecordFieldPlan` declaration.
 pub const ConstRecordFieldPlan = struct {
     field: canonical.RecordFieldLabelId,
     value: ConstGraphReificationPlanId,
 };
 
+/// Public `ConstTupleElemPlan` declaration.
 pub const ConstTupleElemPlan = struct {
     index: u32,
     value: ConstGraphReificationPlanId,
 };
 
+/// Public `ConstTagPayloadPlan` declaration.
 pub const ConstTagPayloadPlan = struct {
     index: u32,
     value: ConstGraphReificationPlanId,
 };
 
+/// Public `ConstTagVariantPlan` declaration.
 pub const ConstTagVariantPlan = struct {
     tag: canonical.TagLabelId,
     payloads: []const ConstTagPayloadPlan,
 };
 
+/// Public `ConstGraphReificationPlan` declaration.
 pub const ConstGraphReificationPlan = union(enum) {
     pending,
     scalar: CheckedTypeId,
@@ -6552,6 +7035,7 @@ pub const ConstGraphReificationPlan = union(enum) {
     recursive_ref: ConstGraphReificationPlanId,
 };
 
+/// Public `SerializableCaptureLeafPlan` declaration.
 pub const SerializableCaptureLeafPlan = struct {
     requested_source_ty: canonical.CanonicalTypeKey,
     source_scheme: canonical.CanonicalTypeSchemeKey,
@@ -6559,11 +7043,13 @@ pub const SerializableCaptureLeafPlan = struct {
     reification_plan: ConstGraphReificationPlanId,
 };
 
+/// Public `PrivateCaptureConstMode` declaration.
 pub const PrivateCaptureConstMode = enum {
     pure_no_callable_slots,
     general_may_contain_callable_slots,
 };
 
+/// Public `PrivateCaptureConstLeaf` declaration.
 pub const PrivateCaptureConstLeaf = struct {
     const_ref: ConstRef,
     const_instance: ConstInstanceRef,
@@ -6572,41 +7058,49 @@ pub const PrivateCaptureConstLeaf = struct {
     mode: PrivateCaptureConstMode,
 };
 
+/// Public `CaptureRecordFieldPlan` declaration.
 pub const CaptureRecordFieldPlan = struct {
     field: canonical.RecordFieldLabelId,
     value: CaptureSlotReificationPlanId,
 };
 
+/// Public `CaptureTupleElemPlan` declaration.
 pub const CaptureTupleElemPlan = struct {
     index: u32,
     value: CaptureSlotReificationPlanId,
 };
 
+/// Public `CaptureTagPayloadPlan` declaration.
 pub const CaptureTagPayloadPlan = struct {
     index: u32,
     value: CaptureSlotReificationPlanId,
 };
 
+/// Public `CaptureTagVariantPlan` declaration.
 pub const CaptureTagVariantPlan = struct {
     tag: canonical.TagLabelId,
     payloads: []const CaptureTagPayloadPlan,
 };
 
+/// Public `PrivateCaptureRecordField` declaration.
 pub const PrivateCaptureRecordField = struct {
     field: canonical.RecordFieldLabelId,
     value: PrivateCaptureNodeId,
 };
 
+/// Public `PrivateCaptureTagPayload` declaration.
 pub const PrivateCaptureTagPayload = struct {
     index: u32,
     value: PrivateCaptureNodeId,
 };
 
+/// Public `PrivateCaptureTagNode` declaration.
 pub const PrivateCaptureTagNode = struct {
     tag: canonical.TagLabelId,
     payloads: []const PrivateCaptureTagPayload,
 };
 
+/// Public `CaptureSlotReificationPlan` declaration.
 pub const CaptureSlotReificationPlan = union(enum) {
     pending,
     serializable_leaf: SerializableCaptureLeafPlan,
@@ -6626,17 +7120,20 @@ pub const CaptureSlotReificationPlan = union(enum) {
     recursive_ref: CaptureSlotReificationPlanId,
 };
 
+/// Public `CallableResultMemberPlan` declaration.
 pub const CallableResultMemberPlan = struct {
     member: canonical.CallableSetMemberId,
     capture_slots: []const CaptureSlotReificationPlanId,
 };
 
+/// Public `FiniteCallableResultPlan` declaration.
 pub const FiniteCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
     members: []const CallableResultMemberPlan,
 };
 
+/// Public `ErasedCaptureReificationPlan` declaration.
 pub const ErasedCaptureReificationPlan = union(enum) {
     none,
     zero_sized_typed: canonical.CanonicalExecValueTypeKey,
@@ -6645,16 +7142,19 @@ pub const ErasedCaptureReificationPlan = union(enum) {
     finite_callable_set_value: CallableResultPlanId,
 };
 
+/// Public `ErasedCaptureSlotReificationRef` declaration.
 pub const ErasedCaptureSlotReificationRef = struct {
     source_ty: canonical.CanonicalTypeKey,
     plan: CaptureSlotReificationPlanId,
 };
 
+/// Public `ErasedCallableResultCodePlan` declaration.
 pub const ErasedCallableResultCodePlan = union(enum) {
     materialized_by_lowering: canonical.ErasedCallableCodeRef,
     read_from_interpreted_erased_value,
 };
 
+/// Public `ErasedCallableResultPlan` declaration.
 pub const ErasedCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
@@ -6665,27 +7165,32 @@ pub const ErasedCallableResultPlan = struct {
     executable_signature_payloads: ErasedPromotedProcedureExecutableSignaturePayloads,
 };
 
+/// Public `CallableResultPlan` declaration.
 pub const CallableResultPlan = union(enum) {
     finite: FiniteCallableResultPlan,
     erased: ErasedCallableResultPlan,
 };
 
+/// Public `FiniteCallablePromotionPlan` declaration.
 pub const FiniteCallablePromotionPlan = struct {
     result_plan: CallableResultPlanId,
     selected_member: canonical.CallableSetMemberId,
     promoted_proc: PromotedProcedureRef,
 };
 
+/// Public `ErasedCallablePromotionPlan` declaration.
 pub const ErasedCallablePromotionPlan = struct {
     result_plan: CallableResultPlanId,
     promoted_proc: PromotedProcedureRef,
 };
 
+/// Public `CallablePromotionPlan` declaration.
 pub const CallablePromotionPlan = union(enum) {
     finite: FiniteCallablePromotionPlan,
     erased: ErasedCallablePromotionPlan,
 };
 
+/// Public `PrivateCaptureNode` declaration.
 pub const PrivateCaptureNode = union(enum) {
     pending,
     const_instance_leaf: PrivateCaptureConstLeaf,
@@ -6702,6 +7207,7 @@ pub const PrivateCaptureNode = union(enum) {
     recursive_ref: PrivateCaptureNodeId,
 };
 
+/// Public `CompileTimePlanStore` declaration.
 pub const CompileTimePlanStore = struct {
     const_graphs: std.ArrayList(ConstGraphReificationPlan) = .empty,
     callable_results: std.ArrayList(CallableResultPlan) = .empty,
@@ -6934,7 +7440,7 @@ pub const CompileTimePlanStore = struct {
     ) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, callable_set_descriptors, plan);
+        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
         for (self.callable_results.items) |plan| verifyCallableResultPlan(self, plan);
         for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
         for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, plan);
@@ -7289,7 +7795,6 @@ fn verifyErasedCaptureSlotReificationRef(store: *const CompileTimePlanStore, ref
 
 fn verifyConstGraphReificationPlan(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
     plan: ConstGraphReificationPlan,
 ) void {
     switch (plan) {
@@ -7310,7 +7815,7 @@ fn verifyConstGraphReificationPlan(
             .finite,
             .erased_boxed,
             => |result| verifyCallableResultRef(store, result),
-            .already_resolved => |resolved| verifyCallableLeafInstance(store, callable_set_descriptors, resolved),
+            .already_resolved => |resolved| verifyCallableLeafInstance(store, resolved),
         },
         .callable_schema => {},
         .recursive_ref => |ref| verifyConstGraphRef(store, ref),
@@ -7436,7 +7941,6 @@ fn verifyPrivateCaptureNode(
 
 fn verifyCallableLeafInstance(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
     leaf: CallableLeafInstance,
 ) void {
     switch (leaf) {
@@ -7445,7 +7949,7 @@ fn verifyCallableLeafInstance(
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased callable leaf has no Box(T) provenance", .{});
             }
-            verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
+            verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
         },
     }
 }
@@ -7479,23 +7983,21 @@ fn verifyMaterializedFiniteCallableSetValue(
             std.debug.panic("checked artifact invariant violated: materialized finite erased capture slots are not canonical", .{});
         }
     }
-    for (finite.captures) |capture| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, capture);
+    for (finite.captures) |capture| verifyErasedCaptureExecutableMaterializationPlan(store, capture);
 }
 
 fn verifyMaterializedErasedCallableValue(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
     erased: MaterializedErasedCallableValue,
 ) void {
     if (erased.provenance.len == 0) {
         std.debug.panic("checked artifact invariant violated: materialized erased callable value has no Box(T) provenance", .{});
     }
-    verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
+    verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
 }
 
 fn verifyErasedCaptureExecutableMaterializationPlan(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
     capture: ErasedCaptureExecutableMaterializationPlan,
 ) void {
     switch (capture) {
@@ -7519,15 +8021,15 @@ fn verifyErasedCaptureExecutableMaterializationNode(
             _ = pure.no_reachable_callable_slots;
         },
         .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetValue(store, callable_set_descriptors, finite),
-        .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, callable_set_descriptors, erased),
-        .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, field.value),
-        .tuple => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, item),
+        .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, erased),
+        .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, field.value),
+        .tuple => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, item),
         .tag_union => |tag| {
-            for (tag.payloads) |payload| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, payload.value);
+            for (tag.payloads) |payload| verifyErasedCaptureExecutableMaterializationPlan(store, payload.value);
         },
-        .list => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, item),
-        .box => |payload| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, payload),
-        .nominal => |nominal| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, nominal.backing),
+        .list => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, item),
+        .box => |payload| verifyErasedCaptureExecutableMaterializationPlan(store, payload),
+        .nominal => |nominal| verifyErasedCaptureExecutableMaterializationPlan(store, nominal.backing),
         .recursive_ref => |ref| verifyErasedCaptureExecutableMaterializationRef(store, ref),
     }
 }
@@ -7726,8 +8228,8 @@ fn verifyExecutableStructuralBridgePlan(store: *const ExecutableValueTransformPl
         => {},
         .box_unbox => |child| verifyExecutableValueTransformRef(store, child),
         .box_box => |child| verifyExecutableValueTransformRef(store, child),
-        .singleton_to_tag_union => |singleton| if (singleton.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
-        .tag_union_to_singleton => |singleton| if (singleton.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
+        .singleton_to_tag_union => |bridge| if (bridge.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
+        .tag_union_to_singleton => |bridge| if (bridge.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
     }
 }
 
@@ -7751,7 +8253,6 @@ fn verifyExecutableValueTransformOp(store: *const ExecutableValueTransformPlanSt
 
 fn verifyPromotedCallableBodyPlan(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
     executable_type_payloads: *const ExecutableTypePayloadStore,
     executable_value_transforms: *const ExecutableValueTransformPlanStore,
     erased_fn_abis: *const canonical.ErasedFnAbiStore,
@@ -7791,15 +8292,16 @@ fn verifyPromotedCallableBodyPlan(
                 erased.executable_signature,
                 erased,
             );
-            verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, erased.capture);
+            verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
             switch (erased.hidden_capture_arg) {
                 .none => {},
-                .materialized_capture => |capture| verifyErasedCaptureExecutableMaterializationPlan(store, callable_set_descriptors, capture),
+                .materialized_capture => |capture| verifyErasedCaptureExecutableMaterializationPlan(store, capture),
             }
         },
     }
 }
 
+/// Public `ConstRef` declaration.
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
     owner: ConstOwner,
@@ -7807,26 +8309,31 @@ pub const ConstRef = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
 };
 
+/// Public `ConstOwner` declaration.
 pub const ConstOwner = union(enum) {
     top_level_binding: ConstTopLevelOwner,
     promoted_capture: PromotedCaptureId,
 };
 
+/// Public `ConstTopLevelOwner` declaration.
 pub const ConstTopLevelOwner = struct {
     module_idx: u32,
     pattern: CheckedPatternId,
 };
 
+/// Public `PromotedCaptureId` declaration.
 pub const PromotedCaptureId = struct {
     promoted_proc: PromotedProcedureRef,
     capture_index: u32,
 };
 
+/// Public `TopLevelValueKind` declaration.
 pub const TopLevelValueKind = union(enum) {
     const_ref: ConstRef,
     procedure_binding: TopLevelProcedureBindingRef,
 };
 
+/// Public `TopLevelValueEntry` declaration.
 pub const TopLevelValueEntry = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
@@ -7836,6 +8343,7 @@ pub const TopLevelValueEntry = struct {
     value: TopLevelValueKind,
 };
 
+/// Public `TopLevelValueTable` declaration.
 pub const TopLevelValueTable = struct {
     entries: []TopLevelValueEntry = &.{},
 
@@ -7949,6 +8457,7 @@ pub const TopLevelValueTable = struct {
     }
 };
 
+/// Public `PromotedProcedureProvenance` declaration.
 pub const PromotedProcedureProvenance = union(enum) {
     local_callable_root_result: struct {
         root: ComptimeRootId,
@@ -7977,6 +8486,7 @@ pub const PromotedProcedureProvenance = union(enum) {
     },
 };
 
+/// Public `PromotedProcedure` declaration.
 pub const PromotedProcedure = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
@@ -7985,6 +8495,7 @@ pub const PromotedProcedure = struct {
     provenance: PromotedProcedureProvenance,
 };
 
+/// Public `ReservedPromotedCallableWrapper` declaration.
 pub const ReservedPromotedCallableWrapper = struct {
     promoted_ref: PromotedProcedureRef,
     proc_value: canonical.ProcedureValueRef,
@@ -7995,6 +8506,7 @@ pub const ReservedPromotedCallableWrapper = struct {
     provenance: PromotedProcedureProvenance,
 };
 
+/// Public `PromotedProcedureTable` declaration.
 pub const PromotedProcedureTable = struct {
     procedures: []PromotedProcedure = &.{},
 
@@ -8097,22 +8609,26 @@ pub const PromotedProcedureTable = struct {
     }
 };
 
+/// Public `ComptimeWrappedSchema` declaration.
 pub const ComptimeWrappedSchema = struct {
     type_name: canonical.NominalTypeKey,
     backing: ComptimeSchemaId,
     is_opaque: bool = false,
 };
 
+/// Public `ComptimeFieldSchema` declaration.
 pub const ComptimeFieldSchema = struct {
     name: canonical.RecordFieldLabelId,
     schema: ComptimeSchemaId,
 };
 
+/// Public `ComptimeVariantSchema` declaration.
 pub const ComptimeVariantSchema = struct {
     name: canonical.TagLabelId,
     payloads: []ComptimeSchemaId,
 };
 
+/// Public `ComptimeSchema` declaration.
 pub const ComptimeSchema = union(enum) {
     pending,
     zst,
@@ -8129,11 +8645,13 @@ pub const ComptimeSchema = union(enum) {
     callable: canonical.CanonicalTypeKey,
 };
 
+/// Public `ComptimeVariantValue` declaration.
 pub const ComptimeVariantValue = struct {
     variant_index: u32,
     payloads: []ComptimeValueId,
 };
 
+/// Public `ComptimeValue` declaration.
 pub const ComptimeValue = union(enum) {
     pending,
     zst,
@@ -8152,12 +8670,14 @@ pub const ComptimeValue = union(enum) {
     callable: CallableLeafInstance,
 };
 
+/// Public `ComptimeBinding` declaration.
 pub const ComptimeBinding = struct {
     pattern: CheckedPatternId,
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
 };
 
+/// Public `CompileTimeValueStore` declaration.
 pub const CompileTimeValueStore = struct {
     allocator: Allocator,
     schemas: std.ArrayList(ComptimeSchema),
@@ -8321,21 +8841,36 @@ pub const CompileTimeValueStore = struct {
     }
 };
 
+/// Public `CheckedCallableBodyRef` declaration.
 pub const CheckedCallableBodyRef = enum(u32) { _ };
+/// Public `CheckedConstBodyRef` declaration.
 pub const CheckedConstBodyRef = enum(u32) { _ };
+/// Public `ConstTemplateId` declaration.
 pub const ConstTemplateId = enum(u32) { _ };
+/// Public `ConstInstanceId` declaration.
 pub const ConstInstanceId = enum(u32) { _ };
+/// Public `CallableBindingInstanceId` declaration.
 pub const CallableBindingInstanceId = enum(u32) { _ };
+/// Public `SemanticInstantiationProcedureId` declaration.
 pub const SemanticInstantiationProcedureId = enum(u32) { _ };
+/// Public `CallableResultPlanId` declaration.
 pub const CallableResultPlanId = enum(u32) { _ };
+/// Public `CallablePromotionPlanId` declaration.
 pub const CallablePromotionPlanId = enum(u32) { _ };
+/// Public `ConstReificationPlanId` declaration.
 pub const ConstReificationPlanId = ConstGraphReificationPlanId;
+/// Public `CaptureSlotReificationPlanId` declaration.
 pub const CaptureSlotReificationPlanId = enum(u32) { _ };
+/// Public `ErasedCaptureExecutableMaterializationNodeId` declaration.
 pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
+/// Public `ComptimeDependencySummaryId` declaration.
 pub const ComptimeDependencySummaryId = enum(u32) { _ };
+/// Public `ComptimeProcDependencySummaryId` declaration.
 pub const ComptimeProcDependencySummaryId = enum(u32) { _ };
+/// Public `ComptimeCallSiteId` declaration.
 pub const ComptimeCallSiteId = enum(u32) { _ };
 
+/// Public `CheckedConstBody` declaration.
 pub const CheckedConstBody = struct {
     id: CheckedConstBodyRef,
     root: ComptimeRootId,
@@ -8343,6 +8878,7 @@ pub const CheckedConstBody = struct {
     checked_type: CheckedTypeId,
 };
 
+/// Public `CheckedConstBodyTable` declaration.
 pub const CheckedConstBodyTable = struct {
     bodies: []CheckedConstBody = &.{},
     by_root: []?CheckedConstBodyRef = &.{},
@@ -8395,6 +8931,7 @@ pub const CheckedConstBodyTable = struct {
     }
 };
 
+/// Public `ComptimeAvailabilityUse` declaration.
 pub const ComptimeAvailabilityUse = union(enum) {
     local_root: ComptimeRootId,
     imported_value: TopLevelValueRef,
@@ -8402,29 +8939,34 @@ pub const ComptimeAvailabilityUse = union(enum) {
     procedure_binding: ProcedureBindingRef,
 };
 
+/// Public `ComptimeConcreteValueUse` declaration.
 pub const ComptimeConcreteValueUse = union(enum) {
     const_instance: ConstInstantiationKey,
     callable_binding_instance: CallableBindingInstantiationKey,
     procedure_callable: canonical.ProcedureCallableRef,
 };
 
+/// Public `ComptimeDependencySummary` declaration.
 pub const ComptimeDependencySummary = struct {
     availability_values: []const ComptimeAvailabilityUse = &.{},
     concrete_values: []const ComptimeConcreteValueUse = &.{},
 };
 
+/// Public `ComptimeCallDependency` declaration.
 pub const ComptimeCallDependency = union(enum) {
     call_proc: canonical.ExecutableSpecializationKey,
     call_value_finite: ComptimeFiniteCallValueDependency,
     call_value_erased: ComptimeErasedCallValueDependency,
 };
 
+/// Public `ComptimeFiniteCallValueDependency` declaration.
 pub const ComptimeFiniteCallValueDependency = struct {
     call_site: ComptimeCallSiteId,
     callable_set: canonical.CanonicalCallableSetKey,
     members: []const canonical.ExecutableSpecializationKey = &.{},
 };
 
+/// Public `ComptimeErasedCallValueDependency` declaration.
 pub const ComptimeErasedCallValueDependency = struct {
     call_site: ComptimeCallSiteId,
     code: ErasedCallableCodeDependency,
@@ -8433,15 +8975,18 @@ pub const ComptimeErasedCallValueDependency = struct {
     provenance: []const canonical.BoxBoundaryId = &.{},
 };
 
+/// Public `ErasedCallableCodeDependency` declaration.
 pub const ErasedCallableCodeDependency = union(enum) {
     direct_proc_value: ErasedDirectProcCodeDependency,
     finite_set_adapter: ErasedFiniteAdapterDependency,
 };
 
+/// Public `ErasedDirectProcCodeDependency` declaration.
 pub const ErasedDirectProcCodeDependency = struct {
     erase_plan: ProcValueEraseDependencyPlan,
 };
 
+/// Public `ProcValueEraseDependencyPlan` declaration.
 pub const ProcValueEraseDependencyPlan = struct {
     proc_value: canonical.ProcedureCallableRef,
     erased_fn_sig_key: canonical.ErasedFnSigKey,
@@ -8450,11 +8995,13 @@ pub const ProcValueEraseDependencyPlan = struct {
     capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
 };
 
+/// Public `ErasedFiniteAdapterDependency` declaration.
 pub const ErasedFiniteAdapterDependency = struct {
     adapter_key: canonical.ErasedAdapterKey,
     member_targets: []const canonical.ExecutableSpecializationKey = &.{},
 };
 
+/// Public `ConstGraphDependency` declaration.
 pub const ConstGraphDependency = struct {
     plan: ConstGraphReificationPlanId,
     availability_values: []const ComptimeAvailabilityUse = &.{},
@@ -8462,6 +9009,7 @@ pub const ConstGraphDependency = struct {
     callable_leaves: []const CallableLeafDependency = &.{},
 };
 
+/// Public `CallableResultDependency` declaration.
 pub const CallableResultDependency = struct {
     plan: CallableResultPlanId,
     members: []const canonical.ExecutableSpecializationKey = &.{},
@@ -8470,12 +9018,14 @@ pub const CallableResultDependency = struct {
     erased: ?ErasedCallableDependency = null,
 };
 
+/// Public `CallableLeafDependency` declaration.
 pub const CallableLeafDependency = union(enum) {
     resolved_finite: FiniteCallableLeafInstance,
     promoted_callable: CallableResultPlanId,
     erased_boxed_callable: ErasedCallableDependency,
 };
 
+/// Public `ErasedCallableDependency` declaration.
 pub const ErasedCallableDependency = struct {
     code: ErasedCallableCodeDependency,
     capture_availability: []const ComptimeAvailabilityUse = &.{},
@@ -8483,6 +9033,7 @@ pub const ErasedCallableDependency = struct {
     provenance: []const canonical.BoxBoundaryId = &.{},
 };
 
+/// Public `ComptimeProcDependencySummary` declaration.
 pub const ComptimeProcDependencySummary = struct {
     proc: canonical.ExecutableSpecializationKey,
     availability_values: []const ComptimeAvailabilityUse = &.{},
@@ -8492,6 +9043,7 @@ pub const ComptimeProcDependencySummary = struct {
     callable_result_deps: []const CallableResultDependency = &.{},
 };
 
+/// Public `ComptimeDependencySummaryStoreView` declaration.
 pub const ComptimeDependencySummaryStoreView = struct {
     owner: CheckedModuleArtifactKey,
     root_requests: []const ?ComptimeDependencySummaryId = &.{},
@@ -8499,6 +9051,7 @@ pub const ComptimeDependencySummaryStoreView = struct {
     proc_summaries: []const ComptimeProcDependencySummary = &.{},
 };
 
+/// Public `ComptimeDependencySummaryStore` declaration.
 pub const ComptimeDependencySummaryStore = struct {
     owner: CheckedModuleArtifactKey = .{},
     root_requests: []?ComptimeDependencySummaryId = &.{},
@@ -8759,39 +9312,50 @@ fn deinitExecutableSpecializationKeySlice(
     allocator.free(keys);
 }
 
+/// Public `ComptimeValuePathKey` declaration.
 pub const ComptimeValuePathKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
+/// Public `PromotedCallablePathKey` declaration.
 pub const PromotedCallablePathKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
+/// Public `PrivateCapturePathKey` declaration.
 pub const PrivateCapturePathKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
+/// Public `PrivateCaptureId` declaration.
 pub const PrivateCaptureId = enum(u32) { _ };
+/// Public `PrivateCaptureNodeId` declaration.
 pub const PrivateCaptureNodeId = enum(u32) { _ };
+/// Public `MethodRegistryEntryRef` declaration.
 pub const MethodRegistryEntryRef = enum(u32) { _ };
 
+/// Public `ArtifactCheckedBodyRef` declaration.
 pub const ArtifactCheckedBodyRef = struct {
     artifact: CheckedModuleArtifactKey,
     body: CheckedBodyId,
 };
 
+/// Public `ArtifactCheckedTypeRef` declaration.
 pub const ArtifactCheckedTypeRef = struct {
     artifact: CheckedModuleArtifactKey,
     ty: CheckedTypeId,
 };
 
+/// Public `ArtifactCheckedTypeSchemeRef` declaration.
 pub const ArtifactCheckedTypeSchemeRef = struct {
     artifact: CheckedModuleArtifactKey,
     scheme: CheckedTypeSchemeId,
 };
 
+/// Public `ArtifactCheckedCallableBodyRef` declaration.
 pub const ArtifactCheckedCallableBodyRef = struct {
     artifact: CheckedModuleArtifactKey,
     body: CheckedCallableBodyRef,
 };
 
+/// Public `ArtifactCheckedConstBodyRef` declaration.
 pub const ArtifactCheckedConstBodyRef = struct {
     artifact: CheckedModuleArtifactKey,
     body: CheckedConstBodyRef,
@@ -8799,60 +9363,72 @@ pub const ArtifactCheckedConstBodyRef = struct {
 
 pub const ArtifactProcedureTemplateRef = canonical.ProcedureTemplateRef;
 
+/// Public `ArtifactCallableEvalTemplateRef` declaration.
 pub const ArtifactCallableEvalTemplateRef = struct {
     artifact: CheckedModuleArtifactKey,
     template: CallableEvalTemplateId,
 };
 
+/// Public `ArtifactResolvedValueRefTableRef` declaration.
 pub const ArtifactResolvedValueRefTableRef = struct {
     artifact: CheckedModuleArtifactKey,
     table: ResolvedValueRefTableRef,
 };
 
+/// Public `ArtifactStaticDispatchPlanTableRef` declaration.
 pub const ArtifactStaticDispatchPlanTableRef = struct {
     artifact: CheckedModuleArtifactKey,
     table: StaticDispatchPlanTableRef,
 };
 
+/// Public `ArtifactNestedProcSiteTableRef` declaration.
 pub const ArtifactNestedProcSiteTableRef = struct {
     artifact: CheckedModuleArtifactKey,
     table: NestedProcSiteTableRef,
 };
 
+/// Public `ArtifactModuleInterfaceCapabilitiesRef` declaration.
 pub const ArtifactModuleInterfaceCapabilitiesRef = struct {
     artifact: CheckedModuleArtifactKey,
 };
 
+/// Public `ArtifactCallableResultPlanRef` declaration.
 pub const ArtifactCallableResultPlanRef = struct {
     artifact: CheckedModuleArtifactKey,
     plan: CallableResultPlanId,
 };
 
+/// Public `ArtifactCallablePromotionPlanRef` declaration.
 pub const ArtifactCallablePromotionPlanRef = struct {
     artifact: CheckedModuleArtifactKey,
     plan: CallablePromotionPlanId,
 };
 
+/// Public `ArtifactConstGraphReificationPlanRef` declaration.
 pub const ArtifactConstGraphReificationPlanRef = struct {
     artifact: CheckedModuleArtifactKey,
     plan: ConstReificationPlanId,
 };
 
+/// Public `ArtifactPrivateCaptureNodeRef` declaration.
 pub const ArtifactPrivateCaptureNodeRef = struct {
     artifact: CheckedModuleArtifactKey,
     node: PrivateCaptureNodeId,
 };
 
+/// Public `ArtifactPromotedCallableWrapperRef` declaration.
 pub const ArtifactPromotedCallableWrapperRef = struct {
     artifact: CheckedModuleArtifactKey,
     wrapper: canonical.PromotedCallableWrapperId,
 };
 
+/// Public `ArtifactPromotedCallableBodyPlanRef` declaration.
 pub const ArtifactPromotedCallableBodyPlanRef = struct {
     artifact: CheckedModuleArtifactKey,
     plan: canonical.PromotedCallableBodyPlanId,
 };
 
+/// Public `ImportedTemplateClosureView` declaration.
 pub const ImportedTemplateClosureView = struct {
     checked_bodies: []const ArtifactCheckedBodyRef = &.{},
     checked_type_roots: []const ArtifactCheckedTypeRef = &.{},
@@ -8879,6 +9455,7 @@ pub const ImportedTemplateClosureView = struct {
     interface_capabilities: []const ArtifactModuleInterfaceCapabilitiesRef = &.{},
 };
 
+/// Public `ExportedProcedureTemplate` declaration.
 pub const ExportedProcedureTemplate = struct {
     export_name: ?canonical.ExportNameId,
     def: CIR.Def.Idx,
@@ -8888,16 +9465,19 @@ pub const ExportedProcedureTemplate = struct {
     template_closure: ImportedTemplateClosureView = .{},
 };
 
+/// Public `ExportedProcedureTemplateView` declaration.
 pub const ExportedProcedureTemplateView = struct {
     templates: []const ExportedProcedureTemplate = &.{},
 };
 
+/// Public `ExportedProcedureTemplateTable` declaration.
 pub const ExportedProcedureTemplateTable = struct {
     templates: []ExportedProcedureTemplate = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        published_exports: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
@@ -8909,8 +9489,7 @@ pub const ExportedProcedureTemplateTable = struct {
             templates.deinit(allocator);
         }
 
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+        for (published_exports) |def_idx| {
             const template = checked_templates.lookupByDef(def_idx) orelse continue;
             const def = module.def(def_idx);
             const export_name = if (def.patternName()) |name|
@@ -8971,6 +9550,7 @@ fn buildImportedTemplateClosure(
             .body = body,
         }),
         .promoted_callable_wrapper,
+        .intrinsic_wrapper,
         .entry_wrapper,
         => &.{},
     };
@@ -9187,11 +9767,13 @@ fn deinitImportedTemplateClosure(
     closure.* = .{};
 }
 
+/// Public `ImportedProcedureBindingBody` declaration.
 pub const ImportedProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
     callable_eval_template: CallableEvalTemplateId,
 };
 
+/// Public `ImportedProcedureBindingView` declaration.
 pub const ImportedProcedureBindingView = struct {
     binding: ImportedProcedureBindingRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
@@ -9199,16 +9781,19 @@ pub const ImportedProcedureBindingView = struct {
     template_closure: ImportedTemplateClosureView = .{},
 };
 
+/// Public `ExportedProcedureBindingView` declaration.
 pub const ExportedProcedureBindingView = struct {
     bindings: []const ImportedProcedureBindingView = &.{},
 };
 
+/// Public `ExportedProcedureBindingTable` declaration.
 pub const ExportedProcedureBindingTable = struct {
     bindings: []ImportedProcedureBindingView = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        published_exports: []const CIR.Def.Idx,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
         top_level_values: *const TopLevelValueTable,
@@ -9222,8 +9807,7 @@ pub const ExportedProcedureBindingTable = struct {
             bindings.deinit(allocator);
         }
 
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+        for (published_exports) |def_idx| {
             const top_level = top_level_values.lookupByDef(def_idx) orelse continue;
             const binding_ref = switch (top_level.value) {
                 .procedure_binding => |binding| binding,
@@ -9344,6 +9928,7 @@ fn buildProcedureBindingClosure(
     };
 }
 
+/// Public `ConstEvalTemplate` declaration.
 pub const ConstEvalTemplate = struct {
     body: CheckedConstBodyRef,
     entry_template: canonical.ProcedureTemplateRef,
@@ -9353,17 +9938,20 @@ pub const ConstEvalTemplate = struct {
     nested_proc_sites: NestedProcSiteTableRef = .{},
 };
 
+/// Public `ConstValueGraphTemplate` declaration.
 pub const ConstValueGraphTemplate = struct {
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
 };
 
+/// Public `ConstTemplateState` declaration.
 pub const ConstTemplateState = union(enum) {
     reserved,
     eval_template: ConstEvalTemplate,
     value_graph_template: ConstValueGraphTemplate,
 };
 
+/// Public `ConstTemplate` declaration.
 pub const ConstTemplate = struct {
     id: ConstTemplateId,
     owner: ConstOwner,
@@ -9371,6 +9959,7 @@ pub const ConstTemplate = struct {
     state: ConstTemplateState,
 };
 
+/// Public `ConstTemplateTable` declaration.
 pub const ConstTemplateTable = struct {
     templates: std.ArrayList(ConstTemplate) = .empty,
 
@@ -9504,6 +10093,7 @@ pub const ConstTemplateTable = struct {
     }
 };
 
+/// Public `ImportedConstTemplateView` declaration.
 pub const ImportedConstTemplateView = struct {
     module_idx: u32,
     def: CIR.Def.Idx,
@@ -9514,16 +10104,19 @@ pub const ImportedConstTemplateView = struct {
     template_closure: ImportedTemplateClosureView = .{},
 };
 
+/// Public `ExportedConstTemplateView` declaration.
 pub const ExportedConstTemplateView = struct {
     templates: []const ImportedConstTemplateView = &.{},
 };
 
+/// Public `ExportedConstTemplateTable` declaration.
 pub const ExportedConstTemplateTable = struct {
     templates: []ImportedConstTemplateView = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        published_exports: []const CIR.Def.Idx,
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         top_level_values: *const TopLevelValueTable,
@@ -9535,8 +10128,7 @@ pub const ExportedConstTemplateTable = struct {
             templates.deinit(allocator);
         }
 
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
+        for (published_exports) |def_idx| {
             const top_level = top_level_values.lookupByDef(def_idx) orelse continue;
             const const_ref = switch (top_level.value) {
                 .const_ref => |ref| ref,
@@ -9577,37 +10169,44 @@ pub const ExportedConstTemplateTable = struct {
     }
 };
 
+/// Public `ConstInstantiationStoreView` declaration.
 pub const ConstInstantiationStoreView = struct {
     owner: CheckedModuleArtifactKey = .{},
     instances: []const ConstInstantiationRecord = &.{},
 };
 
+/// Public `CallableBindingInstantiationStoreView` declaration.
 pub const CallableBindingInstantiationStoreView = struct {
     owner: CheckedModuleArtifactKey = .{},
     instances: []const CallableBindingInstantiationRecord = &.{},
 };
 
+/// Public `SemanticInstantiationProcedureTableView` declaration.
 pub const SemanticInstantiationProcedureTableView = struct {
     owner: CheckedModuleArtifactKey = .{},
     procedures: []const SemanticInstantiationProcedureRecord = &.{},
 };
 
+/// Public `ConstInstantiationKey` declaration.
 pub const ConstInstantiationKey = struct {
     const_ref: ConstRef,
     requested_source_ty: canonical.CanonicalTypeKey,
 };
 
+/// Public `ConstInstantiationRequest` declaration.
 pub const ConstInstantiationRequest = struct {
     key: ConstInstantiationKey,
     requested_source_ty_payload: CheckedTypeId,
 };
 
+/// Public `ConstInstanceRef` declaration.
 pub const ConstInstanceRef = struct {
     owner: CheckedModuleArtifactKey,
     key: ConstInstantiationKey,
     instance: ConstInstanceId,
 };
 
+/// Public `ConstInstance` declaration.
 pub const ConstInstance = struct {
     schema: ComptimeSchemaId,
     value: ComptimeValueId,
@@ -9616,18 +10215,21 @@ pub const ConstInstance = struct {
     generated_procedures: []const SemanticInstantiationProcedureId = &.{},
 };
 
+/// Public `ConstInstantiationState` declaration.
 pub const ConstInstantiationState = union(enum) {
     reserved,
     evaluating,
     evaluated: ConstInstance,
 };
 
+/// Public `ConstInstantiationRecord` declaration.
 pub const ConstInstantiationRecord = struct {
     id: ConstInstanceId,
     key: ConstInstantiationKey,
     state: ConstInstantiationState,
 };
 
+/// Public `ConstInstantiationStore` declaration.
 pub const ConstInstantiationStore = struct {
     owner: CheckedModuleArtifactKey = .{},
     instances: std.ArrayList(ConstInstantiationRecord) = .empty,
@@ -9857,37 +10459,44 @@ fn verifyConstInstantiationRequest(
     }
 }
 
+/// Public `CallableBindingInstantiationKey` declaration.
 pub const CallableBindingInstantiationKey = struct {
     binding: ProcedureBindingRef,
     requested_source_fn_ty: canonical.CanonicalTypeKey,
 };
 
+/// Public `CallableBindingInstantiationRequest` declaration.
 pub const CallableBindingInstantiationRequest = struct {
     key: CallableBindingInstantiationKey,
     requested_source_fn_ty_payload: CheckedTypeId,
 };
 
+/// Public `CallableBindingInstanceRef` declaration.
 pub const CallableBindingInstanceRef = struct {
     owner: CheckedModuleArtifactKey,
     key: CallableBindingInstantiationKey,
     instance: CallableBindingInstanceId,
 };
 
+/// Public `CallablePromotionOutput` declaration.
 pub const CallablePromotionOutput = union(enum) {
     existing_procedure: canonical.ProcedureCallableRef,
     promoted_procedure: PromotedProcedureRef,
 };
 
+/// Public `CallableBindingExecutableRoot` declaration.
 pub const CallableBindingExecutableRoot = union(enum) {
     local_root: ComptimeRootId,
     concrete_request: CallableBindingInstantiationKey,
 };
 
+/// Public `DirectCallableBindingInstance` declaration.
 pub const DirectCallableBindingInstance = struct {
     binding: ProcedureBindingRef,
     template: canonical.CallableProcedureTemplateRef,
 };
 
+/// Public `EvaluatedCallableBindingInstance` declaration.
 pub const EvaluatedCallableBindingInstance = struct {
     executable_root: CallableBindingExecutableRoot,
     result_plan: CallableResultPlanId,
@@ -9895,11 +10504,13 @@ pub const EvaluatedCallableBindingInstance = struct {
     promotion_output: CallablePromotionOutput,
 };
 
+/// Public `CallableBindingInstanceBody` declaration.
 pub const CallableBindingInstanceBody = union(enum) {
     direct: DirectCallableBindingInstance,
     evaluated: EvaluatedCallableBindingInstance,
 };
 
+/// Public `CallableBindingInstance` declaration.
 pub const CallableBindingInstance = struct {
     key: CallableBindingInstantiationKey,
     dependency_summary: ComptimeDependencySummaryId,
@@ -9908,18 +10519,21 @@ pub const CallableBindingInstance = struct {
     generated_procedures: []const SemanticInstantiationProcedureId = &.{},
 };
 
+/// Public `CallableBindingInstantiationState` declaration.
 pub const CallableBindingInstantiationState = union(enum) {
     reserved,
     evaluating,
     evaluated: CallableBindingInstance,
 };
 
+/// Public `CallableBindingInstantiationRecord` declaration.
 pub const CallableBindingInstantiationRecord = struct {
     id: CallableBindingInstanceId,
     key: CallableBindingInstantiationKey,
     state: CallableBindingInstantiationState,
 };
 
+/// Public `CallableBindingInstantiationStore` declaration.
 pub const CallableBindingInstantiationStore = struct {
     owner: CheckedModuleArtifactKey = .{},
     instances: std.ArrayList(CallableBindingInstantiationRecord) = .empty,
@@ -10237,6 +10851,7 @@ fn verifyEvaluatedCallableBindingInstance(
     }
 }
 
+/// Public `SemanticInstantiationProcedureKey` declaration.
 pub const SemanticInstantiationProcedureKey = union(enum) {
     const_instance_callable_leaf: struct {
         instance: ConstInstantiationKey,
@@ -10255,23 +10870,27 @@ pub const SemanticInstantiationProcedureKey = union(enum) {
     },
 };
 
+/// Public `SemanticInstantiationProcedure` declaration.
 pub const SemanticInstantiationProcedure = struct {
     template: canonical.CallableProcedureTemplateRef,
     proc_value: canonical.ProcedureValueRef,
     promoted: ?PromotedProcedureRef = null,
 };
 
+/// Public `SemanticInstantiationProcedureState` declaration.
 pub const SemanticInstantiationProcedureState = union(enum) {
     reserved,
     sealed: SemanticInstantiationProcedure,
 };
 
+/// Public `SemanticInstantiationProcedureRecord` declaration.
 pub const SemanticInstantiationProcedureRecord = struct {
     id: SemanticInstantiationProcedureId,
     key: SemanticInstantiationProcedureKey,
     state: SemanticInstantiationProcedureState,
 };
 
+/// Public `SemanticInstantiationProcedureTable` declaration.
 pub const SemanticInstantiationProcedureTable = struct {
     owner: CheckedModuleArtifactKey = .{},
     procedures: std.ArrayList(SemanticInstantiationProcedureRecord) = .empty,
@@ -10506,29 +11125,6 @@ fn hashProcedureTemplateRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical
     hashEnumValue(hasher, ref.template);
 }
 
-fn hashMonoSpecializationKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.MonoSpecializationKey) void {
-    hashProcedureTemplateRef(hasher, key.template);
-    hashCanonicalTypeKey(hasher, key.requested_mono_fn_ty);
-}
-
-fn hashCallableProcedureTemplateRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.CallableProcedureTemplateRef) void {
-    switch (ref) {
-        .checked => |checked| {
-            hasher.update(&[_]u8{0});
-            hashProcedureTemplateRef(hasher, checked);
-        },
-        .lifted => |lifted| {
-            hasher.update(&[_]u8{1});
-            hashMonoSpecializationKey(hasher, lifted.owner_mono_specialization);
-            hashEnumValue(hasher, lifted.site);
-        },
-        .synthetic => |synthetic| {
-            hasher.update(&[_]u8{2});
-            hashProcedureTemplateRef(hasher, synthetic.template);
-        },
-    }
-}
-
 fn hashTopLevelValueRef(hasher: *std.crypto.hash.sha2.Sha256, ref: TopLevelValueRef) void {
     hashCheckedModuleArtifactKey(hasher, ref.artifact);
     hashEnumValue(hasher, ref.pattern);
@@ -10658,6 +11254,7 @@ fn constRefEql(a: ConstRef, b: ConstRef) bool {
         std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
 }
 
+/// Public `constInstantiationKeyEql` function.
 pub fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
     return constRefEql(a.const_ref, b.const_ref) and
         std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
@@ -10757,6 +11354,7 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     };
 }
 
+/// Public `procedureBindingRefEql` function.
 pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -10768,6 +11366,7 @@ pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bo
     };
 }
 
+/// Public `callableBindingInstantiationKeyEql` function.
 pub fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
     return procedureBindingRefEql(a.binding, b.binding) and
         std.mem.eql(u8, &a.requested_source_fn_ty.bytes, &b.requested_source_fn_ty.bytes);
@@ -10810,6 +11409,7 @@ fn semanticInstantiationProcedureEql(a: SemanticInstantiationProcedure, b: Seman
         promoted_matches;
 }
 
+/// Public `CheckedModuleArtifact` declaration.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     canonical_names: canonical.CanonicalNameStore,
@@ -10831,6 +11431,7 @@ pub const CheckedModuleArtifact = struct {
     nested_proc_sites: NestedProcSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable,
     entry_wrappers: EntryWrapperTable = .{},
+    intrinsic_wrappers: IntrinsicWrapperTable = .{},
     promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
     promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
     executable_type_payloads: ExecutableTypePayloadStore,
@@ -11024,6 +11625,7 @@ pub const CheckedModuleArtifact = struct {
         self.executable_type_payloads.deinit(allocator);
         self.promoted_callable_body_plans.deinit(allocator);
         self.promoted_callable_wrappers.deinit(allocator);
+        self.intrinsic_wrappers.deinit(allocator);
         self.entry_wrappers.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
         self.nested_proc_sites.deinit(allocator);
@@ -11097,8 +11699,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant,
-                .callable_binding => switch (root.payload) {
+                .constant, .callable_binding => switch (root.payload) {
                     .pending => {},
                     else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -11228,6 +11829,13 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.promoted_proc.proc_base == template.proc_base);
                     std.debug.assert(std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &self.key.bytes));
                     std.debug.assert(@intFromEnum(wrapper.body_plan) < self.promoted_callable_body_plans.plans.len);
+                },
+                .intrinsic_wrapper => |wrapper_id| {
+                    const wrapper = self.intrinsic_wrappers.get(wrapper_id);
+                    std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
+                    std.debug.assert(wrapper.template.template == template.template_id);
+                    std.debug.assert(wrapper.template.proc_base == template.proc_base);
+                    std.debug.assert(std.mem.eql(u8, &wrapper.template.artifact.bytes, &self.key.bytes));
                 },
                 .entry_wrapper => |wrapper_id| {
                     const wrapper = self.entry_wrappers.get(wrapper_id);
@@ -11436,7 +12044,6 @@ pub const CheckedModuleArtifact = struct {
         self.interface_capabilities.verifyPublished();
         self.promoted_callable_body_plans.verifyPublished(
             &self.comptime_plans,
-            &self.callable_set_descriptors,
             &self.executable_type_payloads,
             &self.executable_value_transforms,
             &self.erased_fn_abis,
@@ -11524,6 +12131,7 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
     }
 }
 
+/// Public `ImportedModuleView` declaration.
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     canonical_names: *const canonical.CanonicalNameStore,
@@ -11534,6 +12142,7 @@ pub const ImportedModuleView = struct {
     checked_const_bodies: *const CheckedConstBodyTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     entry_wrappers: *const EntryWrapperTable,
+    intrinsic_wrappers: *const IntrinsicWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -11561,12 +12170,14 @@ pub const ImportedModuleView = struct {
     semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
 };
 
+/// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
     artifact: *const CheckedModuleArtifact,
     roots: *const RootRequestTable,
     relation_artifacts: []const ImportedModuleView = &.{},
 };
 
+/// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .key = artifact.key,
@@ -11578,6 +12189,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .checked_const_bodies = &artifact.checked_const_bodies,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .entry_wrappers = &artifact.entry_wrappers,
+        .intrinsic_wrappers = &artifact.intrinsic_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
@@ -11821,6 +12433,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
     }
 }
 
+/// Public `loweringView` function.
 pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     return .{
         .artifact = artifact,
@@ -11829,6 +12442,7 @@ pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     };
 }
 
+/// Public `loweringViewWithRelations` function.
 pub fn loweringViewWithRelations(
     artifact: *const CheckedModuleArtifact,
     relation_artifacts: []const ImportedModuleView,
@@ -11840,6 +12454,7 @@ pub fn loweringViewWithRelations(
     };
 }
 
+/// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
@@ -11885,7 +12500,7 @@ pub fn publishFromTypedModule(
         direct_import_artifact_keys,
     );
 
-    const exports = try allocator.dupe(CIR.Def.Idx, module_env.store.sliceDefs(module_env.exports));
+    const exports = try collectPublishedExportDefs(allocator, module);
     errdefer allocator.free(exports);
 
     const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
@@ -11902,6 +12517,9 @@ pub fn publishFromTypedModule(
     var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_types);
     errdefer checked_bodies.deinit(allocator);
 
+    var intrinsic_wrappers = IntrinsicWrapperTable{};
+    errdefer intrinsic_wrappers.deinit(allocator);
+
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
@@ -11909,6 +12527,7 @@ pub fn publishFromTypedModule(
         owner_artifact,
         &checked_types,
         &checked_bodies,
+        &intrinsic_wrappers,
     );
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
@@ -12042,6 +12661,7 @@ pub fn publishFromTypedModule(
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
         module,
+        exports,
         &canonical_names,
         artifact_key,
         &checked_types,
@@ -12052,6 +12672,7 @@ pub fn publishFromTypedModule(
     var exported_procedure_bindings = try ExportedProcedureBindingTable.fromModule(
         allocator,
         module,
+        exports,
         &checked_types,
         &checked_procedure_templates,
         &top_level_values,
@@ -12064,6 +12685,7 @@ pub fn publishFromTypedModule(
     var exported_const_templates = try ExportedConstTemplateTable.fromModule(
         allocator,
         module,
+        exports,
         artifact_key,
         &checked_types,
         &top_level_values,
@@ -12105,6 +12727,7 @@ pub fn publishFromTypedModule(
         .nested_proc_sites = nested_proc_sites,
         .checked_procedure_templates = checked_procedure_templates,
         .entry_wrappers = entry_wrappers,
+        .intrinsic_wrappers = intrinsic_wrappers,
         .promoted_callable_wrappers = .{},
         .promoted_callable_body_plans = .{},
         .executable_type_payloads = ExecutableTypePayloadStore.init(allocator),
@@ -12154,6 +12777,7 @@ test "artifact views are read-only projections" {
         .checked_procedure_templates = .{},
         .promoted_callable_wrappers = .{},
         .promoted_callable_body_plans = .{},
+        .intrinsic_wrappers = .{},
         .executable_type_payloads = ExecutableTypePayloadStore.init(std.testing.allocator),
         .top_level_procedure_bindings = .{},
         .root_requests = .{},

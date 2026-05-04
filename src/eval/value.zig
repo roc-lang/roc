@@ -132,6 +132,7 @@ pub const LayoutHelper = struct {
 
     /// Read the discriminant value from a tag union value.
     pub fn readTagDiscriminant(self: LayoutHelper, val: Value, union_layout: layout_mod.Idx) u16 {
+        if (val.isZst()) return 0;
         const disc_offset = self.tagDiscriminantOffset(union_layout);
         const at_disc = val.offset(disc_offset);
         const l = self.store.getLayout(union_layout);

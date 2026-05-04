@@ -12,18 +12,22 @@ const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 
+/// Public `ConcreteSourceTypeRef` declaration.
 pub const ConcreteSourceTypeRef = enum(u32) { _ };
 
+/// Public `ConcreteSourceTypeSource` declaration.
 pub const ConcreteSourceTypeSource = union(enum) {
     artifact: checked_artifact.ArtifactCheckedTypeRef,
     local: checked_artifact.CheckedTypeId,
 };
 
+/// Public `ConcreteSourceTypeRoot` declaration.
 pub const ConcreteSourceTypeRoot = struct {
     key: canonical.CanonicalTypeKey,
     source: ConcreteSourceTypeSource,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: Allocator,
     roots: std.ArrayList(ConcreteSourceTypeRoot),
@@ -46,7 +50,7 @@ pub const Store = struct {
         self.local_payloads.deinit(self.allocator);
         self.local_roots.deinit(self.allocator);
         var keys = self.by_key.keyIterator();
-        while (keys.next()) |key| self.allocator.free(key.*);
+        while (keys.next()) |stored_key| self.allocator.free(stored_key.*);
         self.by_key.deinit();
         self.roots.deinit(self.allocator);
         self.* = Store.init(self.allocator);
@@ -64,9 +68,9 @@ pub const Store = struct {
         self: *Store,
         artifact: checked_artifact.CheckedModuleArtifactKey,
         checked_types: checked_artifact.CheckedTypeStoreView,
-        root: checked_artifact.CheckedTypeId,
+        checked_root: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteSourceTypeRef {
-        const raw = @intFromEnum(root);
+        const raw = @intFromEnum(checked_root);
         if (raw >= checked_types.roots.len) {
             invariantViolation("concrete source type store received a checked type id outside the artifact root table");
         }
@@ -75,34 +79,34 @@ pub const Store = struct {
             .key = checked_types.roots[raw].key,
             .source = .{ .artifact = .{
                 .artifact = artifact,
-                .ty = root,
+                .ty = checked_root,
             } },
         });
     }
 
     pub fn registerLocalRoot(
         self: *Store,
-        root: checked_artifact.CheckedTypeId,
+        checked_root: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteSourceTypeRef {
-        const raw = @intFromEnum(root);
+        const raw = @intFromEnum(checked_root);
         if (raw >= self.local_roots.items.len) {
             invariantViolation("concrete source type store received a local checked type id outside the local root table");
         }
 
         return try self.registerRoot(.{
             .key = self.local_roots.items[raw].key,
-            .source = .{ .local = root },
+            .source = .{ .local = checked_root },
         });
     }
 
     pub fn reserveLocalRoot(
         self: *Store,
-        key: canonical.CanonicalTypeKey,
+        type_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         const id: checked_artifact.CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.local_roots.items.len)));
         try self.local_roots.append(self.allocator, .{
             .id = id,
-            .key = key,
+            .key = type_key,
         });
         errdefer _ = self.local_roots.pop();
         try self.local_payloads.append(self.allocator, .pending);
@@ -117,10 +121,10 @@ pub const Store = struct {
 
     pub fn fillLocalRoot(
         self: *Store,
-        root: checked_artifact.CheckedTypeId,
+        checked_root: checked_artifact.CheckedTypeId,
         payload: checked_artifact.CheckedTypePayload,
     ) void {
-        const raw = @intFromEnum(root);
+        const raw = @intFromEnum(checked_root);
         if (raw >= self.local_payloads.items.len) {
             invariantViolation("concrete source type store fill referenced an unknown local root");
         }
@@ -130,15 +134,15 @@ pub const Store = struct {
 
     pub fn sealLocalRoot(
         self: *Store,
-        root: checked_artifact.CheckedTypeId,
-        key: canonical.CanonicalTypeKey,
+        checked_root: checked_artifact.CheckedTypeId,
+        type_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!ConcreteSourceTypeRef {
-        const raw = @intFromEnum(root);
+        const raw = @intFromEnum(checked_root);
         if (raw >= self.local_roots.items.len) {
             invariantViolation("concrete source type store seal referenced an unknown local root");
         }
-        self.local_roots.items[raw].key = key;
-        return try self.registerLocalRoot(root);
+        self.local_roots.items[raw].key = type_key;
+        return try self.registerLocalRoot(checked_root);
     }
 
     pub fn root(self: *const Store, ref: ConcreteSourceTypeRef) ConcreteSourceTypeRoot {
@@ -149,32 +153,33 @@ pub const Store = struct {
         return self.root(ref).key;
     }
 
-    pub fn refForKey(self: *const Store, key: canonical.CanonicalTypeKey) ?ConcreteSourceTypeRef {
-        return self.by_key.get(key.bytes[0..]);
+    pub fn refForKey(self: *const Store, type_key: canonical.CanonicalTypeKey) ?ConcreteSourceTypeRef {
+        return self.by_key.get(type_key.bytes[0..]);
     }
 
     fn registerRoot(
         self: *Store,
-        root: ConcreteSourceTypeRoot,
+        new_root: ConcreteSourceTypeRoot,
     ) Allocator.Error!ConcreteSourceTypeRef {
-        if (self.by_key.get(root.key.bytes[0..])) |existing| {
+        if (self.by_key.get(new_root.key.bytes[0..])) |existing| {
             const existing_root = self.root(existing);
-            if (!std.mem.eql(u8, existing_root.key.bytes[0..], root.key.bytes[0..])) {
+            if (!std.mem.eql(u8, existing_root.key.bytes[0..], new_root.key.bytes[0..])) {
                 invariantViolation("concrete source type store key map returned a non-equivalent payload");
             }
             return existing;
         }
 
         const id: ConcreteSourceTypeRef = @enumFromInt(@as(u32, @intCast(self.roots.items.len)));
-        const owned_key = try self.allocator.dupe(u8, root.key.bytes[0..]);
+        const owned_key = try self.allocator.dupe(u8, new_root.key.bytes[0..]);
         errdefer self.allocator.free(owned_key);
 
-        try self.roots.append(self.allocator, root);
+        try self.roots.append(self.allocator, new_root);
         try self.by_key.put(owned_key, id);
         return id;
     }
 };
 
+/// Public `PayloadKeyBuilder` declaration.
 pub const PayloadKeyBuilder = struct {
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,

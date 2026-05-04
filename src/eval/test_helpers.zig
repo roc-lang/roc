@@ -33,11 +33,13 @@ const LirProcSpecId = lir.LirProcSpecId;
 const RuntimeImage = lir.RuntimeImage;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
+/// Public `SourceKind` declaration.
 pub const SourceKind = enum {
     expr,
     module,
 };
 
+/// Public `ModuleSource` declaration.
 pub const ModuleSource = struct {
     name: []const u8,
     source: []const u8,
@@ -49,6 +51,7 @@ const AvailableImport = struct {
     statement_idx: ?CIR.Statement.Idx,
 };
 
+/// Public `CheckedModule` declaration.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -62,6 +65,21 @@ pub const CheckedModule = struct {
     typecheck_ns: u64 = 0,
 };
 
+/// Public `ProblemResources` declaration.
+pub const ProblemResources = struct {
+    main: CheckedModule,
+    builtin_module: builtin_loading.LoadedModule,
+    extra_modules: []CheckedModule,
+
+    pub fn deinit(self: *ProblemResources, allocator: Allocator) void {
+        cleanupCheckedModule(allocator, self.main);
+        for (self.extra_modules) |module| cleanupCheckedModule(allocator, module);
+        allocator.free(self.extra_modules);
+        self.builtin_module.deinit();
+    }
+};
+
+/// Public `ParsedResources` declaration.
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -99,6 +117,7 @@ else if (builtin.os.tag == .macos)
 else
     2 * 1024 * 1024 * 1024 * 1024;
 
+/// Public `RuntimeImageProgram` declaration.
 pub const RuntimeImageProgram = struct {
     shm: SharedMemoryAllocator,
     view: RuntimeImage.ProgramView,
@@ -121,8 +140,10 @@ pub const RuntimeImageProgram = struct {
     }
 };
 
+/// Public `LoweredProgram` declaration.
 pub const LoweredProgram = RuntimeImageProgram;
 
+/// Public `CompiledProgram` declaration.
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -135,8 +156,10 @@ pub const CompiledProgram = struct {
     }
 };
 
+/// Public `CompiledInspectedExpr` declaration.
 pub const CompiledInspectedExpr = CompiledProgram;
 
+/// Public `parseAndCanonicalizeProgram` function.
 pub fn parseAndCanonicalizeProgram(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -146,10 +169,100 @@ pub fn parseAndCanonicalizeProgram(
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
+/// Public `parseAndCanonicalizeExpr` function.
 pub fn parseAndCanonicalizeExpr(allocator: Allocator, source: []const u8) !ParsedResources {
     return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
+/// Public `parseAndCheckProgramForProblems` function.
+pub fn parseAndCheckProgramForProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) !ProblemResources {
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try builtin_loading.loadCompiledModule(
+        allocator,
+        compiled_builtins.builtin_bin,
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    errdefer builtin_module.deinit();
+
+    var extra_modules = std.ArrayList(CheckedModule).empty;
+    errdefer {
+        for (extra_modules.items) |extra| cleanupCheckedModule(allocator, extra);
+        extra_modules.deinit(allocator);
+    }
+
+    for (imports) |import_module| {
+        const available_imports = try allocator.alloc(AvailableImport, extra_modules.items.len);
+        defer allocator.free(available_imports);
+        for (extra_modules.items, 0..) |extra, i| {
+            available_imports[i] = .{
+                .name = extra.module_env.module_name,
+                .env = extra.module_env,
+                .statement_idx = null,
+            };
+        }
+
+        const checked = try parseCheckModule(
+            allocator,
+            import_module.name,
+            .module,
+            import_module.source,
+            false,
+            true,
+            &.{},
+            builtin_module.env,
+            builtin_indices,
+            available_imports,
+        );
+        try extra_modules.append(allocator, checked);
+    }
+
+    const main_imports = try allocator.alloc(AvailableImport, extra_modules.items.len);
+    defer allocator.free(main_imports);
+    for (extra_modules.items, 0..) |extra, i| {
+        main_imports[i] = .{
+            .name = extra.module_env.module_name,
+            .env = extra.module_env,
+            .statement_idx = null,
+        };
+    }
+
+    const main_checked = try parseCheckModule(
+        allocator,
+        "Test",
+        source_kind,
+        source,
+        false,
+        false,
+        &.{},
+        builtin_module.env,
+        builtin_indices,
+        main_imports,
+    );
+    errdefer cleanupCheckedModule(allocator, main_checked);
+
+    var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
+    defer allocator.free(all_module_envs);
+    all_module_envs[0] = main_checked.module_env;
+    all_module_envs[1] = builtin_module.env;
+    for (extra_modules.items, 0..) |extra, i| {
+        all_module_envs[i + 2] = extra.module_env;
+    }
+    resolveImportsByModuleIndex(all_module_envs);
+
+    return .{
+        .main = main_checked,
+        .builtin_module = builtin_module,
+        .extra_modules = try extra_modules.toOwnedSlice(allocator),
+    };
+}
+
+/// Public `compileProgram` function.
 pub fn compileProgram(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -178,6 +291,7 @@ pub fn compileProgram(
     };
 }
 
+/// Public `compileInspectedProgram` function.
 pub fn compileInspectedProgram(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -206,15 +320,18 @@ pub fn compileInspectedProgram(
     };
 }
 
+/// Public `compileInspectedExpr` function.
 pub fn compileInspectedExpr(allocator: Allocator, source: []const u8) !CompiledInspectedExpr {
     return compileInspectedProgram(allocator, .expr, source, &.{});
 }
 
+/// Public `cleanupParseAndCanonical` function.
 pub fn cleanupParseAndCanonical(allocator: Allocator, resources: ParsedResources) void {
     var owned = resources;
     owned.deinit(allocator);
 }
 
+/// Public `parseAndCanonicalizeProgramWrapped` function.
 pub fn parseAndCanonicalizeProgramWrapped(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -225,6 +342,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap });
 }
 
+/// Public `parseAndCanonicalizeProgramPublishedRoots` function.
 pub fn parseAndCanonicalizeProgramPublishedRoots(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -342,7 +460,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
 
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
     defer typed_cir_modules.deinit();
-    var import_artifacts = try publishImportArtifacts(
+    const import_artifacts = try publishImportArtifacts(
         allocator,
         &typed_cir_modules,
         &builtin_module,
@@ -411,6 +529,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     };
 }
 
+/// Public `parseCheckModule` function.
 pub fn parseCheckModule(
     allocator: Allocator,
     module_name: []const u8,
@@ -788,6 +907,7 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     }
 }
 
+/// Public `mainProcArgLayouts` function.
 pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) ![]LayoutIdx {
     const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_locals = lowered.view.store.getLocalSpan(proc.args);
@@ -798,6 +918,7 @@ pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) 
     return arg_layouts;
 }
 
+/// Public `entrypointParamSlotSize` function.
 pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
     const layouts = &lowered.view.layouts;
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
@@ -818,6 +939,7 @@ pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: Layou
     return if (size == 0) 0 else 8;
 }
 
+/// Public `zeroedEntrypointArgBuffer` function.
 pub fn zeroedEntrypointArgBuffer(
     allocator: Allocator,
     lowered: *const LoweredProgram,
@@ -876,6 +998,7 @@ pub fn zeroedEntrypointArgBuffer(
     return buffer;
 }
 
+/// Public `lirInterpreterInspectedStr` function.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
@@ -909,6 +1032,7 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
     );
 }
 
+/// Public `devEvaluatorInspectedStr` function.
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     var codegen = try HostLirCodeGen.init(
         allocator,
@@ -971,6 +1095,7 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
     );
 }
 
+/// Public `wasmEvaluatorInspectedStr` function.
 pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(

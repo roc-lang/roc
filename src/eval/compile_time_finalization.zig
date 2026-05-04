@@ -6,7 +6,6 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
-const can = @import("can");
 const check = @import("check");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -22,8 +21,8 @@ const RocStr = builtins.str.RocStr;
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 const repr = mir.LambdaSolved.Representation;
-const CIR = can.CIR;
 
+/// Public `finalizer` function.
 pub fn finalizer() checked_artifact.CompileTimeFinalizer {
     return .{ .finalize = finalize };
 }
@@ -1303,16 +1302,6 @@ fn appendConcreteDependencySummary(
     });
 }
 
-fn appendEmptyConcreteDependencySummary(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
-    return try artifact.comptime_dependencies.appendSummary(allocator, .{
-        .availability_values = &.{},
-        .concrete_values = &.{},
-    });
-}
-
 const ConcreteDependencyCollector = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -1455,11 +1444,11 @@ const ConcreteDependencyCollector = struct {
 
         switch (self.artifact.comptime_plans.captureSlot(slot_id)) {
             .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending capture slot plan"),
-            .serializable_leaf => |leaf| try self.appendConstInstance(leaf.const_instance),
+            .serializable_leaf => |leaf| try self.collectConstGraph(leaf.reification_plan),
             .callable_leaf => |result_plan| try self.collectCallableResult(result_plan),
             .callable_schema => {},
             .record => |fields| for (fields) |field| try self.collectCaptureSlot(field.value),
-            .tuple => |items| for (items) |item| try self.collectCaptureSlot(item),
+            .tuple => |items| for (items) |item| try self.collectCaptureSlot(item.value),
             .tag_union => |variants| for (variants) |variant| {
                 for (variant.payloads) |payload| try self.collectCaptureSlot(payload.value);
             },
@@ -1547,7 +1536,6 @@ const ConcreteDependencyCollector = struct {
             .recursive_ref => |ref| try self.collectErasedCaptureExecutableMaterializationNode(ref),
         }
     }
-
 };
 
 const ConstTemplateSource = struct {
@@ -2238,7 +2226,6 @@ fn materializeErasedPromotedCapture(
                 compileTimeFinalizationInvariant("erased callable whole hidden capture had no returned hidden capture payload");
             };
             _ = capture.source_ty;
-            _ = artifact;
             break :blk try capture_builder.executablePlan(capture.plan, physical);
         },
         .proc_capture_tuple => |captures| blk: {
@@ -2507,7 +2494,7 @@ fn publishErasedPromotedWrapperValueTransforms(
         compileTimeFinalizationInvariant("erased promoted wrapper transform arity differs from signature");
     }
 
-    const arg_transforms = if (signature.wrapper_params.len == 0)
+    const arg_transforms: []checked_artifact.PublishedExecutableValueTransformRef = if (signature.wrapper_params.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.PublishedExecutableValueTransformRef, signature.wrapper_params.len);
@@ -2573,7 +2560,7 @@ fn buildErasedPromotedProcedureExecutableSignature(
         compileTimeFinalizationInvariant("erased callable signature payload erased-call arg refs/keys differ in length");
     }
 
-    const wrapper_params = if (params.len == 0)
+    const wrapper_params: []checked_artifact.ExecutableProcedureParamPayload = if (params.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.ExecutableProcedureParamPayload, params.len);
@@ -2741,7 +2728,7 @@ const PrivateCaptureBuilder = struct {
             .record => |fields| .{ .record = try self.record(fields, physical) },
             .tuple => |items| .{ .tuple = try self.tuple(items, physical) },
             .tag_union => |variants| .{ .tag_union = try self.tagUnion(variants, physical) },
-            .list => |list| .{ .list = try self.list(list.elem, physical) },
+            .list => |list_plan| .{ .list = try self.list(list_plan.elem, physical) },
             .box => |payload| .{ .box = try self.box(payload, physical) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
@@ -2792,7 +2779,7 @@ const PrivateCaptureBuilder = struct {
             .record => |fields| .{ .record = try self.executableRecord(fields, physical) },
             .tuple => |items| .{ .tuple = try self.executableTuple(items, physical) },
             .tag_union => |variants| .{ .tag_union = try self.executableTagUnion(variants, physical) },
-            .list => |list| .{ .list = try self.executableList(list.elem, physical) },
+            .list => |list_plan| .{ .list = try self.executableList(list_plan.elem, physical) },
             .box => |payload| .{ .box = try self.executableBox(payload, physical) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,

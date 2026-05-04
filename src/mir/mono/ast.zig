@@ -6,7 +6,7 @@ const base = @import("base");
 const check = @import("check");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
-const ids = @import("../ids.zig");
+const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
 
 const canonical = check.CanonicalNames;
@@ -14,7 +14,7 @@ const checked_artifact = check.CheckedArtifact;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeId = type_mod.TypeId;
-pub const ProgramLiteralId = ids.ProgramLiteralId;
+pub const ProgramLiteralId = mir_ids.ProgramLiteralId;
 
 /// Public enum `ExprId`.
 pub const ExprId = enum(u32) { _ };
@@ -83,11 +83,13 @@ pub const Pat = struct {
     };
 };
 
+/// Public `RecordFieldPattern` declaration.
 pub const RecordFieldPattern = struct {
     field: canonical.RecordFieldLabelId,
     pattern: PatId,
 };
 
+/// Public `ListRestPattern` declaration.
 pub const ListRestPattern = struct {
     index: u32,
     pattern: ?PatId = null,

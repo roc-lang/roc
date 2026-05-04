@@ -265,6 +265,7 @@ pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint,
     }
 }
 
+/// Public `createEmbeddedInterpreterShim` function.
 pub fn createEmbeddedInterpreterShim(
     builder: *Builder,
     entrypoints: []const EntryPoint,

@@ -19,6 +19,7 @@ const Var = types.Var;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const CheckedExprId = checked_ids.CheckedExprId;
 
+/// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
     by_def: []const ?canonical.ProcedureTemplateRef,
@@ -30,11 +31,13 @@ pub const ProcedureTemplateLookup = struct {
     }
 };
 
+/// Public `MethodOwner` declaration.
 pub const MethodOwner = union(enum) {
     nominal: canonical.NominalTypeKey,
     builtin: BuiltinOwner,
 };
 
+/// Public `BuiltinOwner` declaration.
 pub const BuiltinOwner = enum {
     list,
     box,
@@ -55,11 +58,13 @@ pub const BuiltinOwner = enum {
     dec,
 };
 
+/// Public `MethodKey` declaration.
 pub const MethodKey = struct {
     owner: MethodOwner,
     method: canonical.MethodNameId,
 };
 
+/// Public `MethodTarget` declaration.
 pub const MethodTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
@@ -68,11 +73,13 @@ pub const MethodTarget = struct {
     callable_ty: CheckedTypeId,
 };
 
+/// Public `MethodRegistryEntry` declaration.
 pub const MethodRegistryEntry = struct {
     key: MethodKey,
     target: MethodTarget,
 };
 
+/// Public `MethodRegistry` declaration.
 pub const MethodRegistry = struct {
     entries: []MethodRegistryEntry = &.{},
 
@@ -182,6 +189,7 @@ fn methodOwnerEql(a: MethodOwner, b: MethodOwner) bool {
     };
 }
 
+/// Public `StaticDispatchResultMode` declaration.
 pub const StaticDispatchResultMode = union(enum) {
     value,
     equality: struct {
@@ -190,6 +198,7 @@ pub const StaticDispatchResultMode = union(enum) {
     },
 };
 
+/// Public `StaticDispatchCallPlan` declaration.
 pub const StaticDispatchCallPlan = struct {
     expr: CheckedExprId,
     method: canonical.MethodNameId,
@@ -199,8 +208,10 @@ pub const StaticDispatchCallPlan = struct {
     result_mode: StaticDispatchResultMode,
 };
 
+/// Public `StaticDispatchPlanId` declaration.
 pub const StaticDispatchPlanId = enum(u32) { _ };
 
+/// Public `StaticDispatchPlanTable` declaration.
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{},

@@ -15,13 +15,16 @@ const LirStore = @import("LirStore.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Public `LowerResourceError` declaration.
 pub const LowerResourceError = Allocator.Error;
 
+/// Public `ProcMapEntry` declaration.
 pub const ProcMapEntry = struct {
     executable_proc: ir.Ast.ProcRef,
     lir_proc: LIR.LirProcSpecId,
 };
 
+/// Public `Result` declaration.
 pub const Result = struct {
     canonical_names: mir.Hosted.CanonicalNameStore,
     store: LirStore,
@@ -47,6 +50,7 @@ pub const Result = struct {
     }
 };
 
+/// Public `run` function.
 pub fn run(
     allocator: Allocator,
     target_usize: base.target.TargetUsize,
@@ -510,7 +514,7 @@ const Lowerer = struct {
                 .capture_layout = if (call.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
                 .next = next,
             } }),
-            .packed_erased_fn => |packed| try self.lowerPackedErasedFnInto(target, packed, next),
+            .packed_erased_fn => |packed_fn| try self.lowerPackedErasedFnInto(target, packed_fn, next),
             .layout_size => |layout_ref| blk: {
                 const layout_idx = try self.lowerLayoutRef(layout_ref);
                 const size = self.layouts.layoutSize(self.layouts.getLayout(layout_idx));
@@ -530,12 +534,12 @@ const Lowerer = struct {
     fn lowerPackedErasedFnInto(
         self: *Lowerer,
         target: LIR.LocalId,
-        packed: anytype,
+        packed_fn: anytype,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const target_layout = self.store.getLocal(target).layout_idx;
-        const has_capture = packed.capture != null;
-        if (has_capture != (packed.capture_layout != null)) {
+        const has_capture = packed_fn.capture != null;
+        if (has_capture != (packed_fn.capture_layout != null)) {
             lirInvariant("lir.lower_ir packed erased fn capture value disagrees with capture layout");
         }
         const field_count: usize = if (has_capture) 2 else 1;
@@ -553,7 +557,7 @@ const Lowerer = struct {
             .next = next,
         } });
 
-        if (packed.capture) |capture| {
+        if (packed_fn.capture) |capture| {
             const args = [_]LIR.LocalId{try self.lowerVar(capture)};
             current = try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = fields[1],
@@ -566,7 +570,7 @@ const Lowerer = struct {
 
         return try self.store.addCFStmt(.{ .assign_literal = .{
             .target = fields[0],
-            .value = .{ .proc_ref = self.lirProcForExecutable(packed.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder") },
+            .value = .{ .proc_ref = self.lirProcForExecutable(packed_fn.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder") },
             .next = current,
         } });
     }

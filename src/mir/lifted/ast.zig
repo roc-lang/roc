@@ -10,21 +10,27 @@ const check = @import("check");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 const row = @import("../mono_row/mod.zig");
-const ids = @import("../ids.zig");
+const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
 
 const canonical = check.CanonicalNames;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeId = type_mod.TypeId;
-pub const ProgramLiteralId = ids.ProgramLiteralId;
+pub const ProgramLiteralId = mir_ids.ProgramLiteralId;
 
+/// Public `ExprId` declaration.
 pub const ExprId = enum(u32) { _ };
+/// Public `PatId` declaration.
 pub const PatId = enum(u32) { _ };
+/// Public `DefId` declaration.
 pub const DefId = enum(u32) { _ };
+/// Public `StmtId` declaration.
 pub const StmtId = enum(u32) { _ };
+/// Public `BranchId` declaration.
 pub const BranchId = enum(u32) { _ };
 
+/// Public `Span` function.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -36,12 +42,14 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public `TypedSymbol` declaration.
 pub const TypedSymbol = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
     symbol: Symbol,
 };
 
+/// Public `CaptureSlot` declaration.
 pub const CaptureSlot = struct {
     index: u32,
     source_symbol: Symbol,
@@ -49,17 +57,20 @@ pub const CaptureSlot = struct {
     source_ty: canonical.CanonicalTypeKey,
 };
 
+/// Public `CaptureArg` declaration.
 pub const CaptureArg = struct {
     slot: u32,
     symbol: Symbol,
     expr: ExprId,
 };
 
+/// Public `TagPayloadPattern` declaration.
 pub const TagPayloadPattern = struct {
     payload: row.TagPayloadId,
     pattern: PatId,
 };
 
+/// Public `Pat` declaration.
 pub const Pat = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
@@ -97,6 +108,7 @@ pub const Pat = struct {
     };
 };
 
+/// Public `Branch` declaration.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
@@ -104,16 +116,42 @@ pub const Branch = struct {
     degenerate: bool = false,
 };
 
-pub const RecordFieldEval = row.Ast.RecordFieldEval;
-pub const RecordFieldAssembly = row.Ast.RecordFieldAssembly;
-pub const RecordFieldPattern = row.Ast.RecordFieldPattern;
+/// Public `RecordFieldEval` declaration.
+pub const RecordFieldEval = struct {
+    field: row.RecordFieldId,
+    value: ExprId,
+};
+
+/// Public `RecordFieldAssembly` declaration.
+pub const RecordFieldAssembly = struct {
+    field: row.RecordFieldId,
+    value: ExprId,
+};
+
+/// Public `RecordFieldPattern` declaration.
+pub const RecordFieldPattern = struct {
+    field: row.RecordFieldId,
+    pattern: PatId,
+};
+
+/// Public `ListRestPattern` declaration.
 pub const ListRestPattern = struct {
     index: u32,
     pattern: ?PatId = null,
 };
-pub const TagPayloadEval = row.Ast.TagPayloadEval;
-pub const TagPayloadAssembly = row.Ast.TagPayloadAssembly;
+/// Public `TagPayloadEval` declaration.
+pub const TagPayloadEval = struct {
+    payload: row.TagPayloadId,
+    value: ExprId,
+};
 
+/// Public `TagPayloadAssembly` declaration.
+pub const TagPayloadAssembly = struct {
+    payload: row.TagPayloadId,
+    value: ExprId,
+};
+
+/// Public `Expr` declaration.
 pub const Expr = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
@@ -217,6 +255,7 @@ pub const Expr = struct {
     };
 };
 
+/// Public `Stmt` declaration.
 pub const Stmt = union(enum) {
     decl: struct {
         bind: TypedSymbol,
@@ -247,16 +286,19 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Public `FnDef` declaration.
 pub const FnDef = struct {
     args: Span(TypedSymbol),
     captures: Span(CaptureSlot),
     body: ExprId,
 };
 
+/// Public `RunDef` declaration.
 pub const RunDef = struct {
     body: ExprId,
 };
 
+/// Public `HostedFnDef` declaration.
 pub const HostedFnDef = struct {
     proc: canonical.ProcedureValueRef,
     args: Span(TypedSymbol),
@@ -264,6 +306,7 @@ pub const HostedFnDef = struct {
     hosted: hosted_mod.Proc,
 };
 
+/// Public `DefVal` declaration.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
@@ -271,12 +314,14 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
+/// Public `Def` declaration.
 pub const Def = struct {
     proc: canonical.MirProcedureRef,
     debug_name: ?Symbol = null,
     value: DefVal,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

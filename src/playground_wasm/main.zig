@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const builtins = @import("builtins");
 const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
@@ -1061,7 +1060,6 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
     }
 }
 
-
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
 fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData {
@@ -1680,41 +1678,6 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
     try resp_writer.finalize();
 }
 
-/// Write canonicalized CIR response for REPL mode using ModuleEnv directly
-fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
-    resp_writer.pos = @sizeOf(u32);
-    const w = &resp_writer.interface;
-
-    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
-    defer local_arena.deinit();
-    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
-    var tree = SExprTree.init(local_arena.allocator());
-    defer tree.deinit();
-
-    const defs_count = module_env.store.sliceDefs(module_env.all_defs).len;
-    const stmts_count = module_env.store.sliceStatements(module_env.all_statements).len;
-
-    if (defs_count == 0 and stmts_count == 0) {
-        const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
-        const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
-    }
-
-    const mutable_cir = @constCast(module_env);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
-
-    try writeJsonString(w, sexpr_writer_allocating.written());
-    try w.writeAll("\"}");
-    try resp_writer.finalize();
-}
-
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
@@ -1896,7 +1859,6 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
-
 
 const HoverInfo = struct {
     name: []const u8,

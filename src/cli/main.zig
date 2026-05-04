@@ -78,8 +78,6 @@ const builder = @import("builder.zig");
 /// Check if LLVM is available
 const llvm_available = builder.isLLVMAvailable();
 
-const Can = can.Can;
-const Check = check.Check;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const FsIo = io_mod.Io;
 const ModuleEnv = can.ModuleEnv;
@@ -247,11 +245,7 @@ fn restoreWindowsConsoleCodePage() void {
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) *anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-
-    // MAP_FAILED is (void*)-1, not NULL
-    const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 // Windows shared memory functions
@@ -312,7 +306,6 @@ const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
-const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
@@ -1333,34 +1326,6 @@ fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
     return source;
 }
 
-/// State for the CLI echo platform's virtual I/O context.
-/// Intercepts reads for the synthetic app source and embedded platform files.
-const CliEchoState = struct {
-    app_abs_path: []const u8,
-    synthetic_app_source: []const u8,
-    platform_main_path: []const u8,
-    echo_module_path: []const u8,
-};
-
-fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
-    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
-    if (std.mem.eql(u8, path, self.app_abs_path))
-        return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.platform_main_path))
-        return gpa.dupe(u8, echo_platform.platform_main_source) catch error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.echo_module_path))
-        return gpa.dupe(u8, echo_platform.echo_module_source) catch error.OutOfMemory;
-    return FsIo.os().readFile(path, gpa);
-}
-
-fn cliEchoFileExists(ctx: ?*anyopaque, path: []const u8) bool {
-    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
-    if (std.mem.eql(u8, path, self.app_abs_path)) return true;
-    if (std.mem.eql(u8, path, self.platform_main_path)) return true;
-    if (std.mem.eql(u8, path, self.echo_module_path)) return true;
-    return FsIo.os().fileExists(path);
-}
-
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app through checked artifacts and executes the resulting
 /// LIR runtime image with the echo platform host function.
@@ -2209,94 +2174,6 @@ fn extractNonPlatformPackages(
     }
 
     return packages;
-}
-
-/// Extract exposed modules from a platform's main.roc file
-fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8, exposed_modules: *std.ArrayList([]const u8)) !void {
-    // Read the Roc file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path (strip .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse the source code as a full module
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    // Look for platform header in the AST
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    // Check if this is a platform file with a platform header
-    switch (header) {
-        .platform => |platform_header| {
-            // Validate platform header has targets section (non-blocking warning)
-            // This helps platform authors know they need to add targets
-            _ = validatePlatformHeader(ctx, parse_ast, roc_file_path);
-
-            // Get the exposes collection
-            const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
-            const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
-
-            // Extract all exposed module names
-            for (exposes_items) |item_idx| {
-                const item = parse_ast.store.getExposedItem(item_idx);
-                const token_idx = switch (item) {
-                    .upper_ident => |ui| ui.ident,
-                    .upper_ident_star => |uis| uis.ident,
-                    .lower_ident => |li| li.ident,
-                    .malformed => continue, // Skip malformed items
-                };
-                const item_name = parse_ast.resolve(token_idx);
-                try exposed_modules.append(ctx.gpa, try ctx.arena.dupe(u8, item_name));
-            }
-        },
-        else => {
-            return error.NotPlatformFile;
-        },
-    }
-}
-
-/// Validate a platform header and report any errors/warnings
-/// Returns true if valid, false if there are validation issues
-/// This currently only warns about missing targets sections - it doesn't block compilation
-fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platform_path: []const u8) bool {
-    const validation_result = targets_validator.validatePlatformHasTargets(parse_ast.*, platform_path);
-
-    switch (validation_result) {
-        .valid => return true,
-        else => {
-            // Create and render the validation report
-            var report = targets_validator.createValidationReport(ctx.gpa, validation_result) catch {
-                std.log.warn("Platform at {s} is missing targets section", .{platform_path});
-                return false;
-            };
-            defer report.deinit();
-
-            // Render to stderr
-            if (!builtin.is_test) {
-                reporting.renderReportToTerminal(&report, ctx.io.stderr(), .ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
-            }
-            return false;
-        },
-    }
 }
 
 /// Platform resolution result containing the platform source path
@@ -3589,7 +3466,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 }
 
-
 /// Build a standalone binary with the interpreter and an embedded LIR runtime image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
 fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
@@ -3926,7 +3802,6 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 }
 
-
 /// Dump linker inputs to a temp directory for debugging linking issues.
 /// Creates a directory with all input files copied and a README with the linker command.
 fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
@@ -4057,237 +3932,6 @@ const CopiedFile = struct {
 
 // Test cache blob format
 // Binary format for caching test results.
-
-const TestCacheHeader = extern struct {
-    magic: u32 = 0x524F4354, // "ROCT"
-    version: u32 = 1,
-    outcome: u32, // 0=all_passed, 1=some_failed, 2=compilation_error
-    passed_count: u32,
-    failed_count: u32,
-    num_results: u32,
-    comptime_report_len: u32,
-    _reserved: u32 = 0,
-
-    comptime {
-        std.debug.assert(@sizeOf(TestCacheHeader) == 32);
-    }
-};
-
-const TestCacheResultEntry = extern struct {
-    passed: u8,
-    _pad: [3]u8 = .{ 0, 0, 0 },
-    region_start: u32,
-    region_end: u32,
-    report_len: u32,
-
-    comptime {
-        std.debug.assert(@sizeOf(TestCacheResultEntry) == 16);
-    }
-};
-
-/// Atomically appends a test cache entry and its failure report.
-/// If either append fails, neither is added and `report_text` is freed (if non-empty).
-fn appendTestCacheEntry(
-    cache_entries: *std.ArrayList(TestCacheResultEntry),
-    cache_failure_reports: *std.ArrayList([]const u8),
-    gpa: std.mem.Allocator,
-    passed: bool,
-    region: base.Region,
-    report_text: []const u8,
-) void {
-    cache_entries.append(gpa, .{
-        .passed = if (passed) 1 else 0,
-        .region_start = region.start.offset,
-        .region_end = region.end.offset,
-        .report_len = @intCast(report_text.len),
-    }) catch {
-        if (report_text.len > 0) gpa.free(report_text);
-        return;
-    };
-    cache_failure_reports.append(gpa, report_text) catch {
-        _ = cache_entries.pop();
-        if (report_text.len > 0) gpa.free(report_text);
-    };
-}
-
-const TestCacheOutcome = enum(u32) {
-    all_passed = 0,
-    some_failed = 1,
-    compilation_error = 2,
-};
-
-fn parseTestCacheHeader(data: []const u8) ?*const TestCacheHeader {
-    if (data.len < @sizeOf(TestCacheHeader)) return null;
-    const header: *const TestCacheHeader = @ptrCast(@alignCast(data.ptr));
-    if (header.magic != 0x524F4354) return null;
-    if (header.version != 1) return null;
-    return header;
-}
-
-fn buildTestCacheBlob(
-    allocator: std.mem.Allocator,
-    outcome: TestCacheOutcome,
-    passed_count: u32,
-    failed_count: u32,
-    results: []const TestCacheResultEntry,
-    failure_reports: []const []const u8,
-    comptime_report: []const u8,
-) ![]u8 {
-    // Calculate total size
-    var total_size: usize = @sizeOf(TestCacheHeader);
-
-    if (outcome == .compilation_error) {
-        total_size += comptime_report.len;
-    } else {
-        total_size += results.len * @sizeOf(TestCacheResultEntry);
-        for (failure_reports) |report| {
-            total_size += report.len;
-        }
-        total_size += comptime_report.len;
-    }
-
-    var buf = try allocator.alloc(u8, total_size);
-    var offset: usize = 0;
-
-    // Write header
-    const header = TestCacheHeader{
-        .outcome = @intFromEnum(outcome),
-        .passed_count = passed_count,
-        .failed_count = failed_count,
-        .num_results = @intCast(results.len),
-        .comptime_report_len = @intCast(comptime_report.len),
-    };
-    const header_bytes = std.mem.asBytes(&header);
-    @memcpy(buf[offset..][0..header_bytes.len], header_bytes);
-    offset += header_bytes.len;
-
-    if (outcome == .compilation_error) {
-        @memcpy(buf[offset..][0..comptime_report.len], comptime_report);
-        offset += comptime_report.len;
-    } else {
-        // Write result entries
-        for (results) |entry| {
-            const entry_bytes = std.mem.asBytes(&entry);
-            @memcpy(buf[offset..][0..entry_bytes.len], entry_bytes);
-            offset += entry_bytes.len;
-        }
-        // Write failure report data
-        for (failure_reports) |report| {
-            @memcpy(buf[offset..][0..report.len], report);
-            offset += report.len;
-        }
-        // Write comptime report
-        @memcpy(buf[offset..][0..comptime_report.len], comptime_report);
-        offset += comptime_report.len;
-    }
-
-    std.debug.assert(offset == total_size);
-    return buf;
-}
-
-fn replayTestCache(
-    gpa: std.mem.Allocator,
-    data: []const u8,
-    args: cli_args.TestArgs,
-    stdout: *std.Io.Writer,
-    stderr: *std.Io.Writer,
-    source: []const u8,
-    start_time: i128,
-) !void {
-    const header = parseTestCacheHeader(data) orelse return error.InvalidCacheData;
-    const outcome: TestCacheOutcome = @enumFromInt(header.outcome);
-
-    // Calculate elapsed time
-    const end_time = std.time.nanoTimestamp();
-    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-
-    if (outcome == .compilation_error) {
-        // Print cached error message
-        const error_start = @sizeOf(TestCacheHeader);
-        if (data.len < error_start + header.comptime_report_len) return error.InvalidCacheData;
-        const error_msg = data[error_start..][0..header.comptime_report_len];
-        try stderr.writeAll(error_msg);
-        return error.TestsFailed;
-    }
-
-    // Parse result entries
-    const entries_start = @sizeOf(TestCacheHeader);
-    const entries_size = @as(usize, header.num_results) * @sizeOf(TestCacheResultEntry);
-    if (data.len < entries_start + entries_size + header.comptime_report_len) return error.InvalidCacheData;
-
-    const entries_bytes = data[entries_start..][0..entries_size];
-    const entries: []const TestCacheResultEntry = @as([*]const TestCacheResultEntry, @ptrCast(@alignCast(entries_bytes.ptr)))[0..header.num_results];
-
-    // Calculate where failure reports start
-    const failure_data_start = entries_start + entries_size;
-
-    // Print compile-time crash reports from cache
-    const comptime_report_start = data.len - header.comptime_report_len;
-    if (header.comptime_report_len > 0) {
-        const comptime_report = data[comptime_report_start..][0..header.comptime_report_len];
-        try stderr.writeAll(comptime_report);
-    }
-
-    const has_comptime_crashes = header.comptime_report_len > 0;
-    const passed = header.passed_count;
-    const failed = header.failed_count;
-
-    // Create minimal ModuleEnv just for line number computation
-    var env = can.ModuleEnv.init(gpa, source) catch return error.InvalidCacheData;
-    defer env.deinit();
-    env.common.source = source;
-    env.common.calcLineStarts(gpa) catch return error.InvalidCacheData;
-
-    if (failed == 0 and !has_comptime_crashes) {
-        try stdout.print("All ({}) tests passed in {d:.1} ms. (cached)\n", .{ passed, elapsed_ms });
-        if (args.verbose) {
-            for (entries) |entry| {
-                const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
-                const region_info = env.calcRegionInfo(region);
-                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-            }
-        }
-        return; // Exit with 0
-    } else {
-        const total_tests = passed + failed;
-        if (total_tests > 0) {
-            try stderr.print("Ran {} tests in {d:.1}ms (cached):\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, passed, failed });
-        }
-
-        if (args.verbose) {
-            var report_offset = failure_data_start;
-            for (entries) |entry| {
-                const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
-                const region_info = env.calcRegionInfo(region);
-                if (entry.passed != 0) {
-                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                } else {
-                    // Print cached failure report
-                    if (entry.report_len > 0 and report_offset + entry.report_len <= comptime_report_start) {
-                        const report_text = data[report_offset..][0..entry.report_len];
-                        try stderr.writeAll(report_text);
-                    } else {
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                    }
-                }
-                if (entry.passed == 0) {
-                    report_offset += entry.report_len;
-                }
-            }
-        } else {
-            for (entries) |entry| {
-                if (entry.passed == 0) {
-                    const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
-                    const region_info = env.calcRegionInfo(region);
-                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                }
-            }
-        }
-
-        return error.TestsFailed;
-    }
-}
 
 const CliTestResult = enum { passed, failed };
 
@@ -4561,7 +4205,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     return error.TestsFailed;
 }
-
 
 /// Prints a formatted test failure to stderr, including the source snippet,
 /// an optional doc comment from the preceding line, and an optional error message.

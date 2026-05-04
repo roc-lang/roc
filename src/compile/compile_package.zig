@@ -27,7 +27,6 @@ const build_options = @import("build_options");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
-const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
 const roc_target = @import("roc_target");
@@ -298,6 +297,7 @@ pub const TypeCheckOutput = struct {
     }
 };
 
+/// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,

@@ -13,7 +13,6 @@ const can = @import("can");
 const types = @import("types");
 const reporting = @import("reporting");
 const check = @import("check");
-const builtins = @import("builtins");
 const compile = @import("compile");
 const lir = @import("lir");
 const backend = @import("backend");
@@ -51,58 +50,6 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     }
     // No protection active — use default behavior.
     std.debug.defaultPanic(msg, @returnAddress());
-}
-
-/// Unix signal handler for catching segfaults and illegal instructions from
-/// generated code. Uses the same panic_jmp mechanism as the panic handler.
-/// Not available on Windows (no POSIX signals).
-fn crashSignalHandler(_: i32) callconv(.c) void {
-    if (panic_jmp) |jmp| {
-        panic_msg = "signal: segfault or illegal instruction in generated code";
-        gpa_poisoned = true;
-        panic_jmp = null;
-        sljmp.longjmp(jmp, 2);
-    }
-    // No protection active — reset to default handler and re-raise.
-    const dfl = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
-}
-
-/// SIGALRM handler for catching infinite loops in generated code.
-fn alarmSignalHandler(_: i32) callconv(.c) void {
-    if (panic_jmp) |jmp| {
-        panic_msg = "timeout: dev backend execution exceeded time limit";
-        gpa_poisoned = true;
-        panic_jmp = null;
-        sljmp.longjmp(jmp, 3);
-    }
-}
-
-fn installCrashSignalHandlers() void {
-    const native_os = @import("builtin").os.tag;
-    if (comptime native_os == .windows) return;
-
-    const sa = std.posix.Sigaction{
-        .handler = .{ .handler = &crashSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.os.linux.SA.NODEFER,
-    };
-    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
-
-    const alarm_sa = std.posix.Sigaction{
-        .handler = .{ .handler = &alarmSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.os.linux.SA.NODEFER,
-    };
-    std.posix.sigaction(std.posix.SIG.ALRM, &alarm_sa, null);
 }
 
 const roc_target = @import("roc_target");
@@ -4114,7 +4061,6 @@ fn processDevObjectSnapshot(
     return success;
 }
 
-
 // REPL Snapshot Processing
 
 const SnapshotReplDefinitionKind = enum {
@@ -4452,7 +4398,6 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
     if (gpa_poisoned) return false;
 
@@ -4589,7 +4534,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     return success;
 }
-
 
 fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
     try output.begin_section("PROBLEMS");

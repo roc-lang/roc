@@ -8,51 +8,62 @@ const row = @import("../mono_row/mod.zig");
 const canonical = check.CanonicalNames;
 const repr = solved.Representation;
 
+/// Public `TypeId` declaration.
 pub const TypeId = enum(u32) { _ };
+/// Public `TypeIds` declaration.
 pub const TypeIds = []const TypeId;
 pub const Prim = solved.Type.Prim;
 
+/// Public `CallableSetMemberType` declaration.
 pub const CallableSetMemberType = struct {
     member: repr.CallableSetMemberId,
     payload_ty: ?TypeId,
 };
 
+/// Public `CallableSetType` declaration.
 pub const CallableSetType = struct {
     key: repr.CanonicalCallableSetKey,
     members: []const CallableSetMemberType,
 };
 
+/// Public `ErasedFnType` declaration.
 pub const ErasedFnType = struct {
     sig_key: repr.ErasedFnSigKey,
     capture_shape: repr.CaptureShapeKey,
     capture_ty: ?TypeId = null,
 };
 
+/// Public `RecordFieldType` declaration.
 pub const RecordFieldType = struct {
     field: row.RecordFieldId,
     ty: TypeId,
 };
 
+/// Public `RecordType` declaration.
 pub const RecordType = struct {
     shape: row.RecordShapeId,
     fields: []const RecordFieldType,
 };
 
+/// Public `TagPayloadType` declaration.
 pub const TagPayloadType = struct {
     payload: row.TagPayloadId,
     ty: TypeId,
 };
 
+/// Public `TagType` declaration.
 pub const TagType = struct {
     tag: row.TagId,
     payloads: []const TagPayloadType,
 };
 
+/// Public `TagUnionType` declaration.
 pub const TagUnionType = struct {
     shape: row.TagUnionShapeId,
     tags: []const TagType,
 };
 
+/// Public `Content` declaration.
 pub const Content = union(enum) {
     placeholder,
     link: TypeId,
@@ -72,6 +83,7 @@ pub const Content = union(enum) {
     vacant_callable_slot,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(Content),

@@ -6,6 +6,7 @@ const check = @import("check");
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 
+/// Public `RootKind` declaration.
 pub const RootKind = enum {
     runtime_entrypoint,
     provided_export,
@@ -18,6 +19,7 @@ pub const RootKind = enum {
     compile_time_callable,
 };
 
+/// Public `RootAbi` declaration.
 pub const RootAbi = enum {
     roc,
     platform,
@@ -26,6 +28,7 @@ pub const RootAbi = enum {
     compile_time,
 };
 
+/// Public `RootExposure` declaration.
 pub const RootExposure = enum {
     private,
     exported,
@@ -33,6 +36,7 @@ pub const RootExposure = enum {
     hosted,
 };
 
+/// Public `RootMetadata` declaration.
 pub const RootMetadata = struct {
     order: u32,
     kind: RootKind,
@@ -40,10 +44,12 @@ pub const RootMetadata = struct {
     exposure: RootExposure,
 };
 
+/// Public `ExecutableSyntheticProcBody` declaration.
 pub const ExecutableSyntheticProcBody = union(enum) {
     erased_promoted_wrapper: checked_artifact.ErasedPromotedWrapperBodyPlan,
 };
 
+/// Public `ExecutableSyntheticProc` declaration.
 pub const ExecutableSyntheticProc = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     source_proc: canonical.MirProcedureRef,
@@ -55,17 +61,25 @@ pub const ExecutableSyntheticProc = struct {
     body: ExecutableSyntheticProcBody,
 };
 
+/// Public `RecordShapeId` declaration.
 pub const RecordShapeId = enum(u32) { _ };
+/// Public `RecordFieldId` declaration.
 pub const RecordFieldId = enum(u32) { _ };
+/// Public `TagUnionShapeId` declaration.
 pub const TagUnionShapeId = enum(u32) { _ };
+/// Public `TagId` declaration.
 pub const TagId = enum(u32) { _ };
+/// Public `TagPayloadId` declaration.
 pub const TagPayloadId = enum(u32) { _ };
+/// Public `ProgramLiteralId` declaration.
 pub const ProgramLiteralId = enum(u32) { _ };
 
+/// Public `ProgramLiteral` declaration.
 pub const ProgramLiteral = struct {
     bytes: []const u8,
 };
 
+/// Public `ProgramLiteralPool` declaration.
 pub const ProgramLiteralPool = struct {
     allocator: std.mem.Allocator,
     literals: std.ArrayList(ProgramLiteral),
@@ -111,6 +125,7 @@ pub const ProgramLiteralPool = struct {
     }
 };
 
+/// Public `Span` function.
 pub fn Span(comptime T: type) type {
     return extern struct {
         start: u32,

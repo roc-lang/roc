@@ -375,14 +375,14 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                 };
             },
             .problem => blk: {
-                const resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{ .status = .pass, .timings = .{} };
                 };
-                defer helpers.cleanupParseAndCanonical(allocator, resources);
+                defer resources.deinit(allocator);
                 break :blk EvalTimings{
-                    .parse_ns = resources.parse_ns,
-                    .canonicalize_ns = resources.canonicalize_ns,
-                    .typecheck_ns = resources.typecheck_ns,
+                    .parse_ns = resources.main.parse_ns,
+                    .canonicalize_ns = resources.main.canonicalize_ns,
+                    .typecheck_ns = resources.main.typecheck_ns,
                 };
             },
         };
@@ -521,22 +521,22 @@ fn runTestProblem(
     imports: []const helpers.ModuleSource,
 ) !TestOutcome {
     var timer = Timer.start() catch unreachable;
-    const resources = helpers.parseAndCanonicalizeProgram(allocator, source_kind, src, imports) catch {
+    var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
         const elapsed = timer.read();
         return .{ .status = .pass, .timings = .{ .parse_ns = elapsed } };
     };
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    defer resources.deinit(allocator);
 
-    const can_diags = try resources.module_env.getDiagnostics();
+    const can_diags = try resources.main.module_env.getDiagnostics();
     defer allocator.free(can_diags);
-    const type_problems = resources.checker.problems.problems.items.len;
+    const type_problems = resources.main.checker.problems.problems.items.len;
     const has_problems = can_diags.len + type_problems > 0;
 
     const timings = EvalTimings{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
+        .parse_ns = resources.main.parse_ns,
+        .canonicalize_ns = resources.main.canonicalize_ns,
+        .typecheck_ns = resources.main.typecheck_ns,
     };
     if (has_problems) {
         return .{ .status = .pass, .timings = timings };

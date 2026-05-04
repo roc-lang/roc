@@ -14,10 +14,12 @@ const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
 const Symbol = symbol_mod.Symbol;
 
+/// Public `ProcOrderKey` declaration.
 pub const ProcOrderKey = struct {
     ordinal: u32,
 };
 
+/// Public `LiftedGroupMember` declaration.
 pub const LiftedGroupMember = struct {
     source_symbol: Symbol,
     lifted_proc: canonical.ProcedureValueRef,
@@ -26,6 +28,7 @@ pub const LiftedGroupMember = struct {
     capture_slots: Ast.Span(Ast.CaptureSlot),
 };
 
+/// Public `CaptureValueEdge` declaration.
 pub const CaptureValueEdge = struct {
     from_proc: canonical.ProcedureValueRef,
     source_symbol: Symbol,
@@ -33,23 +36,27 @@ pub const CaptureValueEdge = struct {
     source_type_key: canonical.CanonicalTypeKey,
 };
 
+/// Public `CaptureProcValueEdge` declaration.
 pub const CaptureProcValueEdge = struct {
     from_proc: canonical.ProcedureValueRef,
     referenced_proc: canonical.ProcedureValueRef,
 };
 
+/// Public `LiftedCaptureGraph` declaration.
 pub const LiftedCaptureGraph = struct {
     members: []const LiftedGroupMember = &.{},
     value_edges: []const CaptureValueEdge = &.{},
     proc_value_edges: []const CaptureProcValueEdge = &.{},
 };
 
+/// Public `Proc` declaration.
 pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     order_key: ProcOrderKey,
     body: Ast.DefId,
 };
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -97,6 +104,7 @@ pub const Program = struct {
     }
 };
 
+/// Public `run` function.
 pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Program {
     var input = row_result;
     errdefer input.deinit();
@@ -258,7 +266,7 @@ const BodyLifter = struct {
                     .hosted = hosted.hosted,
                 } },
                 .val => |expr| .{ .val = try self.lowerExpr(expr) },
-                .run => |run| .{ .run = .{ .body = try self.lowerExpr(run.body) } },
+                .run => |run_def| .{ .run = .{ .body = try self.lowerExpr(run_def.body) } },
             },
         });
     }
@@ -759,6 +767,7 @@ const BodyLifter = struct {
             .bool_lit,
             .str_lit,
             .const_instance,
+            .const_ref,
             .unit,
             .crash,
             .runtime_error,
@@ -1063,11 +1072,11 @@ const BodyLifter = struct {
         return try self.output.addStmt(switch (stmt) {
             .local_fn => liftInvariant("lifted MIR local function statement reached statement lowering outside block lifting"),
             .decl => |decl| .{ .decl = .{
-                .bind = decl.bind,
+                .bind = self.lowerTypedSymbol(decl.bind),
                 .body = try self.lowerExpr(decl.body),
             } },
             .var_decl => |decl| .{ .var_decl = .{
-                .bind = decl.bind,
+                .bind = self.lowerTypedSymbol(decl.bind),
                 .body = try self.lowerExpr(decl.body),
             } },
             .reassign => |reassign| .{ .reassign = .{
@@ -1103,15 +1112,15 @@ const BodyLifter = struct {
         return try self.output.addExprSpan(output_items);
     }
 
-    fn lowerStmtSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {
-        const input_items = self.input.sliceStmtSpan(span);
-        if (input_items.len == 0) return Ast.Span(Ast.StmtId).empty();
-        const output_items = try self.allocator.alloc(Ast.StmtId, input_items.len);
+    fn lowerPatSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.PatId)) Allocator.Error!Ast.Span(Ast.PatId) {
+        const input_items = self.input.slicePatSpan(span);
+        if (input_items.len == 0) return Ast.Span(Ast.PatId).empty();
+        const output_items = try self.allocator.alloc(Ast.PatId, input_items.len);
         defer self.allocator.free(output_items);
-        for (input_items, 0..) |stmt, i| {
-            output_items[i] = try self.lowerStmt(stmt);
+        for (input_items, 0..) |pat, i| {
+            output_items[i] = try self.lowerPat(pat);
         }
-        return try self.output.addStmtSpan(output_items);
+        return try self.output.addPatSpan(output_items);
     }
 
     fn lowerBranchSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.BranchId)) Allocator.Error!Ast.Span(Ast.BranchId) {
@@ -1162,6 +1171,11 @@ const BodyLifter = struct {
             output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
         }
         return try self.output.addTypedSymbolSpan(output_items);
+    }
+
+    fn lowerTypedSymbol(self: *BodyLifter, symbol: MonoRow.Ast.TypedSymbol) Ast.TypedSymbol {
+        _ = self;
+        return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
     }
 
     fn lowerCaptureArgSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.CaptureArg)) Allocator.Error!Ast.Span(Ast.CaptureArg) {

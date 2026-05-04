@@ -13,8 +13,10 @@ const Allocator = std.mem.Allocator;
 const Exec = mir.Executable;
 const repr = mir.LambdaSolved.Representation;
 
+/// Public `LowerResourceError` declaration.
 pub const LowerResourceError = Allocator.Error;
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: mir.Hosted.CanonicalNameStore,
@@ -50,6 +52,7 @@ pub const Program = struct {
     }
 };
 
+/// Public `fromExecutable` function.
 pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Program) LowerResourceError!Program {
     var input = executable;
     errdefer input.deinit();
@@ -288,7 +291,6 @@ const IrBuilder = struct {
             .value_transform_tag_union => |tag_transform| try self.lowerValueTransformTagUnion(expr, tag_transform, stmts),
             .value_transform_list => |list_transform| try self.lowerValueTransformList(expr, list_transform, stmts),
             .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
-            .while_ => |while_| try self.lowerWhileExpr(expr, while_, stmts),
             .bridge => |bridge_expr| blk: {
                 const value = self.value_env.get(bridge_expr.value) orelse irInvariant("IR lowering bridge source value was not bound");
                 const bridge_plan = try self.lowerBridgePlan(bridge_expr.bridge);
@@ -297,7 +299,7 @@ const IrBuilder = struct {
                     .plan = bridge_plan,
                 } }, stmts);
             },
-            .packed_erased_fn => |packed| try self.lowerPackedErasedFn(expr, packed, stmts),
+            .packed_erased_fn => |packed_fn| try self.lowerPackedErasedFn(expr, packed_fn, stmts),
             .call_erased => |call| try self.lowerCallErased(expr, call, stmts),
             .crash => |literal| blk: {
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal }));
@@ -380,18 +382,18 @@ const IrBuilder = struct {
     fn lowerPackedErasedFn(
         self: *IrBuilder,
         expr: Exec.Ast.Expr,
-        packed: Exec.Ast.PackedErasedFn,
+        packed_fn: Exec.Ast.PackedErasedFn,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const field_count: usize = if (packed.capture_ty == null) 1 else 2;
+        const field_count: usize = if (packed_fn.capture_ty == null) 1 else 2;
         const fields = try self.allocator.alloc(Ast.Var, field_count);
         defer self.allocator.free(fields);
 
-        const fn_ptr = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .{ .fn_ptr = packed.code }, stmts);
+        const fn_ptr = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .{ .fn_ptr = packed_fn.code }, stmts);
         fields[0] = fn_ptr;
 
-        if (packed.capture_ty) |capture_ty| {
-            const capture_ref = packed.capture orelse irInvariant("IR lowering packed erased fn has capture type but no capture value");
+        if (packed_fn.capture_ty) |capture_ty| {
+            const capture_ref = packed_fn.capture orelse irInvariant("IR lowering packed erased fn has capture type but no capture value");
             const capture = self.value_env.get(capture_ref) orelse irInvariant("IR lowering packed erased fn capture value was not bound");
             const capture_layout = try self.layoutForType(capture_ty);
             const capture_box_layout = try self.boxLayout(capture_layout);
@@ -406,7 +408,7 @@ const IrBuilder = struct {
                 } }),
             } }));
             fields[1] = capture_box;
-        } else if (packed.capture != null) {
+        } else if (packed_fn.capture != null) {
             irInvariant("IR lowering packed erased fn has capture value but no capture type");
         }
 
@@ -703,21 +705,6 @@ const IrBuilder = struct {
         );
     }
 
-    fn lowerWhileExpr(
-        self: *IrBuilder,
-        expr: Exec.Ast.Expr,
-        while_: anytype,
-        stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError!Ast.Var {
-        try self.appendWhile(while_, stmts);
-        return try self.bindExpr(
-            expr.value,
-            .{ .canonical = .zst },
-            .{ .make_struct = Ast.Span(Ast.Var).empty() },
-            stmts,
-        );
-    }
-
     fn appendWhile(
         self: *IrBuilder,
         while_: anytype,
@@ -801,7 +788,7 @@ const IrBuilder = struct {
     ) LowerResourceError!void {
         return switch (self.input.ast.getDecisionNode(node_id)) {
             .leaf => |leaf_id| try self.appendDecisionLeaf(leaf_id, scrutinee_values, result, path_values, stmts),
-            .test => |test| try self.appendDecisionTest(test, scrutinee_values, result, path_values, stmts),
+            .decision_test => |test_node| try self.appendDecisionTest(test_node, scrutinee_values, result, path_values, stmts),
         };
     }
 
@@ -845,7 +832,7 @@ const IrBuilder = struct {
         }
 
         const edge = edges[index];
-        const condition = try self.lowerPatternTest(path_value, edge.test, stmts);
+        const condition = try self.lowerPatternTest(path_value, edge.pattern_test, stmts);
         const true_block = try self.decisionNodeBlock(edge.next, scrutinee_values, result, path_values);
         const false_block = try self.decisionEdgeCascadeBlock(edges, index + 1, path_value, default_node, scrutinee_values, result, path_values);
         const true_branches = [_]Ast.Branch{.{
@@ -1192,10 +1179,10 @@ const IrBuilder = struct {
     fn lowerPatternTest(
         self: *IrBuilder,
         path_value: Ast.Var,
-        test: Exec.Ast.PatternTest,
+        pattern_test: Exec.Ast.PatternTest,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        return switch (test) {
+        return switch (pattern_test) {
             .tag => |tag| blk: {
                 const discriminant = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .get_union_id = path_value }, stmts);
                 const literal = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{ .int = @intCast(self.input.row_shapes.tag(tag).logical_index) } }, stmts);
@@ -1450,7 +1437,6 @@ const IrBuilder = struct {
         }
     }
 
-
     fn lowerRecordFields(
         self: *IrBuilder,
         span: Exec.Ast.Span(Exec.Ast.RecordFieldExpr),
@@ -1611,36 +1597,6 @@ const IrBuilder = struct {
             lowered[i] = try self.lowerBridgePlan(bridge_id);
         }
         return try self.output.store.addBridgePlanSpan(lowered);
-    }
-
-    fn procDef(self: *const IrBuilder, proc: Exec.Ast.ExecutableProcId) Exec.Ast.Def {
-        const index = self.proc_def_index.get(proc) orelse irInvariant("IR lowering referenced executable proc with no definition");
-        return self.input.ast.defs.items[index];
-    }
-
-    fn procArgLayout(
-        self: *IrBuilder,
-        proc: Exec.Ast.ExecutableProcId,
-        arg_index: usize,
-    ) LowerResourceError!Ast.LayoutRef {
-        const def = self.procDef(proc);
-        const args = switch (def.value) {
-            .fn_ => |fn_| self.input.ast.typed_values.items[fn_.args.start..][0..fn_.args.len],
-            .hosted_fn => |hosted| self.input.ast.typed_values.items[hosted.args.start..][0..hosted.args.len],
-        };
-        if (arg_index >= args.len) irInvariant("IR lowering direct call argument exceeded target procedure arity");
-        return try self.layoutForType(args[arg_index].ty);
-    }
-
-    fn procReturnLayout(
-        self: *IrBuilder,
-        proc: Exec.Ast.ExecutableProcId,
-    ) LowerResourceError!Ast.LayoutRef {
-        const def = self.procDef(proc);
-        return switch (def.value) {
-            .fn_ => |fn_| try self.layoutForType(self.input.ast.getExpr(fn_.body).ty),
-            .hosted_fn => |hosted| try self.layoutForType(hosted.ret_ty),
-        };
     }
 
     fn bindExpr(

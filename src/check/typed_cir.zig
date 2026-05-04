@@ -183,7 +183,6 @@ pub const Modules = struct {
     pub fn moduleIdxByName(self: @This(), target_name: []const u8) ?u32 {
         return self.module_idxs_by_name.get(target_name);
     }
-
 };
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {

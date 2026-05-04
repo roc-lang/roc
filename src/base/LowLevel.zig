@@ -407,6 +407,8 @@ pub const LowLevel = enum {
         may_allocate: bool = false,
         may_retain_or_release: bool = false,
         may_runtime_uniqueness_check_args: u64 = 0,
+        consume_args: u64 = 0,
+        result_aliases_consumed_args: u64 = 0,
         retain_args: u64 = 0,
         retain_result: bool = false,
 
@@ -449,6 +451,8 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .may_runtime_uniqueness_check_args = mask,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
             };
         }
 
@@ -457,6 +461,25 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .may_runtime_uniqueness_check_args = runtime_mask,
+                .consume_args = runtime_mask,
+                .result_aliases_consumed_args = runtime_mask,
+                .retain_args = retain_mask,
+            };
+        }
+
+        pub fn consumesArgsRetainingArgs(consume_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = consume_mask != 0 or retain_mask != 0,
+                .consume_args = consume_mask,
+                .retain_args = retain_mask,
+            };
+        }
+
+        pub fn consumesArgsReturningConsumedArgsRetainingArgs(consume_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = consume_mask != 0 or retain_mask != 0,
+                .consume_args = consume_mask,
+                .result_aliases_consumed_args = consume_mask,
                 .retain_args = retain_mask,
             };
         }
@@ -494,7 +517,7 @@ pub const LowLevel = enum {
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
-            .list_append_unsafe => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+            .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
             .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
 

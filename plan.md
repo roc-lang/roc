@@ -1136,6 +1136,107 @@ explicit checked artifact data. Cor can keep the solved body and type graph in
 one process; Roc must not depend on that in-process pointer model for imports or
 cache hits.
 
+The cloned requested function type is the only source of truth for procedure
+entry parameter and return types. A checked procedure template may contain
+source pattern type roots for its lambda parameters, but mono specialization
+must not lower procedure-entry binders from those pattern roots. Those roots are
+checker/source evidence and destructuring input, not the authority for a
+concrete specialization. After `MonoSpecializationRequest.requested_fn_ty` has
+been clone-instantiated and unified with the checked template's function root,
+mono must read the ordered parameter types and result type from that instantiated
+requested function type. The number of source parameter patterns must exactly
+equal the requested fixed-arity function type's parameter count. In debug
+builds, mono verifies each source parameter pattern root is compatible with the
+same-index instantiated parameter payload; release builds use `unreachable` for
+the equivalent compiler-invariant path. This is the explicit checked-artifact
+version of Cor/LSS's `specialize_let_fn` flow: Cor clones the function type,
+unifies it with `t_new`, and only then lowers the parameter symbol type from the
+same clone cache.
+
+Checked call expressions must publish the fully checked fixed-arity function
+type at that exact call site. In plan pseudocode this is:
+
+```zig
+const CheckedCallSite = struct {
+    func: CheckedExprId,
+    args: Span(CheckedExprId),
+    called_via: CalledVia,
+
+    /// Fully checked source function type for this call occurrence.
+    /// Mono uses this payload, not the callee expression's lookup type, to
+    /// specialize direct procedure calls and to type `call_value`.
+    source_fn_ty_payload: ArtifactCheckedTypeRef,
+};
+```
+
+The canonical source function key is read from the published checked type root
+named by `source_fn_ty_payload`; the payload is the data and the key is only the
+identity check. `ResolvedValueRef` identifies what binding the callee expression
+refers to. It does not choose the function type for an ordinary call site. This
+distinction is mandatory for generic builtins and generic imported procedures.
+For example, `List.concat([1, 2], [3, 4])` has a callee binding for
+`Builtin.List.concat`, but the checked call site publishes
+`List(I64), List(I64) -> List(I64)`. Mono must reserve and lower the
+`Builtin.List.concat` specialization at that exact call-site function type and
+must type its entry parameters as `List(I64)` and `List(I64)`, never as
+`List(a)` from a stale generic parameter pattern root.
+
+Mono MIR also maintains a specialization-local concrete binder type environment.
+Whenever mono creates a binder from a procedure parameter, pattern binder, local
+declaration, mutable declaration, match binder, `for` binder, or generated
+destructuring binder, it records the binder's concrete `TypeId` and canonical
+source type from the lowering context that created that binder. Any later
+`lookup_local` for that binder must lower from this concrete binder environment,
+not from the lookup expression's standalone checked type root. A checked
+expression root is checker/source evidence; after a concrete binder has been
+published in mono, the binder environment is the single source of truth for
+local lookup types inside that specialization.
+
+This rule is required for builtin and intrinsic bodies as well as user code. For
+example, the checked body of `List.concat` contains a low-level
+`list_concat(left, right)` expression. In the generic checked template,
+`left` and `right` have source roots involving `item`; in the specialization
+requested by `List.concat([1, 2], [3, 4])`, the entry binders for `left` and
+`right` are concrete `List(I64)`. When mono lowers the low-level expression's
+arguments, the local lookups must read `List(I64)` from the concrete binder
+environment. They must not lower the lookup nodes from stale generic roots, and
+they must not infer list element types from syntax or layouts.
+
+Mono expression lowering is contextual. Whenever an expression is lowered with a
+concrete expected source type, mono must first unify the expression's checked
+type root with that concrete expected type in the specialization-local
+instantiation graph, then lower the expression and its children from that
+updated graph. This is required for nested generic expressions whose own checked
+roots remain generic but whose surrounding expression provides the concrete
+type. For example, `List.first(list)` returns `Ok(item)` in the builtin
+template. In the specialization produced by:
+
+```roc
+{
+    x = List.concat([10, 20], [30, 40, 50])
+    first = List.first(x)
+    first
+}
+```
+
+the `Ok(...)` constructor is lowered under the concrete result type
+`[Ok(Dec), Err({})]` (or the equivalent finalized result type for the current
+numeric default). Mono must unify the checked `Ok(...)` expression root with
+that concrete result before lowering the payload expression, so the payload and
+any call inside it see `Dec`, not the generic `item` variable from the builtin
+template.
+
+Tag construction follows the same rule at payload granularity. A tag
+constructor lowered under a concrete tag-union type must lower each payload
+expression with the concrete payload type of the selected tag from that union.
+It must not call ordinary expression lowering on payloads and let their
+standalone checked roots choose the type. This rule applies to generic builtins
+such as `List.first`, user-defined generic tag constructors, nominal/alias
+wrappers around tag unions, and tag-union extension rows. Debug builds verify
+that the selected tag exists in both the lowered constructor type and the
+concrete source type, and that the payload arities match; release builds use
+`unreachable` for the equivalent compiler-invariant path.
+
 `NestedProcSite` gives local functions, closures, and compiler-created nested
 closure sites stable checked-template-local identity before mono lowering or
 lifting. A lifted procedure identity is derived from the owner
@@ -2196,12 +2297,15 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
   generic constant template.
 - `top_level_proc`, `imported_proc`, `hosted_proc`,
   `platform_required_proc`, and `promoted_top_level_proc` carry
-  `ProcedureUseTemplate`. In callee position,
-  mono MIR clone-instantiates `source_fn_ty_template` into the current run's
-  `ConcreteSourceTypeStore`, resolves any static dispatch required by that
-  function type payload, resolves the named procedure binding at that concrete
-  function type, and then creates the concrete `ProcedureCallableRef`/mono
-  specialization request needed for `call_proc`. The resulting
+  `ProcedureUseTemplate`. In callee position for an ordinary call, the
+  `ProcedureUseTemplate` supplies the binding identity and the checked call site
+  supplies the concrete `source_fn_ty_payload`. Mono MIR clone-instantiates that
+  call-site payload into the current run's `ConcreteSourceTypeStore`, resolves
+  any static dispatch required by that function type payload, resolves the named
+  procedure binding at that concrete function type, and then creates the
+  concrete `ProcedureCallableRef`/mono specialization request needed for
+  `call_proc`. The callee lookup expression's own checked type is not the call
+  specialization authority. The resulting
   `ProcedureCallableRef.source_fn_ty` is the payload's canonical key; the mono
   specialization request also carries the `ConcreteSourceTypeRef` payload.
 - `platform_required_const` carries `ConstUseTemplate`. Mono MIR treats it like
@@ -2265,10 +2369,35 @@ production compiler must prevent the mistaken capture earlier: by the time
 capture discovery runs, top-level and imported values are already `const_ref`,
 `call_proc`, or empty-capture `proc_value`, not ordinary capturable refs.
 
+Mono specialization is also the boundary that closes unconstrained local flex
+variables that remain in non-generalized expression types after checking. This
+can happen only when type checking proved the program is valid and the remaining
+variable has no constraints that affect runtime behavior. For example:
+
+```roc
+match Ok(10) {
+    Ok(n) => n + 5
+    Err(_) => 0
+}
+```
+
+The `Err(_)` payload introduces an unconstrained payload type that is never
+observed. Mono MIR must not carry that generic variable forward, and it must not
+reconstruct a narrower singleton source type from the `Ok(10)` syntax. It closes
+the unconstrained flex payload to an explicit zero-field payload in the
+specialization-local concrete source type graph. A constrained flex variable or
+any unresolved rigid/generalized variable at this boundary is a compiler bug:
+debug assertion in debug builds, `unreachable` in release builds.
+
 Debug-only verification after mono MIR must assert:
 
 - every checked value reference that reached mono MIR consumed exactly one
   `ResolvedValueRefRecord`
+- no constrained flex variable, rigid variable, generalized variable, or pending
+  checked type payload remains in any exported mono MIR type
+- any unconstrained flex variable closed by mono specialization became an
+  explicit zero-field payload in the specialization-local concrete source type
+  graph before row finalization
 - no top-level, imported, hosted, platform-required, or promoted value was
   emitted as an ordinary local value reference
 - no `platform_required_declaration` reached an executable mono lowering input
@@ -2891,6 +3020,73 @@ At every executable specialization point for `call_proc`, `proc_value`, or
 5. Solve all reachable callable and representation variables before publishing
    any executable MIR input.
 
+The executable specialization point is a representation use context. It is not
+merely a source procedure name and it is not merely a monomorphic source
+function type. A single source procedure template can have multiple executable
+representation instances at the same source function type when different
+callers pass different callable values, when one use crosses an explicit
+`Box(T)` erased boundary and another does not, or when capture executable
+representations differ.
+
+For example:
+
+```roc
+{
+    pipe = |x, f| f(x)
+    y = 10
+
+    pipe(5, |x| x + y)
+}
+```
+
+The local `pipe` procedure has a parameter `f` whose callable representation is
+not known from `pipe`'s source body alone. At this use, `pipe` must be
+clone-instantiated into the caller's representation use context. The caller's
+argument value for `f` is the finite callable set containing the closure
+`|x| x + y`, and the explicit call-argument value-flow edge connects that finite
+callable set to `pipe`'s instantiated parameter root before the `f(x)` call in
+`pipe` is sealed. If `pipe` were solved once in an isolated non-recursive
+single-member solve session, `f` would have function type but no finite callable
+member. That is invalid.
+
+The same source procedure and source function type can also require distinct
+representation instances:
+
+```roc
+{
+    pipe = |x, f| f(x)
+
+    a = pipe(5, |x| x + 1)
+    b = pipe(5, |x| x + 2)
+
+    a + b
+}
+```
+
+Those two `pipe` uses may both be `I64, (I64 -> I64) -> I64`, but their
+function-typed parameter is connected to different closure procedure values.
+They must not be merged merely because the source function type is equal. They
+may be deduplicated only after sealing if the full canonical
+`ExecutableSpecializationKey` is identical.
+
+Finite and erased uses must also remain independent:
+
+```roc
+id_fn = |f| f
+
+direct = id_fn(|x| x + 1)(41)
+boxed = Box.box(id_fn(|x| x + 2))
+```
+
+The `direct` use keeps a finite callable-set representation. The `boxed` use may
+be erased only because an explicit `Box(T)` boundary requires erasure. The boxed
+use must not mutate a shared source-procedure representation and accidentally
+force the direct use to become erased. This is the production version of
+Cor/LSS's behavior: Cor generalizes lambda-set variables on procedure
+definitions, instantiates fresh lambda-set variables at every variable use, and
+then lets the call unify that fresh instance with the caller's actual argument
+and result flow.
+
 No executable specialization may consume a generalized template directly. If a
 debug verifier sees a generalized variable in an executable input, the compiler
 must assert immediately in debug builds; release builds use `unreachable`.
@@ -2917,6 +3113,25 @@ const RepresentationSolveSessionId = enum(u32) { _ };
 const ValueInfoStoreId = enum(u32) { _ };
 const ProcRepresentationInstanceId = enum(u32) { _ };
 
+const ProcedureInstantiationOwner = union(enum) {
+    root_request: RootRequestId,
+    direct_call: CallSiteInfoId,
+    proc_value: CallableSetConstructionPlanId,
+    callable_match_member: struct {
+        call: CallSiteInfoId,
+        member: CallableSetMemberRef,
+    },
+    erased_adapter_member: ErasedAdapterKey,
+    promoted_wrapper: PromotedCallableWrapperId,
+    recursive_group_member: RecursiveGroupMemberId,
+};
+
+const ProvisionalProcRepresentationInstanceKey = struct {
+    template: CallableProcedureTemplateRef,
+    source_fn_ty: CanonicalTypeKey,
+    owner: ProcedureInstantiationOwner,
+};
+
 const ProcPublicValueRoots = struct {
     params: Span(ValueInfoId),
     ret: ValueInfoId,
@@ -2939,6 +3154,7 @@ const RepresentationSolveState = enum {
 
 const ProcRepresentationInstance = struct {
     proc: MonoSpecializedProcRef,
+    provisional_key: ProvisionalProcRepresentationInstanceKey,
     executable_specialization_key: ExecutableSpecializationKey,
     type_store: TypeStoreRef,
     solve_session: RepresentationSolveSessionId,
@@ -2965,17 +3181,37 @@ before the instance can be exported or consumed by executable MIR.
 
 The `RepresentationSolveSession` owns the `RepresentationStore`. A
 `ProcRepresentationInstance` owns its dense `ValueInfoStore` and stores roots
-into the session's representation store. A non-recursive specialization uses a
-single-member solve session. A recursive specialization SCC uses one shared
-solve session for all member procedures. The final exported data may be stored
-physically however the implementation prefers, but the semantic model is one
-shared representation graph per specialization SCC, not one isolated graph per
-procedure body when the procedures can recursively reference each other.
+into the session's representation store. A solve session is an executable
+representation instantiation component, not a directed source-procedure SCC. It
+contains all procedure instances whose representation roots are connected by
+explicit value flow in the same executable use context.
 
-#### SCC-Scoped Reservation, Fill, Solve, And Seal
+A non-recursive source procedure may have many `ProcRepresentationInstance`
+values. Each instance belongs to the use context that requested it. A recursive
+source procedure group is instantiated as one group inside a use context so
+recursive member references reuse already-reserved public roots instead of
+allocating infinite instances. The final exported data may be stored physically
+however the implementation prefers, but the semantic model is one shared
+representation graph per executable use-context component, not one isolated
+graph per procedure body and not one global graph per source procedure.
 
-Lambda-solved MIR must build recursive callable graphs by reservation, not by
-finishing one body and hoping later recursive references can be repaired.
+`ProvisionalProcRepresentationInstanceKey` is intentionally owner-scoped. It
+prevents premature merging of two uses that have the same source procedure
+template and source function type but different callable arguments, capture
+representations, or Box-erasure requirements. After a session seals, instances
+may be deduplicated only by comparing the full canonical
+`ExecutableSpecializationKey`. Deduplication by source symbol, template id,
+source function type, argument count, display name, or layout compatibility is
+forbidden.
+
+#### Use-Context Reservation, Fill, Solve, And Seal
+
+Lambda-solved MIR must build callable graphs by reservation, not by finishing
+one body and hoping later references can be repaired. Recursion is one reason
+reservation is required, but not the only one. Non-recursive higher-order calls
+also require reservation because the callee's procedure template must be
+clone-instantiated into the caller's representation use context before the
+caller's function-valued argument can flow into the callee parameter.
 
 Every specialization instance has an internal lifecycle:
 
@@ -3001,26 +3237,29 @@ procedure representation instances, sealed solve sessions, sealed value stores,
 and solved representation classes. If executable MIR sees any unsealed state,
 debug verification must assert immediately; release builds use `unreachable`.
 
-`reserve_specialization(key)` must allocate or return all public identity needed
-to refer to the specialization before its body is lowered:
+`reserve_instance(key)` must allocate or return all public identity needed to
+refer to an executable representation instance before its body is lowered:
 
 - output source/MIR `ProcedureValueRef` and procedure-instance id
 - `ProcRepresentationInstanceId`
-- `RepresentationSolveSessionId`, initially a provisional builder handle that
-  is replaced or merged into the final SCC solve session after dependency SCC
-  detection
+- `RepresentationSolveSessionId` for the current executable use-context
+  component
 - dense `ValueInfoStoreId`
 - public parameter `ValueInfoId` roots
 - public return `ValueInfoId` root
 - public capture-slot `ValueInfoId` roots
 - whole-function `RepRootId`
 - capture slot instances
-- canonical dependency-node identity for SCC construction
+- canonical dependency-node identity for recursive-group construction
 
-Re-entering a reserved or building specialization returns the already-reserved
+Re-entering a reserved or building instance with the same
+`ProvisionalProcRepresentationInstanceKey` returns the already-reserved
 instance and records a dependency edge. It must not allocate a second procedure
 symbol, second value store, second capture-shape key, second adapter key, or
-second executable specialization key from a partially solved body.
+second executable specialization key from a partially solved body. Entering the
+same source procedure template at the same source function type from a different
+owner is a different provisional instance until sealing proves that the full
+`ExecutableSpecializationKey` is identical.
 
 The body builder may allocate ordinary expression, binder, projection,
 call-site, mutable-version, join, and loop-phi `ValueInfoId` values while walking
@@ -3031,28 +3270,50 @@ symbol in an environment, or wait for the target `ValueInfoStore` to be filled.
 
 The lambda-solved construction algorithm is:
 
-1. Reserve the root specialization instance and its public roots.
-2. Build each newly reserved body far enough to discover its procedure-value,
-   `call_proc`, `call_value`, capture, erased-adapter, and boxed-boundary
-   dependencies.
-3. Whenever a body references another specialization, call
-   `reserve_specialization` for that dependency and record the dependency edge.
-4. Continue until the reachable specialization dependency graph for the current
-   root batch has no unbuilt reserved nodes.
-5. Run SCC detection over the specialization dependency graph.
-6. For each SCC, create exactly one final `RepresentationSolveSession`
-   containing all member `ProcRepresentationInstanceId` values, replacing or
-   merging any provisional builder handles. A one-member non-recursive SCC is
-   still represented as a solve session.
-7. Move or attach each member's representation roots, edges, and requirements to
-   the SCC's shared `RepresentationStore`.
-8. Solve representation and callable classes once for that session.
-9. Fill every member `ValueInfoStore` from the solved session: each exported
+1. Reserve the root representation instance and its public roots in a fresh
+   executable use-context solve session.
+2. Clone-instantiate the target procedure representation template into that
+   session. Allocate fresh type, callable, and representation variables for
+   every generalized template variable.
+3. Build the newly reserved body far enough to publish every expression value,
+   binder, pattern binder, projection, call site, procedure value, capture,
+   erased-adapter, boxed-boundary, mutable-version, join, loop-phi, and return
+   record into the current session.
+4. When the body reaches `call_proc`, reserve the target procedure template in
+   the same session with owner `direct_call`. Connect caller argument roots to
+   target public parameter roots, target public return root to call result root,
+   and target whole-function root to the call's requested whole-function root.
+5. When the body reaches `proc_value`, create the finite callable construction
+   record in the current session. Reserve the selected target procedure template
+   in the same session with owner `proc_value` so capture roots can connect to
+   target public capture roots without inspecting the target body later.
+6. When the body reaches `call_value`, create the requested whole-function root
+   and explicit value-flow edges from callee, arguments, and result. Do not
+   decide finite or erased dispatch from syntax.
+7. Continue building every newly reserved instance in the session. If a
+   recursive group member is requested while another member is building,
+   `reserve_instance` returns the existing public roots for the same
+   owner-scoped recursive group member instead of recursing indefinitely.
+8. Solve representation and callable classes for the session.
+9. If solving a `call_value` yields a finite callable set, reserve every selected
+   member procedure template in the same session with owner
+   `callable_match_member`, add the branch argument and branch result edges, and
+   return to step 7 before sealing. This includes singleton finite callable
+   sets.
+10. If solving an erased finite callable-set adapter requires member procedure
+    bodies, reserve every adapter member target in the same session with owner
+    `erased_adapter_member`, add the adapter argument, capture, and result
+    representation edges, and return to step 7 before sealing.
+11. If solving introduces new explicit `Box(T)` erased requirements, apply them
+    only through `BoxBoundaryId` payload roots, update the affected callable
+    classes, and return to step 8 until no new instances, edges, or requirements
+    appear.
+12. Fill every member `ValueInfoStore` from the solved session: each exported
    `ValueInfo.solved_class`, `CallableValueInfo.emission_plan`,
    `CallSiteInfo.dispatch`, boxed-boundary plan, projection result, capture-slot
    root, parameter root, and return root must be solved.
-10. Finalize session value-transform boundaries for every real existing-value
-    representation boundary in the SCC. This happens after step 9, not during
+13. Finalize session value-transform boundaries for every real existing-value
+    representation boundary in the session. This happens after step 12, not during
     initial body lowering, because call boundaries may reference target
     procedures whose public roots and executable keys were not sealed when the
     caller body was first visited. The finalization pass consumes only sealed
@@ -3094,7 +3355,7 @@ The lambda-solved construction algorithm is:
     reachable from `from_endpoint`, `to_endpoint`, or child transforms in that
     boundary must point into that same owning session's
     `SessionExecutableTypePayloadStore`. This remains true when the endpoint
-    owner names a target procedure in another non-recursive SCC. The caller
+    owner names a target procedure in another sealed representation session. The caller
     session finalizer must publish a local endpoint payload for the target
     procedure parameter or return by consuming the target's sealed
     `ProcRepresentationInstance.public_roots`, target `ValueInfoStore`, target
@@ -3209,17 +3470,22 @@ The lambda-solved construction algorithm is:
     procedure body, for example because the body stores the captured callable in
     `Box(T)` and therefore needs erased callable representation for that capture
     slot.
-11. Seal the session and all member procedure representation instances together.
-12. Publish executable specialization keys, callable-set keys, capture-shape
+14. Seal the session and all member procedure representation instances together.
+15. Publish executable specialization keys, callable-set keys, capture-shape
     keys, erased function signature keys, erased adapter keys, and
     layout-publication keys only from sealed data.
 
 This mirrors the important Cor/LSS behavior without copying the prototype's
-symbol-map representation. Cor reserves recursive type/procedure placeholders
-before solving recursive bodies. Production Roc must do the same with typed
-procedure-instance ids, public value roots, and dense sealed stores.
+symbol-map representation. Cor generalizes lambda-set variables at procedure
+bindings, instantiates fresh lambda-set variables at each variable use, and then
+unifies those fresh variables with the actual call argument/result flow.
+Production Roc must do the same with explicit procedure-instance ids, public
+value roots, dense sealed stores, and owner-scoped provisional instance keys.
+Recursive groups additionally reserve public roots before solving recursive
+bodies, just as Cor reserves recursive placeholders before inference completes.
 
-Cross-procedure value-flow inside a recursive SCC must use public roots:
+Cross-procedure value-flow inside a representation use context must use public
+roots:
 
 ```zig
 const ProcPublicRootRef = struct {
@@ -3229,12 +3495,13 @@ const ProcPublicRootRef = struct {
 };
 ```
 
-For example, a recursive `call_proc` edge connects the caller's argument value
+For example, a `call_proc` edge connects the caller's argument value
 roots to the callee instance's public parameter roots, and connects the callee
-public return root to the caller's call result root. A recursive `proc_value`
-edge connects the occurrence's result root to the callee public whole-function
-root and connects each explicit capture argument to the callee public capture
-root. No edge may target a callee by source name or by scanning the callee body.
+public return root to the caller's call result root. A `proc_value` edge
+connects the occurrence's result root to the callee public whole-function root
+and connects each explicit capture argument to the callee public capture root.
+This applies to non-recursive higher-order calls and recursive groups alike. No
+edge may target a callee by source name or by scanning the callee body.
 
 Edges that reference an imported procedure, hosted procedure, platform
 procedure, or already sealed outer specialization must go through the explicit
@@ -6267,6 +6534,22 @@ const LowLevelRcEffect = struct {
     may_allocate: bool,
     may_retain_or_release: bool,
     may_runtime_uniqueness_check_args: BitSet,
+    /// Arguments whose ownership token is handed to the low-level operation.
+    /// The operation must either return that token as the result or spend it
+    /// internally by releasing/reallocating as its explicit ABI specifies.
+    /// ARC insertion must not emit an additional post-call `decref` for these
+    /// arguments. If the caller still needs the old value, ARC insertion may
+    /// conservatively emit an `incref` before the low-level operation so the
+    /// caller keeps a separate token.
+    consume_args: BitSet,
+    /// Consumed argument positions whose ownership token may become the
+    /// low-level result token. This must be a subset of `consume_args`.
+    /// It is exact ABI metadata for helpers such as `List.concat`, which may
+    /// return/reallocate either input list, and `List.append_unsafe`, which
+    /// returns the consumed list accumulator. ARC insertion uses this metadata
+    /// to treat the result as the new owner of the consumed token and must not
+    /// rediscover this behavior from operation names, layouts, or backend code.
+    result_aliases_consumed_args: BitSet,
     /// Arguments copied into a newly owned result, box payload, list element
     /// slot, or other escaping low-level storage. ARC insertion emits the
     /// retains for these arguments after the low-level operation succeeds.
@@ -6584,6 +6867,14 @@ The uniform Roc call boundary for this plan is:
   emits a temporary `incref` before the call and a matching `decref` after the
   call. This makes a callee's `refcount == 1` check fail while the caller still
   needs the old value.
+- Low-level operations with `consume_args` are a separate explicit ABI case, not
+  ordinary borrowed calls. The low-level helper receives ownership of each
+  consumed argument token. If ARC insertion retains a consumed argument before
+  the call, that retain is the caller's preserved token; the consumed token is
+  spent by the helper or returned as the result. ARC must therefore not insert a
+  second automatic post-call release of the consumed argument. Any later release
+  comes from the ordinary last use of the preserved caller token or from the
+  returned result value.
 
 This is a fixed ARC convention, not a heuristic and not a semantic
 parameter-mode system. It may retain more than a future alias-permission system
@@ -6626,12 +6917,70 @@ The retain metadata must be exact, not merely "may retain" documentation:
   into the newly allocated box payload.
 - `List.append_unsafe` marks `retain_args` for the appended element argument
   because that element is copied into list storage by the low-level operation.
+- `List.append_unsafe` also marks `consume_args` for its list argument. The
+  returned list is the same ownership token with a new length, so it also marks
+  `result_aliases_consumed_args` for that list argument. ARC must not emit an
+  extra post-call `decref` of the input list before the returned list is
+  installed as the accumulator.
+- Copy-on-write low-level operations such as `Str.concat`, `List.concat`,
+  `List.drop_at`, `List.sublist`, `List.set`, `List.reserve`, and related
+  list/string mutation helpers mark the mutable candidate arguments in
+  `consume_args`. The helper owns those argument tokens and is responsible for
+  either returning one as the result or releasing/reallocating them according to
+  the explicit low-level ABI. Each candidate argument that may become the result
+  token is also marked in `result_aliases_consumed_args`. For example,
+  `List.concat(left, right)` consumes both lists and marks both argument
+  positions in `result_aliases_consumed_args`, because the runtime helper may
+  return/reallocate `left`, return/reallocate `right`, or allocate a fresh
+  result after spending both inputs. ARC may retain before the call when it must
+  preserve a caller-visible old value, but it must not release the consumed
+  token a second time after the call.
+- ARC decides whether to preserve a consumed low-level argument from explicit
+  LIR use information, not from operation names or backend behavior. If the
+  consumed local is semantically used later on the same control-flow path, ARC
+  emits an `incref` before the low-level call and keeps the local owned. If the
+  consumed local is not used later, ARC transfers the token to the low-level
+  helper and removes that old local from the owned set so cleanup cannot emit a
+  second `decref`. If the low-level assignment target is the same local as a
+  consumed argument, ARC must not release the old target before the call; that
+  token is the operation input, and the target becomes owned again as the
+  operation result.
+- ARC insertion must apply consumed-argument ownership changes before rewriting
+  the low-level operation's suffix. This ordering is required because the next
+  statement may overwrite a consumed local with the low-level result. For
+  example, list construction lowers conceptually to
+  `next_acc = List.append_unsafe(acc, elem)` followed by `acc = next_acc`.
+  Before ARC rewrites that `acc = next_acc` assignment, `acc`'s old ownership
+  token has already been transferred to `List.append_unsafe`; otherwise ARC
+  would insert a stale release of `acc` between the append and the assignment.
+  The same ordering applies to ordinary direct calls whose argument tokens are
+  transferred to the callee.
+- Consumed-token result provenance is mandatory ABI data, not optional
+  documentation. `result_aliases_consumed_args` must always be a subset of
+  `consume_args`; debug builds assert this before ARC insertion, and release
+  builds use `unreachable` for the equivalent compiler-invariant path. ARC must
+  preserve this transfer shape explicitly so list literal construction never
+  releases the accumulator before `List.append_unsafe` receives it and
+  `List.concat([1, 2], [3, 4])` never releases either input again after the
+  helper has consumed it.
 - list operations whose runtime helper already receives explicit element
   retain/decref callbacks must keep that behavior inside the helper's explicit
   low-level ABI; ARC must not duplicate it with a second retain mask.
 
 This is still mechanical ARC metadata. It is not a procedure summary, not a
 borrow-inference result, and not backend policy.
+
+Ordinary direct calls use the same ownership-token principle. LIR call
+arguments transfer their owned tokens to the callee. If the caller semantically
+uses an argument local after the call, ARC emits an `incref` before the call and
+keeps that caller-owned token. If the caller does not use the argument later,
+ARC removes the argument local from the caller's owned set and emits no
+post-call `decref`; the callee owns cleanup for its parameters. This is required
+for calls to ordinary procedures that consume parameters internally through
+explicit low-level operations, such as `List.concat([1, 2], [3, 4])`. The caller
+must not clean up the temporary list arguments after the callee has consumed
+them. This is still simple automatic reference counting, not borrow inference:
+the decision is based only on explicit LIR local uses after the call.
 
 `Box.box` and `Box.unbox` are ordinary value operations for ARC purposes.
 `Box.unbox` does not mean a consuming move-out and does not have a special
@@ -10143,6 +10492,52 @@ The exact Zig names may differ, but these invariants must not:
 - if a key is present without its checked type payload, that artifact is
   incomplete; debug builds assert immediately and release builds use
   `unreachable`
+
+#### Checked Type Variable Identity During Artifact Publication
+
+Checked artifact publication must preserve the identity of every unsolved
+checked type variable that remains in a lowering-visible checked type graph.
+This includes anonymous flex variables, named flex variables, rigid variables,
+row-tail variables, tag-union extension variables, and static-dispatch
+constrained variables. The artifact copy may alpha-rename them into
+artifact-owned ids, but it must not collapse two distinct checker variables just
+because they have the same printed name, no printed name, the same constraints,
+or the same structural canonical key.
+
+For example:
+
+```roc
+main =
+    apply = |x, captures| x + captures.n
+    apply(10, { n: 5 })
+```
+
+The checked type of `apply` contains one numeric variable shared by `x`,
+`captures.n`, and the return value, plus a separate record row-tail variable for
+the rest of `captures`. Artifact publication must not turn that into a type
+shaped like `{ n: a | a }`, because that incorrectly says the field value type
+and record extension row are the same variable. The correct graph is equivalent
+to `{ n: a | r }`, where `a` and `r` are distinct checked variables.
+
+Canonical type keys for checked graphs that contain unsolved variables must
+encode variable equality within the graph. For example, `a, a -> a` and
+`a, b -> a` must have different keys, because the first graph requires both
+arguments to share one type while the second does not. Repeated occurrences of
+the same checker variable must map to the same artifact-owned checked type id;
+distinct checker variables must map to distinct artifact-owned checked type ids.
+
+Artifact publication may deduplicate fully concrete checked type roots by
+canonical key. It must not deduplicate a root by canonical key if that root's
+payload graph contains any identity-sensitive unsolved variable. The only flex
+variables exempt from this rule are variables that checking finalization
+deliberately defaults to a concrete type, such as a numeral-origin flex that
+publishes as `Dec`; after defaulting, the published graph is concrete and normal
+concrete deduplication applies.
+
+Post-check stages must treat this as already-published semantic data. Mono MIR
+and later stages may instantiate, clone, compare, or lower the checked graph
+they were given, but they must not repair collapsed variables by looking at
+source syntax, guessing from record shape, or comparing compatible layouts.
 
 #### Concrete Source Type Payloads For Requests
 
@@ -13994,10 +14389,13 @@ Preserve and clean up the real responsibilities:
   `RepresentationStore`
 - reserve `ProcRepresentationInstanceId`, public parameter roots, public return
   roots, public capture roots, whole-function roots, and dense value stores
-  before lowering recursive specialization bodies
-- group recursive specialization dependencies into SCC-scoped
+  before lowering any procedure instance body in a representation use context
+- group procedure instances connected by explicit executable-use value flow into
   `RepresentationSolveSession` records and solve one shared representation
-  store per SCC
+  store per use-context component
+- instantiate recursive specialization groups as owner-scoped groups inside the
+  current use-context solve session so recursive references reuse public roots
+  without allocating infinite instances
 - seal every procedure representation instance, solve session, and value store
   before executable MIR consumes it
 - attach `ValueInfoId` or `BindingInfoId` directly to every exported expression,
@@ -14047,7 +14445,7 @@ Preserve and clean up the real responsibilities:
 - publish and consume instantiation-sensitive `NoReachableCallableSlotsProof`
   records for `opaque_atomic` nominals
 - consume hosted/platform callable representation metadata explicitly
-- order recursive SCCs
+- order recursive source groups inside each use-context instantiation
 - enforce canonical callable-set unification algebra
 - export fully resolved callable representations for every executable specialization
   input
@@ -14062,10 +14460,10 @@ Preserve and clean up the real responsibilities:
   executable representation instances
 - reserve all procedure values, callable representation nodes, capture-shape
   nodes, erased-adapter keys, value stores, public value roots, and solve-session
-  membership for a recursive specialization SCC before solving any member body
-  to completion
+  membership for the current use-context component before sealing any member
+  body
 - publish executable specialization keys only after specialization-local
-  representation solving has completed for the SCC
+  representation solving has completed for the use-context component
 
 Commit when lambda-solved MIR verification proves:
 
@@ -14074,15 +14472,15 @@ Commit when lambda-solved MIR verification proves:
 - every exported expression, binder, pattern binder, mutable version, capture
   slot, projection, call result, and procedure-value occurrence has explicit
   value metadata
-- every recursive specialization instance has reserved public parameter, return,
-  capture, and whole-function roots before any member body refers to it
-- every recursive specialization SCC has exactly one sealed
+- every procedure representation instance has reserved public parameter, return,
+  capture, and whole-function roots before any body can refer to it
+- every executable use-context component has exactly one sealed
   `RepresentationSolveSession`
-- every member of a recursive specialization SCC points to that SCC's solve
-  session and no other solve session
+- every procedure instance connected by value flow in that use context points to
+  that use-context solve session and no other solve session
 - no exported value metadata record is still reserved, building, structurally
   filled without solved class, or otherwise unsealed
-- every cross-procedure value-flow edge inside a recursive SCC targets a
+- every cross-procedure value-flow edge inside a use-context component targets a
   `ProcPublicValueRoots` entry, not a source symbol, expression id, body-local
   value id, or environment lookup result
 - no value-flow edge points into another solve session's private builder state;
@@ -15297,6 +15695,12 @@ Mono MIR:
 - `proc_value` is distinct from `call_proc`
 - mono `proc_value` captures are empty
 - `call_proc` carries exact requested mono source function types
+- ordinary checked calls publish an exact call-site `source_fn_ty_payload`, and
+  mono uses that payload as the only source of truth for `call_proc` and
+  `call_value` requested function types
+- mono procedure-entry parameter binders are typed from the requested
+  specialization function type's ordered parameter list, not from standalone
+  source parameter pattern type roots
 - every `call_proc` and `call_value` carries all fixed-arity source arguments
 - no call node encodes automatic currying or partial application
 - `call_proc` is not an executable direct call
@@ -15397,12 +15801,12 @@ Lambda-solved MIR:
 - `ValueInfoStore` has explicit value metadata for every expression result,
   binder, pattern binder, mutable version, capture slot, projection, call result,
   and procedure-value occurrence
-- recursive specialization instances reserve public parameter, return, capture,
+- procedure representation instances reserve public parameter, return, capture,
   and whole-function value roots before body lowering can reference them
-- recursive specialization SCCs use exactly one sealed
-  `RepresentationSolveSession` per SCC, including one-member non-recursive SCCs
-- recursive cross-procedure value-flow edges use `ProcPublicValueRoots`, not
-  source symbols, procedure names, environment lookup, or body scans
+- each executable use-context component uses exactly one sealed
+  `RepresentationSolveSession`
+- cross-procedure value-flow edges use `ProcPublicValueRoots`, not source
+  symbols, procedure names, environment lookup, or body scans
 - no unsealed `ValueInfoId`, `BindingInfoId`, `CallSiteInfoId`, projection info,
   solve session, callable emission plan, adapter key, capture-shape key, or
   executable specialization key reaches executable MIR
@@ -15470,10 +15874,11 @@ Lambda-solved MIR:
 - generalized template instantiation allocates fresh callable variables and
   representation variables together with ordinary type variables
 - generalized procedure templates are never consumed directly by executable MIR
-- procedure and recursive-SCC template generalization excludes variables
+- procedure and recursive-group template generalization excludes variables
   reachable from the already-bound outer environment
-- recursive specialization SCCs reserve all procedure/callable/capture/adapter
-  nodes before body solving publishes executable keys
+- use-context instantiation reserves all procedure/callable/capture/adapter
+  nodes required by direct calls, proc values, callable-match members, erased
+  adapters, and recursive groups before body solving publishes executable keys
 - executable specialization keys are canonical structural keys from
   specialization-local instantiated representation stores
 - executable specialization keys recursively encode nested function-valued
@@ -15506,7 +15911,7 @@ Lambda-solved MIR:
   erased adapter keys handle recursive callable/capture graphs without raw type
   ids or infinite recursion
 - no dispatch nodes exist
-- `call_proc` and `proc_value` have SCC dependency edges
+- `call_proc` and `proc_value` have explicit procedure-instance dependency edges
 - `call_proc` is inferred as a call to its procedure target type
 - `proc_value` is inferred as a value of its procedure target type
 - every `proc_value` capture arg type unifies with its target capture slot type

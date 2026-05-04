@@ -12,10 +12,13 @@ const lifted_type = @import("../lifted/mod.zig").Type;
 const canonical = check.CanonicalNames;
 
 pub const Prim = lifted_type.Prim;
+/// Public `CallableVarId` declaration.
 pub const CallableVarId = enum(u32) { _ };
 
+/// Public `TypeVarId` declaration.
 pub const TypeVarId = enum(u32) { _ };
 
+/// Public `Span` function.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -31,6 +34,7 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public `Nominal` declaration.
 pub const Nominal = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
@@ -39,6 +43,7 @@ pub const Nominal = struct {
     backing: TypeVarId,
 };
 
+/// Public `LambdaSolvedFnType` declaration.
 pub const LambdaSolvedFnType = struct {
     fixed_arity: u32,
     args: Span(TypeVarId),
@@ -46,16 +51,19 @@ pub const LambdaSolvedFnType = struct {
     callable: CallableVarId,
 };
 
+/// Public `Tag` declaration.
 pub const Tag = struct {
     name: canonical.TagLabelId,
     args: Span(TypeVarId),
 };
 
+/// Public `Field` declaration.
 pub const Field = struct {
     name: canonical.RecordFieldLabelId,
     ty: TypeVarId,
 };
 
+/// Public `Content` declaration.
 pub const Content = union(enum) {
     func: LambdaSolvedFnType,
     list: TypeVarId,
@@ -70,6 +78,7 @@ pub const Content = union(enum) {
     primitive: Prim,
 };
 
+/// Public `Node` declaration.
 pub const Node = union(enum) {
     link: TypeVarId,
     nominal: Nominal,
@@ -79,6 +88,7 @@ pub const Node = union(enum) {
     content: Content,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(Node),
@@ -244,8 +254,8 @@ test "lambda_solved function types carry callable variables" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const i64 = try store.freshContent(.{ .primitive = .i64 });
-    const fn_ty = try store.freshFunction(&.{i64}, i64);
+    const i64_ty = try store.freshContent(.{ .primitive = .i64 });
+    const fn_ty = try store.freshFunction(&.{i64_ty}, i64_ty);
     const shape = store.fnShape(fn_ty);
     try std.testing.expectEqual(@as(u32, 1), shape.fixed_arity);
 }

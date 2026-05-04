@@ -24,30 +24,36 @@ pub const TagUnionShapeId = ids.TagUnionShapeId;
 pub const TagId = ids.TagId;
 pub const TagPayloadId = ids.TagPayloadId;
 
+/// Public `RecordField` declaration.
 pub const RecordField = struct {
     label: canonical.RecordFieldLabelId,
     logical_index: u32,
 };
 
+/// Public `RecordShape` declaration.
 pub const RecordShape = struct {
     fields: ids.Span(RecordFieldId),
 };
 
+/// Public `TagPayload` declaration.
 pub const TagPayload = struct {
     tag: TagId,
     logical_index: u32,
 };
 
+/// Public `Tag` declaration.
 pub const Tag = struct {
     label: canonical.TagLabelId,
     logical_index: u32,
     payloads: ids.Span(TagPayloadId),
 };
 
+/// Public `TagUnionShape` declaration.
 pub const TagUnionShape = struct {
     tags: ids.Span(TagId),
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: Allocator,
     record_shapes: std.ArrayList(RecordShape),
@@ -314,6 +320,7 @@ pub const Store = struct {
     }
 };
 
+/// Public `Proc` declaration.
 pub const Proc = struct {
     key: canonical.MonoSpecializationKey,
     proc: canonical.MirProcedureRef,
@@ -322,6 +329,7 @@ pub const Proc = struct {
     body: Ast.DefId,
 };
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -366,6 +374,7 @@ pub const Program = struct {
     }
 };
 
+/// Public `Result` declaration.
 pub const Result = struct {
     program: Program,
     shapes: Store,
@@ -376,6 +385,7 @@ pub const Result = struct {
     }
 };
 
+/// Public `run` function.
 pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!Result {
     var owned_mono = mono;
     errdefer owned_mono.deinit();
@@ -442,6 +452,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     return result;
 }
 
+/// Public `verifyResult` function.
 pub fn verifyResult(result: *const Result) void {
     if (!verify.enabled()) return;
 
@@ -495,7 +506,7 @@ const BodyFinalizer = struct {
                     .hosted = hosted.hosted,
                 } },
                 .val => |expr| .{ .val = try self.lowerExpr(expr) },
-                .run => |run| .{ .run = .{ .body = try self.lowerExpr(run.body) } },
+                .run => |run_def| .{ .run = .{ .body = try self.lowerExpr(run_def.body) } },
             },
         });
     }
@@ -612,7 +623,7 @@ const BodyFinalizer = struct {
             .site = let_fn.site orelse rowInvariant("row finalization received local function without a nested procedure site"),
             .source_fn_ty = let_fn.source_fn_ty,
             .recursive = let_fn.recursive,
-            .bind = let_fn.bind,
+            .bind = self.lowerTypedSymbol(let_fn.bind),
             .args = try self.lowerTypedSymbolSpan(let_fn.args),
             .body = try self.lowerExpr(let_fn.body),
         };
@@ -796,11 +807,11 @@ const BodyFinalizer = struct {
         return try self.output.addStmt(switch (stmt) {
             .local_fn => |local_fn| .{ .local_fn = try self.lowerLetFn(local_fn) },
             .decl => |decl| .{ .decl = .{
-                .bind = decl.bind,
+                .bind = self.lowerTypedSymbol(decl.bind),
                 .body = try self.lowerExpr(decl.body),
             } },
             .var_decl => |decl| .{ .var_decl = .{
-                .bind = decl.bind,
+                .bind = self.lowerTypedSymbol(decl.bind),
                 .body = try self.lowerExpr(decl.body),
             } },
             .reassign => |reassign| .{ .reassign = .{
@@ -879,6 +890,11 @@ const BodyFinalizer = struct {
             output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
         }
         return try self.output.addTypedSymbolSpan(output_items);
+    }
+
+    fn lowerTypedSymbol(self: *BodyFinalizer, symbol: Mono.Ast.TypedSymbol) Ast.TypedSymbol {
+        _ = self;
+        return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
     }
 
     fn lowerCaptureArgSpan(

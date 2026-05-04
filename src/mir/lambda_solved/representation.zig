@@ -13,43 +13,77 @@ const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 
 pub const CallableVarId = type_mod.CallableVarId;
+/// Public `RepRootId` declaration.
 pub const RepRootId = enum(u32) { _ };
+/// Public `ValueInfoId` declaration.
 pub const ValueInfoId = enum(u32) { _ };
+/// Public `BindingInfoId` declaration.
 pub const BindingInfoId = enum(u32) { _ };
+/// Public `ProjectionInfoId` declaration.
 pub const ProjectionInfoId = enum(u32) { _ };
+/// Public `CallSiteInfoId` declaration.
 pub const CallSiteInfoId = enum(u32) { _ };
+/// Public `CallValueFiniteDispatchPlanId` declaration.
+pub const CallValueFiniteDispatchPlanId = enum(u32) { _ };
+/// Public `LowLevelValueFlowSignatureId` declaration.
 pub const LowLevelValueFlowSignatureId = enum(u32) { _ };
+/// Public `JoinInfoId` declaration.
 pub const JoinInfoId = enum(u32) { _ };
+/// Public `ReturnInfoId` declaration.
 pub const ReturnInfoId = enum(u32) { _ };
 pub const BoxBoundaryId = canonical.BoxBoundaryId;
+/// Public `BoxPayloadRepresentationPlanId` declaration.
 pub const BoxPayloadRepresentationPlanId = enum(u32) { _ };
+/// Public `CallableValueEmissionPlanId` declaration.
 pub const CallableValueEmissionPlanId = enum(u32) { _ };
+/// Public `CallableSetConstructionPlanId` declaration.
 pub const CallableSetConstructionPlanId = enum(u32) { _ };
+/// Public `CanonicalCallableSetDescriptorId` declaration.
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
+/// Public `ValueTransformBoundaryId` declaration.
 pub const ValueTransformBoundaryId = enum(u32) { _ };
 pub const SessionExecutableValueTransformId = checked_artifact.SessionExecutableValueTransformId;
+/// Public `RepresentationEdgeId` declaration.
 pub const RepresentationEdgeId = enum(u32) { _ };
+/// Public `RepresentationRequirementId` declaration.
 pub const RepresentationRequirementId = enum(u32) { _ };
+/// Public `SourceMatchId` declaration.
 pub const SourceMatchId = enum(u32) { _ };
+/// Public `SourceMatchBranchId` declaration.
 pub const SourceMatchBranchId = enum(u32) { _ };
+/// Public `SourceMatchAlternativeId` declaration.
 pub const SourceMatchAlternativeId = enum(u32) { _ };
+/// Public `IfExprId` declaration.
 pub const IfExprId = enum(u32) { _ };
+/// Public `ProcedureBoundaryId` declaration.
 pub const ProcedureBoundaryId = ReturnInfoId;
+/// Public `CaptureBoundaryId` declaration.
 pub const CaptureBoundaryId = enum(u32) { _ };
+/// Public `MutableJoinId` declaration.
 pub const MutableJoinId = enum(u32) { _ };
+/// Public `LoopPhiId` declaration.
 pub const LoopPhiId = enum(u32) { _ };
+/// Public `AggregateBoundaryId` declaration.
 pub const AggregateBoundaryId = enum(u32) { _ };
+/// Public `TransformEndpointScopeId` declaration.
 pub const TransformEndpointScopeId = enum(u32) { _ };
+/// Public `TransformEndpointPathId` declaration.
 pub const TransformEndpointPathId = enum(u32) { _ };
+/// Public `RepresentationClassId` declaration.
 pub const RepresentationClassId = enum(u32) { _ };
+/// Public `ProcRepresentationInstanceId` declaration.
 pub const ProcRepresentationInstanceId = enum(u32) { _ };
+/// Public `RepresentationSolveSessionId` declaration.
 pub const RepresentationSolveSessionId = enum(u32) { _ };
+/// Public `ValueInfoStoreId` declaration.
 pub const ValueInfoStoreId = enum(u32) { _ };
 pub const CallableSetMemberId = canonical.CallableSetMemberId;
+/// Public `ErasedAdapterId` declaration.
 pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
 
+/// Public `RepresentationRootKind` declaration.
 pub const RepresentationRootKind = union(enum) {
     unclassified,
     local_value: struct {
@@ -96,6 +130,7 @@ pub const RepresentationRootKind = union(enum) {
     },
 };
 
+/// Public `RepresentationEdgeKind` declaration.
 pub const RepresentationEdgeKind = union(enum) {
     value_alias,
     value_move,
@@ -113,32 +148,45 @@ pub const RepresentationEdgeKind = union(enum) {
     mutable_version,
 };
 
+/// Public `ProcPublicRootRef` declaration.
 pub const ProcPublicRootRef = struct {
     instance: ProcRepresentationInstanceId,
     value: ValueInfoId,
     rep_root: RepRootId,
 };
 
+/// Public `ProcPublicFunctionRootRef` declaration.
+pub const ProcPublicFunctionRootRef = struct {
+    instance: ProcRepresentationInstanceId,
+    rep_root: RepRootId,
+};
+
+/// Public `RepresentationEndpoint` declaration.
 pub const RepresentationEndpoint = union(enum) {
     local: RepRootId,
     procedure_public: ProcPublicRootRef,
+    procedure_function_root: ProcPublicFunctionRootRef,
 };
 
+/// Public `RepresentationEdge` declaration.
 pub const RepresentationEdge = struct {
     from: RepresentationEndpoint,
     to: RepresentationEndpoint,
     kind: RepresentationEdgeKind,
 };
 
+/// Public `RepresentationRequirement` declaration.
 pub const RepresentationRequirement = union(enum) {
     require_box_erased: BoxBoundaryId,
 };
 
+/// Public `TransformEndpointSide` declaration.
 pub const TransformEndpointSide = enum {
     from,
     to,
 };
 
+/// Public `Span` function.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -154,6 +202,7 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public `LowLevelProjectionPath` declaration.
 pub const LowLevelProjectionPath = union(enum) {
     whole_value,
     list_elem,
@@ -163,6 +212,7 @@ pub const LowLevelProjectionPath = union(enum) {
     tag_payload: row.TagPayloadId,
 };
 
+/// Public `LowLevelValueFlowEdge` declaration.
 pub const LowLevelValueFlowEdge = union(enum) {
     arg_to_result: struct {
         arg: u32,
@@ -180,6 +230,7 @@ pub const LowLevelValueFlowEdge = union(enum) {
     fresh_result: LowLevelProjectionPath,
 };
 
+/// Public `LowLevelValueFlowSignature` declaration.
 pub const LowLevelValueFlowSignature = union(enum) {
     no_value_flow: struct {
         op: base.LowLevel,
@@ -208,6 +259,7 @@ pub const CanonicalCallableSetMember = canonical.CanonicalCallableSetMember;
 pub const CanonicalCallableSetDescriptor = canonical.CanonicalCallableSetDescriptor;
 pub const ExecutablePrimitive = checked_artifact.ExecutablePrimitive;
 
+/// Public `SessionExecutableTypePayloadId` declaration.
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
 const RootTypeKey = struct {
@@ -215,53 +267,63 @@ const RootTypeKey = struct {
     ty: type_mod.TypeVarId,
 };
 
+/// Public `SessionExecutableTypePayloadRef` declaration.
 pub const SessionExecutableTypePayloadRef = struct {
     payload: SessionExecutableTypePayloadId,
 };
 
+/// Public `SessionExecutableTypeEndpoint` declaration.
 pub const SessionExecutableTypeEndpoint = struct {
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableTypePayloadChild` declaration.
 pub const SessionExecutableTypePayloadChild = struct {
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableRecordFieldPayload` declaration.
 pub const SessionExecutableRecordFieldPayload = struct {
     field: row.RecordFieldId,
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableRecordPayload` declaration.
 pub const SessionExecutableRecordPayload = struct {
     shape: row.RecordShapeId,
     fields: []const SessionExecutableRecordFieldPayload = &.{},
 };
 
+/// Public `SessionExecutableTupleElemPayload` declaration.
 pub const SessionExecutableTupleElemPayload = struct {
     index: u32,
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableTagPayload` declaration.
 pub const SessionExecutableTagPayload = struct {
     payload: row.TagPayloadId,
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableTagVariantPayload` declaration.
 pub const SessionExecutableTagVariantPayload = struct {
     tag: row.TagId,
     payloads: []const SessionExecutableTagPayload = &.{},
 };
 
+/// Public `SessionExecutableTagUnionPayload` declaration.
 pub const SessionExecutableTagUnionPayload = struct {
     shape: row.TagUnionShapeId,
     variants: []const SessionExecutableTagVariantPayload = &.{},
 };
 
+/// Public `SessionExecutableNominalPayload` declaration.
 pub const SessionExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
@@ -269,17 +331,20 @@ pub const SessionExecutableNominalPayload = struct {
     backing_key: CanonicalExecValueTypeKey,
 };
 
+/// Public `SessionExecutableCallableSetMemberPayload` declaration.
 pub const SessionExecutableCallableSetMemberPayload = struct {
     member: CallableSetMemberId,
     payload_ty: ?SessionExecutableTypePayloadRef = null,
     payload_ty_key: ?CanonicalExecValueTypeKey = null,
 };
 
+/// Public `SessionExecutableCallableSetPayload` declaration.
 pub const SessionExecutableCallableSetPayload = struct {
     key: CanonicalCallableSetKey,
     members: []const SessionExecutableCallableSetMemberPayload = &.{},
 };
 
+/// Public `SessionExecutableErasedFnPayload` declaration.
 pub const SessionExecutableErasedFnPayload = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
@@ -287,6 +352,7 @@ pub const SessionExecutableErasedFnPayload = struct {
     capture_ty_key: ?CanonicalExecValueTypeKey = null,
 };
 
+/// Public `SessionExecutableTypePayload` declaration.
 pub const SessionExecutableTypePayload = union(enum) {
     pending,
     primitive: ExecutablePrimitive,
@@ -302,11 +368,13 @@ pub const SessionExecutableTypePayload = union(enum) {
     recursive_ref: SessionExecutableTypePayloadId,
 };
 
+/// Public `SessionExecutableTypePayloadEntry` declaration.
 pub const SessionExecutableTypePayloadEntry = struct {
     key: CanonicalExecValueTypeKey,
     payload: SessionExecutableTypePayload,
 };
 
+/// Public `SessionExecutableTypePayloadStore` declaration.
 pub const SessionExecutableTypePayloadStore = struct {
     entries: []SessionExecutableTypePayloadEntry = &.{},
     by_key: std.AutoHashMap(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId),
@@ -429,26 +497,66 @@ fn deinitSessionExecutableTypePayload(
 
 fn representationEdgeKindEql(a: RepresentationEdgeKind, b: RepresentationEdgeKind) bool {
     return switch (a) {
-        .value_alias => switch (b) { .value_alias => true, else => false },
-        .value_move => switch (b) { .value_move => true, else => false },
-        .function_arg => |left| switch (b) { .function_arg => |right| left == right, else => false },
-        .function_return => switch (b) { .function_return => true, else => false },
-        .function_callable => switch (b) { .function_callable => true, else => false },
-        .record_field => |left| switch (b) { .record_field => |right| left == right, else => false },
-        .tuple_elem => |left| switch (b) { .tuple_elem => |right| left == right, else => false },
-        .tag_payload => |left| switch (b) { .tag_payload => |right| left == right, else => false },
-        .list_elem => switch (b) { .list_elem => true, else => false },
-        .box_payload => switch (b) { .box_payload => true, else => false },
+        .value_alias => switch (b) {
+            .value_alias => true,
+            else => false,
+        },
+        .value_move => switch (b) {
+            .value_move => true,
+            else => false,
+        },
+        .function_arg => |left| switch (b) {
+            .function_arg => |right| left == right,
+            else => false,
+        },
+        .function_return => switch (b) {
+            .function_return => true,
+            else => false,
+        },
+        .function_callable => switch (b) {
+            .function_callable => true,
+            else => false,
+        },
+        .record_field => |left| switch (b) {
+            .record_field => |right| left == right,
+            else => false,
+        },
+        .tuple_elem => |left| switch (b) {
+            .tuple_elem => |right| left == right,
+            else => false,
+        },
+        .tag_payload => |left| switch (b) {
+            .tag_payload => |right| left == right,
+            else => false,
+        },
+        .list_elem => switch (b) {
+            .list_elem => true,
+            else => false,
+        },
+        .box_payload => switch (b) {
+            .box_payload => true,
+            else => false,
+        },
         .nominal_backing => |left| switch (b) {
             .nominal_backing => |right| left.module_name == right.module_name and left.type_name == right.type_name,
             else => false,
         },
-        .branch_join => switch (b) { .branch_join => true, else => false },
-        .loop_phi => switch (b) { .loop_phi => true, else => false },
-        .mutable_version => switch (b) { .mutable_version => true, else => false },
+        .branch_join => switch (b) {
+            .branch_join => true,
+            else => false,
+        },
+        .loop_phi => switch (b) {
+            .loop_phi => true,
+            else => false,
+        },
+        .mutable_version => switch (b) {
+            .mutable_version => true,
+            else => false,
+        },
     };
 }
 
+/// Public `CallableMemberInstanceId` declaration.
 pub const CallableMemberInstanceId = struct {
     proc_base: canonical.ProcBaseKeyRef,
     mono_specialization: canonical.MonoSpecializationKey,
@@ -460,6 +568,7 @@ pub const CallableRepresentation = canonical.CallableRepresentation;
 pub const CallableReprMode = canonical.CallableReprMode;
 pub const ExecutableSpecializationKey = canonical.ExecutableSpecializationKey;
 
+/// Public `RepresentationShape` declaration.
 pub const RepresentationShape = union(enum) {
     primitive,
     function: struct {
@@ -485,31 +594,37 @@ pub const RepresentationShape = union(enum) {
     },
 };
 
+/// Public `BoxBoundaryDirection` declaration.
 pub const BoxBoundaryDirection = enum {
     box,
     unbox,
 };
 
+/// Public `BoxPayloadCapabilityRef` declaration.
 pub const BoxPayloadCapabilityRef = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     capability: checked_artifact.BoxPayloadCapabilityId,
 };
 
+/// Public `OpaqueAtomicProofRef` declaration.
 pub const OpaqueAtomicProofRef = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     proof: checked_artifact.OpaqueAtomicProofId,
 };
 
+/// Public `HostedRepresentationCapabilityRef` declaration.
 pub const HostedRepresentationCapabilityRef = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     capability: checked_artifact.HostedRepresentationCapabilityId,
 };
 
+/// Public `PlatformRepresentationCapabilityRef` declaration.
 pub const PlatformRepresentationCapabilityRef = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     capability: checked_artifact.PlatformRepresentationCapabilityId,
 };
 
+/// Public `NominalPayloadRepresentation` declaration.
 pub const NominalPayloadRepresentation = union(enum) {
     transparent_backing: struct {
         nominal: canonical.NominalTypeKey,
@@ -531,6 +646,7 @@ pub const NominalPayloadRepresentation = union(enum) {
     platform_abi: PlatformRepresentationCapabilityRef,
 };
 
+/// Public `BoxPayloadRepresentationPlan` declaration.
 pub const BoxPayloadRepresentationPlan = union(enum) {
     unchanged,
     function_erased: struct {
@@ -545,21 +661,25 @@ pub const BoxPayloadRepresentationPlan = union(enum) {
     nominal: NominalPayloadRepresentation,
 };
 
+/// Public `BoxPayloadFieldPlan` declaration.
 pub const BoxPayloadFieldPlan = struct {
     field: row.RecordFieldId,
     plan: BoxPayloadRepresentationPlanId,
 };
 
+/// Public `BoxPayloadTupleElemPlan` declaration.
 pub const BoxPayloadTupleElemPlan = struct {
     index: u32,
     plan: BoxPayloadRepresentationPlanId,
 };
 
+/// Public `BoxPayloadTagPlan` declaration.
 pub const BoxPayloadTagPlan = struct {
     tag: row.TagId,
     payloads: []const BoxPayloadTagPayloadPlan,
 };
 
+/// Public `BoxPayloadTagPayloadPlan` declaration.
 pub const BoxPayloadTagPayloadPlan = struct {
     payload: row.TagPayloadId,
     plan: BoxPayloadRepresentationPlanId,
@@ -587,6 +707,7 @@ fn deinitBoxPayloadRepresentationPlan(
     }
 }
 
+/// Public `BoxBoundary` declaration.
 pub const BoxBoundary = struct {
     box_ty: canonical.CanonicalTypeKey,
     box_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
@@ -600,6 +721,7 @@ pub const BoxBoundary = struct {
     payload_plan: BoxPayloadRepresentationPlan,
 };
 
+/// Public `ProcValueErasePlan` declaration.
 pub const ProcValueErasePlan = struct {
     source_value: ValueInfoId,
     proc_value: canonical.ProcedureCallableRef,
@@ -612,12 +734,14 @@ pub const ProcValueErasePlan = struct {
     provenance: []const BoxBoundaryId,
 };
 
+/// Public `AlreadyErasedCapturePlan` declaration.
 pub const AlreadyErasedCapturePlan = union(enum) {
     none,
     zero_sized_ty: TypeVarId,
     value: ValueInfoId,
 };
 
+/// Public `AlreadyErasedCallablePlan` declaration.
 pub const AlreadyErasedCallablePlan = struct {
     sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
@@ -628,12 +752,14 @@ pub const AlreadyErasedCallablePlan = struct {
 
 pub const ErasedAdapterKey = canonical.ErasedAdapterKey;
 
+/// Public `FiniteSetErasePlan` declaration.
 pub const FiniteSetErasePlan = struct {
     adapter: ErasedAdapterKey,
     result_ty: CanonicalExecValueTypeKey,
     provenance: []const BoxBoundaryId = &.{},
 };
 
+/// Public `CallableValueEmissionPlan` declaration.
 pub const CallableValueEmissionPlan = union(enum) {
     finite: CanonicalCallableSetKey,
     already_erased: AlreadyErasedCallablePlan,
@@ -641,9 +767,11 @@ pub const CallableValueEmissionPlan = union(enum) {
     erase_finite_set: FiniteSetErasePlan,
 };
 
+/// Public `CallableValueSource` declaration.
 pub const CallableValueSource = union(enum) {
     proc_value: struct {
         proc: canonical.MirProcedureRef,
+        target_instance: ProcRepresentationInstanceId,
         captures: []const ValueInfoId,
         fn_ty: canonical.CanonicalTypeKey,
     },
@@ -652,15 +780,18 @@ pub const CallableValueSource = union(enum) {
     erased_adapter: ErasedAdapterKey,
 };
 
+/// Public `CallableSetConstructionPlan` declaration.
 pub const CallableSetConstructionPlan = struct {
     result: ValueInfoId,
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,
     selected_member: CallableSetMemberId,
+    target_instance: ProcRepresentationInstanceId,
     capture_values: []const ValueInfoId,
     capture_transforms: []const ValueTransformBoundaryId = &.{},
 };
 
+/// Public `CaptureBoundaryOwner` declaration.
 pub const CaptureBoundaryOwner = union(enum) {
     callable_set_construction: struct {
         construction: CallableSetConstructionPlanId,
@@ -674,6 +805,7 @@ pub const CaptureBoundaryOwner = union(enum) {
     },
 };
 
+/// Public `CaptureBoundaryInfo` declaration.
 pub const CaptureBoundaryInfo = struct {
     owner: CaptureBoundaryOwner,
     target_instance: ProcRepresentationInstanceId,
@@ -683,6 +815,7 @@ pub const CaptureBoundaryInfo = struct {
     boundary: ValueTransformBoundaryId,
 };
 
+/// Public `CallableValueInfo` declaration.
 pub const CallableValueInfo = struct {
     whole_function_root: RepRootId,
     callable_root: RepRootId,
@@ -691,6 +824,7 @@ pub const CallableValueInfo = struct {
     construction_plan: ?CallableSetConstructionPlanId = null,
 };
 
+/// Public `BoxedValueInfo` declaration.
 pub const BoxedValueInfo = struct {
     box_root: RepRootId,
     payload_root: RepRootId,
@@ -698,6 +832,7 @@ pub const BoxedValueInfo = struct {
     boundary: ?BoxBoundaryId = null,
 };
 
+/// Public `AggregateValueInfo` declaration.
 pub const AggregateValueInfo = union(enum) {
     record: struct {
         shape: row.RecordShapeId,
@@ -716,6 +851,7 @@ pub const AggregateValueInfo = union(enum) {
     },
 };
 
+/// Public `TransformEndpointPathStep` declaration.
 pub const TransformEndpointPathStep = union(enum) {
     record_field: row.RecordFieldId,
     tuple_elem: u32,
@@ -729,12 +865,14 @@ pub const TransformEndpointPathStep = union(enum) {
     callable_leaf,
 };
 
+/// Public `TransformChildEndpoint` declaration.
 pub const TransformChildEndpoint = struct {
     scope: TransformEndpointScopeId,
     side: TransformEndpointSide,
     path: TransformEndpointPathId,
 };
 
+/// Public `SessionExecutableValueEndpointOwner` declaration.
 pub const SessionExecutableValueEndpointOwner = union(enum) {
     local_value: ValueInfoId,
     procedure_param: struct {
@@ -758,46 +896,54 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
     transform_child: TransformChildEndpoint,
 };
 
+/// Public `SessionExecutableValueEndpoint` declaration.
 pub const SessionExecutableValueEndpoint = struct {
     owner: SessionExecutableValueEndpointOwner,
     logical_ty: TypeVarId,
     exec_ty: SessionExecutableTypeEndpoint,
 };
 
+/// Public `TransformEndpointScope` declaration.
 pub const TransformEndpointScope = struct {
     root_kind: ValueTransformBoundaryKind,
     root_from: SessionExecutableValueEndpoint,
     root_to: SessionExecutableValueEndpoint,
 };
 
+/// Public `SessionValueTransformRecordField` declaration.
 pub const SessionValueTransformRecordField = struct {
     field: row.RecordFieldId,
     transform: checked_artifact.ExecutableValueTransformRef,
 };
 
+/// Public `SessionValueTransformTupleElem` declaration.
 pub const SessionValueTransformTupleElem = struct {
     index: u32,
     transform: checked_artifact.ExecutableValueTransformRef,
 };
 
+/// Public `SessionValueTransformTagPayloadEdge` declaration.
 pub const SessionValueTransformTagPayloadEdge = struct {
     source_payload_index: u32,
     target_payload_index: u32,
     transform: checked_artifact.ExecutableValueTransformRef,
 };
 
+/// Public `SessionValueTransformTagCase` declaration.
 pub const SessionValueTransformTagCase = struct {
     source_tag: row.TagId,
     target_tag: row.TagId,
     payloads: []const SessionValueTransformTagPayloadEdge = &.{},
 };
 
+/// Public `SessionBoxPayloadTransformPlan` declaration.
 pub const SessionBoxPayloadTransformPlan = struct {
     boundary: BoxBoundaryId,
     kind: checked_artifact.BoxPayloadTransformKind,
     payload: checked_artifact.ExecutableValueTransformRef,
 };
 
+/// Public `SessionExecutableStructuralBridgePlan` declaration.
 pub const SessionExecutableStructuralBridgePlan = union(enum) {
     direct,
     zst,
@@ -817,11 +963,13 @@ pub const SessionExecutableStructuralBridgePlan = union(enum) {
     },
 };
 
+/// Public `SessionCallableToErasedTransformPlan` declaration.
 pub const SessionCallableToErasedTransformPlan = union(enum) {
     finite_value: FiniteSetErasePlan,
     proc_value: ProcValueErasePlan,
 };
 
+/// Public `SessionExecutableValueTransformOp` declaration.
 pub const SessionExecutableValueTransformOp = union(enum) {
     identity,
     structural_bridge: SessionExecutableStructuralBridgePlan,
@@ -830,6 +978,7 @@ pub const SessionExecutableValueTransformOp = union(enum) {
     tag_union: []const SessionValueTransformTagCase,
     nominal: struct {
         nominal: canonical.NominalTypeKey,
+        source_ty: canonical.CanonicalTypeKey,
         backing: checked_artifact.ExecutableValueTransformRef,
     },
     list: struct {
@@ -840,6 +989,7 @@ pub const SessionExecutableValueTransformOp = union(enum) {
     already_erased_callable: checked_artifact.AlreadyErasedCallableTransformPlan,
 };
 
+/// Public `SessionExecutableValueTransformPlan` declaration.
 pub const SessionExecutableValueTransformPlan = struct {
     scope: ?TransformEndpointScopeId = null,
     from: SessionExecutableValueEndpoint,
@@ -848,6 +998,7 @@ pub const SessionExecutableValueTransformPlan = struct {
     op: SessionExecutableValueTransformOp,
 };
 
+/// Public `SessionExecutableValueTransformStore` declaration.
 pub const SessionExecutableValueTransformStore = struct {
     plans: std.ArrayList(SessionExecutableValueTransformPlan) = .empty,
 
@@ -1022,22 +1173,6 @@ fn cloneSessionCallableToErasedTransformPlan(
     };
 }
 
-fn cloneAlreadyErasedCallablePlan(
-    allocator: std.mem.Allocator,
-    erased: AlreadyErasedCallablePlan,
-) std.mem.Allocator.Error!AlreadyErasedCallablePlan {
-    return .{
-        .sig_key = erased.sig_key,
-        .capture_shape_key = erased.capture_shape_key,
-        .result_ty = erased.result_ty,
-        .capture = erased.capture,
-        .provenance = if (erased.provenance.len == 0)
-            &.{}
-        else
-            try allocator.dupe(BoxBoundaryId, erased.provenance),
-    };
-}
-
 fn deinitSessionExecutableValueTransformPlan(
     allocator: std.mem.Allocator,
     plan: *SessionExecutableValueTransformPlan,
@@ -1090,26 +1225,31 @@ fn deinitSessionCallableToErasedTransformPlan(
     plan.* = undefined;
 }
 
+/// Public `FieldValueInfo` declaration.
 pub const FieldValueInfo = struct {
     field: row.RecordFieldId,
     value: ValueInfoId,
 };
 
+/// Public `ElemValueInfo` declaration.
 pub const ElemValueInfo = struct {
     index: u32,
     value: ValueInfoId,
 };
 
+/// Public `TagPayloadValueInfo` declaration.
 pub const TagPayloadValueInfo = struct {
     payload: row.TagPayloadId,
     value: ValueInfoId,
 };
 
+/// Public `TagPayloadRootInfo` declaration.
 pub const TagPayloadRootInfo = struct {
     payload: row.TagPayloadId,
     root: RepRootId,
 };
 
+/// Public `ValueInfo` declaration.
 pub const ValueInfo = struct {
     logical_ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
@@ -1125,18 +1265,21 @@ pub const ValueInfo = struct {
     aggregate: ?AggregateValueInfo = null,
 };
 
+/// Public `BindingInfo` declaration.
 pub const BindingInfo = struct {
     symbol: Symbol,
     value: ValueInfoId,
     root: RepRootId,
 };
 
+/// Public `ProjectionKind` declaration.
 pub const ProjectionKind = union(enum) {
     record_field: row.RecordFieldId,
     tuple_elem: u32,
     tag_payload: row.TagPayloadId,
 };
 
+/// Public `ProjectionInfo` declaration.
 pub const ProjectionInfo = struct {
     source: ValueInfoId,
     result: ValueInfoId,
@@ -1144,12 +1287,27 @@ pub const ProjectionInfo = struct {
     kind: ProjectionKind,
 };
 
+/// Public `CallSiteDispatch` declaration.
 pub const CallSiteDispatch = union(enum) {
     call_proc: ProcRepresentationInstanceId,
-    call_value_finite: CanonicalCallableSetKey,
+    call_value_finite: CallValueFiniteDispatchPlanId,
     call_value_erased: ErasedFnSigKey,
 };
 
+/// Public `CallValueFiniteDispatchBranch` declaration.
+pub const CallValueFiniteDispatchBranch = struct {
+    member: CallableSetMemberRef,
+    target_instance: ProcRepresentationInstanceId,
+    result_transform: ValueTransformBoundaryId,
+};
+
+/// Public `CallValueFiniteDispatchPlan` declaration.
+pub const CallValueFiniteDispatchPlan = struct {
+    callable_set_key: CanonicalCallableSetKey,
+    branches: Span(CallValueFiniteDispatchBranch),
+};
+
+/// Public `CallSiteInfo` declaration.
 pub const CallSiteInfo = struct {
     callee: ?ValueInfoId,
     args: Span(ValueInfoId),
@@ -1157,17 +1315,20 @@ pub const CallSiteInfo = struct {
     requested_fn_root: RepRootId,
     requested_source_fn_ty: canonical.CanonicalTypeKey,
     dispatch: ?CallSiteDispatch = null,
+    representation_edges_resolved: bool = false,
     arg_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
     branch_result_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
     result_transform: ?ValueTransformBoundaryId = null,
 };
 
+/// Public `JoinKind` declaration.
 pub const JoinKind = enum {
     if_expr,
     match_expr,
     loop_expr,
 };
 
+/// Public `JoinInputSource` declaration.
 pub const JoinInputSource = union(enum) {
     if_branch: struct {
         if_expr: IfExprId,
@@ -1181,11 +1342,13 @@ pub const JoinInputSource = union(enum) {
     loop_phi: LoopPhiId,
 };
 
+/// Public `JoinInputInfo` declaration.
 pub const JoinInputInfo = struct {
     source: JoinInputSource,
     value: ValueInfoId,
 };
 
+/// Public `JoinInfo` declaration.
 pub const JoinInfo = struct {
     result: ValueInfoId,
     inputs: Span(JoinInputInfo),
@@ -1194,11 +1357,13 @@ pub const JoinInfo = struct {
     input_transforms: Span(ValueTransformBoundaryId) = Span(ValueTransformBoundaryId).empty(),
 };
 
+/// Public `ReturnInfo` declaration.
 pub const ReturnInfo = struct {
     value: ValueInfoId,
     transform: ?ValueTransformBoundaryId = null,
 };
 
+/// Public `ProcPublicValueRoots` declaration.
 pub const ProcPublicValueRoots = struct {
     params: Span(ValueInfoId),
     ret: ValueInfoId,
@@ -1206,11 +1371,13 @@ pub const ProcPublicValueRoots = struct {
     function_root: RepRootId,
 };
 
+/// Public `IfBranch` declaration.
 pub const IfBranch = enum {
     then_,
     else_,
 };
 
+/// Public `ValueTransformBoundaryKind` declaration.
 pub const ValueTransformBoundaryKind = union(enum) {
     call_arg: struct {
         call: CallSiteInfoId,
@@ -1237,6 +1404,7 @@ pub const ValueTransformBoundaryKind = union(enum) {
     aggregate_existing_value: AggregateBoundaryId,
 };
 
+/// Public `ValueTransformBoundary` declaration.
 pub const ValueTransformBoundary = struct {
     kind: ValueTransformBoundaryKind,
     from_value: ValueInfoId,
@@ -1246,6 +1414,7 @@ pub const ValueTransformBoundary = struct {
     transform: checked_artifact.ExecutableValueTransformRef,
 };
 
+/// Public `RepresentationSolveState` declaration.
 pub const RepresentationSolveState = enum {
     reserved,
     building,
@@ -1253,6 +1422,7 @@ pub const RepresentationSolveState = enum {
     sealed,
 };
 
+/// Public `RepresentationStore` declaration.
 pub const RepresentationStore = struct {
     allocator: std.mem.Allocator,
     roots_len: u32 = 0,
@@ -1403,6 +1573,7 @@ pub const RepresentationStore = struct {
         switch (endpoint) {
             .local => |root| self.verifyReservedRoot(root, label),
             .procedure_public => {},
+            .procedure_function_root => {},
         }
     }
 
@@ -1812,6 +1983,7 @@ pub const RepresentationStore = struct {
         result: ValueInfoId,
         whole_function_root: RepRootId,
         proc: canonical.MirProcedureRef,
+        target_instance: ProcRepresentationInstanceId,
         capture_values: []const ValueInfoId,
     ) std.mem.Allocator.Error!CallableValueInfo {
         const source_fn_ty = proc.callable.source_fn_ty;
@@ -1861,6 +2033,7 @@ pub const RepresentationStore = struct {
             .source_fn_ty = source_fn_ty,
             .callable_set_key = callable_set_key,
             .selected_member = member_id,
+            .target_instance = target_instance,
             .capture_values = capture_values,
         });
         const construction = self.callableConstructionPlan(construction_plan);
@@ -1875,6 +2048,7 @@ pub const RepresentationStore = struct {
             .callable_root = callable_root,
             .source = .{ .proc_value = .{
                 .proc = proc,
+                .target_instance = target_instance,
                 .captures = construction.capture_values,
                 .fn_ty = source_fn_ty,
             } },
@@ -1973,6 +2147,7 @@ pub const RepresentationStore = struct {
             .source_fn_ty = plan.source_fn_ty,
             .callable_set_key = plan.callable_set_key,
             .selected_member = plan.selected_member,
+            .target_instance = plan.target_instance,
             .capture_values = if (plan.capture_values.len == 0)
                 &.{}
             else
@@ -2139,12 +2314,15 @@ pub const RepresentationStore = struct {
     }
 };
 
+/// Public `ValueInfoStore` declaration.
 pub const ValueInfoStore = struct {
     allocator: std.mem.Allocator,
     values: std.ArrayList(ValueInfo),
     bindings: std.ArrayList(BindingInfo),
     projections: std.ArrayList(ProjectionInfo),
     call_sites: std.ArrayList(CallSiteInfo),
+    call_value_finite_dispatches: std.ArrayList(CallValueFiniteDispatchPlan),
+    call_value_finite_dispatch_branches: std.ArrayList(CallValueFiniteDispatchBranch),
     low_level_value_flows: std.ArrayList(LowLevelValueFlowSignature),
     low_level_value_flow_edges: std.ArrayList(LowLevelValueFlowEdge),
     low_level_value_flow_arg_indices: std.ArrayList(u32),
@@ -2161,6 +2339,8 @@ pub const ValueInfoStore = struct {
             .bindings = .empty,
             .projections = .empty,
             .call_sites = .empty,
+            .call_value_finite_dispatches = .empty,
+            .call_value_finite_dispatch_branches = .empty,
             .low_level_value_flows = .empty,
             .low_level_value_flow_edges = .empty,
             .low_level_value_flow_arg_indices = .empty,
@@ -2194,6 +2374,8 @@ pub const ValueInfoStore = struct {
         self.low_level_value_flow_arg_indices.deinit(self.allocator);
         self.low_level_value_flow_edges.deinit(self.allocator);
         self.low_level_value_flows.deinit(self.allocator);
+        self.call_value_finite_dispatch_branches.deinit(self.allocator);
+        self.call_value_finite_dispatches.deinit(self.allocator);
         self.call_sites.deinit(self.allocator);
         self.projections.deinit(self.allocator);
         self.bindings.deinit(self.allocator);
@@ -2223,6 +2405,40 @@ pub const ValueInfoStore = struct {
         const id: CallSiteInfoId = @enumFromInt(@as(u32, @intCast(self.call_sites.items.len)));
         try self.call_sites.append(self.allocator, call_site);
         return id;
+    }
+
+    pub fn addCallValueFiniteDispatchPlan(
+        self: *ValueInfoStore,
+        plan: CallValueFiniteDispatchPlan,
+    ) std.mem.Allocator.Error!CallValueFiniteDispatchPlanId {
+        const id: CallValueFiniteDispatchPlanId = @enumFromInt(@as(u32, @intCast(self.call_value_finite_dispatches.items.len)));
+        try self.call_value_finite_dispatches.append(self.allocator, plan);
+        return id;
+    }
+
+    pub fn addCallValueFiniteDispatchBranchSpan(
+        self: *ValueInfoStore,
+        branches: []const CallValueFiniteDispatchBranch,
+    ) std.mem.Allocator.Error!Span(CallValueFiniteDispatchBranch) {
+        if (branches.len == 0) return Span(CallValueFiniteDispatchBranch).empty();
+        const start: u32 = @intCast(self.call_value_finite_dispatch_branches.items.len);
+        try self.call_value_finite_dispatch_branches.appendSlice(self.allocator, branches);
+        return .{ .start = start, .len = @intCast(branches.len) };
+    }
+
+    pub fn callValueFiniteDispatchPlan(
+        self: *const ValueInfoStore,
+        id: CallValueFiniteDispatchPlanId,
+    ) CallValueFiniteDispatchPlan {
+        return self.call_value_finite_dispatches.items[@intFromEnum(id)];
+    }
+
+    pub fn sliceCallValueFiniteDispatchBranches(
+        self: *const ValueInfoStore,
+        span: Span(CallValueFiniteDispatchBranch),
+    ) []const CallValueFiniteDispatchBranch {
+        if (span.len == 0) return &.{};
+        return self.call_value_finite_dispatch_branches.items[span.start..][0..span.len];
     }
 
     pub fn addLowLevelValueFlowSignature(
@@ -2325,6 +2541,7 @@ pub const ValueInfoStore = struct {
     }
 };
 
+/// Public `canonicalTypeKeyEql` function.
 pub fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
@@ -2336,18 +2553,22 @@ fn isEmptyCanonicalTypeKey(key: canonical.CanonicalTypeKey) bool {
     return true;
 }
 
+/// Public `callableSetKeyEql` function.
 pub fn callableSetKeyEql(a: CanonicalCallableSetKey, b: CanonicalCallableSetKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+/// Public `canonicalExecValueTypeKeyEql` function.
 pub fn canonicalExecValueTypeKeyEql(a: CanonicalExecValueTypeKey, b: CanonicalExecValueTypeKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+/// Public `captureShapeKeyEql` function.
 pub fn captureShapeKeyEql(a: CaptureShapeKey, b: CaptureShapeKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+/// Public `erasedFnSigKeyEql` function.
 pub fn erasedFnSigKeyEql(a: ErasedFnSigKey, b: ErasedFnSigKey) bool {
     if (!canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty)) return false;
     if (!std.mem.eql(u8, a.abi.bytes[0..], b.abi.bytes[0..])) return false;
@@ -2358,6 +2579,7 @@ pub fn erasedFnSigKeyEql(a: ErasedFnSigKey, b: ErasedFnSigKey) bool {
     return b.capture_ty == null;
 }
 
+/// Public `RepresentationSolveSession` declaration.
 pub const RepresentationSolveSession = struct {
     members: []const ProcRepresentationInstanceId,
     representation_store: RepresentationStore,
@@ -2369,6 +2591,7 @@ pub const RepresentationSolveSession = struct {
     }
 };
 
+/// Public `ProcRepresentationInstance` declaration.
 pub const ProcRepresentationInstance = struct {
     proc: canonical.MirProcedureRef,
     executable_specialization_key: ExecutableSpecializationKey,
@@ -2377,6 +2600,7 @@ pub const ProcRepresentationInstance = struct {
     public_roots: ProcPublicValueRoots,
 };
 
+/// Public `executableSpecializationKeyForProc` function.
 pub fn executableSpecializationKeyForProc(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2388,7 +2612,7 @@ pub fn executableSpecializationKeyForProc(
     roots: ProcPublicValueRoots,
 ) std.mem.Allocator.Error!ExecutableSpecializationKey {
     const params = value_store.sliceValueSpan(roots.params);
-    const arg_keys = if (params.len == 0)
+    const arg_keys: []CanonicalExecValueTypeKey = if (params.len == 0)
         &.{}
     else
         try allocator.alloc(CanonicalExecValueTypeKey, params.len);
@@ -2415,6 +2639,7 @@ pub fn deinitExecutableSpecializationKey(
     key.exec_arg_tys = &.{};
 }
 
+/// Public `cloneExecutableSpecializationKey` function.
 pub fn cloneExecutableSpecializationKey(
     allocator: std.mem.Allocator,
     key: ExecutableSpecializationKey,
@@ -2432,6 +2657,7 @@ pub fn cloneExecutableSpecializationKey(
     };
 }
 
+/// Public `executableSpecializationKeyEql` function.
 pub fn executableSpecializationKeyEql(a: ExecutableSpecializationKey, b: ExecutableSpecializationKey) bool {
     if (a.base != b.base) return false;
     if (!canonicalTypeKeyEql(a.requested_fn_ty, b.requested_fn_ty)) return false;
@@ -2451,6 +2677,7 @@ pub fn deinitProcRepresentationInstance(
     deinitExecutableSpecializationKey(allocator, &instance.executable_specialization_key);
 }
 
+/// Public `execValueTypeKeyForValue` function.
 pub fn execValueTypeKeyForValue(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2465,6 +2692,7 @@ pub fn execValueTypeKeyForValue(
     return try builder.keyForValue(value);
 }
 
+/// Public `execValueTypeKey` function.
 pub fn execValueTypeKey(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2476,6 +2704,7 @@ pub fn execValueTypeKey(
     return try builder.key(root);
 }
 
+/// Public `execValueTypeKeyForRootType` function.
 pub fn execValueTypeKeyForRootType(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2490,6 +2719,7 @@ pub fn execValueTypeKeyForRootType(
     return try builder.keyForRootType(rep_root, ty);
 }
 
+/// Public `captureShapeKeyForValues` function.
 pub fn captureShapeKeyForValues(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2510,6 +2740,7 @@ pub fn captureShapeKeyForValues(
     );
 }
 
+/// Public `captureShapeKeyForValueSlice` function.
 pub fn captureShapeKeyForValueSlice(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2530,6 +2761,7 @@ pub fn captureShapeKeyForValueSlice(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `captureShapeKeyForExecKeys` function.
 pub fn captureShapeKeyForExecKeys(
     keys: []const CanonicalExecValueTypeKey,
 ) CaptureShapeKey {
@@ -2543,6 +2775,7 @@ pub fn captureShapeKeyForExecKeys(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `captureTupleExecKeyForSlots` function.
 pub fn captureTupleExecKeyForSlots(
     slots: []const CallableSetCaptureSlot,
 ) CanonicalExecValueTypeKey {
@@ -2557,6 +2790,7 @@ pub fn captureTupleExecKeyForSlots(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `finiteCallableSetExecValueTypeKey` function.
 pub fn finiteCallableSetExecValueTypeKey(key: CanonicalCallableSetKey) CanonicalExecValueTypeKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "callable_set");
@@ -2564,6 +2798,7 @@ pub fn finiteCallableSetExecValueTypeKey(key: CanonicalCallableSetKey) Canonical
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `erasedCallableExecValueTypeKey` function.
 pub fn erasedCallableExecValueTypeKey(sig_key: ErasedFnSigKey) CanonicalExecValueTypeKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "erased_fn");
@@ -2571,6 +2806,7 @@ pub fn erasedCallableExecValueTypeKey(sig_key: ErasedFnSigKey) CanonicalExecValu
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `sessionExecutableTypeEndpointForValue` function.
 pub fn sessionExecutableTypeEndpointForValue(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -2585,6 +2821,7 @@ pub fn sessionExecutableTypeEndpointForValue(
     return try builder.endpointForValue(value);
 }
 
+/// Public `sessionExecutableTypeEndpointForValueIntoStore` function.
 pub fn sessionExecutableTypeEndpointForValueIntoStore(
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -3008,13 +3245,17 @@ const SessionExecutableTypePayloadBuilder = struct {
         for (self.representation_store.representation_edges.items) |edge| {
             const from = switch (edge.from) {
                 .local => |root| root,
-                .procedure_public => continue,
+                .procedure_public,
+                .procedure_function_root,
+                => continue,
             };
             if (from != parent) continue;
             if (!representationEdgeKindEql(edge.kind, kind)) continue;
             return switch (edge.to) {
                 .local => |root| root,
-                .procedure_public => representationInvariant("session executable root payload child edge targets procedure-public root"),
+                .procedure_public,
+                .procedure_function_root,
+                => representationInvariant("session executable root payload child edge targets procedure-public root"),
             };
         }
         representationInvariant("session executable root payload has no published structural child root");
@@ -3391,45 +3632,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn tuplePayloadForCaptureValues(
-        self: *SessionExecutableTypePayloadBuilder,
-        captures: []const ValueInfoId,
-        expected_key: ?CanonicalExecValueTypeKey,
-    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        if (captures.len == 0) {
-            const key = expected_key orelse blk: {
-                var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                key_hasher.update("capture_tuple");
-                break :blk CanonicalExecValueTypeKey{ .bytes = key_hasher.finalResult() };
-            };
-            const id = try self.payload_store.append(self.allocator, key, .{ .tuple = &.{} });
-            return .{
-                .ty = refFor(id),
-                .key = key,
-            };
-        }
-
-        const items = try self.allocator.alloc(SessionExecutableTupleElemPayload, captures.len);
-        errdefer self.allocator.free(items);
-        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        key_hasher.update("capture_tuple");
-        for (captures, 0..) |capture, i| {
-            const child = try self.endpointForValue(capture);
-            key_hasher.update(&child.key.bytes);
-            items[i] = .{
-                .index = @intCast(i),
-                .ty = child.ty,
-                .key = child.key,
-            };
-        }
-        const key = expected_key orelse .{ .bytes = key_hasher.finalResult() };
-        const id = try self.payload_store.append(self.allocator, key, .{ .tuple = items });
-        return .{
-            .ty = refFor(id),
-            .key = key,
-        };
-    }
-
     fn tuplePayloadForCaptureSlots(
         self: *SessionExecutableTypePayloadBuilder,
         slots: []const CallableSetCaptureSlot,
@@ -3583,17 +3785,12 @@ const SessionExecutableTypePayloadBuilder = struct {
         const out = try self.allocator.alloc(SessionExecutableTagPayload, args.len);
         errdefer self.allocator.free(out);
         for (shape_payloads, args, 0..) |shape_payload, arg, i| {
-            const payload_root = self.tagPayloadRoot(tag_value, shape_payload);
-            const child = try self.childForRootType(payload_root, arg);
-            if (tag == tag_value.tag) {
+            const child = if (tag == tag_value.tag) blk: {
                 const selected_value = self.selectedTagPayloadValue(tag_value, shape_payload) orelse {
                     representationInvariant("session executable selected tag omitted a payload");
                 };
-                const selected_child = try self.childForValue(selected_value);
-                if (!canonicalExecValueTypeKeyEql(child.key, selected_child.key)) {
-                    representationInvariant("session executable selected tag payload key differs from solved payload root");
-                }
-            }
+                break :blk try self.childForValue(selected_value);
+            } else try self.childForRootType(self.tagPayloadRoot(tag_value, shape_payload), arg);
             out[i] = .{
                 .payload = shape_payload,
                 .ty = child.ty,
@@ -3633,8 +3830,10 @@ const SessionExecutableTypePayloadBuilder = struct {
         list: anytype,
     ) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
         const elem_ty = try self.logicalListElemType(logical_ty);
-        const elem_endpoint = try self.childForRootType(list.elem_root, elem_ty);
-        for (list.elems) |elem| {
+        if (list.elems.len == 0) return try self.childForRootType(list.elem_root, elem_ty);
+
+        const elem_endpoint = try self.childForValue(list.elems[0]);
+        for (list.elems[1..]) |elem| {
             const child = try self.childForValue(elem);
             if (!canonicalExecValueTypeKeyEql(elem_endpoint.key, child.key)) {
                 representationInvariant("session executable list payload elements have different executable representations");
@@ -3671,6 +3870,7 @@ const SessionExecutableTypePayloadBuilder = struct {
     }
 };
 
+/// Public `singletonCallableSetKey` function.
 pub fn singletonCallableSetKey(
     proc_callable: canonical.ProcedureCallableRef,
     capture_shape_key: CaptureShapeKey,
@@ -3689,6 +3889,7 @@ pub fn singletonCallableSetKey(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `callableSetKeyForMembers` function.
 pub fn callableSetKeyForMembers(
     members: []const CanonicalCallableSetMember,
 ) CanonicalCallableSetKey {
@@ -3800,7 +4001,7 @@ const ExecValueTypeKeyBuilder = struct {
     }
 
     fn keyForValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
-        if (try self.redirectedValueKey(value)) |key| return key;
+        if (try self.redirectedValueKey(value)) |redirected_key| return redirected_key;
         try self.writeValue(value);
         return .{ .bytes = self.hasher.finalResult() };
     }
@@ -3843,8 +4044,8 @@ const ExecValueTypeKeyBuilder = struct {
         }
         const first = try self.valueKeySnapshot(inputs[0].value);
         for (inputs[1..]) |input| {
-            const key = try self.valueKeySnapshot(input.value);
-            if (!canonicalExecValueTypeKeyEql(first, key)) {
+            const input_key = try self.valueKeySnapshot(input.value);
+            if (!canonicalExecValueTypeKeyEql(first, input_key)) {
                 representationInvariant("executable value type key join inputs have different executable representations");
             }
         }
@@ -3871,8 +4072,8 @@ const ExecValueTypeKeyBuilder = struct {
         } else if (info.value_alias_source) |source| {
             try self.writeValue(source);
         } else if (info.join_info) |join_id| {
-            const key = try self.joinValueKey(value, join_id);
-            self.writeCanonicalExecValueTypeKey(key);
+            const join_key = try self.joinValueKey(value, join_id);
+            self.writeCanonicalExecValueTypeKey(join_key);
         } else {
             try self.writeRootType(info.root, info.logical_ty);
         }
@@ -4079,38 +4280,27 @@ const ExecValueTypeKeyBuilder = struct {
         }
     }
 
-    fn writeCallableClass(
-        self: *ExecValueTypeKeyBuilder,
-        class: RepresentationClassId,
-    ) std.mem.Allocator.Error!void {
-        const representations = self.representationStore();
-        const emission = representations.callableClassEmission(class) orelse {
-            representationInvariant("executable value type key function root has no callable class emission");
-        };
-        try self.writeCallableEmissionPlan(emission, representations);
-    }
-
     fn writeCallableEmissionPlan(
         self: *ExecValueTypeKeyBuilder,
         emission: CallableValueEmissionPlanId,
         representations: *const RepresentationStore,
     ) std.mem.Allocator.Error!void {
         switch (representations.callableEmissionPlan(emission)) {
-            .finite => |key| {
+            .finite => |callable_set_key| {
                 self.writeTag("callable_set");
-                self.writeCanonicalCallableSetKey(key);
+                self.writeCanonicalCallableSetKey(callable_set_key);
             },
             .already_erased => |erased| {
                 self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erased.sig_key);
+                self.writeErasedFnSigKeyRef(erased.sig_key);
             },
             .erase_proc_value => |erase| {
                 self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erase.erased_fn_sig_key);
+                self.writeErasedFnSigKeyRef(erase.erased_fn_sig_key);
             },
             .erase_finite_set => |erase| {
                 self.writeTag("erased_fn");
-                self.writeErasedFnSigKey(erase.adapter.erased_fn_sig_key);
+                self.writeErasedFnSigKeyRef(erase.adapter.erased_fn_sig_key);
             },
         }
     }
@@ -4145,7 +4335,15 @@ const ExecValueTypeKeyBuilder = struct {
             self.writeU32(@intCast(payloads.len));
             for (payloads, args) |payload_id, arg| {
                 self.writeU32(@intFromEnum(payload_id));
-                try self.writeRootType(self.tagPayloadRoot(tag_value, payload_id), arg);
+                if (shape_tag == tag_value.tag) {
+                    const selected_value = self.selectedTagPayloadValue(tag_value, payload_id) orelse {
+                        representationInvariant("executable value type key selected tag omitted a payload");
+                    };
+                    const selected_key = try self.valueKeySnapshot(selected_value);
+                    self.writeCanonicalExecValueTypeKey(selected_key);
+                } else {
+                    try self.writeRootType(self.tagPayloadRoot(tag_value, payload_id), arg);
+                }
             }
         }
     }
@@ -4194,6 +4392,14 @@ const ExecValueTypeKeyBuilder = struct {
         representationInvariant("executable value type key tag payload root metadata omitted a payload");
     }
 
+    fn selectedTagPayloadValue(self: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) ?ValueInfoId {
+        _ = self;
+        for (tag_value.payloads) |selected| {
+            if (selected.payload == payload) return selected.value;
+        }
+        return null;
+    }
+
     fn structuralChildRoot(
         self: *ExecValueTypeKeyBuilder,
         parent: RepRootId,
@@ -4202,13 +4408,17 @@ const ExecValueTypeKeyBuilder = struct {
         for (self.representationStore().representation_edges.items) |edge| {
             const from = switch (edge.from) {
                 .local => |root| root,
-                .procedure_public => continue,
+                .procedure_public,
+                .procedure_function_root,
+                => continue,
             };
             if (from != parent) continue;
             if (!representationEdgeKindEql(edge.kind, kind)) continue;
             return switch (edge.to) {
                 .local => |root| root,
-                .procedure_public => representationInvariant("executable value type key structural child edge targets procedure-public root"),
+                .procedure_public,
+                .procedure_function_root,
+                => representationInvariant("executable value type key structural child edge targets procedure-public root"),
             };
         }
         representationInvariant("executable value type key root has no published structural child root");
@@ -4442,16 +4652,16 @@ const ExecValueTypeKeyBuilder = struct {
         writeHashU32(&self.hasher, value);
     }
 
-    fn writeCanonicalCallableSetKey(self: *ExecValueTypeKeyBuilder, key: CanonicalCallableSetKey) void {
-        self.hasher.update(&key.bytes);
+    fn writeCanonicalCallableSetKey(self: *ExecValueTypeKeyBuilder, callable_set_key: CanonicalCallableSetKey) void {
+        self.hasher.update(&callable_set_key.bytes);
     }
 
-    fn writeCanonicalExecValueTypeKey(self: *ExecValueTypeKeyBuilder, key: CanonicalExecValueTypeKey) void {
-        self.hasher.update(&key.bytes);
+    fn writeCanonicalExecValueTypeKey(self: *ExecValueTypeKeyBuilder, exec_value_key: CanonicalExecValueTypeKey) void {
+        self.hasher.update(&exec_value_key.bytes);
     }
 
-    fn writeErasedFnSigKey(self: *ExecValueTypeKeyBuilder, key: ErasedFnSigKey) void {
-        writeErasedFnSigKey(&self.hasher, key);
+    fn writeErasedFnSigKeyRef(self: *ExecValueTypeKeyBuilder, sig_key: ErasedFnSigKey) void {
+        writeErasedFnSigKey(&self.hasher, sig_key);
     }
 };
 

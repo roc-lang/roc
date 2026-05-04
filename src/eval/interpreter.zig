@@ -62,7 +62,6 @@ const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const LocalSpan = LIR.LocalSpan;
-const Symbol = LIR.Symbol;
 const Layout = layout_mod.Layout;
 const Value = lir_value.Value;
 const LayoutHelper = lir_value.LayoutHelper;
@@ -719,6 +718,15 @@ pub const Interpreter = struct {
                 }
             },
             .tag_union => {
+                if (value.isZst() and self.helper.sizeOf(layout_idx) > 0) {
+                    self.debugValueShapePanic(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        "tag union value used ZST sentinel for nonzero tag layout",
+                    );
+                }
                 const disc = self.helper.readTagDiscriminant(value, layout_idx);
                 const tag_union_info = self.layout_store.getTagUnionInfo(layout_val);
                 if (disc >= tag_union_info.variants.len) {
@@ -933,6 +941,7 @@ pub const Interpreter = struct {
                 .ret,
                 .crash,
                 .loop_continue,
+                .loop_break,
                 => break,
             };
         }
@@ -1560,12 +1569,15 @@ pub const Interpreter = struct {
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_low_level => |assign| {
-                    debugPrint("    {d}: assign_low_level target={d} op={s} next={d}\n", .{
+                    debugPrint("    {d}: assign_low_level target={d} op={s} args=", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @tagName(assign.op),
-                        @intFromEnum(assign.next),
                     });
+                    for (self.store.getLocalSpan(assign.args)) |arg_local| {
+                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
+                    }
+                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
                     stack.append(self.allocator, assign.next) catch return;
                 },
                 .assign_list => |assign| {
@@ -1788,10 +1800,12 @@ pub const Interpreter = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         const size = self.helper.sizeOf(target_layout);
-        if (size == 0 or value.isZst()) return Value.zst;
+        if (size == 0) return Value.zst;
 
         const storage = try self.alloc(target_layout);
-        storage.copyFrom(value, size);
+        if (!value.isZst()) {
+            storage.copyFrom(value, size);
+        }
         return storage;
     }
 
@@ -2230,7 +2244,14 @@ pub const Interpreter = struct {
         union_layout: layout_mod.Idx,
     ) Error!Value {
         const allocated = try self.allocTagValue(union_layout);
-        self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
+        if (self.helper.sizeOf(allocated.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
+        } else if (builtin.mode == .Debug and discriminant != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: nonzero discriminant {d} for zero-sized tag layout {d}",
+                .{ discriminant, @intFromEnum(allocated.base_layout) },
+            );
+        }
 
         const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
         if (payload_local) |local| {

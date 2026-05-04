@@ -20,13 +20,16 @@ const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const repr = mir.LambdaSolved.Representation;
 
+/// Public `LowerResourceError` declaration.
 pub const LowerResourceError = Allocator.Error;
 
+/// Public `ArtifactSet` declaration.
 pub const ArtifactSet = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
 };
 
+/// Public `RootRequestSet` declaration.
 pub const RootRequestSet = struct {
     requests: []const checked_artifact.RootRequest = &.{},
     compile_time_requests: []const checked_artifact.CompileTimeEvaluationRequest = &.{},
@@ -35,21 +38,25 @@ pub const RootRequestSet = struct {
     compile_time_artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
 };
 
+/// Public `RootPurpose` declaration.
 pub const RootPurpose = enum {
     runtime,
     compile_time,
 };
 
+/// Public `TargetConfig` declaration.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     artifact_state: ArtifactState = .published,
 };
 
+/// Public `ArtifactState` declaration.
 pub const ArtifactState = enum {
     published,
     checking_finalization,
 };
 
+/// Public `LoweredProgram` declaration.
 pub const LoweredProgram = struct {
     lir_result: LowerIr.Result,
     main_proc: LIR.LirProcSpecId,
@@ -73,6 +80,7 @@ pub const LoweredProgram = struct {
     }
 };
 
+/// Public `CompileTimeDependencySummaryResult` declaration.
 pub const CompileTimeDependencySummaryResult = struct {
     allocator: Allocator,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
@@ -89,6 +97,7 @@ pub const CompileTimeDependencySummaryResult = struct {
     }
 };
 
+/// Public `LoweredErasedCallableCodeEntry` declaration.
 pub const LoweredErasedCallableCodeEntry = struct {
     lir_proc: LIR.LirProcSpecId,
     code: canonical.ErasedCallableCodeRef,
@@ -107,6 +116,7 @@ const ExecutableErasedCallableCodeOrigin = struct {
     capture_shape_key: canonical.CaptureShapeKey,
 };
 
+/// Public `lowerArtifactsToLir` function.
 pub fn lowerArtifactsToLir(
     allocator: Allocator,
     artifacts: ArtifactSet,
@@ -128,13 +138,14 @@ pub fn lowerArtifactsToLir(
     var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .runnable);
     errdefer solved.deinit();
 
-    try publishCallableSetDescriptorsForLowering(
+    var callable_set_descriptors = try callableSetDescriptorsForLowering(
         allocator,
         artifacts.root.artifact,
         &solved,
         roots,
         target.artifact_state,
     );
+    defer callable_set_descriptors.deinit(allocator);
     try publishErasedFnAbisForLowering(
         allocator,
         artifacts.root.artifact,
@@ -159,14 +170,14 @@ pub fn lowerArtifactsToLir(
             .root = artifacts.root,
             .imports = artifacts.imports,
         },
-        artifacts.root.artifact.callable_set_descriptors.descriptors,
+        callable_set_descriptors.descriptors,
     );
     errdefer executable.deinit();
 
     var erased_code_origins = try collectExecutableErasedCallableCodeOrigins(allocator, &executable);
     errdefer deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
 
-    var executable_for_ir = executable;
+    const executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
 
     var lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir);
@@ -207,6 +218,7 @@ pub fn lowerArtifactsToLir(
     };
 }
 
+/// Public `summarizeCompileTimeDependencies` function.
 pub fn summarizeCompileTimeDependencies(
     allocator: Allocator,
     artifacts: ArtifactSet,
@@ -234,13 +246,14 @@ pub fn summarizeCompileTimeDependencies(
     var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .comptime_dependency_summary);
     defer solved.deinit();
 
-    try publishCallableSetDescriptorsForLowering(
+    var callable_set_descriptors = try callableSetDescriptorsForLowering(
         allocator,
         artifacts.root.artifact,
         &solved,
         roots,
         target.artifact_state,
     );
+    defer callable_set_descriptors.deinit(allocator);
     try publishErasedFnAbisForLowering(
         allocator,
         artifacts.root.artifact,
@@ -403,26 +416,47 @@ fn deinitLoweredErasedCallableCodeMap(
     if (entries.len > 0) allocator.free(entries);
 }
 
-fn publishCallableSetDescriptorsForLowering(
+const CallableSetDescriptorsForLowering = struct {
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
+    owned_shell: []repr.CanonicalCallableSetDescriptor = &.{},
+
+    fn deinit(self: *CallableSetDescriptorsForLowering, allocator: Allocator) void {
+        if (self.owned_shell.len > 0) allocator.free(self.owned_shell);
+        self.* = .{ .descriptors = &.{} };
+    }
+};
+
+fn callableSetDescriptorsForLowering(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     solved: *const mir.LambdaSolved.Solve.Program,
     roots: RootRequestSet,
     artifact_state: ArtifactState,
-) Allocator.Error!void {
+) Allocator.Error!CallableSetDescriptorsForLowering {
     switch (artifact_state) {
         .published => {
-            if (builtin.mode != .Debug) return;
+            var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
+            defer descriptors.deinit(allocator);
+            try descriptors.appendSlice(allocator, artifact.callable_set_descriptors.descriptors);
             for (solved.solve_sessions.items) |*session| {
                 for (session.representation_store.callable_set_descriptors) |descriptor| {
-                    const published = artifact.callable_set_descriptors.descriptorFor(descriptor.key) orelse {
-                        checkedPipelineInvariant("published checked artifact is missing a callable-set descriptor required by lowering");
-                    };
-                    if (!callableSetDescriptorEql(published.*, descriptor)) {
-                        checkedPipelineInvariant("published checked artifact callable-set descriptor differs from solved descriptor");
+                    var found = false;
+                    for (descriptors.items) |published| {
+                        if (!repr.callableSetKeyEql(published.key, descriptor.key)) continue;
+                        found = true;
+                        if (builtin.mode == .Debug and !callableSetDescriptorEql(published, descriptor)) {
+                            checkedPipelineInvariant("published checked artifact callable-set descriptor differs from solved descriptor");
+                        }
+                        break;
                     }
+                    if (!found) try descriptors.append(allocator, descriptor);
                 }
             }
+            const owned = try descriptors.toOwnedSlice(allocator);
+            return .{
+                .descriptors = owned,
+                .owned_shell = owned,
+            };
         },
         .checking_finalization => {
             const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization lowering requires mutable checked artifact sink");
@@ -436,6 +470,7 @@ fn publishCallableSetDescriptorsForLowering(
                 try descriptors.appendSlice(allocator, session.representation_store.callable_set_descriptors);
             }
             try artifact_sink.callable_set_descriptors.publishFromDescriptors(allocator, descriptors.items);
+            return .{ .descriptors = artifact_sink.callable_set_descriptors.descriptors };
         },
     }
 }
@@ -507,7 +542,7 @@ fn publishCompileTimePayloads(
     if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
         checkedPipelineInvariant("compile-time lowering artifact sink does not match root artifact");
     }
-    if (selected_entrypoints.len != solved.root_procs.items.len) {
+    if (selected_entrypoints.len != solved.root_instances.items.len) {
         checkedPipelineInvariant("compile-time lowering root count changed before plan publication");
     }
 
@@ -524,8 +559,8 @@ fn publishCompileTimePayloads(
     };
     defer const_builder.deinit();
 
-    for (selected_entrypoints, solved.root_procs.items, 0..) |entrypoint, root_proc, i| {
-        const value_context = constValueContextForRoot(solved, root_proc);
+    for (selected_entrypoints, solved.root_instances.items, 0..) |entrypoint, root_instance, i| {
+        const value_context = constValueContextForRootInstance(solved, root_instance);
         payloads[i] = switch (entrypoint) {
             .root => |root_request| root_payload: {
                 const root = compileTimeRootForRequest(artifact, root_request);
@@ -536,7 +571,7 @@ fn publishCompileTimePayloads(
                         artifact_sink,
                         plan_sink,
                         solved,
-                        root_proc,
+                        root_instance,
                     ) },
                     .expect => .expect,
                 } };
@@ -551,7 +586,7 @@ fn publishCompileTimePayloads(
                 artifact_sink,
                 plan_sink,
                 solved,
-                root_proc,
+                root_instance,
             ) },
         };
     }
@@ -567,7 +602,7 @@ fn publishCompileTimeDependencySummariesFromSolved(
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     payloads: []const checked_artifact.CompileTimeEvaluationPayload,
 ) Allocator.Error![]const ?checked_artifact.ComptimeDependencySummaryId {
-    if (selected_entrypoints.len != solved.root_procs.items.len or selected_entrypoints.len != payloads.len) {
+    if (selected_entrypoints.len != solved.root_instances.items.len or selected_entrypoints.len != payloads.len) {
         checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
     }
 
@@ -578,8 +613,8 @@ fn publishCompileTimeDependencySummariesFromSolved(
     errdefer allocator.free(summary_ids);
     @memset(summary_ids, null);
 
-    for (selected_entrypoints, solved.root_procs.items, payloads, 0..) |entrypoint, root_proc, payload, i| {
-        var summary = try collector.entrypointSummary(root_proc, payload);
+    for (selected_entrypoints, solved.root_instances.items, payloads, 0..) |entrypoint, root_instance, payload, i| {
+        var summary = try collector.entrypointSummary(root_instance, payload);
         defer summary.deinit(allocator);
         const summary_id = try artifact_sink.comptime_dependencies.appendSummary(allocator, .{
             .availability_values = summary.availability.items,
@@ -648,14 +683,13 @@ const CompileTimeDependencySummaryBuilder = struct {
 
     fn entrypointSummary(
         self: *CompileTimeDependencySummaryBuilder,
-        root_proc: canonical.MirProcedureRef,
+        root_instance: repr.ProcRepresentationInstanceId,
         payload: checked_artifact.CompileTimeEvaluationPayload,
     ) Allocator.Error!CompileTimeRootSummary {
         var summary = CompileTimeRootSummary.init();
         errdefer summary.deinit(self.allocator);
 
         self.transitive_proc_visits.clearRetainingCapacity();
-        const root_instance = self.procInstanceIdForMir(root_proc);
         try self.collectTransitiveProc(root_instance, &summary.availability, &summary.concrete);
         try self.collectEntrypointPayload(payload, &summary.availability, &summary.concrete);
 
@@ -876,9 +910,8 @@ const CompileTimeDependencySummaryBuilder = struct {
     ) Allocator.Error!void {
         const stmt = self.solved.ast.stmts.items[@intFromEnum(stmt_id)];
         switch (stmt) {
-            .decl,
-            .var_decl,
-            => |decl| try self.collectExprImmediate(decl.body, value_store, representation_store, availability, concrete, call_deps),
+            .decl => |decl| try self.collectExprImmediate(decl.body, value_store, representation_store, availability, concrete, call_deps),
+            .var_decl => |decl| try self.collectExprImmediate(decl.body, value_store, representation_store, availability, concrete, call_deps),
             .reassign => |reassign| try self.collectExprImmediate(reassign.body, value_store, representation_store, availability, concrete, call_deps),
             .expr,
             .debug,
@@ -917,12 +950,20 @@ const CompileTimeDependencySummaryBuilder = struct {
                 }
                 try call_deps.append(self.allocator, .{ .call_proc = key });
             },
-            .call_value_finite => |callable_set| {
-                const members = try self.cloneExecutableKeysForCallableSet(callable_set);
+            .call_value_finite => |plan_id| {
+                const plan = value_store.callValueFiniteDispatchPlan(plan_id);
+                const branches = value_store.sliceCallValueFiniteDispatchBranches(plan.branches);
+                const members = try self.allocator.alloc(canonical.ExecutableSpecializationKey, branches.len);
+                var initialized: usize = 0;
+                errdefer if (initialized < members.len) deinitExecutableSpecializationKeys(self.allocator, members[0..initialized]);
+                for (branches, 0..) |branch, i| {
+                    members[i] = try self.cloneExecutableKeyForInstance(branch.target_instance);
+                    initialized += 1;
+                }
                 errdefer deinitExecutableSpecializationKeys(self.allocator, members);
                 try call_deps.append(self.allocator, .{ .call_value_finite = .{
                     .call_site = @enumFromInt(@intFromEnum(call_site_id)),
-                    .callable_set = callable_set,
+                    .callable_set = plan.callable_set_key,
                     .members = members,
                 } });
             },
@@ -1808,12 +1849,11 @@ const ExecutableTypePayloadBuilder = struct {
     }
 };
 
-fn constValueContextForRoot(
+fn constValueContextForRootInstance(
     solved: *const mir.LambdaSolved.Solve.Program,
-    root_proc: canonical.MirProcedureRef,
+    root_instance: repr.ProcRepresentationInstanceId,
 ) ConstValueContext {
-    const instance = procRepresentationInstanceForRoot(solved, root_proc);
-    return constValueContextForInstance(solved, instance);
+    return constValueContextForInstance(solved, solved.proc_instances.items[@intFromEnum(root_instance)]);
 }
 
 fn constValueContextForInstance(
@@ -1837,9 +1877,9 @@ fn callableResultPlanForRoot(
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     plans: *checked_artifact.CompileTimePlanStore,
     solved: *const mir.LambdaSolved.Solve.Program,
-    root_proc: canonical.MirProcedureRef,
+    root_instance: repr.ProcRepresentationInstanceId,
 ) Allocator.Error!checked_artifact.CallableResultPlanId {
-    const instance = procRepresentationInstanceForRoot(solved, root_proc);
+    const instance = solved.proc_instances.items[@intFromEnum(root_instance)];
     const value_store = &solved.value_stores.items[@intFromEnum(instance.value_store)];
     const representation_store = &solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
     const ret_info = value_store.values.items[@intFromEnum(instance.public_roots.ret)];
@@ -1954,12 +1994,12 @@ fn erasedPromotedSignaturePayloadsForAlreadyErased(
         checkedPipelineInvariant("already-erased promoted signature ABI arity differs from argument key count");
     }
 
-    const param_exec_tys = if (abi.arg_exec_keys.len == 0)
+    const param_exec_tys: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
     errdefer if (param_exec_tys.len > 0) allocator.free(param_exec_tys);
-    const erased_call_args = if (abi.arg_exec_keys.len == 0)
+    const erased_call_args: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
@@ -2028,12 +2068,12 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
     if (abi.fixed_arity != @as(u32, @intCast(params.len)) or abi.arg_exec_keys.len != params.len) {
         checkedPipelineInvariant("erased promoted executable signature ABI arity differs from wrapper parameter arity");
     }
-    const param_exec_tys = if (params.len == 0)
+    const param_exec_tys: []checked_artifact.ExecutableTypePayloadRef = if (params.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, params.len);
     errdefer if (param_exec_tys.len > 0) allocator.free(param_exec_tys);
-    const param_exec_ty_keys = if (params.len == 0)
+    const param_exec_ty_keys: []canonical.CanonicalExecValueTypeKey = if (params.len == 0)
         &.{}
     else
         try allocator.alloc(canonical.CanonicalExecValueTypeKey, params.len);
@@ -2050,7 +2090,7 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         param_exec_ty_keys[i] = payload.key;
     }
 
-    const erased_call_args = if (abi.arg_exec_keys.len == 0)
+    const erased_call_args: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
         &.{}
     else
         try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
@@ -2380,13 +2420,6 @@ const CaptureSlotPlanBuilder = struct {
         value_info: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
         return try self.planForOptional(source_ty, value_info);
-    }
-
-    fn planForTypeOnly(
-        self: *CaptureSlotPlanBuilder,
-        source_ty: canonical.CanonicalTypeKey,
-    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        return try self.planForOptional(source_ty, null);
     }
 
     fn planForInContext(
@@ -2798,10 +2831,10 @@ const CaptureSlotPlanBuilder = struct {
                     .elem = try self.listElemPlan(nominalArg(nominal, 0), value_info_id, exec_ty),
                 } },
                 .box => try self.boxPlan(checked_ty, source_ty, nominalArg(nominal, 0), value_info_id, exec_ty),
-                .bool => try self.planForOptionalExecutable(
-                    self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
+                .bool => try self.serializableLeafPlan(
+                    checked_ty,
+                    source_ty,
                     value_info_id,
-                    self.nominalBackingExecutableKey(exec_ty),
                 ),
             };
         }

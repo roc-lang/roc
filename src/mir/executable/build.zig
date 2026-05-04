@@ -21,6 +21,7 @@ const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 const repr = LambdaSolved.Representation;
 
+/// Public `ArtifactViews` declaration.
 pub const ArtifactViews = struct {
     root: ?checked_artifact.LoweringModuleView = null,
     imports: []const checked_artifact.ImportedModuleView = &.{},
@@ -38,6 +39,7 @@ const PublishedTransformContext = struct {
     executable_value_transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
 };
 
+/// Public `Proc` declaration.
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
     origin: Ast.ProcOrigin,
@@ -54,6 +56,7 @@ const ConstInstanceAdapterVisitKey = struct {
     instance: checked_artifact.ConstInstanceId,
 };
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -105,6 +108,7 @@ pub const Program = struct {
     }
 };
 
+/// Public `run` function.
 pub fn run(
     allocator: Allocator,
     solved: LambdaSolved.Solve.Program,
@@ -222,9 +226,12 @@ pub fn run(
         });
     }
 
-    for (input.root_procs.items, input.root_metadata.items) |root, metadata| {
-        const executable_root = executableProcForSource(&program, root) orelse {
-            debug.invariant(false, "executable build invariant violated: root source proc has no executable proc");
+    if (input.root_instances.items.len != input.root_metadata.items.len) {
+        executableInvariant("executable build root instance count differs from root metadata");
+    }
+    for (input.root_instances.items, input.root_metadata.items) |root_instance, metadata| {
+        const executable_root = proc_exec_map.get(root_instance) orelse {
+            debug.invariant(false, "executable build invariant violated: root representation instance has no executable proc");
             unreachable;
         };
         try program.root_procs.append(allocator, executable_root);
@@ -296,6 +303,16 @@ fn callableSetDescriptorFromSlice(
 ) ?*const repr.CanonicalCallableSetDescriptor {
     for (descriptors) |*descriptor| {
         if (repr.callableSetKeyEql(descriptor.key, key)) return descriptor;
+    }
+    return null;
+}
+
+fn callableSetDescriptorMember(
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    member_id: repr.CallableSetMemberId,
+) ?*const repr.CanonicalCallableSetMember {
+    for (descriptor.members) |*member| {
+        if (member.member == member_id) return member;
     }
     return null;
 }
@@ -986,7 +1003,7 @@ fn lowerErasedFiniteSetAdapterBody(
         executableInvariant("executable erased finite-set adapter descriptor key differs from adapter key");
     }
 
-    const callee_value = hidden_capture orelse blk: {
+    const callee_value = hidden_capture orelse {
         const member = descriptor.members[0];
         if (member.capture_slots.len != 0) {
             executableInvariant("executable erased finite-set adapter without hidden capture cannot synthesize captured callable set");
@@ -1369,7 +1386,7 @@ fn applyPublishedExecutableValueTransform(
             } }));
             return bridged_value;
         },
-        .record => |fields| try applyRecordValueTransform(
+        .record => |fields| return try applyRecordValueTransform(
             program,
             materialization,
             published_types,
@@ -1379,7 +1396,7 @@ fn applyPublishedExecutableValueTransform(
             fields,
             value,
         ),
-        .tuple => |items| try applyTupleValueTransform(
+        .tuple => |items| return try applyTupleValueTransform(
             program,
             materialization,
             published_types,
@@ -1389,7 +1406,7 @@ fn applyPublishedExecutableValueTransform(
             items,
             value,
         ),
-        .nominal => |nominal| try applyNominalValueTransform(
+        .nominal => |nominal| return try applyNominalValueTransform(
             program,
             materialization,
             published_types,
@@ -1399,7 +1416,7 @@ fn applyPublishedExecutableValueTransform(
             nominal,
             value,
         ),
-        .tag_union => |cases| try applyTagUnionValueTransform(
+        .tag_union => |cases| return try applyTagUnionValueTransform(
             program,
             materialization,
             published_types,
@@ -1409,7 +1426,7 @@ fn applyPublishedExecutableValueTransform(
             cases,
             value,
         ),
-        .list => |list| try applyListValueTransform(
+        .list => |list| return try applyListValueTransform(
             program,
             materialization,
             published_types,
@@ -1419,7 +1436,7 @@ fn applyPublishedExecutableValueTransform(
             list.elem,
             value,
         ),
-        .box_payload => |box| try applyBoxValueTransform(
+        .box_payload => |box| return try applyBoxValueTransform(
             program,
             materialization,
             published_types,
@@ -1429,7 +1446,7 @@ fn applyPublishedExecutableValueTransform(
             box,
             value,
         ),
-        .callable_to_erased => |callable| try applyCallableToErasedValueTransform(
+        .callable_to_erased => |callable| return try applyCallableToErasedValueTransform(
             program,
             materialization,
             published_types,
@@ -3500,17 +3517,17 @@ fn lowerMaterializedErasedCallableValue(
     } else null;
 
     const value = program.ast.freshValueRef();
-    const packed = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = .{
+    const packed_fn = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = .{
         .sig_key = erased.sig_key,
         .code = executableProcForErasedCode(program, erased.code),
         .capture = capture_ref,
         .capture_ty = erased_ty.capture_ty,
         .capture_shape = erased_ty.capture_shape,
     } });
-    if (stmt_ids.len == 0) return packed;
+    if (stmt_ids.len == 0) return packed_fn;
     return try program.ast.addExpr(expected_ty, value, .{ .block = .{
         .stmts = try program.ast.addStmtSpan(stmt_ids),
-        .final_expr = packed,
+        .final_expr = packed_fn,
     } });
 }
 
@@ -3701,7 +3718,7 @@ const PublishedTypeLowerer = struct {
         self: *PublishedTypeLowerer,
         variants: []const checked_artifact.ExecutableTagVariantPayload,
     ) Allocator.Error!Type.Content {
-        const descriptors = try self.allocator.alloc(MonoRow.TagShapeDescriptor, variants.len);
+        const descriptors = try self.allocator.alloc(MonoRow.Store.TagShapeDescriptor, variants.len);
         defer self.allocator.free(descriptors);
         for (variants, 0..) |variant, i| {
             descriptors[i] = .{
@@ -4091,7 +4108,7 @@ const TypeLowerer = struct {
 
     fn lowerTagUnionType(self: *TypeLowerer, span: LambdaSolved.Type.Span(LambdaSolved.Type.Tag)) Allocator.Error!Type.Content {
         const source_tags = self.input.sliceTags(span);
-        const descriptors = try self.allocator.alloc(MonoRow.TagShapeDescriptor, source_tags.len);
+        const descriptors = try self.allocator.alloc(MonoRow.Store.TagShapeDescriptor, source_tags.len);
         defer self.allocator.free(descriptors);
         for (source_tags, 0..) |tag, i| {
             descriptors[i] = .{
@@ -4214,9 +4231,9 @@ const BodyBuilder = struct {
                     } },
                 };
             },
-            .run => |run| blk: {
+            .run => |run_def| blk: {
                 self.capture_record_arg = null;
-                const body = try self.lowerExpr(run.body);
+                const body = try self.lowerExpr(run_def.body);
                 break :blk .{
                     .proc = self.executable_proc,
                     .origin = .{ .source = def.proc },
@@ -4705,7 +4722,7 @@ const BodyBuilder = struct {
 
     const PendingPatternTest = struct {
         path_value: Ast.PatternPathValuePlanId,
-        test: Ast.PatternTest,
+        pattern_test: Ast.PatternTest,
     };
 
     const SourceMatchDecisionRow = struct {
@@ -4934,7 +4951,6 @@ const BodyBuilder = struct {
             .procedure_return => {},
             else => executableInvariant("executable return boundary target endpoint is not procedure_return"),
         }
-        _ = self;
     }
 
     fn verifyJoinInputBoundary(
@@ -5098,13 +5114,13 @@ const BodyBuilder = struct {
 
         var edges = std.ArrayList(Ast.DecisionEdge).empty;
         defer edges.deinit(self.allocator);
-        for (tests_at_path.items) |test| {
-            const edge_rows = try self.decisionRowsForAssumedTest(rows, selected.path_value, test);
+        for (tests_at_path.items) |pattern_test| {
+            const edge_rows = try self.decisionRowsForAssumedTest(rows, selected.path_value, pattern_test);
             defer self.deinitSourceMatchDecisionRowRefs(edge_rows);
             const next = (try self.buildSourceMatchDecisionRows(edge_rows, leaves)) orelse
                 executableInvariant("executable source_match decision edge had no reachable rows");
             try edges.append(self.allocator, .{
-                .test = test,
+                .pattern_test = pattern_test,
                 .next = next,
             });
         }
@@ -5113,7 +5129,7 @@ const BodyBuilder = struct {
         defer self.deinitSourceMatchDecisionRowRefs(default_rows);
         const default = try self.buildSourceMatchDecisionRows(default_rows, leaves);
 
-        return try self.output.addDecisionNode(.{ .test = .{
+        return try self.output.addDecisionNode(.{ .decision_test = .{
             .path_value = selected.path_value,
             .edges = try self.output.addDecisionEdgeSpan(edges.items),
             .default = default,
@@ -5128,9 +5144,9 @@ const BodyBuilder = struct {
     ) Allocator.Error!void {
         for (rows) |row| {
             if (self.firstTestIndexAtPath(row.remaining, path_value)) |index| {
-                const test = row.remaining[index].test;
-                if (!self.hasDecisionTest(tests.items, test)) {
-                    try tests.append(self.allocator, test);
+                const pattern_test = row.remaining[index].pattern_test;
+                if (!self.hasDecisionTest(tests.items, pattern_test)) {
+                    try tests.append(self.allocator, pattern_test);
                 }
             }
         }
@@ -5154,7 +5170,7 @@ const BodyBuilder = struct {
 
         for (rows) |row| {
             if (self.firstTestIndexAtPath(row.remaining, path_value)) |index| {
-                const relation = self.patternTestRelationWhenAssumed(assumed, row.remaining[index].test);
+                const relation = self.patternTestRelationWhenAssumed(assumed, row.remaining[index].pattern_test);
                 switch (relation) {
                     .impossible => continue,
                     .proves => {
@@ -5210,9 +5226,9 @@ const BodyBuilder = struct {
         if (tests.len == 1) return &.{};
         const out = try self.allocator.alloc(PendingPatternTest, tests.len - 1);
         var write: usize = 0;
-        for (tests, 0..) |test, i| {
+        for (tests, 0..) |pending_test, i| {
             if (i == removed) continue;
-            out[write] = test;
+            out[write] = pending_test;
             write += 1;
         }
         return out;
@@ -5236,8 +5252,8 @@ const BodyBuilder = struct {
         path_value: Ast.PatternPathValuePlanId,
     ) ?usize {
         _ = self;
-        for (tests, 0..) |test, i| {
-            if (test.path_value == path_value) return i;
+        for (tests, 0..) |pending_test, i| {
+            if (pending_test.path_value == path_value) return i;
         }
         return null;
     }
@@ -5247,8 +5263,8 @@ const BodyBuilder = struct {
         tests: []const Ast.PatternTest,
         needle: Ast.PatternTest,
     ) bool {
-        for (tests) |test| {
-            if (self.patternTestEql(test, needle)) return true;
+        for (tests) |candidate| {
+            if (self.patternTestEql(candidate, needle)) return true;
         }
         return false;
     }
@@ -5521,12 +5537,12 @@ const BodyBuilder = struct {
                 try self.collectPatternDecisionData(as.pattern, path_value, tests, bindings, path_plans);
             },
             .nominal => |child| try self.collectPatternDecisionData(child, path_value, tests, bindings, path_plans),
-            .bool_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .bool_literal = literal } }),
-            .int_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .int_literal = literal } }),
-            .frac_f32_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .float_f32_literal = literal } }),
-            .frac_f64_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .float_f64_literal = literal } }),
-            .dec_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .decimal_literal = literal } }),
-            .str_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .str_literal = literal } }),
+            .bool_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .bool_literal = literal } }),
+            .int_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .int_literal = literal } }),
+            .frac_f32_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .float_f32_literal = literal } }),
+            .frac_f64_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .float_f64_literal = literal } }),
+            .dec_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .decimal_literal = literal } }),
+            .str_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .str_literal = literal } }),
             .tuple => |items| {
                 const child_ids = self.output.pat_ids.items[items.start..][0..items.len];
                 for (child_ids, 0..) |child_id, i| {
@@ -5568,7 +5584,7 @@ const BodyBuilder = struct {
                 }
             },
             .tag => |tag| {
-                try tests.append(self.allocator, .{ .path_value = path_value, .test = .{ .tag = tag.tag } });
+                try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .tag = tag.tag } });
                 const payload_patterns = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_patterns.len == 0) return;
 
@@ -5596,7 +5612,7 @@ const BodyBuilder = struct {
                 const item_ids = self.output.pat_ids.items[list.items.start..][0..list.items.len];
                 try tests.append(self.allocator, .{
                     .path_value = path_value,
-                    .test = if (list.rest == null)
+                    .pattern_test = if (list.rest == null)
                         .{ .list_len_exact = @intCast(item_ids.len) }
                     else
                         .{ .list_len_at_least = @intCast(item_ids.len) },
@@ -6076,9 +6092,18 @@ const BodyBuilder = struct {
         source_ty: LambdaSolved.Type.TypeVarId,
         call: anytype,
     ) Allocator.Error!Ast.ExprId {
-        const target_proc = self.proc_map.get(call.proc) orelse executableInvariant("executable call_proc target was not reserved before body lowering");
-        const target_instance_id = self.proc_instance_map.get(call.proc) orelse executableInvariant("executable call_proc target has no representation instance");
+        const dispatch = self.value_store.call_sites.items[@intFromEnum(call.call_site)].dispatch orelse executableInvariant("executable call_proc reached unresolved call-site dispatch");
+        const target_instance_id = switch (dispatch) {
+            .call_proc => |target| target,
+            .call_value_finite,
+            .call_value_erased,
+            => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
+        };
+        const target_proc = self.proc_exec_map.get(target_instance_id) orelse executableInvariant("executable call_proc target was not reserved before body lowering");
         const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
+        if (!canonical.mirProcedureRefEql(target_instance.proc, call.proc)) {
+            executableInvariant("executable call_proc dispatch target differs from expression target");
+        }
 
         const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
@@ -6087,17 +6112,6 @@ const BodyBuilder = struct {
         }
         if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, call_site.requested_source_fn_ty)) {
             executableInvariant("executable call_proc target specialization source type differs from call site");
-        }
-        const dispatch = call_site.dispatch orelse executableInvariant("executable call_proc reached unresolved call-site dispatch");
-        switch (dispatch) {
-            .call_proc => |target| {
-                if (target != target_instance_id) {
-                    executableInvariant("executable call_proc dispatch target differs from expression target");
-                }
-            },
-            .call_value_finite,
-            .call_value_erased,
-            => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         }
 
         const arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.arg_transforms);
@@ -6571,11 +6585,13 @@ const BodyBuilder = struct {
             executableInvariant("executable call_value call-site requested source type differs from expression");
         }
         const dispatch = call_site.dispatch orelse executableInvariant("executable call_value reached unresolved call-site dispatch");
-        const callable_set_key = switch (dispatch) {
-            .call_value_finite => |key| key,
+        const finite_dispatch = switch (dispatch) {
+            .call_value_finite => |plan| self.value_store.callValueFiniteDispatchPlan(plan),
             .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call.call_site, call_site, sig_key),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
         };
+        const callable_set_key = finite_dispatch.callable_set_key;
+        const finite_branches = self.value_store.sliceCallValueFiniteDispatchBranches(finite_dispatch.branches);
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
         const callable = func_value_info.callable orelse executableInvariant("executable call_value callee has no callable metadata");
@@ -6616,19 +6632,29 @@ const BodyBuilder = struct {
         const requested_source_fn_ty = call_site.requested_source_fn_ty;
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
         const branch_result_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.branch_result_transforms);
-        if (branch_result_ids.len != descriptor.members.len) {
+        if (branch_result_ids.len != finite_branches.len or finite_branches.len != descriptor.members.len) {
             executableInvariant("executable call_value finite branch result transform count differs from callable-set member count");
         }
-        const branches = try self.allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
+        const branches = try self.allocator.alloc(Ast.CallableMatchBranch, finite_branches.len);
         defer self.allocator.free(branches);
-        for (descriptor.members, 0..) |member, i| {
+        for (finite_branches, 0..) |finite_branch, i| {
+            const member_ptr = callableSetDescriptorMember(descriptor, finite_branch.member.member_index) orelse {
+                executableInvariant("executable call_value finite dispatch branch selected missing descriptor member");
+            };
+            const member = member_ptr.*;
+            if (!repr.callableSetKeyEql(finite_branch.member.callable_set_key, callable_set_key)) {
+                executableInvariant("executable call_value finite dispatch branch has wrong callable-set key");
+            }
             if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, requested_source_fn_ty)) {
                 executableInvariant("executable call_value callable-set member source type differs from call site");
             }
-            const target = member.source_proc;
-            const executable_proc = self.proc_map.get(target) orelse executableInvariant("executable call_value member target was not reserved");
-            const target_instance_id = self.proc_instance_map.get(target) orelse executableInvariant("executable call_value member target has no representation instance");
+            const target_instance_id = finite_branch.target_instance;
+            const executable_proc = self.proc_exec_map.get(target_instance_id) orelse executableInvariant("executable call_value member target was not reserved");
             const target_instance = self.proc_instances[@intFromEnum(target_instance_id)];
+            const target = target_instance.proc;
+            if (!canonical.mirProcedureRefEql(target, member.source_proc)) {
+                executableInvariant("executable call_value branch target instance differs from descriptor source procedure");
+            }
             if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, requested_source_fn_ty)) {
                 executableInvariant("executable call_value member target specialization source type differs from call site");
             }
@@ -6648,7 +6674,10 @@ const BodyBuilder = struct {
                 .callable_set_key = callable_set_key,
                 .member_index = member.member,
             };
-            const result_boundary = self.representation_store.valueTransformBoundary(branch_result_ids[i]);
+            if (branch_result_ids[i] != finite_branch.result_transform) {
+                executableInvariant("executable call_value finite branch transform differs from dispatch plan");
+            }
+            const result_boundary = self.representation_store.valueTransformBoundary(finite_branch.result_transform);
             self.verifyCallableMatchBranchResultBoundary(
                 result_boundary,
                 call.call_site,
@@ -7599,7 +7628,7 @@ const BodyBuilder = struct {
                 const packed_value = self.output.freshValueRef();
                 const packed_expr = try self.output.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
                     .sig_key = finite.adapter.erased_fn_sig_key,
-                    .code = executableProcForErasedAdapter(self.program, finite.adapter),
+                    .code = self.executableProcForErasedAdapter(finite.adapter),
                     .capture = hidden_capture,
                     .capture_ty = erased_ty.capture_ty,
                     .capture_shape = finite.adapter.capture_shape_key,
@@ -7659,17 +7688,7 @@ fn executableInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
-fn executableProcForSource(program: *const Program, source_proc: canonical.MirProcedureRef) ?Ast.ExecutableProcId {
-    for (program.procs.items) |proc| {
-        const source = switch (proc.origin) {
-            .source => |source| source,
-            .erased_adapter => continue,
-        };
-        if (canonical.mirProcedureRefEql(source, source_proc)) return proc.executable_proc;
-    }
-    return null;
-}
-
+/// Public `verifyCallableMatchBranch` function.
 pub fn verifyCallableMatchBranch(
     representation_store: *const repr.RepresentationStore,
     callable_set_key: repr.CanonicalCallableSetKey,
@@ -7738,15 +7757,13 @@ fn sessionExecutableValueEndpointOwnerEql(
             else => false,
         },
         .callable_match_branch_raw_result => |branch| switch (b) {
-            .callable_match_branch_raw_result => |other|
-                branch.call == other.call and
+            .callable_match_branch_raw_result => |other| branch.call == other.call and
                 branch.member.member_index == other.member.member_index and
                 repr.callableSetKeyEql(branch.member.callable_set_key, other.member.callable_set_key),
             else => false,
         },
         .transform_child => |child| switch (b) {
-            .transform_child => |other|
-                child.scope == other.scope and
+            .transform_child => |other| child.scope == other.scope and
                 child.side == other.side and
                 child.path == other.path,
             else => false,

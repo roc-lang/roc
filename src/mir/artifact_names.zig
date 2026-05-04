@@ -13,6 +13,7 @@ const canonical = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const debug = @import("debug_verify.zig");
 
+/// Public `ArtifactNameResolver` declaration.
 pub const ArtifactNameResolver = struct {
     lowering_names: *canonical.CanonicalNameStore,
     root_key: checked_artifact.CheckedModuleArtifactKey,
@@ -96,6 +97,92 @@ pub const ArtifactNameResolver = struct {
     ) Allocator.Error!canonical.ExternalSymbolNameId {
         const source = self.namesForArtifact(artifact);
         return try self.lowering_names.internExternalSymbolName(externalSymbolNameText(source, id));
+    }
+
+    pub fn procBase(
+        self: *ArtifactNameResolver,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        id: canonical.ProcBaseKeyRef,
+    ) Allocator.Error!canonical.ProcBaseKeyRef {
+        const source = self.namesForArtifact(artifact);
+        const key = source.procBase(id);
+        return try self.lowering_names.internProcBase(.{
+            .module_name = try self.moduleName(artifact, key.module_name),
+            .export_name = if (key.export_name) |export_name| try self.exportName(artifact, export_name) else null,
+            .kind = key.kind,
+            .ordinal = key.ordinal,
+            .source_def_idx = key.source_def_idx,
+            .nested_proc_site = if (key.nested_proc_site) |site| .{
+                .owner_template = try self.procedureTemplateRef(site.owner_template),
+                .site = site.site,
+            } else null,
+            .owner_mono_specialization = if (key.owner_mono_specialization) |owner| .{
+                .template = try self.procedureTemplateRef(owner.template),
+                .requested_mono_fn_ty = owner.requested_mono_fn_ty,
+            } else null,
+        });
+    }
+
+    pub fn procedureValueRef(
+        self: *ArtifactNameResolver,
+        ref: canonical.ProcedureValueRef,
+    ) Allocator.Error!canonical.ProcedureValueRef {
+        const artifact: checked_artifact.CheckedModuleArtifactKey = .{ .bytes = ref.artifact.bytes };
+        return .{
+            .artifact = ref.artifact,
+            .proc_base = try self.procBase(artifact, ref.proc_base),
+        };
+    }
+
+    pub fn procedureTemplateRef(
+        self: *ArtifactNameResolver,
+        ref: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!canonical.ProcedureTemplateRef {
+        const artifact: checked_artifact.CheckedModuleArtifactKey = .{ .bytes = ref.artifact.bytes };
+        return .{
+            .artifact = ref.artifact,
+            .proc_base = try self.procBase(artifact, ref.proc_base),
+            .template = ref.template,
+        };
+    }
+
+    pub fn callableProcedureTemplateRef(
+        self: *ArtifactNameResolver,
+        ref: canonical.CallableProcedureTemplateRef,
+    ) Allocator.Error!canonical.CallableProcedureTemplateRef {
+        return switch (ref) {
+            .checked => |checked| .{ .checked = try self.procedureTemplateRef(checked) },
+            .synthetic => |synthetic| .{ .synthetic = .{
+                .template = try self.procedureTemplateRef(synthetic.template),
+            } },
+            .lifted => |lifted| .{ .lifted = .{
+                .owner_mono_specialization = .{
+                    .template = try self.procedureTemplateRef(lifted.owner_mono_specialization.template),
+                    .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+                },
+                .site = lifted.site,
+            } },
+        };
+    }
+
+    pub fn procedureCallableRef(
+        self: *ArtifactNameResolver,
+        ref: canonical.ProcedureCallableRef,
+    ) Allocator.Error!canonical.ProcedureCallableRef {
+        return .{
+            .template = try self.callableProcedureTemplateRef(ref.template),
+            .source_fn_ty = ref.source_fn_ty,
+        };
+    }
+
+    pub fn mirProcedureRef(
+        self: *ArtifactNameResolver,
+        ref: canonical.MirProcedureRef,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        return .{
+            .proc = try self.procedureValueRef(ref.proc),
+            .callable = try self.procedureCallableRef(ref.callable),
+        };
     }
 
     pub fn nominalTypeKey(

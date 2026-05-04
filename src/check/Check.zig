@@ -1347,6 +1347,7 @@ fn copyBuiltinTypes(self: *Self) !void {
     self.builtin_types_copied = true;
 }
 
+/// Public `checkFile` function.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
 }
@@ -1586,31 +1587,6 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         //                                ^^^^^^^^^^^^^^^^^^^^^^
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
-}
-
-/// Find a type alias declaration by name and return the var for its underlying type.
-/// This returns the var for the alias's body (e.g., for `Model : { value: I64 }` returns the var for `{ value: I64 }`),
-/// not the var for the alias declaration itself.
-/// Returns null if no type alias declaration with the given name is found.
-fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
-    for (stmts_slice) |stmt_idx| {
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_alias_decl => |alias| {
-                const header = self.cir.store.getTypeHeader(alias.header);
-                if (header.relative_name.eql(name)) {
-                    // Return the var for the alias body annotation, not the statement
-                    return ModuleEnv.varFrom(alias.anno);
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
 }
 
 /// Check if a statement index is a for-clause alias statement.

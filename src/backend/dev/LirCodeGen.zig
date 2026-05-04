@@ -4365,6 +4365,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (std.meta.eql(normalized, stable_loc)) return;
 
             const size = self.getLayoutSize(layout_idx);
+            if (size == 0) return;
+
             switch (stable_loc) {
                 .stack => |stack_loc| try self.copyBytesToStackOffset(stack_loc.offset, normalized, size),
                 .stack_i128 => |offset| {
@@ -4468,7 +4470,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const local_layout = self.localLayout(local);
             const size = self.getLayoutSize(local_layout);
             const stable_loc = if (size == 0)
-                self.stackLocationForLayout(local_layout, 0)
+                ValueLocation{ .immediate_i64 = 0 }
             else
                 self.stackLocationForLayout(local_layout, self.codegen.allocStackSlot(size));
             try self.local_locations.put(key, stable_loc);
@@ -8838,7 +8840,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const union_layout = ls.getLayout(tag.target_layout);
 
-            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+            if (union_layout.tag == .zst) {
+                if (tag.discriminant != 0) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
+                            .{tag.discriminant},
+                        );
+                    }
+                    unreachable;
+                }
+                return .{ .immediate_i64 = 0 };
+            }
+            if (union_layout.tag == .scalar) {
                 return .{ .immediate_i64 = tag.discriminant };
             }
             if (union_layout.tag == .box_of_zst) {
@@ -8875,7 +8889,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const union_layout = ls.getLayout(tag.target_layout);
-            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+            if (union_layout.tag == .zst) {
+                if (tag.discriminant != 0) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
+                            .{tag.discriminant},
+                        );
+                    }
+                    unreachable;
+                }
+                if (tag.payload) |payload| _ = try self.emitValueLocal(payload);
+                return .{ .immediate_i64 = 0 };
+            }
+            if (union_layout.tag == .scalar) {
                 if (tag.payload) |payload| _ = try self.emitValueLocal(payload);
                 return .{ .immediate_i64 = tag.discriminant };
             }
@@ -9503,7 +9530,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => blk: {
                     const size = self.getLayoutSize(layout_idx);
                     if (size == 0) {
-                        break :blk self.stackLocationForLayout(layout_idx, 0);
+                        break :blk ValueLocation{ .immediate_i64 = 0 };
                     }
 
                     const slot = self.codegen.allocStackSlot(size);

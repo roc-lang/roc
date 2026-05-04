@@ -5323,7 +5323,7 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
                 .f32, .f64 => unreachable,
             }
         },
-        .i128_literal => |lit| try self.generateI128Literal(lit.value),
+        .i128_literal => |lit| try self.generateIntLiteralForLayout(lit.value, lit.layout_idx),
         .f64_literal => |lit| {
             self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
             try self.body.writer(self.allocator).writeInt(u64, @bitCast(lit), .little);
@@ -5353,6 +5353,24 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(table_idx)) catch return error.OutOfMemory;
         },
+    }
+}
+
+fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx) Allocator.Error!void {
+    const repr = WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
+    switch (repr) {
+        .primitive => |vt| switch (vt) {
+            .i32 => {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @truncate(value)) catch return error.OutOfMemory;
+            },
+            .i64 => {
+                self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI64(self.allocator, &self.body, @truncate(value)) catch return error.OutOfMemory;
+            },
+            .f32, .f64 => unreachable,
+        },
+        .stack_memory => try self.generateI128Literal(value),
     }
 }
 
@@ -5480,6 +5498,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                         if (tu_layout.discriminant_size == 0) {
                             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                             WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                            break :blk .i32;
                         } else {
                             try self.emitProcLocal(disc.source);
                             if (tu_layout.discriminant_size < 4) {
@@ -5507,6 +5526,11 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const tu_layout = WasmLayout.tagUnionLayoutWithStore(inner_layout.data.tag_union.idx, ls);
                     try self.emitProcLocal(disc.source);
                     try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
+                    break :blk .i32;
+                },
+                .zst => blk: {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                     break :blk .i32;
                 },
                 else => blk: {
@@ -5598,16 +5622,25 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 },
                 else => .zst,
             };
-            if (!self.isCompositeLayout(target_layout)) {
-                try self.emitLoadOpForLayout(target_layout, 0);
-            } else if (builtin.mode == .Debug) {
+            if (builtin.mode == .Debug and payload_layout_idx != target_layout) {
                 const payload_layout = ls.getLayout(payload_layout_idx);
-                if (payload_layout.tag != .struct_) {
-                    std.debug.panic(
-                        "LIR/wasm invariant violated: tag_payload_struct access expected struct payload layout, found {s}",
-                        .{@tagName(payload_layout.tag)},
-                    );
-                }
+                const target_layout_val = ls.getLayout(target_layout);
+                std.debug.panic(
+                    "LIR/wasm invariant violated: tag_payload_struct payload layout {d} ({s}) did not match target layout {d} ({s})",
+                    .{
+                        @intFromEnum(payload_layout_idx),
+                        @tagName(payload_layout.tag),
+                        @intFromEnum(target_layout),
+                        @tagName(target_layout_val.tag),
+                    },
+                );
+            }
+            if (self.layoutStorageByteSize(target_layout) == 0) {
+                self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            } else if (!self.isCompositeLayout(target_layout)) {
+                try self.emitLoadOpForLayout(target_layout, 0);
             }
         },
         .list_reinterpret => |list_bridge| try self.emitProcLocal(list_bridge.backing_ref),
@@ -6349,7 +6382,34 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(t.union_layout);
 
-    std.debug.assert(l.tag == .tag_union);
+    if (l.tag == .zst) {
+        if (t.discriminant != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "WASM/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
+                    .{t.discriminant},
+                );
+            }
+            unreachable;
+        }
+        if (t.payload) |payload_local| {
+            try self.emitProcLocal(payload_local);
+            self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+        }
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        return;
+    }
+
+    if (l.tag != .tag_union) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "WASM/codegen invariant violated: tag assignment target must be tag_union or zst, got {s}",
+                .{@tagName(l.tag)},
+            );
+        }
+        unreachable;
+    }
 
     const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
     const tu_size = tu_layout.size;

@@ -13,6 +13,7 @@ const LirStore = @import("LirStore.zig");
 
 pub const ResourceError = std.mem.Allocator.Error;
 
+/// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var inserter = Inserter{
         .store = store,
@@ -75,17 +76,22 @@ const Inserter = struct {
             },
             .assign_call => |assign| {
                 var current_start = start;
-                current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                const preserve_args = try self.preserveCallArgMask(assign.args, assign.next, assign.target);
+                if (self.spanUsesLocal(assign.args, assign.target)) {
+                    owned.unset(assign.target);
+                } else {
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                }
+                self.unsetMaskedArgsExcept(owned, assign.args, ~preserve_args, assign.target);
                 self.addOwnedIfRc(owned, assign.target);
-                var next = try self.rewritePath(assign.next, owned, options);
-                next = try self.releaseSpan(assign.args, next);
+                const next = try self.rewritePath(assign.next, owned, options);
                 self.store.getCFStmtPtr(start).* = .{ .assign_call = .{
                     .target = assign.target,
                     .proc = assign.proc,
                     .args = assign.args,
                     .next = next,
                 } };
-                current_start = try self.retainSpan(assign.args, current_start);
+                current_start = try self.retainMaskedArgs(assign.args, preserve_args, current_start);
                 return current_start;
             },
             .assign_call_erased => |assign| {
@@ -108,12 +114,21 @@ const Inserter = struct {
             },
             .assign_low_level => |assign| {
                 var current_start = start;
-                current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                if ((assign.rc_effect.result_aliases_consumed_args & ~assign.rc_effect.consume_args) != 0) {
+                    arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
+                }
+                const preserve_consumed_args = try self.preserveConsumedArgMask(assign.args, assign.rc_effect.consume_args, assign.next, assign.target);
+                const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
+                if (target_consumed) {
+                    owned.unset(assign.target);
+                } else {
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                }
+                if (assign.rc_effect.consume_args != 0) {
+                    self.unsetMaskedArgsExcept(owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
+                }
                 self.addOwnedIfRc(owned, assign.target);
                 var next = try self.rewritePath(assign.next, owned, options);
-                if (assign.rc_effect.may_runtime_uniqueness_check_args != 0) {
-                    next = try self.releaseRuntimeMutationArgs(assign.args, assign.rc_effect.may_runtime_uniqueness_check_args, next);
-                }
                 if (assign.rc_effect.retain_args != 0) {
                     next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args, next);
                 }
@@ -127,8 +142,8 @@ const Inserter = struct {
                     .args = assign.args,
                     .next = next,
                 } };
-                if (assign.rc_effect.may_runtime_uniqueness_check_args != 0) {
-                    current_start = try self.retainMaskedArgs(assign.args, assign.rc_effect.may_runtime_uniqueness_check_args, current_start);
+                if (assign.rc_effect.consume_args != 0) {
+                    current_start = try self.retainMaskedArgs(assign.args, preserve_consumed_args, current_start);
                 }
                 return current_start;
             },
@@ -422,6 +437,7 @@ const Inserter = struct {
                 try self.analyzeUntil(assign.next, owned, stop, exits);
             },
             .assign_call => |assign| {
+                self.unsetAllArgs(owned, assign.args);
                 self.addOwnedIfRc(owned, assign.target);
                 try self.analyzeUntil(assign.next, owned, stop, exits);
             },
@@ -430,6 +446,7 @@ const Inserter = struct {
                 try self.analyzeUntil(assign.next, owned, stop, exits);
             },
             .assign_low_level => |assign| {
+                self.unsetMaskedArgsExcept(owned, assign.args, assign.rc_effect.consume_args, assign.target);
                 self.addOwnedIfRc(owned, assign.target);
                 try self.analyzeUntil(assign.next, owned, stop, exits);
             },
@@ -512,17 +529,146 @@ const Inserter = struct {
         return current;
     }
 
-    fn releaseRuntimeMutationArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var current = next;
+    fn preserveConsumedArgMask(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        mask: u64,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+    ) ResourceError!u64 {
+        if (mask == 0) return 0;
+        var preserve: u64 = 0;
         const locals = self.store.getLocalSpan(span);
-        var i = locals.len;
-        while (i > 0) {
-            i -= 1;
-            if ((mask & argMaskBit(i)) != 0) {
-                current = try self.releaseLocalIfRc(locals[i], current);
+        for (locals, 0..) |local, i| {
+            const bit = argMaskBit(i);
+            if ((mask & bit) == 0) continue;
+            if (local == target) continue;
+            if (try self.localUsedInPath(next, local)) {
+                preserve |= bit;
             }
         }
-        return current;
+        return preserve;
+    }
+
+    fn preserveCallArgMask(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+    ) ResourceError!u64 {
+        var preserve: u64 = 0;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if (local == target) continue;
+            if (try self.localUsedInPath(next, local)) {
+                preserve |= argMaskBit(i);
+            }
+        }
+        return preserve;
+    }
+
+    fn maskedArgsContainLocal(self: *Inserter, span: LIR.LocalSpan, mask: u64, needle: LIR.LocalId) bool {
+        if (mask == 0) return false;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if ((mask & argMaskBit(i)) != 0 and local == needle) return true;
+        }
+        return false;
+    }
+
+    fn unsetMaskedArgsExcept(
+        self: *Inserter,
+        owned: *OwnedSet,
+        span: LIR.LocalSpan,
+        mask: u64,
+        except: LIR.LocalId,
+    ) void {
+        if (mask == 0) return;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if ((mask & argMaskBit(i)) != 0 and local != except) {
+                owned.unset(local);
+            }
+        }
+    }
+
+    fn unsetAllArgs(self: *Inserter, owned: *OwnedSet, span: LIR.LocalSpan) void {
+        for (self.store.getLocalSpan(span)) |local| {
+            owned.unset(local);
+        }
+    }
+
+    fn localUsedInPath(self: *Inserter, start: LIR.CFStmtId, needle: LIR.LocalId) ResourceError!bool {
+        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
+        defer visited.deinit();
+        return try self.localUsedInPathInner(start, needle, &visited);
+    }
+
+    fn localUsedInPathInner(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        needle: LIR.LocalId,
+        visited: *std.AutoHashMap(LIR.CFStmtId, void),
+    ) ResourceError!bool {
+        if (visited.contains(start)) return false;
+        try visited.put(start, {});
+
+        const stmt = self.store.getCFStmt(start);
+        return switch (stmt) {
+            .assign_ref => |assign| (refOpUsesLocal(assign.op, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_literal => |assign| try self.localUsedInPathInner(assign.next, needle, visited),
+            .assign_call => |assign| (self.spanUsesLocal(assign.args, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_call_erased => |assign| (assign.closure == needle or
+                self.spanUsesLocal(assign.args, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_low_level => |assign| (self.spanUsesLocal(assign.args, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_list => |assign| (self.spanUsesLocal(assign.elems, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_struct => |assign| (self.spanUsesLocal(assign.fields, needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .assign_tag => |assign| ((assign.payload != null and assign.payload.? == needle) or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .set_local => |assign| (assign.value == needle or
+                try self.localUsedInPathInner(assign.next, needle, visited)),
+            .debug => |debug_stmt| (debug_stmt.message == needle or
+                try self.localUsedInPathInner(debug_stmt.next, needle, visited)),
+            .expect => |expect_stmt| (expect_stmt.condition == needle or
+                try self.localUsedInPathInner(expect_stmt.next, needle, visited)),
+            .switch_stmt => |switch_stmt| blk: {
+                if (switch_stmt.cond == needle) break :blk true;
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    if (try self.localUsedInPathInner(branch.body, needle, visited)) break :blk true;
+                }
+                if (try self.localUsedInPathInner(switch_stmt.default_branch, needle, visited)) break :blk true;
+                if (switch_stmt.continuation) |continuation| {
+                    if (try self.localUsedInPathInner(continuation, needle, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .for_list => |for_stmt| (for_stmt.iterable == needle or
+                try self.localUsedInPathInner(for_stmt.body, needle, visited) or
+                try self.localUsedInPathInner(for_stmt.next, needle, visited)),
+            .join => |join_stmt| (try self.localUsedInPathInner(join_stmt.body, needle, visited) or
+                try self.localUsedInPathInner(join_stmt.remainder, needle, visited)),
+            .jump => |jump_stmt| self.spanUsesLocal(jump_stmt.args, needle),
+            .ret => |ret_stmt| ret_stmt.value == needle,
+            .runtime_error,
+            .loop_continue,
+            .loop_break,
+            .crash,
+            => false,
+            .incref, .decref, .free => arcInvariant("ARC liveness scan received already-reference-counted LIR"),
+        };
+    }
+
+    fn spanUsesLocal(self: *Inserter, span: LIR.LocalSpan, needle: LIR.LocalId) bool {
+        for (self.store.getLocalSpan(span)) |local| {
+            if (local == needle) return true;
+        }
+        return false;
     }
 
     fn retainSpan(self: *Inserter, span: LIR.LocalSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -627,6 +773,18 @@ const OwnedSet = struct {
         }
     }
 };
+
+fn refOpUsesLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
+    return switch (op) {
+        .local => |local| local == needle,
+        .discriminant => |ref| ref.source == needle,
+        .field => |ref| ref.source == needle,
+        .tag_payload => |ref| ref.source == needle,
+        .tag_payload_struct => |ref| ref.source == needle,
+        .list_reinterpret => |ref| ref.backing_ref == needle,
+        .nominal => |ref| ref.backing_ref == needle,
+    };
+}
 
 fn argMaskBit(index: usize) u64 {
     if (index >= 64) arcInvariant("ARC low-level runtime mutation argument mask exceeded 64 args");

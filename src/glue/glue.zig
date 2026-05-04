@@ -558,7 +558,6 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-
 /// Information extracted from a platform header for glue generation.
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,

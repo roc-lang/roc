@@ -16,6 +16,7 @@ const canonical = check.CanonicalNames;
 
 const CheckedTypeId = checked_artifact.CheckedTypeId;
 
+/// Public `Lowerer` declaration.
 pub const Lowerer = struct {
     allocator: Allocator,
     source: checked_artifact.CheckedTypeStoreView,
@@ -82,9 +83,9 @@ pub const Lowerer = struct {
     fn lowerPayload(
         self: *Lowerer,
         id: CheckedTypeId,
-        payload: checked_artifact.CheckedTypePayload,
+        checked_payload: checked_artifact.CheckedTypePayload,
     ) Allocator.Error!Type.Content {
-        return switch (payload) {
+        return switch (checked_payload) {
             .pending => invariantViolation("mono type lowering received an unpublished checked type payload"),
             .flex => invariantViolation("mono type lowering received an unsolved flex type variable"),
             .rigid => invariantViolation("mono type lowering received an unsolved rigid type variable"),

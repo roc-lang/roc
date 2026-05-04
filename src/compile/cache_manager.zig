@@ -14,6 +14,7 @@ const Io = io_mod.Io;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 
+/// Public `CacheManager` declaration.
 pub const CacheManager = struct {
     config: CacheConfig,
     io: Io,
@@ -57,12 +58,6 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_subdir);
 
         return std.fs.path.join(self.allocator, &.{ cache_subdir, filename });
-    }
-
-    fn ensureCacheSubdir(self: *Self, cache_key: [32]u8) !void {
-        const entries_dir = try self.config.getCheckedArtifactCacheDir(self.allocator);
-        defer self.allocator.free(entries_dir);
-        return self.ensureCacheSubdirIn(cache_key, entries_dir);
     }
 
     pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) !void {

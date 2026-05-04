@@ -17,11 +17,13 @@ const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
 
+/// Public `ArtifactViews` declaration.
 pub const ArtifactViews = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
 };
 
+/// Public `Proc` declaration.
 pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     body: Ast.DefId,
@@ -30,13 +32,15 @@ pub const Proc = struct {
 
 const ProcBuildRecord = struct {
     proc: canonical.MirProcedureRef,
-    body: Ast.DefId,
+    body: Ast.DefId = @enumFromInt(std.math.maxInt(u32)),
     representation_instance: repr.ProcRepresentationInstanceId,
     solve_session: repr.RepresentationSolveSessionId,
     value_store: repr.ValueInfoStoreId,
-    public_roots: repr.ProcPublicValueRoots,
+    public_roots: repr.ProcPublicValueRoots = undefined,
+    built: bool = false,
 };
 
+/// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
     canonical_names: canonical.CanonicalNameStore,
@@ -49,6 +53,7 @@ pub const Program = struct {
     procs: std.ArrayList(Proc),
     executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
+    root_instances: std.ArrayList(repr.ProcRepresentationInstanceId),
     root_metadata: std.ArrayList(ids.RootMetadata),
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
@@ -67,6 +72,7 @@ pub const Program = struct {
             .procs = .empty,
             .executable_synthetic_procs = .empty,
             .root_procs = .empty,
+            .root_instances = .empty,
             .root_metadata = .empty,
             .solve_sessions = .empty,
             .proc_instances = .empty,
@@ -88,6 +94,7 @@ pub const Program = struct {
         }
         self.solve_sessions.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
+        self.root_instances.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.executable_synthetic_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
@@ -102,323 +109,265 @@ pub const Program = struct {
     }
 };
 
-const ProcedureDependencyGraph = struct {
+const ProcedureInstanceOwner = union(enum) {
+    root: u32,
+    direct_call: struct {
+        caller: repr.ProcRepresentationInstanceId,
+        call_site: repr.CallSiteInfoId,
+    },
+    proc_value: struct {
+        owner: repr.ProcRepresentationInstanceId,
+        value: repr.ValueInfoId,
+    },
+};
+
+const ProcedureInstanceReservation = struct {
+    proc: canonical.MirProcedureRef,
+    solve_session: repr.RepresentationSolveSessionId,
+    owner: ProcedureInstanceOwner,
+    instance: repr.ProcRepresentationInstanceId,
+};
+
+const ProcedureInstanceRegistry = struct {
     allocator: Allocator,
     input: *const Lifted.Lift.Program,
-    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
-    edges: []std.ArrayList(u32),
+    program: *Program,
+    type_importer: *TypeImporter,
+    records: *std.ArrayList(ProcBuildRecord),
+    reservations: std.ArrayList(ProcedureInstanceReservation),
+    pending: std.ArrayList(repr.ProcRepresentationInstanceId),
+    active: std.ArrayList(repr.ProcRepresentationInstanceId),
+    session_members: std.ArrayList(std.ArrayList(repr.ProcRepresentationInstanceId)),
 
     fn init(
         allocator: Allocator,
         input: *const Lifted.Lift.Program,
-        proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
-    ) Allocator.Error!ProcedureDependencyGraph {
-        const edges = try allocator.alloc(std.ArrayList(u32), input.procs.items.len);
-        errdefer allocator.free(edges);
-        for (edges) |*edge_list| {
-            edge_list.* = .empty;
-        }
-        errdefer {
-            for (edges) |*edge_list| {
-                edge_list.deinit(allocator);
-            }
-        }
-
-        var graph = ProcedureDependencyGraph{
-            .allocator = allocator,
-            .input = input,
-            .proc_instance_map = proc_instance_map,
-            .edges = edges,
-        };
-        for (input.procs.items, 0..) |proc, i| {
-            _ = proc;
-            try graph.collectDefDependencies(@intCast(i), input.procs.items[i].body);
-        }
-        return graph;
-    }
-
-    fn deinit(self: *ProcedureDependencyGraph) void {
-        for (self.edges) |*edge_list| {
-            edge_list.deinit(self.allocator);
-        }
-        self.allocator.free(self.edges);
-    }
-
-    fn collectDefDependencies(self: *ProcedureDependencyGraph, source_index: u32, def_id: Lifted.Ast.DefId) Allocator.Error!void {
-        const def = self.input.ast.getDef(def_id);
-        switch (def.value) {
-            .fn_ => |fn_| try self.collectExprDependencies(source_index, fn_.body),
-            .hosted_fn => {},
-            .val => |expr| try self.collectExprDependencies(source_index, expr),
-            .run => |run| try self.collectExprDependencies(source_index, run.body),
-        }
-    }
-
-    fn collectExprDependencies(self: *ProcedureDependencyGraph, source_index: u32, expr_id: Lifted.Ast.ExprId) Allocator.Error!void {
-        const expr = self.input.ast.getExpr(expr_id);
-        switch (expr.data) {
-            .var_,
-            .capture_ref,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .bool_lit,
-            .str_lit,
-            .const_instance,
-            .unit,
-            .crash,
-            .runtime_error,
-            => {},
-            .tag => |tag| {
-                try self.collectTagPayloadEvalDependencies(source_index, tag.eval_order);
-                try self.collectTagPayloadAssemblyDependencies(source_index, tag.assembly_order);
-            },
-            .record => |record| {
-                try self.collectRecordFieldEvalDependencies(source_index, record.eval_order);
-                try self.collectRecordFieldAssemblyDependencies(source_index, record.assembly_order);
-            },
-            .nominal_reinterpret => |backing| try self.collectExprDependencies(source_index, backing),
-            .access => |access| try self.collectExprDependencies(source_index, access.record),
-            .structural_eq => |eq| {
-                try self.collectExprDependencies(source_index, eq.lhs);
-                try self.collectExprDependencies(source_index, eq.rhs);
-            },
-            .bool_not => |child| try self.collectExprDependencies(source_index, child),
-            .let_ => |let_| {
-                try self.collectExprDependencies(source_index, let_.body);
-                try self.collectExprDependencies(source_index, let_.rest);
-            },
-            .call_value => |call| {
-                try self.collectExprDependencies(source_index, call.func);
-                try self.collectExprSpanDependencies(source_index, call.args);
-            },
-            .call_proc => |call| {
-                try self.appendProcedureDependency(source_index, call.proc);
-                try self.collectExprSpanDependencies(source_index, call.args);
-            },
-            .proc_value => |proc_value| {
-                try self.appendProcedureDependency(source_index, proc_value.proc);
-                try self.collectCaptureArgDependencies(source_index, proc_value.captures);
-            },
-            .inspect => |child| try self.collectExprDependencies(source_index, child),
-            .low_level => |low_level| try self.collectExprSpanDependencies(source_index, low_level.args),
-            .match_ => |match_| {
-                try self.collectExprDependencies(source_index, match_.cond);
-                for (self.input.ast.sliceBranchSpan(match_.branches)) |branch_id| {
-                    const branch = self.input.ast.getBranch(branch_id);
-                    if (branch.guard) |guard| try self.collectExprDependencies(source_index, guard);
-                    try self.collectExprDependencies(source_index, branch.body);
-                }
-            },
-            .if_ => |if_| {
-                try self.collectExprDependencies(source_index, if_.cond);
-                try self.collectExprDependencies(source_index, if_.then_body);
-                try self.collectExprDependencies(source_index, if_.else_body);
-            },
-            .block => |block| {
-                for (self.input.ast.sliceStmtSpan(block.stmts)) |stmt_id| {
-                    try self.collectStmtDependencies(source_index, self.input.ast.getStmt(stmt_id));
-                }
-                try self.collectExprDependencies(source_index, block.final_expr);
-            },
-            .tuple => |items| try self.collectExprSpanDependencies(source_index, items),
-            .tag_payload => |payload| try self.collectExprDependencies(source_index, payload.tag_union),
-            .tuple_access => |access| try self.collectExprDependencies(source_index, access.tuple),
-            .list => |items| try self.collectExprSpanDependencies(source_index, items),
-            .return_ => |child| try self.collectExprDependencies(source_index, child),
-            .for_ => |for_| {
-                try self.collectExprDependencies(source_index, for_.iterable);
-                try self.collectExprDependencies(source_index, for_.body);
-            },
-        }
-    }
-
-    fn collectStmtDependencies(self: *ProcedureDependencyGraph, source_index: u32, stmt: Lifted.Ast.Stmt) Allocator.Error!void {
-        switch (stmt) {
-            .decl => |decl| try self.collectExprDependencies(source_index, decl.body),
-            .var_decl => |decl| try self.collectExprDependencies(source_index, decl.body),
-            .reassign => |reassign| try self.collectExprDependencies(source_index, reassign.body),
-            .expr => |expr| try self.collectExprDependencies(source_index, expr),
-            .debug => |expr| try self.collectExprDependencies(source_index, expr),
-            .expect => |expr| try self.collectExprDependencies(source_index, expr),
-            .crash,
-            .break_,
-            => {},
-            .return_ => |expr| try self.collectExprDependencies(source_index, expr),
-            .for_ => |for_| {
-                try self.collectExprDependencies(source_index, for_.iterable);
-                try self.collectExprDependencies(source_index, for_.body);
-            },
-            .while_ => |while_| {
-                try self.collectExprDependencies(source_index, while_.cond);
-                try self.collectExprDependencies(source_index, while_.body);
-            },
-        }
-    }
-
-    fn collectExprSpanDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!void {
-        for (self.input.ast.sliceExprSpan(span)) |expr_id| {
-            try self.collectExprDependencies(source_index, expr_id);
-        }
-    }
-
-    fn collectCaptureArgDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.CaptureArg)) Allocator.Error!void {
-        for (self.input.ast.sliceCaptureArgSpan(span)) |capture| {
-            try self.collectExprDependencies(source_index, capture.expr);
-        }
-    }
-
-    fn collectRecordFieldEvalDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldEval)) Allocator.Error!void {
-        for (self.input.ast.sliceRecordFieldEvalSpan(span)) |field| {
-            try self.collectExprDependencies(source_index, field.value);
-        }
-    }
-
-    fn collectRecordFieldAssemblyDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.RecordFieldAssembly)) Allocator.Error!void {
-        for (self.input.ast.sliceRecordFieldAssemblySpan(span)) |field| {
-            try self.collectExprDependencies(source_index, field.value);
-        }
-    }
-
-    fn collectTagPayloadEvalDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadEval)) Allocator.Error!void {
-        for (self.input.ast.sliceTagPayloadEvalSpan(span)) |payload| {
-            try self.collectExprDependencies(source_index, payload.value);
-        }
-    }
-
-    fn collectTagPayloadAssemblyDependencies(self: *ProcedureDependencyGraph, source_index: u32, span: Lifted.Ast.Span(Lifted.Ast.TagPayloadAssembly)) Allocator.Error!void {
-        for (self.input.ast.sliceTagPayloadAssemblySpan(span)) |payload| {
-            try self.collectExprDependencies(source_index, payload.value);
-        }
-    }
-
-    fn appendProcedureDependency(self: *ProcedureDependencyGraph, source_index: u32, proc: canonical.MirProcedureRef) Allocator.Error!void {
-        const target_instance = self.proc_instance_map.get(proc) orelse {
-            lambdaInvariant("lambda-solved procedure dependency referenced an unreserved procedure");
-        };
-        try self.edges[source_index].append(self.allocator, @intFromEnum(target_instance));
-    }
-};
-
-const ProcedureSccBuilder = struct {
-    allocator: Allocator,
-    graph: *const ProcedureDependencyGraph,
-    next_index: i32 = 0,
-    indices: []i32,
-    lowlinks: []i32,
-    on_stack: []bool,
-    stack: std.ArrayList(u32),
-    proc_session_ids: []repr.RepresentationSolveSessionId,
-
-    fn init(allocator: Allocator, graph: *const ProcedureDependencyGraph) Allocator.Error!ProcedureSccBuilder {
-        const len = graph.edges.len;
-        const indices = try allocator.alloc(i32, len);
-        errdefer allocator.free(indices);
-        const lowlinks = try allocator.alloc(i32, len);
-        errdefer allocator.free(lowlinks);
-        const on_stack = try allocator.alloc(bool, len);
-        errdefer allocator.free(on_stack);
-        const proc_session_ids = try allocator.alloc(repr.RepresentationSolveSessionId, len);
-        errdefer allocator.free(proc_session_ids);
-
-        @memset(indices, -1);
-        @memset(lowlinks, -1);
-        @memset(on_stack, false);
-
+        program: *Program,
+        type_importer: *TypeImporter,
+        records: *std.ArrayList(ProcBuildRecord),
+    ) ProcedureInstanceRegistry {
         return .{
             .allocator = allocator,
-            .graph = graph,
-            .indices = indices,
-            .lowlinks = lowlinks,
-            .on_stack = on_stack,
-            .stack = .empty,
-            .proc_session_ids = proc_session_ids,
+            .input = input,
+            .program = program,
+            .type_importer = type_importer,
+            .records = records,
+            .reservations = .empty,
+            .pending = .empty,
+            .active = .empty,
+            .session_members = .empty,
         };
     }
 
-    fn deinit(self: *ProcedureSccBuilder) void {
-        self.stack.deinit(self.allocator);
-        self.allocator.free(self.proc_session_ids);
-        self.allocator.free(self.on_stack);
-        self.allocator.free(self.lowlinks);
-        self.allocator.free(self.indices);
+    fn deinit(self: *ProcedureInstanceRegistry) void {
+        for (self.session_members.items) |*members| {
+            members.deinit(self.allocator);
+        }
+        self.session_members.deinit(self.allocator);
+        self.active.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        self.reservations.deinit(self.allocator);
     }
 
-    fn build(self: *ProcedureSccBuilder, program: *Program) Allocator.Error![]repr.RepresentationSolveSessionId {
-        for (self.graph.edges, 0..) |_, i| {
-            if (self.indices[i] == -1) {
-                try self.strongConnect(@intCast(i), program);
-            }
-        }
-        const result = try self.allocator.dupe(repr.RepresentationSolveSessionId, self.proc_session_ids);
-        return result;
+    fn createSession(self: *ProcedureInstanceRegistry) Allocator.Error!repr.RepresentationSolveSessionId {
+        const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(self.program.solve_sessions.items.len)));
+        try self.program.solve_sessions.append(self.allocator, .{
+            .members = &.{},
+            .representation_store = repr.RepresentationStore.init(self.allocator),
+            .state = .building,
+        });
+        try self.session_members.append(self.allocator, .empty);
+        return session_id;
     }
 
-    fn strongConnect(self: *ProcedureSccBuilder, v: u32, program: *Program) Allocator.Error!void {
-        self.indices[v] = self.next_index;
-        self.lowlinks[v] = self.next_index;
-        self.next_index += 1;
-        try self.stack.append(self.allocator, v);
-        self.on_stack[v] = true;
+    fn finalizeSessions(self: *ProcedureInstanceRegistry) Allocator.Error!void {
+        if (self.session_members.items.len != self.program.solve_sessions.items.len) {
+            lambdaInvariant("lambda-solved procedure instance registry session count disagrees with program sessions");
+        }
+        for (self.session_members.items, 0..) |*members, raw_session| {
+            self.program.solve_sessions.items[raw_session].members = try members.toOwnedSlice(self.allocator);
+        }
+    }
 
-        for (self.graph.edges[v].items) |w| {
-            if (self.indices[w] == -1) {
-                try self.strongConnect(w, program);
-                self.lowlinks[v] = @min(self.lowlinks[v], self.lowlinks[w]);
-            } else if (self.on_stack[w]) {
-                self.lowlinks[v] = @min(self.lowlinks[v], self.indices[w]);
+    fn reserveRoot(
+        self: *ProcedureInstanceRegistry,
+        proc: canonical.MirProcedureRef,
+        session_id: repr.RepresentationSolveSessionId,
+        root_index: u32,
+    ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        return try self.reserve(proc, session_id, .{ .root = root_index });
+    }
+
+    fn reserveDirectCall(
+        self: *ProcedureInstanceRegistry,
+        caller: repr.ProcRepresentationInstanceId,
+        call_site: repr.CallSiteInfoId,
+        proc: canonical.MirProcedureRef,
+    ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        const caller_record = self.procRecord(caller);
+        if (self.activeInstanceForProc(caller_record.solve_session, proc)) |active| return active;
+        return try self.reserve(proc, caller_record.solve_session, .{ .direct_call = .{
+            .caller = caller,
+            .call_site = call_site,
+        } });
+    }
+
+    fn reserveProcValue(
+        self: *ProcedureInstanceRegistry,
+        owner: repr.ProcRepresentationInstanceId,
+        value: repr.ValueInfoId,
+        proc: canonical.MirProcedureRef,
+    ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        const owner_record = self.procRecord(owner);
+        if (self.activeInstanceForProc(owner_record.solve_session, proc)) |active| return active;
+        return try self.reserve(proc, owner_record.solve_session, .{ .proc_value = .{
+            .owner = owner,
+            .value = value,
+        } });
+    }
+
+    fn reserve(
+        self: *ProcedureInstanceRegistry,
+        proc: canonical.MirProcedureRef,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: ProcedureInstanceOwner,
+    ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        for (self.reservations.items) |reservation| {
+            if (reservation.solve_session == session_id and
+                canonical.mirProcedureRefEql(reservation.proc, proc) and
+                procedureInstanceOwnerEql(reservation.owner, owner))
+            {
+                return reservation.instance;
             }
         }
 
-        if (self.lowlinks[v] == self.indices[v]) {
-            var members = std.ArrayList(repr.ProcRepresentationInstanceId){};
-            errdefer members.deinit(self.allocator);
+        _ = self.inputProc(proc);
+        const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(self.records.items.len)));
+        const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(self.program.value_stores.items.len)));
+        try self.program.value_stores.append(self.allocator, repr.ValueInfoStore.init(self.allocator));
+        try self.records.append(self.allocator, .{
+            .proc = proc,
+            .representation_instance = instance,
+            .solve_session = session_id,
+            .value_store = value_store_id,
+        });
+        try self.reservations.append(self.allocator, .{
+            .proc = proc,
+            .solve_session = session_id,
+            .owner = owner,
+            .instance = instance,
+        });
+        try self.pending.append(self.allocator, instance);
+        try self.session_members.items[@intFromEnum(session_id)].append(self.allocator, instance);
+        return instance;
+    }
 
-            while (true) {
-                const w = self.stack.pop() orelse lambdaInvariant("lambda-solved SCC stack unexpectedly emptied");
-                self.on_stack[w] = false;
-                try members.append(self.allocator, @enumFromInt(w));
-                if (w == v) break;
-            }
-
-            std.mem.sort(repr.ProcRepresentationInstanceId, members.items, {}, struct {
-                fn lessThan(_: void, lhs: repr.ProcRepresentationInstanceId, rhs: repr.ProcRepresentationInstanceId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan);
-
-            const session_id: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(program.solve_sessions.items.len)));
-            for (members.items) |member| {
-                self.proc_session_ids[@intFromEnum(member)] = session_id;
-            }
-
-            const owned_members = try members.toOwnedSlice(self.allocator);
-            errdefer self.allocator.free(owned_members);
-            try program.solve_sessions.append(self.allocator, .{
-                .members = owned_members,
-                .representation_store = repr.RepresentationStore.init(self.allocator),
-                .state = .building,
-            });
+    fn buildPending(self: *ProcedureInstanceRegistry) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.pending.items.len) : (index += 1) {
+            try self.buildInstance(self.pending.items[index]);
         }
+        for (self.records.items) |record| {
+            if (!record.built) lambdaInvariant("lambda-solved procedure instance registry left an unbuilt procedure instance");
+        }
+    }
+
+    fn buildInstance(
+        self: *ProcedureInstanceRegistry,
+        instance: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!void {
+        const record = &self.records.items[@intFromEnum(instance)];
+        if (record.built) return;
+        const input_proc = self.inputProc(record.proc);
+        try self.active.append(self.allocator, instance);
+        defer _ = self.active.pop();
+
+        const session_index = @intFromEnum(record.solve_session);
+        const value_store_index = @intFromEnum(record.value_store);
+        var solver = BodySolver{
+            .allocator = self.allocator,
+            .input = &self.input.ast,
+            .output = &self.program.ast,
+            .canonical_names = &self.program.canonical_names,
+            .row_shapes = &self.program.row_shapes,
+            .symbols = &self.program.symbols,
+            .type_importer = self.type_importer,
+            .concrete_source_types = &self.program.concrete_source_types,
+            .representation_store = &self.program.solve_sessions.items[session_index].representation_store,
+            .value_store = &self.program.value_stores.items[value_store_index],
+            .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(self.allocator),
+            .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(self.allocator),
+            .instance = instance,
+            .registry = self,
+        };
+        defer solver.deinit();
+
+        const body = try solver.lowerDef(input_proc.body);
+        const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
+        const completed_record = &self.records.items[@intFromEnum(instance)];
+        completed_record.body = body;
+        completed_record.public_roots = roots;
+        completed_record.built = true;
+    }
+
+    fn activeInstanceForProc(
+        self: *const ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        proc: canonical.MirProcedureRef,
+    ) ?repr.ProcRepresentationInstanceId {
+        var i = self.active.items.len;
+        while (i > 0) {
+            i -= 1;
+            const instance = self.active.items[i];
+            const active_record = self.procRecord(instance);
+            if (active_record.solve_session == session_id and canonical.mirProcedureRefEql(active_record.proc, proc)) {
+                return instance;
+            }
+        }
+        return null;
+    }
+
+    fn procRecord(
+        self: *const ProcedureInstanceRegistry,
+        instance: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(instance);
+        if (index >= self.records.items.len) {
+            lambdaInvariant("lambda-solved procedure instance registry referenced out-of-range instance");
+        }
+        return &self.records.items[index];
+    }
+
+    fn inputProc(
+        self: *const ProcedureInstanceRegistry,
+        proc: canonical.MirProcedureRef,
+    ) Lifted.Lift.Proc {
+        for (self.input.procs.items) |candidate| {
+            if (canonical.mirProcedureRefEql(candidate.proc, proc)) return candidate;
+        }
+        lambdaInvariant("lambda-solved procedure instance registry referenced missing lifted procedure");
     }
 };
 
-fn createRepresentationSolveSessions(
-    allocator: Allocator,
-    input: *const Lifted.Lift.Program,
-    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
-    program: *Program,
-) Allocator.Error![]repr.RepresentationSolveSessionId {
-    var graph = try ProcedureDependencyGraph.init(allocator, input, proc_instance_map);
-    defer graph.deinit();
-
-    var builder = try ProcedureSccBuilder.init(allocator, &graph);
-    defer builder.deinit();
-
-    return try builder.build(program);
+fn procedureInstanceOwnerEql(a: ProcedureInstanceOwner, b: ProcedureInstanceOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .root => |a_root| switch (b) {
+            .root => |b_root| a_root == b_root,
+            else => false,
+        },
+        .direct_call => |a_call| switch (b) {
+            .direct_call => |b_call| a_call.caller == b_call.caller and a_call.call_site == b_call.call_site,
+            else => false,
+        },
+        .proc_value => |a_value| switch (b) {
+            .proc_value => |b_value| a_value.owner == b_value.owner and a_value.value == b_value.value,
+            else => false,
+        },
+    };
 }
 
+/// Public `run` function.
 pub fn run(
     allocator: Allocator,
     lifted: Lifted.Lift.Program,
@@ -441,7 +390,7 @@ pub fn run(
     input.row_shapes = MonoRow.Store.init(allocator);
 
     try program.procs.ensureTotalCapacity(allocator, input.procs.items.len);
-    try program.solve_sessions.ensureTotalCapacity(allocator, input.procs.items.len);
+    try program.solve_sessions.ensureTotalCapacity(allocator, input.root_procs.items.len);
     try program.proc_instances.ensureTotalCapacity(allocator, input.procs.items.len);
     try program.value_stores.ensureTotalCapacity(allocator, input.procs.items.len);
     var proc_build_records = std.ArrayList(ProcBuildRecord).empty;
@@ -451,56 +400,29 @@ pub fn run(
     var type_importer = TypeImporter.init(allocator, &input.types, &program.types);
     defer type_importer.deinit();
 
-    var proc_instance_map = std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId).init(allocator);
-    defer proc_instance_map.deinit();
-    try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
-
-    for (input.procs.items, 0..) |proc, i| {
-        const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
-        program.value_stores.appendAssumeCapacity(repr.ValueInfoStore.init(allocator));
-        proc_instance_map.putAssumeCapacity(proc.proc, instance);
+    var registry = ProcedureInstanceRegistry.init(allocator, &input, &program, &type_importer, &proc_build_records);
+    defer registry.deinit();
+    for (input.root_procs.items, 0..) |root_proc, raw_root| {
+        const session_id = try registry.createSession();
+        const root_instance = try registry.reserveRoot(root_proc, session_id, @intCast(raw_root));
+        try program.root_instances.append(allocator, root_instance);
     }
-
-    const proc_session_ids = try createRepresentationSolveSessions(allocator, &input, &proc_instance_map, &program);
-    defer allocator.free(proc_session_ids);
-
-    for (input.procs.items, 0..) |proc, i| {
-        const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
-        const session_id = proc_session_ids[i];
-        const session_index = @intFromEnum(session_id);
-        const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(i)));
-
-        var solver = BodySolver{
-            .allocator = allocator,
-            .input = &input.ast,
-            .output = &program.ast,
-            .canonical_names = &program.canonical_names,
-            .row_shapes = &program.row_shapes,
-            .type_importer = &type_importer,
-            .concrete_source_types = &program.concrete_source_types,
-            .representation_store = &program.solve_sessions.items[session_index].representation_store,
-            .value_store = &program.value_stores.items[i],
-            .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(allocator),
-            .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(allocator),
-            .instance = instance,
-            .proc_instance_map = &proc_instance_map,
-        };
-        defer solver.deinit();
-
-        const body = try solver.lowerDef(proc.body);
-        const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
-        proc_build_records.appendAssumeCapacity(.{
-            .proc = proc.proc,
-            .solve_session = session_id,
-            .value_store = value_store_id,
-            .public_roots = roots,
-            .body = body,
-            .representation_instance = instance,
-        });
+    if (input.root_procs.items.len == 0) {
+        const session_id = try registry.createSession();
+        for (input.procs.items, 0..) |proc, raw_proc| {
+            _ = try registry.reserveRoot(proc.proc, session_id, @intCast(raw_proc));
+        }
     }
-    try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items);
+    try registry.buildPending();
+    try registry.finalizeSessions();
+    _ = try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items, true);
+    while (true) {
+        try solveRepresentationSessions(&program, proc_build_records.items);
+        try assignCallableEmissionPlans(&program, proc_build_records.items, .allow_pending_call_values);
+        if (!try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items, false)) break;
+    }
     try solveRepresentationSessions(&program, proc_build_records.items);
-    try assignCallableEmissionPlans(&program, proc_build_records.items);
+    try assignCallableEmissionPlans(&program, proc_build_records.items, .strict);
     try sealProcRepresentationInstances(&program, proc_build_records.items);
     try publishSessionExecutableTypePayloads(&program);
     try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
@@ -726,7 +648,7 @@ const SessionExecutablePayloadPublisher = struct {
         proc: canonical.MirProcedureRef,
     ) *const repr.ProcRepresentationInstance {
         for (self.program.proc_instances.items) |*instance| {
-            if (canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
+            if (instance.solve_session == self.session_id and canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
         }
         lambdaInvariant("lambda-solved executable payload publication referenced missing procedure instance");
     }
@@ -775,38 +697,63 @@ fn sealProcRepresentationInstances(
     }
 }
 
-fn appendCrossProcedureRepresentationEdges(program: *Program, records: []const ProcBuildRecord) Allocator.Error!void {
+fn appendCrossProcedureRepresentationEdges(
+    program: *Program,
+    records: []const ProcBuildRecord,
+    include_proc_value_edges: bool,
+) Allocator.Error!bool {
+    var changed = false;
     for (records) |*record| {
         var linker = CrossProcedureRepresentationLinker{
             .program = program,
             .records = records,
+            .record = record,
             .representation_store = &program.solve_sessions.items[@intFromEnum(record.solve_session)].representation_store,
             .value_store = &program.value_stores.items[@intFromEnum(record.value_store)],
         };
-        try linker.appendCallSiteEdges();
-        try linker.appendProcValueEdges();
+        if (try linker.appendCallSiteEdges()) changed = true;
+        if (include_proc_value_edges) try linker.appendProcValueEdges();
     }
+    return changed;
 }
 
 const CrossProcedureRepresentationLinker = struct {
     program: *Program,
     records: []const ProcBuildRecord,
+    record: *const ProcBuildRecord,
     representation_store: *repr.RepresentationStore,
-    value_store: *const repr.ValueInfoStore,
+    value_store: *repr.ValueInfoStore,
 
-    fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
-        for (self.value_store.call_sites.items) |call_site| {
+    fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!bool {
+        var changed = false;
+        for (self.value_store.call_sites.items) |*call_site| {
+            if (call_site.representation_edges_resolved) continue;
             const dispatch = call_site.dispatch orelse {
                 const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
-                try self.appendPendingCallValueEdges(call_site, callee);
+                if (try self.appendPendingCallValueEdges(call_site.*, callee)) {
+                    call_site.representation_edges_resolved = true;
+                    changed = true;
+                }
                 continue;
             };
             switch (dispatch) {
-                .call_proc => |target| try self.appendDirectCallEdges(call_site, target),
-                .call_value_finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
-                .call_value_erased => {},
+                .call_proc => |target| {
+                    try self.appendDirectCallEdges(call_site.*, target);
+                    call_site.representation_edges_resolved = true;
+                    changed = true;
+                },
+                .call_value_finite => |plan_id| {
+                    const plan = self.value_store.callValueFiniteDispatchPlan(plan_id);
+                    for (self.value_store.sliceCallValueFiniteDispatchBranches(plan.branches)) |branch| {
+                        try self.appendDirectCallEdges(call_site.*, branch.target_instance);
+                    }
+                    call_site.representation_edges_resolved = true;
+                    changed = true;
+                },
+                .call_value_erased => call_site.representation_edges_resolved = true,
             }
         }
+        return changed;
     }
 
     fn appendDirectCallEdges(
@@ -828,7 +775,7 @@ const CrossProcedureRepresentationLinker = struct {
             });
         }
         _ = try self.representation_store.appendRepresentationEdge(.{
-            .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.function_root) },
+            .from = .{ .procedure_function_root = self.publicFunctionRootRef(target_id, target.public_roots.function_root) },
             .to = .{ .local = call_site.requested_fn_root },
             .kind = .value_alias,
         });
@@ -860,16 +807,36 @@ const CrossProcedureRepresentationLinker = struct {
         self: *CrossProcedureRepresentationLinker,
         call_site: repr.CallSiteInfo,
         callee: repr.ValueInfoId,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const value_info = self.value_store.values.items[@intFromEnum(callee)];
-        const callable = value_info.callable orelse lambdaInvariant("lambda-solved pending call_value has non-callable callee");
+        const callable = value_info.callable orelse {
+            if (self.valueHasFunctionType(value_info.logical_ty)) return false;
+            lambdaInvariant("lambda-solved pending call_value has non-callable callee");
+        };
         switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| try self.appendFiniteCallValueEdges(call_site, key),
+            .finite => |key| {
+                try self.appendFiniteCallValueEdges(call_site, key);
+                return true;
+            },
             .already_erased,
             .erase_finite_set,
             .erase_proc_value,
-            => {},
+            => return true,
         }
+    }
+
+    fn valueHasFunctionType(
+        self: *CrossProcedureRepresentationLinker,
+        ty: Type.TypeVarId,
+    ) bool {
+        const root = self.program.types.unlinkConst(ty);
+        return switch (self.program.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            else => false,
+        };
     }
 
     fn appendProcValueEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
@@ -910,12 +877,24 @@ const CrossProcedureRepresentationLinker = struct {
         };
     }
 
+    fn publicFunctionRootRef(
+        self: *CrossProcedureRepresentationLinker,
+        target_id: repr.ProcRepresentationInstanceId,
+        root: repr.RepRootId,
+    ) repr.ProcPublicFunctionRootRef {
+        _ = self;
+        return .{
+            .instance = target_id,
+            .rep_root = root,
+        };
+    }
+
     fn procInstanceForSource(
         self: *CrossProcedureRepresentationLinker,
         proc: canonical.MirProcedureRef,
     ) repr.ProcRepresentationInstanceId {
         for (self.records, 0..) |record, raw| {
-            if (canonical.mirProcedureRefEql(record.proc, proc)) {
+            if (record.solve_session == self.record.solve_session and canonical.mirProcedureRefEql(record.proc, proc)) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
         }
@@ -1140,6 +1119,11 @@ const RepresentationClassSolver = struct {
                 if (record.solve_session != self.session_id) break :blk null;
                 break :blk public.rep_root;
             },
+            .procedure_function_root => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
         };
     }
 
@@ -1226,9 +1210,15 @@ const RepresentationClassSolver = struct {
     }
 };
 
+const CallableEmissionAssignmentMode = enum {
+    allow_pending_call_values,
+    strict,
+};
+
 fn assignCallableEmissionPlans(
     program: *Program,
     records: []const ProcBuildRecord,
+    mode: CallableEmissionAssignmentMode,
 ) Allocator.Error!void {
     for (program.solve_sessions.items, 0..) |*session, raw_session| {
         var assigner = CallableEmissionAssigner{
@@ -1241,6 +1231,7 @@ fn assignCallableEmissionPlans(
             .class_set_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
             .erased_classes = .empty,
             .erased_class_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .mode = mode,
         };
         defer assigner.deinit();
         try assigner.assign();
@@ -1268,6 +1259,7 @@ const CallableEmissionAssigner = struct {
     class_set_index: std.AutoHashMap(repr.RepresentationClassId, usize),
     erased_classes: std.ArrayList(ErasedClassProvenance),
     erased_class_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+    mode: CallableEmissionAssignmentMode,
 
     fn deinit(self: *CallableEmissionAssigner) void {
         for (self.erased_classes.items) |*entry| entry.boundaries.deinit(self.allocator);
@@ -1425,6 +1417,7 @@ const CallableEmissionAssigner = struct {
                 const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
                 const class_set = self.callableClassSet(class) orelse {
                     if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
+                    if (self.mode == .allow_pending_call_values and value_info.callable == null) continue;
                     lambdaInvariant("lambda-solved function-typed value solved to a class with no finite callable members");
                 };
                 const class_key = class_set.key orelse lambdaInvariant("lambda-solved callable class set was not interned before emission assignment");
@@ -1574,8 +1567,11 @@ const CallableEmissionAssigner = struct {
         provenance: []const repr.BoxBoundaryId,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         _ = owner_record;
-        const target_id = self.procInstanceForSource(source.proc);
+        const target_id = source.target_instance;
         const target_record = self.recordForInstance(target_id);
+        if (!canonical.mirProcedureRefEql(target_record.proc, source.proc)) {
+            lambdaInvariant("lambda-solved direct proc-value erase target instance differs from proc-value source");
+        }
         const target_value_store = self.valueStoreFor(target_record);
         const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
 
@@ -1757,6 +1753,11 @@ const CallableEmissionAssigner = struct {
                 if (record.solve_session != self.session_id) break :blk null;
                 break :blk public.rep_root;
             },
+            .procedure_function_root => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
         };
     }
 
@@ -1776,7 +1777,7 @@ const CallableEmissionAssigner = struct {
         proc: canonical.MirProcedureRef,
     ) repr.ProcRepresentationInstanceId {
         for (self.records, 0..) |record, raw| {
-            if (canonical.mirProcedureRefEql(record.proc, proc)) {
+            if (record.solve_session == self.session_id and canonical.mirProcedureRefEql(record.proc, proc)) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
         }
@@ -1881,6 +1882,7 @@ const BoxPayloadPlanFinalizer = struct {
             .primitive,
             .callable_set,
             => .unchanged,
+            .vacant_callable_slot => lambdaInvariant("lambda-solved boxed payload planning reached vacant callable slot without explicit value metadata"),
             .erased_fn => |erased| .{ .function_erased = .{
                 .source_fn_ty = erased.sig_key.source_fn_ty,
                 .sig_key = erased.sig_key,
@@ -2202,7 +2204,7 @@ const ValueTransformFinalizer = struct {
             };
             switch (dispatch) {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
-                .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
+                .call_value_finite => |plan| try self.verifyFinalizedCallValueFinite(call_site_id, call_site, plan),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
             }
         }
@@ -2287,27 +2289,26 @@ const ValueTransformFinalizer = struct {
         call_site: *repr.CallSiteInfo,
         callee: repr.ValueInfoId,
     ) Allocator.Error!void {
-        const dispatch = self.resolvedCallValueDispatch(callee);
-        call_site.dispatch = dispatch;
-        switch (dispatch) {
-            .call_value_finite => |key| try self.finalizeCallValueFinite(call_site_id, call_site, key),
-            .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
-            .call_proc => lambdaInvariant("lambda-solved pending call_value resolved to a non-call_value dispatch"),
-        }
-    }
-
-    fn resolvedCallValueDispatch(
-        self: *ValueTransformFinalizer,
-        callee: repr.ValueInfoId,
-    ) repr.CallSiteDispatch {
         const value_info = self.valueStore().values.items[@intFromEnum(callee)];
         const callable = value_info.callable orelse lambdaInvariant("lambda-solved call_value callee has no callable representation");
-        return switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
-            .finite => |key| .{ .call_value_finite = key },
-            .already_erased => |erased| .{ .call_value_erased = erased.sig_key },
-            .erase_finite_set => |erase| .{ .call_value_erased = erase.adapter.erased_fn_sig_key },
-            .erase_proc_value => |erase| .{ .call_value_erased = erase.erased_fn_sig_key },
-        };
+        switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+            .finite => |key| {
+                const plan = try self.finalizeCallValueFinite(call_site_id, call_site, key);
+                call_site.dispatch = .{ .call_value_finite = plan };
+            },
+            .already_erased => |erased| {
+                call_site.dispatch = .{ .call_value_erased = erased.sig_key };
+                try self.finalizeCallValueErased(call_site_id, call_site, erased.sig_key);
+            },
+            .erase_finite_set => |erase| {
+                call_site.dispatch = .{ .call_value_erased = erase.adapter.erased_fn_sig_key };
+                try self.finalizeCallValueErased(call_site_id, call_site, erase.adapter.erased_fn_sig_key);
+            },
+            .erase_proc_value => |erase| {
+                call_site.dispatch = .{ .call_value_erased = erase.erased_fn_sig_key };
+                try self.finalizeCallValueErased(call_site_id, call_site, erase.erased_fn_sig_key);
+            },
+        }
     }
 
     fn finalizeCallProc(
@@ -2367,7 +2368,7 @@ const ValueTransformFinalizer = struct {
         call_site_id: repr.CallSiteInfoId,
         call_site: *repr.CallSiteInfo,
         callable_set_key: repr.CanonicalCallableSetKey,
-    ) Allocator.Error!void {
+    ) Allocator.Error!repr.CallValueFiniteDispatchPlanId {
         self.verifyCallSiteUnfinalized(call_site);
         const descriptor = self.representationStore().callableSetDescriptor(callable_set_key) orelse {
             lambdaInvariant("lambda-solved finite call boundary finalization referenced a missing callable-set descriptor");
@@ -2378,6 +2379,8 @@ const ValueTransformFinalizer = struct {
 
         const branch_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, descriptor.members.len);
         defer self.allocator.free(branch_boundaries);
+        const branches = try self.allocator.alloc(repr.CallValueFiniteDispatchBranch, descriptor.members.len);
+        defer self.allocator.free(branches);
 
         const result_to = try self.localEndpoint(call_site.result);
         for (descriptor.members, 0..) |member, i| {
@@ -2400,9 +2403,38 @@ const ValueTransformFinalizer = struct {
                 .to_endpoint = result_to,
                 .transform = result_transform,
             });
+            branches[i] = .{
+                .member = .{
+                    .callable_set_key = callable_set_key,
+                    .member_index = member.member,
+                },
+                .target_instance = target_id,
+                .result_transform = branch_boundaries[i],
+            };
         }
 
         call_site.branch_result_transforms = try self.valueStore().addValueTransformBoundarySpan(branch_boundaries);
+        return try self.valueStore().addCallValueFiniteDispatchPlan(.{
+            .callable_set_key = callable_set_key,
+            .branches = try self.valueStore().addCallValueFiniteDispatchBranchSpan(branches),
+        });
+    }
+
+    fn verifyFinalizedCallValueFinite(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        call_site: *const repr.CallSiteInfo,
+        plan_id: repr.CallValueFiniteDispatchPlanId,
+    ) Allocator.Error!void {
+        _ = call_site_id;
+        const plan = self.valueStore().callValueFiniteDispatchPlan(plan_id);
+        const branches = self.valueStore().sliceCallValueFiniteDispatchBranches(plan.branches);
+        if (branches.len == 0) {
+            lambdaInvariant("lambda-solved finalized finite call dispatch plan has no branches");
+        }
+        if (call_site.branch_result_transforms.len != branches.len) {
+            lambdaInvariant("lambda-solved finalized finite call dispatch branch count differs from result transforms");
+        }
     }
 
     fn finalizeCallValueErased(
@@ -2484,8 +2516,11 @@ const ValueTransformFinalizer = struct {
         const member = self.representationStore().callableSetMember(construction_snapshot.callable_set_key, construction_snapshot.selected_member) orelse {
             lambdaInvariant("lambda-solved callable construction finalization selected a missing callable-set member");
         };
-        const target_id = self.procInstanceForSource(member.source_proc);
+        const target_id = construction_snapshot.target_instance;
         const target_instance = self.procInstance(target_id);
+        if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+            lambdaInvariant("lambda-solved callable construction target instance differs from selected member source");
+        }
         const target_captures = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.captures);
         const source_captures = construction_snapshot.capture_values;
         if (source_captures.len != target_captures.len or source_captures.len != member.capture_slots.len) {
@@ -2595,7 +2630,6 @@ const ValueTransformFinalizer = struct {
                     .source_value = value_id,
                     .proc_value = erase.proc_value,
                     .erased_fn_sig_key = erase.erased_fn_sig_key,
-                },
                 } },
                 .target_instance = erase.target_instance,
                 .slot = slot.slot,
@@ -2703,6 +2737,7 @@ const ValueTransformFinalizer = struct {
                 else => self.transformInvariant("lambda-solved erased callable value transform target is not erased callable"),
             },
             .primitive,
+            .vacant_callable_slot,
             .recursive_ref,
             .pending,
             => self.transformInvariant("lambda-solved value transform has incompatible executable payloads"),
@@ -3497,7 +3532,7 @@ const ValueTransformFinalizer = struct {
         proc: canonical.MirProcedureRef,
     ) repr.ProcRepresentationInstanceId {
         for (self.program.proc_instances.items, 0..) |instance, raw| {
-            if (canonical.mirProcedureRefEql(instance.proc, proc)) {
+            if (instance.solve_session == self.instance.solve_session and canonical.mirProcedureRefEql(instance.proc, proc)) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
         }
@@ -3648,6 +3683,7 @@ const BodySolver = struct {
     output: *Ast.Store,
     canonical_names: *const canonical.CanonicalNameStore,
     row_shapes: *MonoRow.Store,
+    symbols: *const symbol_mod.Store,
     type_importer: *TypeImporter,
     concrete_source_types: *const ConcreteSourceType.Store,
     representation_store: *repr.RepresentationStore,
@@ -3655,7 +3691,7 @@ const BodySolver = struct {
     env: std.AutoHashMap(Ast.Symbol, repr.BindingInfoId),
     expr_map: std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
     instance: repr.ProcRepresentationInstanceId,
-    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
+    registry: *ProcedureInstanceRegistry,
     public_roots: ?repr.ProcPublicValueRoots = null,
     active_captures: ?repr.Span(repr.ValueInfoId) = null,
     next_source_match_id: u32 = 0,
@@ -3719,8 +3755,8 @@ const BodySolver = struct {
                     };
                     break :blk .{ .val = body };
                 },
-                .run => |run| blk: {
-                    const body = try self.lowerExpr(run.body);
+                .run => |run_def| blk: {
+                    const body = try self.lowerExpr(run_def.body);
                     self.public_roots = .{
                         .params = repr.Span(repr.ValueInfoId).empty(),
                         .ret = self.exprValue(body),
@@ -3797,7 +3833,13 @@ const BodySolver = struct {
         const ty = try self.type_importer.importType(expr.ty);
         switch (expr.data) {
             .var_ => |symbol| {
-                const binding_info = self.env.get(symbol) orelse lambdaInvariant("lambda-solved variable occurrence has no published binding info");
+                const binding_info = self.env.get(symbol) orelse {
+                    const entry = self.symbols.get(symbol);
+                    lambdaInvariantFmt(
+                        "lambda-solved variable occurrence has no published binding info for symbol {d} ({s})",
+                        .{ @intFromEnum(symbol), @tagName(entry.origin) },
+                    );
+                };
                 const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
                 const value = try self.newValue(ty, expr.source_ty);
                 try self.publishValueAlias(binding.value, value);
@@ -4034,8 +4076,11 @@ const BodySolver = struct {
                     .result = value,
                     .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
-                    .dispatch = .{ .call_proc = self.procRepresentationInstance(call.proc) },
+                    .dispatch = null,
                 });
+                const target_instance = try self.registry.reserveDirectCall(self.instance, call_site, call.proc);
+                self.refreshValueStore();
+                self.value_store.call_sites.items[@intFromEnum(call_site)].dispatch = .{ .call_proc = target_instance };
                 try self.publishCallProcRequestedFunctionEdges(
                     call_site,
                     lowered_args.values,
@@ -4053,6 +4098,8 @@ const BodySolver = struct {
             .proc_value => |proc_value| blk: {
                 const captures = try self.lowerCaptureArgSpanWithValues(proc_value.captures);
                 const whole_function_root = self.representation_store.reserveRoot();
+                const target_instance = try self.registry.reserveProcValue(self.instance, value, proc_value.proc);
+                self.refreshValueStore();
                 try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = .{
                     .instance = self.instance,
                     .value = value,
@@ -4070,6 +4117,7 @@ const BodySolver = struct {
                     value,
                     whole_function_root,
                     proc_value.proc,
+                    target_instance,
                     self.value_store.sliceValueSpan(captures.values),
                 );
                 self.value_store.values.items[@intFromEnum(value)].callable = callable;
@@ -4510,17 +4558,6 @@ const BodySolver = struct {
             .exprs = try self.output.addExprSpan(exprs),
             .values = try self.value_store.addValueSpan(values),
         };
-    }
-
-    fn procRepresentationInstance(
-        self: *const BodySolver,
-        proc: canonical.MirProcedureRef,
-    ) repr.ProcRepresentationInstanceId {
-        return self.proc_instance_map.get(proc) orelse lambdaInvariant("lambda-solved call_proc target was not reserved before body lowering");
-    }
-
-    fn lowerExprSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
-        return (try self.lowerExprSpanWithValues(span)).exprs;
     }
 
     fn lowerLowLevel(
@@ -5452,6 +5489,11 @@ const BodySolver = struct {
     fn valueRoot(self: *const BodySolver, value: repr.ValueInfoId) repr.RepRootId {
         return self.value_store.values.items[@intFromEnum(value)].root;
     }
+
+    fn refreshValueStore(self: *BodySolver) void {
+        const record = self.registry.procRecord(self.instance);
+        self.value_store = &self.registry.program.value_stores.items[@intFromEnum(record.value_store)];
+    }
 };
 
 fn isEmptyCanonicalTypeKey(key: canonical.CanonicalTypeKey) bool {
@@ -5460,6 +5502,11 @@ fn isEmptyCanonicalTypeKey(key: canonical.CanonicalTypeKey) bool {
 
 fn lambdaInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
+}
+
+fn lambdaInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(fmt, args);
     unreachable;
 }
 

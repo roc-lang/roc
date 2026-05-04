@@ -11,21 +11,27 @@ const symbol_mod = @import("symbol");
 const row = @import("../mono_row/mod.zig");
 const type_mod = @import("type.zig");
 const repr = @import("representation.zig");
-const ids = @import("../ids.zig");
+const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
 
 const canonical = check.CanonicalNames;
 
 pub const Symbol = symbol_mod.Symbol;
 pub const TypeVarId = type_mod.TypeVarId;
-pub const ProgramLiteralId = ids.ProgramLiteralId;
+pub const ProgramLiteralId = mir_ids.ProgramLiteralId;
 
+/// Public `ExprId` declaration.
 pub const ExprId = enum(u32) { _ };
+/// Public `PatId` declaration.
 pub const PatId = enum(u32) { _ };
+/// Public `DefId` declaration.
 pub const DefId = enum(u32) { _ };
+/// Public `StmtId` declaration.
 pub const StmtId = enum(u32) { _ };
+/// Public `BranchId` declaration.
 pub const BranchId = enum(u32) { _ };
 
+/// Public `Span` function.
 pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -37,6 +43,7 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+/// Public `TypedSymbol` declaration.
 pub const TypedSymbol = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
@@ -44,11 +51,13 @@ pub const TypedSymbol = struct {
     binding_info: repr.BindingInfoId,
 };
 
+/// Public `TagPayloadPattern` declaration.
 pub const TagPayloadPattern = struct {
     payload: row.TagPayloadId,
     pattern: PatId,
 };
 
+/// Public `Pat` declaration.
 pub const Pat = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
@@ -91,6 +100,7 @@ pub const Pat = struct {
     };
 };
 
+/// Public `Branch` declaration.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
@@ -98,38 +108,50 @@ pub const Branch = struct {
     degenerate: bool = false,
 };
 
-pub const RecordFieldPattern = row.Ast.RecordFieldPattern;
+/// Public `RecordFieldPattern` declaration.
+pub const RecordFieldPattern = struct {
+    field: row.RecordFieldId,
+    pattern: PatId,
+};
+
+/// Public `ListRestPattern` declaration.
 pub const ListRestPattern = struct {
     index: u32,
     pattern: ?PatId = null,
 };
 
+/// Public `CaptureArg` declaration.
 pub const CaptureArg = struct {
     slot: u32,
     value_info: repr.ValueInfoId,
     expr: ExprId,
 };
 
+/// Public `RecordFieldEval` declaration.
 pub const RecordFieldEval = struct {
     field: row.RecordFieldId,
     value: ExprId,
 };
 
+/// Public `RecordFieldAssembly` declaration.
 pub const RecordFieldAssembly = struct {
     field: row.RecordFieldId,
     value: ExprId,
 };
 
+/// Public `TagPayloadEval` declaration.
 pub const TagPayloadEval = struct {
     payload: row.TagPayloadId,
     value: ExprId,
 };
 
+/// Public `TagPayloadAssembly` declaration.
 pub const TagPayloadAssembly = struct {
     payload: row.TagPayloadId,
     value: ExprId,
 };
 
+/// Public `Expr` declaration.
 pub const Expr = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
@@ -248,6 +270,7 @@ pub const Expr = struct {
     };
 };
 
+/// Public `Stmt` declaration.
 pub const Stmt = union(enum) {
     decl: struct {
         bind: TypedSymbol,
@@ -282,16 +305,19 @@ pub const Stmt = union(enum) {
     },
 };
 
+/// Public `FnDef` declaration.
 pub const FnDef = struct {
     args: Span(TypedSymbol),
     body: ExprId,
     representation_instance: repr.ProcRepresentationInstanceId,
 };
 
+/// Public `RunDef` declaration.
 pub const RunDef = struct {
     body: ExprId,
 };
 
+/// Public `HostedFnDef` declaration.
 pub const HostedFnDef = struct {
     proc: canonical.ProcedureValueRef,
     args: Span(TypedSymbol),
@@ -299,6 +325,7 @@ pub const HostedFnDef = struct {
     hosted: hosted_mod.Proc,
 };
 
+/// Public `DefVal` declaration.
 pub const DefVal = union(enum) {
     fn_: FnDef,
     hosted_fn: HostedFnDef,
@@ -306,11 +333,13 @@ pub const DefVal = union(enum) {
     run: RunDef,
 };
 
+/// Public `Def` declaration.
 pub const Def = struct {
     proc: canonical.MirProcedureRef,
     value: DefVal,
 };
 
+/// Public `Store` declaration.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

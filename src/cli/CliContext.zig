@@ -280,7 +280,6 @@ pub const CliContext = struct {
     pub fn exitCode(self: *const Self) u8 {
         return self.exit_code;
     }
-
 };
 
 // Helper Functions

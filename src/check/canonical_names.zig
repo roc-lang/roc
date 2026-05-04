@@ -11,75 +11,102 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
+/// Public `ModuleNameId` declaration.
 pub const ModuleNameId = enum(u32) { _ };
+/// Public `TypeNameId` declaration.
 pub const TypeNameId = enum(u32) { _ };
+/// Public `MethodNameId` declaration.
 pub const MethodNameId = enum(u32) { _ };
+/// Public `RecordFieldLabelId` declaration.
 pub const RecordFieldLabelId = enum(u32) { _ };
+/// Public `TagLabelId` declaration.
 pub const TagLabelId = enum(u32) { _ };
+/// Public `ExportNameId` declaration.
 pub const ExportNameId = enum(u32) { _ };
+/// Public `ExternalSymbolNameId` declaration.
 pub const ExternalSymbolNameId = enum(u32) { _ };
 
+/// Public `ProcBaseKeyRef` declaration.
 pub const ProcBaseKeyRef = enum(u32) { _ };
+/// Public `CheckedProcedureTemplateId` declaration.
 pub const CheckedProcedureTemplateId = enum(u32) { _ };
+/// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
+/// Public `PromotedCallableWrapperId` declaration.
 pub const PromotedCallableWrapperId = enum(u32) { _ };
+/// Public `HostedWrapperId` declaration.
 pub const HostedWrapperId = enum(u32) { _ };
+/// Public `IntrinsicWrapperId` declaration.
 pub const IntrinsicWrapperId = enum(u32) { _ };
+/// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
+/// Public `PromotedCallableNodeId` declaration.
 pub const PromotedCallableNodeId = enum(u32) { _ };
+/// Public `PromotedCallableBodyPlanId` declaration.
 pub const PromotedCallableBodyPlanId = enum(u32) { _ };
 
+/// Public `ArtifactRef` declaration.
 pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `ProcedureValueRef` declaration.
 pub const ProcedureValueRef = struct {
     artifact: ArtifactRef = .{},
     proc_base: ProcBaseKeyRef,
 };
 
+/// Public `ProcedureTemplateRef` declaration.
 pub const ProcedureTemplateRef = struct {
     artifact: ArtifactRef = .{},
     proc_base: ProcBaseKeyRef,
     template: CheckedProcedureTemplateId,
 };
 
+/// Public `MonoSpecializationKey` declaration.
 pub const MonoSpecializationKey = struct {
     template: ProcedureTemplateRef,
     requested_mono_fn_ty: CanonicalTypeKey,
 };
 
+/// Public `MonoSpecializedProcRef` declaration.
 pub const MonoSpecializedProcRef = struct {
     proc: ProcedureValueRef,
     specialization: MonoSpecializationKey,
 };
 
+/// Public `MirProcedureRef` declaration.
 pub const MirProcedureRef = struct {
     proc: ProcedureValueRef,
     callable: ProcedureCallableRef,
 };
 
+/// Public `procedureValueRefEql` function.
 pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
         a.proc_base == b.proc_base;
 }
 
+/// Public `procedureTemplateRefEql` function.
 pub fn procedureTemplateRefEql(a: ProcedureTemplateRef, b: ProcedureTemplateRef) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
         a.proc_base == b.proc_base and
         a.template == b.template;
 }
 
+/// Public `monoSpecializationKeyEql` function.
 pub fn monoSpecializationKeyEql(a: MonoSpecializationKey, b: MonoSpecializationKey) bool {
     return std.mem.eql(u8, &a.requested_mono_fn_ty.bytes, &b.requested_mono_fn_ty.bytes) and
         procedureTemplateRefEql(a.template, b.template);
 }
 
+/// Public `monoSpecializedProcRefEql` function.
 pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedProcRef) bool {
     return procedureValueRefEql(a.proc, b.proc) and
         monoSpecializationKeyEql(a.specialization, b.specialization);
 }
 
+/// Public `mirProcedureRefFromMono` function.
 pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
     return .{
         .proc = proc.proc,
@@ -90,66 +117,81 @@ pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
     };
 }
 
+/// Public `mirProcedureRefEql` function.
 pub fn mirProcedureRefEql(a: MirProcedureRef, b: MirProcedureRef) bool {
     return procedureValueRefEql(a.proc, b.proc) and
         procedureCallableRefEql(a.callable, b.callable);
 }
 
+/// Public `LiftedProcedureTemplateRef` declaration.
 pub const LiftedProcedureTemplateRef = struct {
     owner_mono_specialization: MonoSpecializationKey,
     site: NestedProcSiteId,
 };
 
+/// Public `SyntheticProcedureTemplateRef` declaration.
 pub const SyntheticProcedureTemplateRef = struct {
     template: ProcedureTemplateRef,
 };
 
+/// Public `CallableProcedureTemplateRef` declaration.
 pub const CallableProcedureTemplateRef = union(enum) {
     checked: ProcedureTemplateRef,
     lifted: LiftedProcedureTemplateRef,
     synthetic: SyntheticProcedureTemplateRef,
 };
 
+/// Public `ProcedureCallableRef` declaration.
 pub const ProcedureCallableRef = struct {
     template: CallableProcedureTemplateRef,
     source_fn_ty: CanonicalTypeKey,
 };
 
+/// Public `BoxBoundaryId` declaration.
 pub const BoxBoundaryId = enum(u32) { _ };
+/// Public `CallableSetMemberId` declaration.
 pub const CallableSetMemberId = enum(u32) { _ };
 
+/// Public `CanonicalCallableSetKey` declaration.
 pub const CanonicalCallableSetKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `CaptureShapeKey` declaration.
 pub const CaptureShapeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `CanonicalExecValueTypeKey` declaration.
 pub const CanonicalExecValueTypeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `ErasedFnAbiKey` declaration.
 pub const ErasedFnAbiKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `ErasedFnSigKey` declaration.
 pub const ErasedFnSigKey = struct {
     source_fn_ty: CanonicalTypeKey,
     abi: ErasedFnAbiKey,
     capture_ty: ?CanonicalExecValueTypeKey = null,
 };
 
+/// Public `HostedAbiKey` declaration.
 pub const HostedAbiKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `ErasedPackedFunctionArgAbi` declaration.
 pub const ErasedPackedFunctionArgAbi = union(enum) {
     ordinary_refcounted_value,
     hosted: HostedAbiKey,
     intrinsic: IntrinsicWrapperId,
 };
 
+/// Public `ErasedValueAbi` declaration.
 pub const ErasedValueAbi = union(enum) {
     ordinary_roc_value,
     opaque_ptr,
@@ -157,6 +199,7 @@ pub const ErasedValueAbi = union(enum) {
     intrinsic: IntrinsicWrapperId,
 };
 
+/// Public `ErasedResultAbi` declaration.
 pub const ErasedResultAbi = union(enum) {
     ordinary_roc_value,
     opaque_ptr,
@@ -164,6 +207,7 @@ pub const ErasedResultAbi = union(enum) {
     intrinsic: IntrinsicWrapperId,
 };
 
+/// Public `ErasedCaptureArgAbi` declaration.
 pub const ErasedCaptureArgAbi = union(enum) {
     ordinary_roc_value,
     zero_sized_roc_value,
@@ -171,6 +215,7 @@ pub const ErasedCaptureArgAbi = union(enum) {
     intrinsic: IntrinsicWrapperId,
 };
 
+/// Public `ErasedFnAbi` declaration.
 pub const ErasedFnAbi = struct {
     key: ErasedFnAbiKey = .{},
     fixed_arity: u32,
@@ -183,6 +228,7 @@ pub const ErasedFnAbi = struct {
     hosted_owner: ?HostedAbiKey = null,
 };
 
+/// Public `ErasedFnAbiStore` declaration.
 pub const ErasedFnAbiStore = struct {
     abis: []const ErasedFnAbi = &.{},
 
@@ -244,17 +290,20 @@ pub const ErasedFnAbiStore = struct {
     }
 };
 
+/// Public `CallableSetMemberRef` declaration.
 pub const CallableSetMemberRef = struct {
     callable_set_key: CanonicalCallableSetKey,
     member_index: CallableSetMemberId,
 };
 
+/// Public `CallableSetCaptureSlot` declaration.
 pub const CallableSetCaptureSlot = struct {
     slot: u32,
     source_ty: CanonicalTypeKey,
     exec_value_ty: CanonicalExecValueTypeKey,
 };
 
+/// Public `CanonicalCallableSetMember` declaration.
 pub const CanonicalCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: ProcedureCallableRef,
@@ -263,16 +312,19 @@ pub const CanonicalCallableSetMember = struct {
     capture_shape_key: CaptureShapeKey,
 };
 
+/// Public `CanonicalCallableSetDescriptor` declaration.
 pub const CanonicalCallableSetDescriptor = struct {
     key: CanonicalCallableSetKey,
     members: []const CanonicalCallableSetMember,
 };
 
+/// Public `CallableRepresentation` declaration.
 pub const CallableRepresentation = union(enum) {
     finite: CanonicalCallableSetKey,
     erased: ErasedFnSigKey,
 };
 
+/// Public `CallableReprMode` declaration.
 pub const CallableReprMode = enum {
     direct,
     finite_callable_set,
@@ -281,6 +333,7 @@ pub const CallableReprMode = enum {
     intrinsic_wrapper,
 };
 
+/// Public `ExecutableSpecializationKey` declaration.
 pub const ExecutableSpecializationKey = struct {
     base: ProcBaseKeyRef,
     requested_fn_ty: CanonicalTypeKey,
@@ -290,6 +343,7 @@ pub const ExecutableSpecializationKey = struct {
     capture_shape_key: CaptureShapeKey,
 };
 
+/// Public `ErasedAdapterKey` declaration.
 pub const ErasedAdapterKey = struct {
     source_fn_ty: CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,
@@ -297,21 +351,25 @@ pub const ErasedAdapterKey = struct {
     capture_shape_key: CaptureShapeKey,
 };
 
+/// Public `ErasedDirectProcCodeRef` declaration.
 pub const ErasedDirectProcCodeRef = struct {
     proc_value: ProcedureCallableRef,
     capture_shape_key: CaptureShapeKey,
 };
 
+/// Public `ErasedCallableCodeRef` declaration.
 pub const ErasedCallableCodeRef = union(enum) {
     direct_proc_value: ErasedDirectProcCodeRef,
     finite_set_adapter: ErasedAdapterKey,
 };
 
+/// Public `procedureCallableRefEql` function.
 pub fn procedureCallableRefEql(a: ProcedureCallableRef, b: ProcedureCallableRef) bool {
     return callableProcedureTemplateRefEql(a.template, b.template) and
         std.mem.eql(u8, &a.source_fn_ty.bytes, &b.source_fn_ty.bytes);
 }
 
+/// Public `callableProcedureTemplateRefEql` function.
 pub fn callableProcedureTemplateRefEql(a: CallableProcedureTemplateRef, b: CallableProcedureTemplateRef) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -321,23 +379,28 @@ pub fn callableProcedureTemplateRefEql(a: CallableProcedureTemplateRef, b: Calla
     };
 }
 
+/// Public `liftedProcedureTemplateRefEql` function.
 pub fn liftedProcedureTemplateRefEql(a: LiftedProcedureTemplateRef, b: LiftedProcedureTemplateRef) bool {
     return monoSpecializationKeyEql(a.owner_mono_specialization, b.owner_mono_specialization) and
         a.site == b.site;
 }
 
+/// Public `CanonicalTypeKey` declaration.
 pub const CanonicalTypeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `CanonicalTypeTemplateKey` declaration.
 pub const CanonicalTypeTemplateKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `CanonicalTypeSchemeKey` declaration.
 pub const CanonicalTypeSchemeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Public `ProcBaseKind` declaration.
 pub const ProcBaseKind = enum {
     checked_source,
     hosted_wrapper,
@@ -346,11 +409,13 @@ pub const ProcBaseKind = enum {
     entry_wrapper,
 };
 
+/// Public `NestedProcSiteKey` declaration.
 pub const NestedProcSiteKey = struct {
     owner_template: ProcedureTemplateRef,
     site: NestedProcSiteId,
 };
 
+/// Public `ProcBaseKey` declaration.
 pub const ProcBaseKey = struct {
     module_name: ModuleNameId,
     export_name: ?ExportNameId,
@@ -368,15 +433,18 @@ pub const ProcBaseKey = struct {
     owner_mono_specialization: ?MonoSpecializationKey = null,
 };
 
+/// Public `NominalTypeKey` declaration.
 pub const NominalTypeKey = struct {
     module_name: ModuleNameId,
     type_name: TypeNameId,
 };
 
+/// Public `erasedFnAbiKeyEql` function.
 pub fn erasedFnAbiKeyEql(a: ErasedFnAbiKey, b: ErasedFnAbiKey) bool {
     return std.mem.eql(u8, &a.bytes, &b.bytes);
 }
 
+/// Public `computeErasedFnAbiKey` function.
 pub fn computeErasedFnAbiKey(abi: ErasedFnAbi) ErasedFnAbiKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "erased-fn-abi");
@@ -464,6 +532,7 @@ fn writeHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(&bytes);
 }
 
+/// Public `CanonicalNameStore` declaration.
 pub const CanonicalNameStore = struct {
     allocator: Allocator,
     module_names: std.ArrayList([]const u8),

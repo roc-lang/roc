@@ -15,11 +15,12 @@ const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 const LowerIr = @import("lower_ir.zig");
 
-const Allocator = std.mem.Allocator;
-
+/// Public `MAGIC` declaration.
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
+/// Public `FORMAT_VERSION` declaration.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// Public `ImageError` declaration.
 pub const ImageError = error{
     InvalidRuntimeImage,
     UnsupportedRuntimeImageVersion,
@@ -66,6 +67,7 @@ pub const ProgramView = struct {
     target_usize: base.target.TargetUsize,
 };
 
+/// Public `LirStoreImage` declaration.
 pub const LirStoreImage = extern struct {
     cf_stmts: ArrayRef,
     cf_switch_branches: ArrayRef,
@@ -101,6 +103,7 @@ pub const LirStoreImage = extern struct {
     }
 };
 
+/// Public `StringLiteralStoreImage` declaration.
 pub const StringLiteralStoreImage = extern struct {
     buffer: ArrayRef,
 
@@ -117,6 +120,7 @@ pub const StringLiteralStoreImage = extern struct {
     }
 };
 
+/// Public `LayoutStoreImage` declaration.
 pub const LayoutStoreImage = extern struct {
     layouts: ArrayRef,
     resolved_list_layouts: ArrayRef,

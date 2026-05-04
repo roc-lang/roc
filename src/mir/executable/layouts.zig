@@ -7,10 +7,12 @@ const repr = @import("../lambda_solved/mod.zig").Representation;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
+/// Public `LayoutPublicationKey` declaration.
 pub const LayoutPublicationKey = struct {
     executable_ty: Type.TypeId,
 };
 
+/// Public `Layouts` declaration.
 pub const Layouts = struct {
     allocator: std.mem.Allocator,
     graph: layout_mod.Graph,
@@ -30,6 +32,7 @@ pub const Layouts = struct {
     }
 };
 
+/// Public `CallLoweringLayoutInputs` declaration.
 pub const CallLoweringLayoutInputs = struct {
     callable_set_keys: []const repr.CanonicalCallableSetKey = &.{},
     erased_signature_keys: []const repr.ErasedFnSigKey = &.{},

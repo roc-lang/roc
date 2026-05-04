@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [29]ModuleTest,
+    tests: [28]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -330,7 +330,7 @@ pub const ModuleType = enum {
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp, .ipc },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
             .ipc => &.{},
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
