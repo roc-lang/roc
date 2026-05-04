@@ -2093,6 +2093,7 @@ const ResolvedValueRefId = enum(u32) { _ };
 const ConstUseTemplate = struct {
     const_ref: ConstRef,
     requested_source_ty_template: CanonicalTypeTemplateKey,
+    requested_source_ty_payload: ArtifactCheckedTypeRef,
 };
 
 const ProcedureBindingRef = union(enum) {
@@ -2106,6 +2107,7 @@ const ProcedureBindingRef = union(enum) {
 const ProcedureUseTemplate = struct {
     binding: ProcedureBindingRef,
     source_fn_ty_template: CanonicalTypeTemplateKey,
+    source_fn_ty_payload: ArtifactCheckedTypeRef,
 };
 
 const ResolvedValueRef = union(enum) {
@@ -2223,6 +2225,17 @@ same template may instantiate to different concrete payloads in different mono
 specializations. Mono MIR must store the concrete payload ref produced in the
 current specialization and must not enqueue a const/procedure/callable request
 from only the canonical key.
+
+The paired payload fields are just as mandatory as the keys.
+`ConstUseTemplate.requested_source_ty_payload` and
+`ProcedureUseTemplate.source_fn_ty_payload` name the checked type payload graph
+that must be clone-instantiated in the current specialization or concrete
+checking-finalization request. The key is an identity check; the payload ref is
+the data. A dependency template that stores only a canonical key is invalid,
+because finalization would have to reconstruct the type graph from a hash,
+source expression, import lookup, or checker `Var`. Missing payload refs are
+compiler invariant violations: debug builds assert immediately and release
+builds use `unreachable`.
 
 `ProcedureUseTemplate` deliberately does not store a
 `CallableProcedureTemplateRef`. A function-valued top-level binding can be a

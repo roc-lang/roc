@@ -3559,6 +3559,7 @@ pub const PromotedProcedureRef = struct {
 pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
     requested_source_ty_template: canonical.CanonicalTypeKey,
+    requested_source_ty_payload: ?CheckedTypeId = null,
 };
 
 pub const ProcedureBindingRef = union(enum) {
@@ -3729,6 +3730,7 @@ pub const ImportedProcedureBindingRef = struct {
 pub const ProcedureUseTemplate = struct {
     binding: ProcedureBindingRef,
     source_fn_ty_template: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: ?CheckedTypeId = null,
 };
 
 pub const ResolvedValueRef = union(enum) {
@@ -3822,13 +3824,13 @@ pub const ResolvedValueRefTable = struct {
                 module.identStoreConst(),
                 module.exprType(expr_idx),
             );
-            attachUseTypeKey(&resolved_ref, checked_type_key);
             const checked_ty = checked_types.rootForKey(checked_type_key) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
                 unreachable;
             };
+            attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -3922,16 +3924,44 @@ fn classifyValueRef(
     };
 }
 
-fn attachUseTypeKey(ref: *ResolvedValueRef, key: canonical.CanonicalTypeKey) void {
+fn attachUseTypePayload(
+    ref: *ResolvedValueRef,
+    key: canonical.CanonicalTypeKey,
+    checked_ty: CheckedTypeId,
+) void {
     switch (ref.*) {
-        .top_level_const => |*use| use.requested_source_ty_template = key,
-        .imported_const => |*use| use.requested_source_ty_template = key,
-        .platform_required_const => |*use| use.requested_source_ty_template = key,
-        .top_level_proc => |*use| use.source_fn_ty_template = key,
-        .imported_proc => |*use| use.source_fn_ty_template = key,
-        .hosted_proc => |*use| use.source_fn_ty_template = key,
-        .platform_required_proc => |*use| use.source_fn_ty_template = key,
-        .promoted_top_level_proc => |*use| use.source_fn_ty_template = key,
+        .top_level_const => |*use| {
+            use.requested_source_ty_template = key;
+            use.requested_source_ty_payload = checked_ty;
+        },
+        .imported_const => |*use| {
+            use.requested_source_ty_template = key;
+            use.requested_source_ty_payload = checked_ty;
+        },
+        .platform_required_const => |*use| {
+            use.requested_source_ty_template = key;
+            use.requested_source_ty_payload = checked_ty;
+        },
+        .top_level_proc => |*use| {
+            use.source_fn_ty_template = key;
+            use.source_fn_ty_payload = checked_ty;
+        },
+        .imported_proc => |*use| {
+            use.source_fn_ty_template = key;
+            use.source_fn_ty_payload = checked_ty;
+        },
+        .hosted_proc => |*use| {
+            use.source_fn_ty_template = key;
+            use.source_fn_ty_payload = checked_ty;
+        },
+        .platform_required_proc => |*use| {
+            use.source_fn_ty_template = key;
+            use.source_fn_ty_payload = checked_ty;
+        },
+        .promoted_top_level_proc => |*use| {
+            use.source_fn_ty_template = key;
+            use.source_fn_ty_payload = checked_ty;
+        },
         .local_param,
         .local_value,
         .local_mutable_version,
@@ -5626,6 +5656,15 @@ pub fn buildPlatformAppRelation(
             .artifact = app_artifact.key,
             .pattern = app_value.pattern,
         };
+        const requested_source_ty_payload = app_artifact.checked_types.rootForKey(requested_source_ty) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform requirement {s} requested type has no checked payload in app artifact",
+                    .{required_name},
+                );
+            }
+            unreachable;
+        };
         const required_ty_is_function = sourceVarIsFunction(&platform_module_env.types, ModuleEnv.varFrom(declaration.type_anno));
 
         bindings[i] = .{
@@ -5654,6 +5693,7 @@ pub fn buildPlatformAppRelation(
                         .procedure_binding = procedure_binding,
                     } },
                     .source_fn_ty_template = requested_source_ty,
+                    .source_fn_ty_payload = requested_source_ty_payload,
                 } };
             } else blk: {
                 const const_ref = switch (app_value.value) {
@@ -5671,6 +5711,7 @@ pub fn buildPlatformAppRelation(
                 break :blk .{ .const_value = .{
                     .const_ref = const_ref,
                     .requested_source_ty_template = requested_source_ty,
+                    .requested_source_ty_payload = requested_source_ty_payload,
                 } };
             },
         };
