@@ -388,6 +388,7 @@ pub const Expr = struct {
         packed_erased_fn: PackedErasedFn,
         low_level: struct {
             op: base.LowLevel,
+            rc_effect: base.LowLevel.RcEffect,
             args: Span(ExprId),
         },
         source_match: SourceMatch,

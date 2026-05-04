@@ -265,6 +265,7 @@ const IrBuilder = struct {
                 defer if (args.len > 0) self.allocator.free(args);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
                     .op = low_level.op,
+                    .rc_effect = low_level.rc_effect,
                     .args = try self.output.store.addVarSpan(args),
                 } }, stmts);
             },
@@ -273,6 +274,7 @@ const IrBuilder = struct {
                 const args = [_]Ast.Var{arg};
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
                     .op = .bool_not,
+                    .rc_effect = base.LowLevel.bool_not.rcEffect(),
                     .args = try self.output.store.addVarSpan(&args),
                 } }, stmts);
             },
@@ -629,10 +631,12 @@ const IrBuilder = struct {
 
         const len = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
             .op = .list_len,
+            .rc_effect = base.LowLevel.list_len.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{source}),
         } }, stmts);
         const result = try self.bindExpr(expr.value, result_layout, .{ .call_low_level = .{
             .op = .list_with_capacity,
+            .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{len}),
         } }, stmts);
 
@@ -669,6 +673,7 @@ const IrBuilder = struct {
         const append_args = [_]Ast.Var{ result, transformed };
         const appended = try self.bindAnonymous(result_layout, .{ .call_low_level = .{
             .op = .list_append_unsafe,
+            .rc_effect = base.LowLevel.list_append_unsafe.rcEffect(),
             .args = try self.output.store.addVarSpan(&append_args),
         } }, &body_stmts);
         try body_stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
@@ -1110,6 +1115,7 @@ const IrBuilder = struct {
         const args = [_]Ast.Var{ parent, index };
         return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
             .op = .list_get_unsafe,
+            .rc_effect = base.LowLevel.list_get_unsafe.rcEffect(),
             .args = try self.output.store.addVarSpan(&args),
         } }, stmts);
     }
@@ -1127,11 +1133,13 @@ const IrBuilder = struct {
         const dropped_tail = try self.u64Literal(@intCast(rest.probe.from_end_count), stmts);
         const len_without_tail = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
             .op = .num_minus,
+            .rc_effect = base.LowLevel.num_minus.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len, dropped_tail }),
         } }, stmts);
         const start = try self.u64Literal(@intCast(rest.probe.start), stmts);
         const rest_len = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
             .op = .num_minus,
+            .rc_effect = base.LowLevel.num_minus.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len_without_tail, start }),
         } }, stmts);
         const slice_record = try self.bindAnonymous(try self.structLayout(&[_]Ast.Var{ rest_len, start }), .{
@@ -1139,6 +1147,7 @@ const IrBuilder = struct {
         }, stmts);
         return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
             .op = .list_sublist,
+            .rc_effect = base.LowLevel.list_sublist.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ parent, slice_record }),
         } }, stmts);
     }
@@ -1154,6 +1163,7 @@ const IrBuilder = struct {
         const len = try self.listLength(list, stmts);
         return try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
             .op = .num_minus,
+            .rc_effect = base.LowLevel.num_minus.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len, offset }),
         } }, stmts);
     }
@@ -1165,6 +1175,7 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         return try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
             .op = .list_len,
+            .rc_effect = base.LowLevel.list_len.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{list}),
         } }, stmts);
     }
@@ -1248,6 +1259,7 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         return try self.bindAnonymous(.{ .canonical = .bool }, .{ .call_low_level = .{
             .op = op,
+            .rc_effect = op.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ lhs, rhs }),
         } }, stmts);
     }

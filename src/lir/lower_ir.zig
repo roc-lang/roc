@@ -482,6 +482,7 @@ const Lowerer = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = target,
                     .op = .num_is_eq,
+                    .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
                     .args = try self.store.addLocalSpan(&args),
                     .next = next,
                 } });
@@ -489,6 +490,7 @@ const Lowerer = struct {
             .call_low_level => |call| try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = call.op,
+                .rc_effect = call.rc_effect,
                 .args = try self.lowerVarSpan(call.args),
                 .next = next,
             } }),
@@ -547,6 +549,7 @@ const Lowerer = struct {
             current = try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = fields[1],
                 .op = .box_box,
+                .rc_effect = LIR.LowLevel.box_box.rcEffect(),
                 .args = try self.store.addLocalSpan(&args),
                 .next = current,
             } });
@@ -619,6 +622,7 @@ const Lowerer = struct {
         const box_stmt = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .box_box,
+            .rc_effect = LIR.LowLevel.box_box.rcEffect(),
             .args = try self.store.addLocalSpan(&args),
             .next = next,
         } });
@@ -639,6 +643,7 @@ const Lowerer = struct {
         return try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = payload,
             .op = .box_unbox,
+            .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
             .args = try self.store.addLocalSpan(&args),
             .next = child_start,
         } });

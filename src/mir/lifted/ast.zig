@@ -176,6 +176,7 @@ pub const Expr = struct {
         inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,
+            rc_effect: base.LowLevel.RcEffect,
             args: Span(ExprId),
             source_constraint_ty: TypeId,
         },

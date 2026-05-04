@@ -186,6 +186,7 @@ pub const CFStmt = union(enum) {
     assign_low_level: struct {
         target: LocalId,
         op: LowLevel,
+        rc_effect: LowLevel.RcEffect,
         args: LocalSpan,
         next: CFStmtId,
     },

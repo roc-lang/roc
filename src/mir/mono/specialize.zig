@@ -2002,6 +2002,7 @@ const BodyLowerer = struct {
         const args = [_]Ast.ExprId{child};
         return try self.program.ast.addExprWithSource(ty, checkedTypeKey(checkedTypesForKey(self.input, artifact) orelse unreachable, checked_ty), .{ .low_level = .{
             .op = .box_box,
+            .rc_effect = base.LowLevel.box_box.rcEffect(),
             .args = try self.program.ast.addExprSpan(&args),
             .source_constraint_ty = ty,
         } });
@@ -2361,6 +2362,7 @@ const BodyLowerer = struct {
             const args = [_]Ast.ExprId{ current, rhs };
             current = try self.program.ast.addExpr(ty, .{ .low_level = .{
                 .op = .str_concat,
+                .rc_effect = base.LowLevel.str_concat.rcEffect(),
                 .args = try self.program.ast.addExprSpan(&args),
                 .source_constraint_ty = ty,
             } });
@@ -2817,6 +2819,7 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         return try self.program.ast.addExpr(ty, .{ .low_level = .{
             .op = op,
+            .rc_effect = op.rcEffect(),
             .args = try self.lowerExprSpan(args),
             .source_constraint_ty = ty,
         } });
@@ -2881,6 +2884,7 @@ const BodyLowerer = struct {
         const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(lhs_expr).ty);
         return try self.program.ast.addExpr(ty, .{ .low_level = .{
             .op = op,
+            .rc_effect = op.rcEffect(),
             .args = try self.program.ast.addExprSpan(&args),
             .source_constraint_ty = source_constraint_ty,
         } });
@@ -2896,6 +2900,7 @@ const BodyLowerer = struct {
         const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(child_expr).ty);
         return try self.program.ast.addExpr(ty, .{ .low_level = .{
             .op = .num_negate,
+            .rc_effect = base.LowLevel.num_negate.rcEffect(),
             .args = try self.program.ast.addExprSpan(&args),
             .source_constraint_ty = source_constraint_ty,
         } });

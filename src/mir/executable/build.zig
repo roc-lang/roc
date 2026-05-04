@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const check = @import("check");
 const types = @import("types");
 const symbol_mod = @import("symbol");
@@ -2041,6 +2042,7 @@ fn unboxPayloadForTransform(
     const args = [_]Ast.ExprId{source_expr};
     const unboxed_expr = try program.ast.addExpr(payload_ty, unboxed_value, .{ .low_level = .{
         .op = .box_unbox,
+        .rc_effect = base.LowLevel.box_unbox.rcEffect(),
         .args = try program.ast.addExprSpan(&args),
     } });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -2063,6 +2065,7 @@ fn boxTransformedPayload(
     const args = [_]Ast.ExprId{payload_expr};
     const boxed_expr = try program.ast.addExpr(target_box_ty, boxed_value, .{ .low_level = .{
         .op = .box_box,
+        .rc_effect = base.LowLevel.box_box.rcEffect(),
         .args = try program.ast.addExprSpan(&args),
     } });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -2677,6 +2680,7 @@ fn lowerPureComptimeBoxExpr(
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .low_level = .{
         .op = .box_box,
+        .rc_effect = base.LowLevel.box_box.rcEffect(),
         .args = try program.ast.addExprSpan(&exprs),
     } });
 }
@@ -3280,6 +3284,7 @@ fn lowerErasedCaptureBoxMaterialization(
     const value = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, value, .{ .low_level = .{
         .op = .box_box,
+        .rc_effect = base.LowLevel.box_box.rcEffect(),
         .args = try program.ast.addExprSpan(&exprs),
     } });
 }
@@ -4564,6 +4569,7 @@ const BodyBuilder = struct {
                     self.output.freshValueRef(),
                     .{ .low_level = .{
                         .op = low_level.op,
+                        .rc_effect = low_level.rc_effect,
                         .args = args,
                     } },
                 );

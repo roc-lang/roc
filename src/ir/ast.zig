@@ -132,6 +132,7 @@ pub const Expr = union(enum) {
     },
     call_low_level: struct {
         op: base.LowLevel,
+        rc_effect: base.LowLevel.RcEffect,
         args: Span(Var),
     },
 };

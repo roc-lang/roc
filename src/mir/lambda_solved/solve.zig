@@ -4587,6 +4587,7 @@ const BodySolver = struct {
         }
         return .{ .low_level = .{
             .op = low_level.op,
+            .rc_effect = low_level.rc_effect,
             .args = lowered_args.exprs,
             .source_constraint_ty = source_constraint_ty,
         } };

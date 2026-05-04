@@ -317,6 +317,7 @@ const BodyLifter = struct {
             .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,
+                .rc_effect = low_level.rc_effect,
                 .args = try self.lowerExprSpan(low_level.args),
                 .source_constraint_ty = low_level.source_constraint_ty,
             } },
