@@ -8119,12 +8119,14 @@ pub const ComptimeDependencySummary = struct {
 
 pub const ComptimeDependencySummaryStoreView = struct {
     owner: CheckedModuleArtifactKey,
+    root_requests: []const ?ComptimeDependencySummaryId = &.{},
     templates: []const ComptimeDependencySummaryTemplate = &.{},
     summaries: []const ComptimeDependencySummary = &.{},
 };
 
 pub const ComptimeDependencySummaryStore = struct {
     owner: CheckedModuleArtifactKey = .{},
+    root_requests: []?ComptimeDependencySummaryId = &.{},
     templates: std.ArrayList(ComptimeDependencySummaryTemplate) = .empty,
     summaries: std.ArrayList(ComptimeDependencySummary) = .empty,
 
@@ -8135,9 +8137,23 @@ pub const ComptimeDependencySummaryStore = struct {
     pub fn view(self: *const ComptimeDependencySummaryStore) ComptimeDependencySummaryStoreView {
         return .{
             .owner = self.owner,
+            .root_requests = self.root_requests,
             .templates = self.templates.items,
             .summaries = self.summaries.items,
         };
+    }
+
+    pub fn reserveRootRequests(
+        self: *ComptimeDependencySummaryStore,
+        allocator: Allocator,
+        count: usize,
+    ) Allocator.Error!void {
+        if (self.root_requests.len != 0) {
+            checkedArtifactInvariant("compile-time dependency root requests were reserved twice", .{});
+        }
+        if (count == 0) return;
+        self.root_requests = try allocator.alloc(?ComptimeDependencySummaryId, count);
+        @memset(self.root_requests, null);
     }
 
     pub fn appendTemplate(
@@ -8155,6 +8171,41 @@ pub const ComptimeDependencySummaryStore = struct {
             .concrete_value_templates = concrete_value_templates,
         });
         return id;
+    }
+
+    pub fn fillRootRequest(
+        self: *ComptimeDependencySummaryStore,
+        request: ComptimeDependencySummaryRequestId,
+        summary: ComptimeDependencySummaryId,
+    ) void {
+        const idx = @intFromEnum(request);
+        if (idx >= self.root_requests.len) {
+            checkedArtifactInvariant("compile-time dependency root request id is out of range", .{});
+        }
+        if (self.root_requests[idx] != null) {
+            checkedArtifactInvariant("compile-time dependency root request was filled twice", .{});
+        }
+        self.root_requests[idx] = summary;
+    }
+
+    pub fn summaryForRootRequest(
+        self: *const ComptimeDependencySummaryStore,
+        request: ComptimeDependencySummaryRequestId,
+    ) ComptimeDependencySummary {
+        return self.getSummary(self.summaryIdForRootRequest(request));
+    }
+
+    pub fn summaryIdForRootRequest(
+        self: *const ComptimeDependencySummaryStore,
+        request: ComptimeDependencySummaryRequestId,
+    ) ComptimeDependencySummaryId {
+        const idx = @intFromEnum(request);
+        if (idx >= self.root_requests.len) {
+            checkedArtifactInvariant("compile-time dependency root request id is out of range", .{});
+        }
+        return self.root_requests[idx] orelse {
+            checkedArtifactInvariant("compile-time dependency root request was consumed before it was filled", .{});
+        };
     }
 
     pub fn appendSummary(
@@ -8203,6 +8254,21 @@ pub const ComptimeDependencySummaryStore = struct {
             _ = summary;
             std.debug.assert(i <= std.math.maxInt(u32));
         }
+        for (self.root_requests, 0..) |summary_id, i| {
+            std.debug.assert(i <= std.math.maxInt(u32));
+            const id = summary_id orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: compile-time dependency root request {d} was not filled",
+                    .{i},
+                );
+            };
+            if (@intFromEnum(id) >= self.summaries.items.len) {
+                std.debug.panic(
+                    "checked artifact invariant violated: compile-time dependency root request {d} references missing summary",
+                    .{i},
+                );
+            }
+        }
     }
 
     pub fn deinit(self: *ComptimeDependencySummaryStore, allocator: Allocator) void {
@@ -8214,6 +8280,7 @@ pub const ComptimeDependencySummaryStore = struct {
             allocator.free(summary.availability_values);
             allocator.free(summary.concrete_values);
         }
+        allocator.free(self.root_requests);
         self.templates.deinit(allocator);
         self.summaries.deinit(allocator);
         self.* = .{};
@@ -10838,6 +10905,7 @@ pub fn publishFromTypedModule(
 
     var comptime_dependencies = ComptimeDependencySummaryStore.init(artifact_key);
     errdefer comptime_dependencies.deinit(allocator);
+    try comptime_dependencies.reserveRootRequests(allocator, compile_time_roots.roots.len);
 
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);

@@ -37,6 +37,8 @@ fn finalize(
     const compile_time_roots = try compileTimeRootRequests(allocator, artifact.root_requests.requests);
     defer if (compile_time_roots.len > 0) allocator.free(compile_time_roots);
 
+    try publishCompileTimeRootDependencySummaries(allocator, artifact);
+
     if (compile_time_roots.len == 0) {
         try artifact.comptime_values.sealBindings();
         return;
@@ -48,46 +50,52 @@ fn finalize(
         import_views[i] = import.view;
     }
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
-        allocator,
-        .{
-            .root = checked_artifact.loweringView(artifact),
-            .imports = import_views,
-        },
-        .{
-            .requests = compile_time_roots,
-            .purpose = .compile_time,
-            .compile_time_plan_sink = &artifact.comptime_plans,
-            .compile_time_artifact_sink = artifact,
-        },
-        .{
-            .target_usize = base.target.TargetUsize.native,
-            .artifact_state = .checking_finalization,
-        },
-    );
-    defer lowered.deinit();
+    const ordered_roots = try orderCompileTimeRootRequests(allocator, artifact, compile_time_roots);
+    defer allocator.free(ordered_roots);
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interpreter = try Interpreter.init(
-        allocator,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        runtime_env.get_ops(),
-    );
-    defer interpreter.deinit();
+    for (ordered_roots) |root_request| {
+        const single_root = [_]checked_artifact.RootRequest{root_request};
+        var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+            allocator,
+            .{
+                .root = checked_artifact.loweringView(artifact),
+                .imports = import_views,
+            },
+            .{
+                .requests = &single_root,
+                .purpose = .compile_time,
+                .compile_time_plan_sink = &artifact.comptime_plans,
+                .compile_time_artifact_sink = artifact,
+            },
+            .{
+                .target_usize = base.target.TargetUsize.native,
+                .artifact_state = .checking_finalization,
+            },
+        );
+        defer lowered.deinit();
 
-    if (compile_time_roots.len != lowered.lir_result.root_procs.items.len) {
-        compileTimeFinalizationInvariant("compile-time lowering did not preserve root cardinality");
-    }
+        var interpreter = try Interpreter.init(
+            allocator,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            runtime_env.get_ops(),
+        );
+        defer interpreter.deinit();
 
-    if (compile_time_roots.len != lowered.compile_time_root_payloads.len) {
-        compileTimeFinalizationInvariant("compile-time lowering did not publish one root payload per root");
-    }
+        if (lowered.lir_result.root_procs.items.len != 1) {
+            compileTimeFinalizationInvariant("single compile-time root lowering did not produce exactly one LIR root");
+        }
 
-    for (compile_time_roots, lowered.lir_result.root_procs.items, lowered.compile_time_root_payloads) |root_request, lir_root, payload| {
+        if (lowered.compile_time_root_payloads.len != 1) {
+            compileTimeFinalizationInvariant("single compile-time root lowering did not publish exactly one root payload");
+        }
+
         const root = compileTimeRootForRequest(artifact, root_request);
+        const lir_root = lowered.lir_result.root_procs.items[0];
+        const payload = lowered.compile_time_root_payloads[0];
         artifact.compile_time_roots.fillPayload(root.id, payload);
         switch (root.kind) {
             .constant => try evaluateConstantRoot(
@@ -134,6 +142,274 @@ fn compileTimeRootRequests(
     }
 
     return try out.toOwnedSlice(allocator);
+}
+
+fn publishCompileTimeRootDependencySummaries(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+) Allocator.Error!void {
+    for (artifact.compile_time_roots.roots) |root| {
+        var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
+        defer availability.deinit(allocator);
+
+        try collectRootAvailabilityUses(allocator, artifact, root, &availability);
+
+        const summary_id = try artifact.comptime_dependencies.appendSummary(allocator, .{
+            .availability_values = availability.items,
+            .concrete_values = &.{},
+        });
+        artifact.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
+    }
+}
+
+fn collectRootAvailabilityUses(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+) Allocator.Error!void {
+    var visited_templates = std.ArrayList(canonical.ProcedureTemplateRef).empty;
+    defer visited_templates.deinit(allocator);
+
+    const wrapper = artifact.entry_wrappers.lookupByRoot(root.id) orelse {
+        compileTimeFinalizationInvariant("compile-time root has no checked entry wrapper for dependency collection");
+    };
+    try collectLocalTemplateAvailabilityUses(
+        allocator,
+        artifact,
+        wrapper.template,
+        availability,
+        &visited_templates,
+    );
+}
+
+fn collectLocalTemplateAvailabilityUses(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    template_ref: canonical.ProcedureTemplateRef,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    if (!std.mem.eql(u8, &template_ref.artifact.bytes, &artifact.key.bytes)) {
+        compileTimeFinalizationInvariant("compile-time dependency collection attempted to walk a non-local procedure template");
+    }
+    if (templateAlreadyVisited(visited_templates.items, template_ref)) return;
+    try visited_templates.append(allocator, template_ref);
+
+    const template = artifact.checked_procedure_templates.get(template_ref.template);
+    try collectTemplateAvailabilityUses(allocator, artifact, template, availability, visited_templates);
+}
+
+fn collectTemplateAvailabilityUses(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    template: checked_artifact.CheckedProcedureTemplate,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    const start: usize = @intCast(template.resolved_value_refs.start);
+    const end = start + @as(usize, @intCast(template.resolved_value_refs.len));
+    if (end > artifact.resolved_value_refs.template_refs.len) {
+        compileTimeFinalizationInvariant("checked template resolved-value dependency span is out of range");
+    }
+
+    for (artifact.resolved_value_refs.template_refs[start..end]) |ref_id| {
+        const ref_index = @intFromEnum(ref_id);
+        if (ref_index >= artifact.resolved_value_refs.records.len) {
+            compileTimeFinalizationInvariant("checked template resolved-value dependency id is out of range");
+        }
+        try collectAvailabilityUse(
+            allocator,
+            artifact,
+            artifact.resolved_value_refs.records[ref_index].ref,
+            availability,
+            visited_templates,
+        );
+    }
+}
+
+fn collectAvailabilityUse(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    resolved: checked_artifact.ResolvedValueRef,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    switch (resolved) {
+        .top_level_const,
+        .imported_const,
+        .platform_required_const,
+        => |const_use| try appendConstAvailabilityUse(allocator, artifact, const_use, availability),
+
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .platform_required_proc,
+        .promoted_top_level_proc,
+        => |proc_use| try appendProcedureAvailabilityUse(
+            allocator,
+            artifact,
+            proc_use,
+            availability,
+            visited_templates,
+        ),
+
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        => {},
+
+        .platform_required_declaration => compileTimeFinalizationInvariant("dependency collection reached unresolved platform-required declaration"),
+    }
+}
+
+fn appendConstAvailabilityUse(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    const_use: checked_artifact.ConstUseTemplate,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+) Allocator.Error!void {
+    switch (const_use.const_ref.owner) {
+        .top_level_binding => |owner| {
+            if (std.mem.eql(u8, &const_use.const_ref.artifact.bytes, &artifact.key.bytes)) {
+                const dep_root = artifact.compile_time_roots.lookupIdByPattern(owner.pattern) orelse {
+                    compileTimeFinalizationInvariant("local top-level const dependency has no compile-time root");
+                };
+                try availability.append(allocator, .{ .local_root = dep_root });
+            } else {
+                try availability.append(allocator, .{ .imported_value = .{
+                    .artifact = const_use.const_ref.artifact,
+                    .pattern = owner.pattern,
+                } });
+            }
+        },
+        .promoted_capture => {},
+    }
+    try availability.append(allocator, .{ .const_template = const_use.const_ref });
+}
+
+fn appendProcedureAvailabilityUse(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    proc_use: checked_artifact.ProcedureUseTemplate,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+    visited_templates: *std.ArrayList(canonical.ProcedureTemplateRef),
+) Allocator.Error!void {
+    switch (proc_use.binding) {
+        .top_level => |binding_ref| {
+            const binding = artifact.top_level_procedure_bindings.get(binding_ref);
+            switch (binding.body) {
+                .direct_template => |direct| switch (direct.template) {
+                    .checked => |template| try collectLocalTemplateAvailabilityUses(
+                        allocator,
+                        artifact,
+                        template,
+                        availability,
+                        visited_templates,
+                    ),
+                    .synthetic => |synthetic| try collectLocalTemplateAvailabilityUses(
+                        allocator,
+                        artifact,
+                        synthetic.template,
+                        availability,
+                        visited_templates,
+                    ),
+                    .lifted => {},
+                },
+                .callable_eval_template => |template_id| {
+                    const template = artifact.callable_eval_templates.get(template_id);
+                    try availability.append(allocator, .{ .local_root = template.root });
+                },
+            }
+        },
+        .imported,
+        .hosted,
+        .platform_required,
+        .promoted,
+        => {},
+    }
+    try availability.append(allocator, .{ .procedure_binding = proc_use.binding });
+}
+
+fn templateAlreadyVisited(
+    visited: []const canonical.ProcedureTemplateRef,
+    template: canonical.ProcedureTemplateRef,
+) bool {
+    for (visited) |existing| {
+        if (existing.proc_base == template.proc_base and
+            existing.template == template.template and
+            std.mem.eql(u8, &existing.artifact.bytes, &template.artifact.bytes))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn orderCompileTimeRootRequests(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    roots: []const checked_artifact.RootRequest,
+) Allocator.Error![]checked_artifact.RootRequest {
+    var root_to_request = std.AutoHashMap(checked_artifact.ComptimeRootId, usize).init(allocator);
+    defer root_to_request.deinit();
+
+    for (roots, 0..) |request, i| {
+        const root = compileTimeRootForRequest(artifact, request);
+        try root_to_request.put(root.id, i);
+    }
+
+    const emitted = try allocator.alloc(bool, roots.len);
+    defer allocator.free(emitted);
+    @memset(emitted, false);
+
+    var ordered = std.ArrayList(checked_artifact.RootRequest).empty;
+    errdefer ordered.deinit(allocator);
+
+    var remaining = roots.len;
+    while (remaining != 0) {
+        var progressed = false;
+        for (roots, 0..) |request, i| {
+            if (emitted[i]) continue;
+            const root = compileTimeRootForRequest(artifact, request);
+            const summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
+            if (!localRootDependenciesSatisfied(summary, &root_to_request, emitted)) continue;
+
+            try ordered.append(allocator, request);
+            emitted[i] = true;
+            remaining -= 1;
+            progressed = true;
+        }
+        if (!progressed) {
+            compileTimeFinalizationInvariant("compile-time root dependency graph contains a local-root cycle or missing prerequisite");
+        }
+    }
+
+    return try ordered.toOwnedSlice(allocator);
+}
+
+fn localRootDependenciesSatisfied(
+    summary: checked_artifact.ComptimeDependencySummary,
+    root_to_request: *const std.AutoHashMap(checked_artifact.ComptimeRootId, usize),
+    emitted: []const bool,
+) bool {
+    for (summary.availability_values) |availability| {
+        switch (availability) {
+            .local_root => |dependency| {
+                const dependency_index = root_to_request.get(dependency) orelse {
+                    compileTimeFinalizationInvariant("compile-time root dependency references a root outside the selected compile-time root set");
+                };
+                if (!emitted[dependency_index]) return false;
+            },
+            .imported_value,
+            .const_template,
+            .procedure_binding,
+            => {},
+        }
+    }
+    return true;
 }
 
 fn evaluateConstantRoot(
@@ -185,7 +461,7 @@ fn evaluateConstantRoot(
     artifact.const_instances.fill(instance_ref, .{
         .schema = reified.schema,
         .value = reified.value,
-        .dependency_summary = @enumFromInt(@intFromEnum(root.dependency_summary_request)),
+        .dependency_summary = artifact.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request),
         .reification_plan = reification_plan,
     });
 }
@@ -257,7 +533,7 @@ fn evaluateCallableBindingRoot(
     artifact.callable_binding_instances.markEvaluating(instance_ref);
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
-        .dependency_summary = @enumFromInt(@intFromEnum(root.dependency_summary_request)),
+        .dependency_summary = artifact.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request),
         .executable_root = root.id,
         .result_plan = result_plan,
         .promotion_plan = callable.promotion_plan,
