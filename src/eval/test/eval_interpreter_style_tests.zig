@@ -268,6 +268,24 @@ pub const tests = [_]TestCase{
     .{ .name = "interpreter: List.contains is False for a missing element", .source = "List.contains([-1, -2, -3, 1, 2, 3], 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "interpreter: List.contains is True when element is found", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "interpreter: List.contains is False on empty list", .source = "List.contains([], 3333)", .expected = .{ .inspect_str = "False" } },
+    .{
+        .name = "interpreter: boxed promoted callable captures boxed value",
+        .source_kind = .module,
+        .source =
+        \\make_boxed_adder : I64 -> (I64 -> I64)
+        \\make_boxed_adder = |n| {
+        \\    boxed_n = Box.box(n)
+        \\
+        \\    |x| x + Box.unbox(boxed_n)
+        \\}
+        \\
+        \\add_one : I64 -> I64
+        \\add_one = make_boxed_adder(1)
+        \\
+        \\main = add_one(41)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
     .{ .name = "interpreter: empty record expression renders {}", .source = "{}", .expected = .{ .inspect_str = "{}" } },
     .{ .name = "interpreter: tuples and records", .source = "((1, 2), { x: 1, y: 2 })", .expected = .{ .inspect_str = "((1.0, 2.0), { x: 1.0, y: 2.0 })" } },
     .{
