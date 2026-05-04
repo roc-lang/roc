@@ -7255,11 +7255,31 @@ const CallableBindingInstanceRef = struct {
 const CallableBindingInstance = struct {
     key: CallableBindingInstantiationKey,
     dependency_summary: ComptimeDependencySummaryId,
+    proc_value: ProcedureCallableRef,
+    body: CallableBindingInstanceBody,
+};
+
+const CallableBindingInstanceBody = union(enum) {
+    /// The concrete instance was resolved from an already-sealed direct
+    /// procedure binding. No LIR interpreter execution was performed, and there
+    /// is no callable-result plan, promotion plan, or private executable root.
+    direct: DirectCallableBindingInstance,
+
+    /// The concrete instance was produced by evaluating a `CallableEvalTemplate`
+    /// through the compile-time MIR-family/LIR-interpreter path.
+    evaluated: EvaluatedCallableBindingInstance,
+};
+
+const DirectCallableBindingInstance = struct {
+    binding: ProcedureBindingRef,
+    template: CallableProcedureTemplateRef,
+};
+
+const EvaluatedCallableBindingInstance = struct {
     executable_root: CallableBindingExecutableRoot,
     result_plan: CallableResultPlanId,
     promotion_plan: ?CallablePromotionPlanId,
     promotion_output: CallablePromotionOutput,
-    proc_value: ProcedureCallableRef,
 };
 
 const CallableBindingExecutableRoot = union(enum) {
@@ -7544,24 +7564,38 @@ function-valued top-level binding is requested, the compiler receives a
 `source_scheme` and the request's `requested_source_fn_ty_payload` into one
 checking-finalization source type graph, validates that the request is an
 instance of that scheme, and debug-asserts that the payload's canonical key
-equals `key.requested_source_fn_ty`. A `direct_template` binding then produces a
-concrete `ProcedureCallableRef` from the direct callable template and the
-requested source function type payload. A `callable_eval_template` binding
-reserves a `CallableBindingInstanceRef`, lowers the checked callable body at the
-requested source function type payload, evaluates the private compile-time root
-through the LIR interpreter, reifies the `ComptimeCallable`, promotes captured
-callable results if needed, and fills the instance with a complete
-`CallableBindingInstance`.
+equals `key.requested_source_fn_ty`.
 
-A `CallableBindingInstance` is the concrete evaluation product, not just a
-procedure pointer. It records the concrete instantiation key, concrete dependency
-summary, private compile-time executable root used by the interpreter, concrete
-`CallableResultPlan`, optional `CallablePromotionPlan`, promotion output, and
-final `ProcedureCallableRef`. These records are sealed in the owning checked
-artifact. Later executable, IR, LIR, materialization, backend, REPL, glue, and
-test paths consume the sealed `ProcedureCallableRef` and related records; they
-must not run the callable-eval root or create promoted procedures after artifact
-publication.
+A `direct_template` binding fills a `CallableBindingInstance` with
+`body.direct`. This is not interpreter evaluation and must not manufacture a
+fake `CallableResultPlan`, fake promotion plan, fake executable root, fake
+runtime closure, or fake alias record. The row records the concrete
+`ProcedureCallableRef`, the direct binding that was instantiated, the direct
+callable template, and the concrete dependency summary. That is all the semantic
+data needed for later lowering to treat the value as an ordinary procedure
+value.
+
+A `callable_eval_template` binding reserves a `CallableBindingInstanceRef`,
+lowers the checked callable body at the requested source function type payload,
+evaluates the private compile-time root through the LIR interpreter, reifies the
+`ComptimeCallable`, promotes captured callable results if needed, and fills the
+instance with `body.evaluated`. The evaluated body records the private
+compile-time executable root used by the interpreter, concrete
+`CallableResultPlan`, optional `CallablePromotionPlan`, and promotion output.
+
+A `CallableBindingInstance` is the concrete semantic instance for a function
+binding request, not merely a procedure pointer and not always an interpreter
+evaluation product. Every instance records the concrete instantiation key,
+concrete dependency summary, final `ProcedureCallableRef`, and exactly one body
+case:
+
+- `direct` for already-sealed direct procedure bindings
+- `evaluated` for bindings produced by compile-time callable evaluation
+
+These records are sealed in the owning checked artifact. Later executable, IR,
+LIR, materialization, backend, REPL, glue, and test paths consume the sealed
+`ProcedureCallableRef` and related records; they must not run the callable-eval
+root or create promoted procedures after artifact publication.
 
 The store owner is always the checked artifact that requested the concrete
 callable binding instance. This matters for imported generic callable bindings:
@@ -16371,10 +16405,14 @@ Compile-time constants:
 - callable binding ownership tests must put `also_id = choose(True, id, id)` in
   one module, import it in another module, and call it at both `I64 -> I64` and
   `Str -> Str`. The importer must own two sealed
-  `CallableBindingInstance` rows with concrete dependency summaries, executable
-  roots, result plans, promotion outputs, and final procedure values. Removing
-  any of those rows after publication must be a debug-only verifier failure, not
-  a trigger for post-check recovery.
+  `CallableBindingInstance` rows with concrete dependency summaries and final
+  procedure values. If the selected binding body is direct, each row must have
+  `body.direct` with the direct callable template and no fake executable root,
+  result plan, or promotion output. If the selected binding body requires
+  compile-time callable evaluation, each row must have `body.evaluated` with the
+  executable root, result plan, and promotion output. Removing any of those rows
+  after publication must be a debug-only verifier failure, not a trigger for
+  post-check recovery.
 - semantic-instantiation procedure table tests must cover generated procedure
   templates from public callable-containing constants, generated procedure
   templates from callable binding promotion, and generated procedure templates

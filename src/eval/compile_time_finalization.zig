@@ -629,11 +629,13 @@ fn evaluateCallableBindingRoot(
     artifact.callable_binding_instances.fill(instance_ref, .{
         .key = key,
         .dependency_summary = dependency_summary,
-        .executable_root = .{ .local_root = root.id },
-        .result_plan = result_plan,
-        .promotion_plan = callable.promotion_plan,
-        .promotion_output = callable.output,
         .proc_value = callable.proc_value,
+        .body = .{ .evaluated = .{
+            .executable_root = .{ .local_root = root.id },
+            .result_plan = result_plan,
+            .promotion_plan = callable.promotion_plan,
+            .promotion_output = callable.output,
+        } },
     });
 }
 
@@ -666,6 +668,152 @@ const PublishedCallableResult = struct {
     output: checked_artifact.CallablePromotionOutput,
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
 };
+
+const DirectCallableBindingInfo = struct {
+    direct: checked_artifact.DirectProcedureBinding,
+};
+
+fn fillDirectCallableBindingInstance(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+) Allocator.Error!bool {
+    const direct = directCallableBindingInfo(artifact, import_views, request.key.binding) orelse return false;
+    const proc_value = canonical.ProcedureCallableRef{
+        .template = direct.direct.template,
+        .source_fn_ty = request.key.requested_source_fn_ty,
+    };
+    const instance_ref = try artifact.callable_binding_instances.reserveRequest(allocator, &artifact.checked_types, request);
+    const dependency_summary = try appendDirectCallableBindingDependencySummary(
+        allocator,
+        artifact,
+        request.key.binding,
+        proc_value,
+    );
+    artifact.callable_binding_instances.fill(instance_ref, .{
+        .key = request.key,
+        .dependency_summary = dependency_summary,
+        .proc_value = proc_value,
+        .body = .{ .direct = .{
+            .binding = request.key.binding,
+            .template = direct.direct.template,
+        } },
+    });
+    return true;
+}
+
+fn appendDirectCallableBindingDependencySummary(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    binding: checked_artifact.ProcedureBindingRef,
+    proc_value: canonical.ProcedureCallableRef,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    const availability = [_]checked_artifact.ComptimeAvailabilityUse{.{ .procedure_binding = binding }};
+    const concrete = [_]checked_artifact.ComptimeConcreteValueUse{.{ .procedure_callable = proc_value }};
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = availability[0..],
+        .concrete_values = concrete[0..],
+    });
+}
+
+fn directCallableBindingInfo(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    binding: checked_artifact.ProcedureBindingRef,
+) ?DirectCallableBindingInfo {
+    return switch (binding) {
+        .top_level => |binding_ref| switch (artifact.top_level_procedure_bindings.get(binding_ref).body) {
+            .direct_template => |direct| .{ .direct = direct },
+            .callable_eval_template => null,
+        },
+        .imported => |imported| blk: {
+            const view = importedProcedureBindingView(import_views, imported) orelse {
+                compileTimeFinalizationInvariant("direct callable binding request referenced missing imported binding");
+            };
+            break :blk switch (view.body) {
+                .direct_template => |direct| .{ .direct = direct },
+                .callable_eval_template => null,
+            };
+        },
+        .hosted => |hosted| .{ .direct = .{
+            .proc_value = hosted.proc,
+            .template = .{ .checked = hosted.template },
+        } },
+        .platform_required => |required| blk: {
+            const owner_bindings = topLevelProcedureBindingsForArtifact(
+                artifact,
+                import_views,
+                required.artifact,
+            ) orelse {
+                compileTimeFinalizationInvariant("platform-required direct callable binding owner artifact was not available");
+            };
+            break :blk switch (owner_bindings.get(required.procedure_binding).body) {
+                .direct_template => |direct| .{ .direct = direct },
+                .callable_eval_template => null,
+            };
+        },
+        .promoted => |promoted| blk: {
+            const promoted_record = promotedProcedureForRef(artifact, import_views, promoted) orelse {
+                compileTimeFinalizationInvariant("direct callable binding request referenced missing promoted procedure");
+            };
+            break :blk .{ .direct = .{
+                .proc_value = promoted_record.proc,
+                .template = .{ .synthetic = .{ .template = promoted_record.template } },
+            } };
+        },
+    };
+}
+
+fn topLevelProcedureBindingsForArtifact(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.TopLevelProcedureBindingTable {
+    if (std.mem.eql(u8, &artifact.key.bytes, &owner.bytes)) return &artifact.top_level_procedure_bindings;
+    for (import_views) |view| {
+        if (std.mem.eql(u8, &view.key.bytes, &owner.bytes)) return view.top_level_procedure_bindings;
+    }
+    return null;
+}
+
+fn importedProcedureBindingView(
+    import_views: []const checked_artifact.ImportedModuleView,
+    binding: checked_artifact.ImportedProcedureBindingRef,
+) ?checked_artifact.ImportedProcedureBindingView {
+    for (import_views) |view| {
+        if (!std.mem.eql(u8, &view.key.bytes, &binding.artifact.bytes)) continue;
+        for (view.exported_procedure_bindings.bindings) |candidate| {
+            if (importedProcedureBindingRefEql(candidate.binding, binding)) return candidate;
+        }
+    }
+    return null;
+}
+
+fn importedProcedureBindingRefEql(
+    a: checked_artifact.ImportedProcedureBindingRef,
+    b: checked_artifact.ImportedProcedureBindingRef,
+) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        a.module_idx == b.module_idx and
+        a.def == b.def and
+        a.pattern == b.pattern;
+}
+
+fn promotedProcedureForRef(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    promoted: checked_artifact.PromotedProcedureRef,
+) ?checked_artifact.PromotedProcedure {
+    if (artifact.module_identity.module_idx == promoted.module_idx) {
+        if (artifact.promoted_procedures.get(promoted)) |procedure| return procedure;
+    }
+    for (import_views) |view| {
+        if (view.module_identity.module_idx != promoted.module_idx) continue;
+        if (view.promoted_procedures.get(promoted)) |procedure| return procedure;
+    }
+    return null;
+}
 
 const CompileTimeRootDependencyGraph = struct {
     nodes: []CompileTimeRootNode = &.{},

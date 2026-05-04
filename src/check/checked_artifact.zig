@@ -9615,14 +9615,28 @@ pub const CallableBindingExecutableRoot = union(enum) {
     concrete_request: CallableBindingInstantiationKey,
 };
 
-pub const CallableBindingInstance = struct {
-    key: CallableBindingInstantiationKey,
-    dependency_summary: ComptimeDependencySummaryId,
+pub const DirectCallableBindingInstance = struct {
+    binding: ProcedureBindingRef,
+    template: canonical.CallableProcedureTemplateRef,
+};
+
+pub const EvaluatedCallableBindingInstance = struct {
     executable_root: CallableBindingExecutableRoot,
     result_plan: CallableResultPlanId,
     promotion_plan: ?CallablePromotionPlanId = null,
     promotion_output: CallablePromotionOutput,
+};
+
+pub const CallableBindingInstanceBody = union(enum) {
+    direct: DirectCallableBindingInstance,
+    evaluated: EvaluatedCallableBindingInstance,
+};
+
+pub const CallableBindingInstance = struct {
+    key: CallableBindingInstantiationKey,
+    dependency_summary: ComptimeDependencySummaryId,
     proc_value: canonical.ProcedureCallableRef,
+    body: CallableBindingInstanceBody,
 };
 
 pub const CallableBindingInstantiationState = union(enum) {
@@ -9823,9 +9837,50 @@ fn verifyCallableBindingInstance(
     if (@intFromEnum(instance.dependency_summary) >= comptime_dependencies.summaries.items.len) {
         std.debug.panic("checked artifact invariant violated: callable binding instance {d} references missing dependency summary", .{index});
     }
-    verifyCallableResultRef(plans, instance.result_plan);
+    if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &key.requested_source_fn_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: callable binding instance {d} proc value type differs from row key", .{index});
+    }
 
-    switch (instance.executable_root) {
+    switch (instance.body) {
+        .direct => |direct| verifyDirectCallableBindingInstance(index, key, instance.proc_value, direct),
+        .evaluated => |evaluated| verifyEvaluatedCallableBindingInstance(
+            index,
+            key,
+            instance.proc_value,
+            evaluated,
+            plans,
+            roots,
+            promoted_procedures,
+        ),
+    }
+}
+
+fn verifyDirectCallableBindingInstance(
+    index: usize,
+    key: CallableBindingInstantiationKey,
+    proc_value: canonical.ProcedureCallableRef,
+    direct: DirectCallableBindingInstance,
+) void {
+    if (!procedureBindingRefEql(direct.binding, key.binding)) {
+        std.debug.panic("checked artifact invariant violated: direct callable binding instance {d} body binding differs from row key", .{index});
+    }
+    if (!canonical.callableProcedureTemplateRefEql(direct.template, proc_value.template)) {
+        std.debug.panic("checked artifact invariant violated: direct callable binding instance {d} body template differs from proc value", .{index});
+    }
+}
+
+fn verifyEvaluatedCallableBindingInstance(
+    index: usize,
+    key: CallableBindingInstantiationKey,
+    proc_value: canonical.ProcedureCallableRef,
+    evaluated: EvaluatedCallableBindingInstance,
+    plans: *const CompileTimePlanStore,
+    roots: *const CompileTimeRootTable,
+    promoted_procedures: *const PromotedProcedureTable,
+) void {
+    verifyCallableResultRef(plans, evaluated.result_plan);
+
+    switch (evaluated.executable_root) {
         .local_root => |root| {
             const root_index = @intFromEnum(root);
             if (root_index >= roots.roots.len) {
@@ -9842,17 +9897,17 @@ fn verifyCallableBindingInstance(
         },
     }
 
-    switch (instance.promotion_output) {
+    switch (evaluated.promotion_output) {
         .existing_procedure => |proc| {
-            if (instance.promotion_plan != null) {
+            if (evaluated.promotion_plan != null) {
                 std.debug.panic("checked artifact invariant violated: existing callable binding instance {d} unexpectedly has a promotion plan", .{index});
             }
-            if (!canonical.procedureCallableRefEql(instance.proc_value, proc)) {
+            if (!canonical.procedureCallableRefEql(proc_value, proc)) {
                 std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from existing procedure output", .{index});
             }
         },
         .promoted_procedure => |promoted| {
-            const plan = instance.promotion_plan orelse {
+            const plan = evaluated.promotion_plan orelse {
                 std.debug.panic("checked artifact invariant violated: promoted callable binding instance {d} has no promotion plan", .{index});
             };
             verifyCallablePromotionRef(plans, plan);
@@ -9861,9 +9916,9 @@ fn verifyCallableBindingInstance(
             };
             const expected = canonical.ProcedureCallableRef{
                 .template = .{ .synthetic = .{ .template = promoted_record.template } },
-                .source_fn_ty = instance.key.requested_source_fn_ty,
+                .source_fn_ty = key.requested_source_fn_ty,
             };
-            if (!canonical.procedureCallableRefEql(instance.proc_value, expected)) {
+            if (!canonical.procedureCallableRefEql(proc_value, expected)) {
                 std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from promoted procedure output", .{index});
             }
         },
