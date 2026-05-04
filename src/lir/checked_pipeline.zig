@@ -987,10 +987,10 @@ fn callableResultPlanForRoot(
     };
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
-        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, callable, key),
+        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, instance.public_roots.ret, callable, key),
         .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, plans, value_context, erased),
         .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
-        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
+        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, plans, value_context, instance.public_roots.ret, callable, erase),
     };
 }
 
@@ -999,6 +999,7 @@ fn finiteCallableResultPlan(
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
+    callable_value: repr.ValueInfoId,
     callable: repr.CallableValueInfo,
     key: repr.CanonicalCallableSetKey,
 ) Allocator.Error!checked_artifact.CallableResultPlanId {
@@ -1019,16 +1020,6 @@ fn finiteCallableResultPlan(
             checkedPipelineInvariant("finite compile-time callable result descriptor mixes source function types");
         }
         if (member.capture_slots.len != 0) {
-            const construction_id = callable.construction_plan orelse {
-                checkedPipelineInvariant("captured finite compile-time callable result has no construction plan");
-            };
-            const construction = representation_store.callableConstructionPlan(construction_id);
-            if (construction.selected_member != member.member) {
-                checkedPipelineInvariant("captured multi-member compile-time callable result needs per-member capture plans");
-            }
-            if (construction.capture_values.len != member.capture_slots.len) {
-                checkedPipelineInvariant("captured finite compile-time callable result capture arity disagrees with descriptor");
-            }
             const slot_plans = try allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
             errdefer allocator.free(slot_plans);
             var capture_builder = CaptureSlotPlanBuilder{
@@ -1039,11 +1030,36 @@ fn finiteCallableResultPlan(
                 .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
             };
             defer capture_builder.deinit();
-            for (member.capture_slots, construction.capture_values, 0..) |slot, capture_value, slot_i| {
+            const construction = if (callable.construction_plan) |construction_id|
+                representation_store.callableConstructionPlan(construction_id)
+            else
+                null;
+            if (construction) |constructed| {
+                if (constructed.result != callable_value) {
+                    checkedPipelineInvariant("captured finite compile-time callable result construction is attached to a different value");
+                }
+                if (constructed.selected_member == member.member) {
+                    if (constructed.capture_values.len != member.capture_slots.len) {
+                        checkedPipelineInvariant("captured finite compile-time callable result capture arity disagrees with descriptor");
+                    }
+                    for (member.capture_slots, constructed.capture_values, 0..) |slot, capture_value, slot_i| {
+                        if (slot.slot != @as(u32, @intCast(slot_i))) {
+                            checkedPipelineInvariant("captured finite compile-time callable result capture slots are not canonical");
+                        }
+                        slot_plans[slot_i] = try capture_builder.planFor(slot.source_ty, capture_value);
+                    }
+                    members[i] = .{
+                        .member = member.member,
+                        .capture_slots = slot_plans,
+                    };
+                    continue;
+                }
+            }
+            for (member.capture_slots, 0..) |slot, slot_i| {
                 if (slot.slot != @as(u32, @intCast(slot_i))) {
                     checkedPipelineInvariant("captured finite compile-time callable result capture slots are not canonical");
                 }
-                slot_plans[slot_i] = try capture_builder.planFor(slot.source_ty, capture_value);
+                slot_plans[slot_i] = try capture_builder.planForExecutableSlot(slot.source_ty, slot.exec_value_ty);
             }
             members[i] = .{
                 .member = member.member,
@@ -1334,6 +1350,7 @@ fn erasedFiniteSetResultPlan(
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
+    callable_value: repr.ValueInfoId,
     callable: repr.CallableValueInfo,
     erase: repr.FiniteSetErasePlan,
 ) Allocator.Error!checked_artifact.CallableResultPlanId {
@@ -1351,6 +1368,7 @@ fn erasedFiniteSetResultPlan(
                 artifact_sink,
                 plans,
                 value_context,
+                callable_value,
                 callable,
                 erase.adapter.callable_set_key,
             ) },
@@ -1506,8 +1524,10 @@ fn cloneBoxBoundarySpan(
 
 const CapturePlanKey = struct {
     source_ty: canonical.CanonicalTypeKey,
+    exec_ty: canonical.CanonicalExecValueTypeKey,
     value_store: u32,
     value_info: u32,
+    has_exec_ty: bool,
 
     const none = std.math.maxInt(u32);
 
@@ -1518,8 +1538,24 @@ const CapturePlanKey = struct {
     ) CapturePlanKey {
         return .{
             .source_ty = source_ty,
+            .exec_ty = .{},
             .value_store = @intFromEnum(value_store_id),
             .value_info = if (value_info) |info| @intFromEnum(info) else none,
+            .has_exec_ty = false,
+        };
+    }
+
+    fn fromExecutable(
+        source_ty: canonical.CanonicalTypeKey,
+        value_store_id: repr.ValueInfoStoreId,
+        exec_ty: canonical.CanonicalExecValueTypeKey,
+    ) CapturePlanKey {
+        return .{
+            .source_ty = source_ty,
+            .exec_ty = exec_ty,
+            .value_store = @intFromEnum(value_store_id),
+            .value_info = none,
+            .has_exec_ty = true,
         };
     }
 };
@@ -1550,13 +1586,33 @@ const CaptureSlotPlanBuilder = struct {
         return try self.planForOptional(source_ty, null);
     }
 
+    fn planForExecutableSlot(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        exec_ty: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
+        return try self.planForOptionalExecutable(source_ty, null, exec_ty);
+    }
+
     fn planForOptional(
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
         value_info: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
+        return try self.planForOptionalExecutable(source_ty, value_info, null);
+    }
+
+    fn planForOptionalExecutable(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        value_info: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
         const resolved_value = if (value_info) |info| self.resolveValueInfoId(info) else null;
-        const key = CapturePlanKey.from(source_ty, self.value_context.value_store_id, resolved_value);
+        const key = if (resolved_value == null and exec_ty != null)
+            CapturePlanKey.fromExecutable(source_ty, self.value_context.value_store_id, exec_ty.?)
+        else
+            CapturePlanKey.from(source_ty, self.value_context.value_store_id, resolved_value);
         if (self.active.get(key)) |active| {
             const recursive = try self.plans.reserveCaptureSlot(self.allocator);
             self.plans.fillCaptureSlot(recursive, .{ .recursive_ref = active });
@@ -1567,7 +1623,7 @@ const CaptureSlotPlanBuilder = struct {
         try self.active.put(key, id);
         errdefer _ = self.active.remove(key);
 
-        const plan = try self.buildPlan(source_ty, resolved_value);
+        const plan = try self.buildPlan(source_ty, resolved_value, if (resolved_value == null) exec_ty else null);
         self.plans.fillCaptureSlot(id, plan);
         _ = self.active.remove(key);
         return id;
@@ -1577,6 +1633,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         const checked_ty = self.artifact.checked_types.rootForKey(source_ty) orelse {
             checkedPipelineInvariant("capture slot source type was not published in checked type store");
@@ -1593,26 +1650,98 @@ const CaptureSlotPlanBuilder = struct {
             .flex, .rigid => checkedPipelineInvariant("capture slot planning reached unresolved type variable"),
             .function => if (value_info_id) |info_id|
                 .{ .callable_leaf = try self.callableLeafPlan(info_id) }
+            else if (exec_ty) |key|
+                try self.callablePlanForExecutableKey(source_ty, key)
             else
                 .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .empty_record => .{ .record = &.{} },
-            .record => |record| .{ .record = try self.recordFields(record.fields, value_info_id) },
-            .record_unbound => |fields| .{ .record = try self.recordFields(fields, value_info_id) },
-            .tuple => |items| .{ .tuple = try self.tupleItems(items, value_info_id) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags, value_info_id) },
+            .record => |record| .{ .record = try self.recordFields(record.fields, value_info_id, exec_ty) },
+            .record_unbound => |fields| .{ .record = try self.recordFields(fields, value_info_id, exec_ty) },
+            .tuple => |items| .{ .tuple = try self.tupleItems(items, value_info_id, exec_ty) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags, value_info_id, exec_ty) },
             .empty_tag_union => checkedPipelineInvariant("capture slot planning reached empty tag union"),
             .alias => |alias| .{ .nominal = .{
                 .nominal = .{
                     .module_name = alias.origin_module,
                     .type_name = alias.name,
                 },
-                .backing = try self.planForOptional(
+                .backing = try self.planForOptionalExecutable(
                     self.artifact.checked_types.roots[@intFromEnum(alias.backing)].key,
                     value_info_id,
+                    self.nominalBackingExecutableKey(exec_ty),
                 ),
             } },
-            .nominal => |nominal| try self.nominalPlan(checked_ty, source_ty, nominal, value_info_id),
+            .nominal => |nominal| try self.nominalPlan(checked_ty, source_ty, nominal, value_info_id, exec_ty),
         };
+    }
+
+    fn callablePlanForExecutableKey(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        exec_ty: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
+        const payload = self.executablePayloadForKey(exec_ty);
+        return switch (payload) {
+            .callable_set => |callable_set| .{ .callable_leaf = try self.finiteCallableResultPlanForExecutableKey(source_ty, callable_set.key) },
+            .vacant_callable_slot => .{ .callable_schema = source_ty },
+            .erased_fn => checkedPipelineInvariant("capture slot executable schema reached erased function without explicit value metadata"),
+            .recursive_ref => |ref| try self.callablePlanForExecutablePayloadRef(source_ty, ref),
+            else => checkedPipelineInvariant("function capture slot executable key did not reference callable payload"),
+        };
+    }
+
+    fn callablePlanForExecutablePayloadRef(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        ref: repr.SessionExecutableTypePayloadId,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
+        const key = self.value_context.representation_store.session_executable_type_payloads.keyFor(ref);
+        return try self.callablePlanForExecutableKey(source_ty, key);
+    }
+
+    fn finiteCallableResultPlanForExecutableKey(
+        self: *CaptureSlotPlanBuilder,
+        source_fn_ty: canonical.CanonicalTypeKey,
+        key: repr.CanonicalCallableSetKey,
+    ) Allocator.Error!checked_artifact.CallableResultPlanId {
+        const descriptor = self.value_context.representation_store.callableSetDescriptor(key) orelse {
+            checkedPipelineInvariant("finite executable callable result has no descriptor");
+        };
+        if (descriptor.members.len == 0) {
+            checkedPipelineInvariant("finite executable callable result descriptor has no members");
+        }
+
+        const members = try self.allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
+        errdefer self.allocator.free(members);
+
+        for (descriptor.members, 0..) |member, i| {
+            if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
+                checkedPipelineInvariant("finite executable callable result descriptor source function type disagrees with payload");
+            }
+            const slot_plans: []const checked_artifact.CaptureSlotReificationPlanId = if (member.capture_slots.len == 0)
+                &.{}
+            else blk: {
+                const out = try self.allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
+                errdefer self.allocator.free(out);
+                for (member.capture_slots, 0..) |slot, slot_i| {
+                    if (slot.slot != @as(u32, @intCast(slot_i))) {
+                        checkedPipelineInvariant("finite executable callable result capture slots are not canonical");
+                    }
+                    out[slot_i] = try self.planForExecutableSlot(slot.source_ty, slot.exec_value_ty);
+                }
+                break :blk out;
+            };
+            members[i] = .{
+                .member = member.member,
+                .capture_slots = slot_plans,
+            };
+        }
+
+        return try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
+            .source_fn_ty = source_fn_ty,
+            .callable_set_key = key,
+            .members = members,
+        } });
     }
 
     fn callableLeafPlan(
@@ -1628,6 +1757,7 @@ const CaptureSlotPlanBuilder = struct {
                 self.artifact,
                 self.plans,
                 self.value_context,
+                value_info_id,
                 callable,
                 key,
             ),
@@ -1651,6 +1781,7 @@ const CaptureSlotPlanBuilder = struct {
                 self.artifact,
                 self.plans,
                 self.value_context,
+                value_info_id,
                 callable,
                 erase,
             ),
@@ -1692,6 +1823,7 @@ const CaptureSlotPlanBuilder = struct {
         source_ty: canonical.CanonicalTypeKey,
         nominal: checked_artifact.CheckedNominalType,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         if (nominal.builtin) |builtin_nominal| {
             return switch (builtin_nominal) {
@@ -1715,12 +1847,13 @@ const CaptureSlotPlanBuilder = struct {
                     value_info_id,
                 ),
                 .list => .{ .list = .{
-                    .elem = try self.listElemPlan(nominalArg(nominal, 0), value_info_id),
+                    .elem = try self.listElemPlan(nominalArg(nominal, 0), value_info_id, exec_ty),
                 } },
-                .box => try self.boxPlan(checked_ty, source_ty, nominalArg(nominal, 0), value_info_id),
-                .bool => try self.planForOptional(
+                .box => try self.boxPlan(checked_ty, source_ty, nominalArg(nominal, 0), value_info_id, exec_ty),
+                .bool => try self.planForOptionalExecutable(
                     self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
                     value_info_id,
+                    self.nominalBackingExecutableKey(exec_ty),
                 ),
             };
         }
@@ -1730,9 +1863,10 @@ const CaptureSlotPlanBuilder = struct {
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
             },
-            .backing = try self.planForOptional(
+            .backing = try self.planForOptionalExecutable(
                 self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
                 value_info_id,
+                self.nominalBackingExecutableKey(exec_ty),
             ),
         } };
     }
@@ -1743,6 +1877,7 @@ const CaptureSlotPlanBuilder = struct {
         source_ty: canonical.CanonicalTypeKey,
         payload_ty: checked_artifact.CheckedTypeId,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         if (value_info_id) |info_id| {
             if (self.boxPayloadNeedsExecutableMaterialization(info_id)) {
@@ -1750,22 +1885,32 @@ const CaptureSlotPlanBuilder = struct {
             }
             return .{ .box = try self.boxPayloadPlan(payload_ty, info_id) };
         }
-        return .{ .box = try self.planForTypeOnly(self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key) };
+        return .{ .box = try self.planForOptionalExecutable(
+            self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key,
+            null,
+            self.boxPayloadExecutableKey(exec_ty),
+        ) };
     }
 
     fn recordFields(
         self: *CaptureSlotPlanBuilder,
         fields: []const checked_artifact.CheckedRecordField,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.CaptureRecordFieldPlan {
         if (fields.len == 0) return &.{};
         const plans_out = try self.allocator.alloc(checked_artifact.CaptureRecordFieldPlan, fields.len);
         errdefer self.allocator.free(plans_out);
         for (fields, 0..) |field, i| {
             const child = self.recordFieldValue(value_info_id, field.name);
+            const child_exec = if (child == null) self.recordFieldExecutableKey(exec_ty, field.name) else null;
             plans_out[i] = .{
                 .field = field.name,
-                .value = try self.planForOptional(self.artifact.checked_types.roots[@intFromEnum(field.ty)].key, child),
+                .value = try self.planForOptionalExecutable(
+                    self.artifact.checked_types.roots[@intFromEnum(field.ty)].key,
+                    child,
+                    child_exec,
+                ),
             };
         }
         return plans_out;
@@ -1775,16 +1920,20 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         items: []const checked_artifact.CheckedTypeId,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.CaptureTupleElemPlan {
         if (items.len == 0) return &.{};
         const plans_out = try self.allocator.alloc(checked_artifact.CaptureTupleElemPlan, items.len);
         errdefer self.allocator.free(plans_out);
         for (items, 0..) |item, i| {
+            const child = self.tupleElemValue(value_info_id, @intCast(i));
+            const child_exec = if (child == null) self.tupleElemExecutableKey(exec_ty, @intCast(i)) else null;
             plans_out[i] = .{
                 .index = @intCast(i),
-                .value = try self.planForOptional(
+                .value = try self.planForOptionalExecutable(
                     self.artifact.checked_types.roots[@intFromEnum(item)].key,
-                    self.tupleElemValue(value_info_id, @intCast(i)),
+                    child,
+                    child_exec,
                 ),
             };
         }
@@ -1795,6 +1944,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         tags: []const checked_artifact.CheckedTag,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.CaptureTagVariantPlan {
         const variants = try self.allocator.alloc(checked_artifact.CaptureTagVariantPlan, tags.len);
         errdefer {
@@ -1805,11 +1955,14 @@ const CaptureSlotPlanBuilder = struct {
             const payloads = try self.allocator.alloc(checked_artifact.CaptureTagPayloadPlan, tag.args.len);
             errdefer self.allocator.free(payloads);
             for (tag.args, 0..) |arg_ty, arg_i| {
+                const child = self.tagPayloadValue(value_info_id, tag.name, @intCast(arg_i));
+                const child_exec = if (child == null) self.tagPayloadExecutableKey(exec_ty, tag.name, @intCast(arg_i)) else null;
                 payloads[arg_i] = .{
                     .index = @intCast(arg_i),
-                    .value = try self.planForOptional(
+                    .value = try self.planForOptionalExecutable(
                         self.artifact.checked_types.roots[@intFromEnum(arg_ty)].key,
-                        self.tagPayloadValue(value_info_id, tag.name, @intCast(arg_i)),
+                        child,
+                        child_exec,
                     ),
                 };
             }
@@ -1822,10 +1975,14 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         elem_ty: checked_artifact.CheckedTypeId,
         value_info_id: ?repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        return try self.planForOptional(
+        const child = self.listRepresentativeValue(value_info_id);
+        const child_exec = if (child == null) self.listElemExecutableKey(exec_ty) else null;
+        return try self.planForOptionalExecutable(
             self.artifact.checked_types.roots[@intFromEnum(elem_ty)].key,
-            self.listRepresentativeValue(value_info_id),
+            child,
+            child_exec,
         );
     }
 
@@ -1958,6 +2115,174 @@ const CaptureSlotPlanBuilder = struct {
             return null;
         }
         return list.elems[0];
+    }
+
+    fn executablePayloadForKey(
+        self: *const CaptureSlotPlanBuilder,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) repr.SessionExecutableTypePayload {
+        const ref = self.value_context.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+            checkedPipelineInvariant("capture slot executable key has no published payload");
+        };
+        return self.value_context.representation_store.session_executable_type_payloads.get(ref.payload);
+    }
+
+    fn executablePayloadForRef(
+        self: *const CaptureSlotPlanBuilder,
+        ref: repr.SessionExecutableTypePayloadId,
+    ) repr.SessionExecutableTypePayload {
+        return self.value_context.representation_store.session_executable_type_payloads.get(ref);
+    }
+
+    fn recordFieldExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+        label: canonical.RecordFieldLabelId,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.recordFieldExecutableKeyFromPayload(self.executablePayloadForKey(key), label);
+    }
+
+    fn recordFieldExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        payload: repr.SessionExecutableTypePayload,
+        label: canonical.RecordFieldLabelId,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (self.value_context.row_shapes.recordField(field.field).label == label) break :blk field.key;
+                }
+                checkedPipelineInvariant("record capture executable payload omitted a checked field label");
+            },
+            .recursive_ref => |ref| self.recordFieldExecutableKeyFromPayload(self.executablePayloadForRef(ref), label),
+            else => checkedPipelineInvariant("record capture executable key did not reference a record payload"),
+        };
+    }
+
+    fn tupleElemExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+        index: u32,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.tupleElemExecutableKeyFromPayload(self.executablePayloadForKey(key), index);
+    }
+
+    fn tupleElemExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        payload: repr.SessionExecutableTypePayload,
+        index: u32,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .tuple => |items| blk: {
+                for (items) |item| {
+                    if (item.index == index) break :blk item.key;
+                }
+                checkedPipelineInvariant("tuple capture executable payload omitted a checked element");
+            },
+            .recursive_ref => |ref| self.tupleElemExecutableKeyFromPayload(self.executablePayloadForRef(ref), index),
+            else => checkedPipelineInvariant("tuple capture executable key did not reference a tuple payload"),
+        };
+    }
+
+    fn tagPayloadExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+        tag_label: canonical.TagLabelId,
+        payload_index: u32,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.tagPayloadExecutableKeyFromPayload(self.executablePayloadForKey(key), tag_label, payload_index);
+    }
+
+    fn tagPayloadExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        payload: repr.SessionExecutableTypePayload,
+        tag_label: canonical.TagLabelId,
+        payload_index: u32,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .tag_union => |tag_union| blk: {
+                for (tag_union.variants) |variant| {
+                    const tag = self.value_context.row_shapes.tag(variant.tag);
+                    if (tag.label != tag_label) continue;
+                    const payload_ids = self.value_context.row_shapes.tagPayloads(variant.tag);
+                    if (payload_index >= payload_ids.len) {
+                        checkedPipelineInvariant("tag capture executable payload index exceeded finalized payload arity");
+                    }
+                    const payload_id = payload_ids[payload_index];
+                    for (variant.payloads) |item| {
+                        if (item.payload == payload_id) break :blk item.key;
+                    }
+                    checkedPipelineInvariant("tag capture executable payload omitted a checked payload");
+                }
+                break :blk null;
+            },
+            .recursive_ref => |ref| self.tagPayloadExecutableKeyFromPayload(self.executablePayloadForRef(ref), tag_label, payload_index),
+            else => checkedPipelineInvariant("tag capture executable key did not reference a tag-union payload"),
+        };
+    }
+
+    fn listElemExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.listElemExecutableKeyFromPayload(self.executablePayloadForKey(key));
+    }
+
+    fn listElemExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        payload: repr.SessionExecutableTypePayload,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .list => |list| list.key,
+            .recursive_ref => |ref| self.listElemExecutableKeyFromPayload(self.executablePayloadForRef(ref)),
+            else => checkedPipelineInvariant("List(T) capture executable key did not reference a list payload"),
+        };
+    }
+
+    fn boxPayloadExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.boxPayloadExecutableKeyFromPayload(self.executablePayloadForKey(key));
+    }
+
+    fn boxPayloadExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        payload: repr.SessionExecutableTypePayload,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .box => |box| box.key,
+            .recursive_ref => |ref| self.boxPayloadExecutableKeyFromPayload(self.executablePayloadForRef(ref)),
+            else => checkedPipelineInvariant("Box(T) capture executable key did not reference a box payload"),
+        };
+    }
+
+    fn nominalBackingExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const key = exec_ty orelse return null;
+        return self.nominalBackingExecutableKeyFromPayload(key, self.executablePayloadForKey(key));
+    }
+
+    fn nominalBackingExecutableKeyFromPayload(
+        self: *const CaptureSlotPlanBuilder,
+        original_key: canonical.CanonicalExecValueTypeKey,
+        payload: repr.SessionExecutableTypePayload,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        return switch (payload) {
+            .nominal => |nominal| nominal.backing_key,
+            .recursive_ref => |ref| self.nominalBackingExecutableKeyFromPayload(
+                self.value_context.representation_store.session_executable_type_payloads.keyFor(ref),
+                self.executablePayloadForRef(ref),
+            ),
+            else => original_key,
+        };
     }
 
     fn valueInfo(self: *const CaptureSlotPlanBuilder, value_info_id: repr.ValueInfoId) repr.ValueInfo {
@@ -2355,6 +2680,7 @@ const ConstGraphPlanBuilder = struct {
                 self.artifactSink(),
                 self.plans,
                 context,
+                info_id,
                 callable,
                 key,
             ) },
@@ -2378,6 +2704,7 @@ const ConstGraphPlanBuilder = struct {
                 self.artifactSink(),
                 self.plans,
                 context,
+                info_id,
                 callable,
                 erase,
             ) },
