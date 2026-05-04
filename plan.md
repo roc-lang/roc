@@ -10393,6 +10393,30 @@ procedure, runtime top-level constant thunk, runtime zero-argument wrapper,
 runtime global initializer, runtime top-level closure object, or runtime global
 callable object.
 
+Lowering a `ConstInstantiationRequest` for an eval template seeds mono MIR with
+the template's `entry_template` and the request's exact
+`requested_source_ty_payload`. The root metadata for that lowering is private
+checking-finalization metadata; it is not inserted into `RootRequestTable` and
+it is not visible as a runtime root. The lowered compile-time payload is keyed
+by the `ConstInstantiationRequest` itself, not by a `CompileTimeRootId`.
+
+Lowering a `ConstInstantiationRequest` for a value-graph template does not run
+the interpreter. It clones the target-independent value graph into the
+requesting artifact's `CompileTimeValueStore`, instantiates every callable leaf
+through explicit semantic-instantiation procedure requests, builds the concrete
+dependency summary from the template plus concrete requests, and fills the
+requesting artifact's `ConstInstantiationStore`.
+
+Lowering a `CallableBindingInstantiationRequest` follows the same ownership
+rule. If the binding is already a direct sealed procedure binding at the
+requested function type, finalization fills the instance from that procedure
+value without interpreter execution. If the binding names a
+`CallableEvalTemplate`, finalization lowers that template as a private
+checking-finalization interpreter entrypoint keyed by the
+`CallableBindingInstantiationRequest`, promotes any returned captured callable
+value into sealed checked procedure data owned by the requesting artifact, and
+fills the requesting artifact's `CallableBindingInstantiationStore`.
+
 `ImportedTemplateClosureView` is a serialized semantic closure, not a source
 module. It contains only the checked bodies, checked type roots, checked type
 schemes, checked callable bodies, checked constant bodies, checked procedure
@@ -10431,10 +10455,49 @@ type root or scheme in the closure or in the public checked type view of the
 imported artifact. Missing type payload is the same class of invariant violation
 as a missing body or missing resolved value-reference table.
 
-The executable pipeline consumes `LoweringModuleView` values. It may lower only
-roots named by `RootRequestSet`. It must not discover additional roots by
-scanning exports, source declarations, checked CIR expression shapes, or
-procedure order.
+The executable pipeline consumes `LoweringModuleView` values plus explicit
+lowering entrypoint requests. Runtime/tool/test/platform entrypoints are named
+by `RootRequestSet`. Checking-finalization interpreter entrypoints for concrete
+semantic instances are named by `ConstInstantiationRequest` or
+`CallableBindingInstantiationRequest`. A concrete constant or callable-binding
+instance must never be disguised as a `RootRequest`, because it may not have a
+source root row in the requesting artifact and because one generic source
+binding can produce many concrete instances.
+
+The shared post-check lowering API therefore has two explicit request classes:
+
+```zig
+const LoweringRequestSet = struct {
+    runtime_roots: Span(RootRequest),
+    compile_time_requests: Span(CompileTimeEvaluationRequest),
+    purpose: LoweringPurpose,
+};
+
+const CompileTimeEvaluationRequest = union(enum) {
+    /// Evaluate a local top-level compile-time root selected from
+    /// `CompileTimeRootTable`. This is the only compile-time request variant
+    /// that fills `CompileTimeRootTable.payload`.
+    local_root: RootRequest,
+
+    /// Evaluate or clone one concrete instance of a `ConstRef` at a fully
+    /// resolved requested source type. The requesting artifact owns the
+    /// resulting `ConstInstanceRef`; the artifact that owns the `ConstRef` may
+    /// be local, imported, or a platform relation artifact.
+    const_instance: ConstInstantiationRequest,
+
+    /// Evaluate one concrete function-valued binding instance at a fully
+    /// resolved requested source function type. The requesting artifact owns the
+    /// resulting `CallableBindingInstanceRef`.
+    callable_binding_instance: CallableBindingInstantiationRequest,
+};
+```
+
+The exact Zig names may differ, but the separation is mandatory. `RootRequest`
+is for source/app/test/platform entrypoints. `ConstInstantiationRequest` and
+`CallableBindingInstantiationRequest` are for semantic instance construction
+during checking finalization. Later stages must not recover those instance
+requests by scanning exports, source declarations, checked CIR expression
+shapes, procedure order, or previous interpreter output.
 
 For executable platform lowering, `relation_artifacts` must include the sealed
 app artifact view named by `PlatformAppRelationKey`. This is not a source import
