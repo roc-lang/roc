@@ -1823,7 +1823,7 @@ const BodyLowerer = struct {
 
         const lowered = switch (node) {
             .pending => invariantViolation("mono body lowering reached pending private capture node"),
-            .const_instance_leaf => |leaf| try self.lowerPrivateConstInstanceLeaf(artifact, ty, leaf),
+            .const_instance_leaf => |leaf| try self.lowerPrivateConstInstanceLeaf(ty, leaf),
             .finite_callable_leaf => |leaf| try self.lowerPrivateCallableLeaf(ty, source_ty, node_id, leaf),
             .record => |fields| try self.lowerPrivateRecordCapture(artifact, ty, checked_ty, fields),
             .tuple => |items| try self.lowerPrivateTupleCapture(artifact, ty, checked_ty, items),
@@ -1840,19 +1840,16 @@ const BodyLowerer = struct {
 
     fn lowerPrivateConstInstanceLeaf(
         self: *BodyLowerer,
-        artifact: checked_artifact.CheckedModuleArtifactKey,
         ty: Type.TypeId,
         leaf: checked_artifact.PrivateCaptureConstLeaf,
     ) Allocator.Error!Ast.ExprId {
-        const key = checked_artifact.ConstInstantiationKey{
+        if (!checked_artifact.constInstantiationKeyEql(leaf.const_instance.key, .{
             .const_ref = leaf.const_ref,
             .requested_source_ty = leaf.requested_source_ty,
-        };
-        const instance = constInstanceForKey(self.input, artifact, key) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: private capture serializable leaf had no sealed const instance");
-            unreachable;
-        };
-        return try self.program.ast.addExprWithSource(ty, leaf.requested_source_ty, .{ .const_instance = instance });
+        })) {
+            invariantViolation("private capture const leaf instance key disagrees with published const ref and requested source type");
+        }
+        return try self.program.ast.addExprWithSource(ty, leaf.requested_source_ty, .{ .const_instance = leaf.const_instance });
     }
 
     fn lowerPrivateCallableLeaf(

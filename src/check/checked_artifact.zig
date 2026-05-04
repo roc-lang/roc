@@ -9777,7 +9777,7 @@ fn constRefEql(a: ConstRef, b: ConstRef) bool {
         std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
 }
 
-fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
+pub fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
     return constRefEql(a.const_ref, b.const_ref) and
         std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
 }
