@@ -5056,9 +5056,6 @@ pub const Interpreter = struct {
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
-                if (self.builtinInternalContainsRefcounted("interpreter.evalBoxBox.arg_rc", box_info.elem_layout_idx)) {
-                    self.performBuiltinInternalRc("interpreter.evalBoxBox.arg_incref", .incref, arg, box_info.elem_layout_idx, 1);
-                }
                 const boxed = try self.alloc(ret_layout);
                 const target_usize = self.layout_store.targetUsize();
                 if (target_usize.size() == 8) {
@@ -5080,9 +5077,6 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
-        }
-        if (self.builtinInternalContainsRefcounted("interpreter.evalBoxUnbox.result_rc", ret_layout)) {
-            self.performBuiltinInternalRc("interpreter.evalBoxUnbox.result_incref", .incref, result, ret_layout, 1);
         }
 
         return result;

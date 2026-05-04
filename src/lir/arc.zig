@@ -113,6 +113,12 @@ const Inserter = struct {
                 if (assign.rc_effect.may_runtime_uniqueness_check_args != 0) {
                     next = try self.releaseRuntimeMutationArgs(assign.args, assign.rc_effect.may_runtime_uniqueness_check_args, next);
                 }
+                if (assign.rc_effect.retain_args != 0) {
+                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args, next);
+                }
+                if (assign.rc_effect.retain_result) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
                 self.store.getCFStmtPtr(start).* = .{ .assign_low_level = .{
                     .target = assign.target,
                     .op = assign.op,
@@ -121,7 +127,7 @@ const Inserter = struct {
                     .next = next,
                 } };
                 if (assign.rc_effect.may_runtime_uniqueness_check_args != 0) {
-                    current_start = try self.retainRuntimeMutationArgs(assign.args, assign.rc_effect.may_runtime_uniqueness_check_args, current_start);
+                    current_start = try self.retainMaskedArgs(assign.args, assign.rc_effect.may_runtime_uniqueness_check_args, current_start);
                 }
                 return current_start;
             },
@@ -492,7 +498,7 @@ const Inserter = struct {
         return try self.releaseLocalIfRc(target, next);
     }
 
-    fn retainRuntimeMutationArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         const locals = self.store.getLocalSpan(span);
         var i = locals.len;

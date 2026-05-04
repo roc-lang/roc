@@ -6252,6 +6252,14 @@ const LowLevelRcEffect = struct {
     may_allocate: bool,
     may_retain_or_release: bool,
     may_runtime_uniqueness_check_args: BitSet,
+    /// Arguments copied into a newly owned result, box payload, list element
+    /// slot, or other escaping low-level storage. ARC insertion emits the
+    /// retains for these arguments after the low-level operation succeeds.
+    retain_args: BitSet,
+    /// The low-level result is copied from borrowed storage, such as a list
+    /// element or boxed payload. ARC insertion emits a retain of the result
+    /// after the low-level operation succeeds.
+    retain_result: bool,
 };
 
 const LowLevelValueFlowSignature = union(enum) {
@@ -6573,10 +6581,28 @@ the same logical result. No MIR or LIR stage may statically mark a value unique
 for this plan.
 
 Low-level, hosted, platform, and intrinsic operations that can allocate, retain,
-release, or attempt runtime uniqueness mutation must expose explicit
+release, copy borrowed storage into an owned result, copy an argument into owned
+low-level storage, or attempt runtime uniqueness mutation must expose explicit
 `LowLevelRcEffect` or equivalent metadata before LIR ARC insertion. Later stages
 must not infer those effects from names, layout shapes, host symbols, or runtime
 function pointers.
+
+The retain metadata must be exact, not merely "may retain" documentation:
+
+- `List.get_unsafe`, `List.first`, and `List.last` mark `retain_result` because
+  the result payload is copied out of borrowed list storage.
+- `Box.unbox` marks `retain_result` because the result is copied out of borrowed
+  boxed payload storage.
+- `Box.box` marks `retain_args` for argument 0 because the argument is copied
+  into the newly allocated box payload.
+- `List.append_unsafe` marks `retain_args` for the appended element argument
+  because that element is copied into list storage by the low-level operation.
+- list operations whose runtime helper already receives explicit element
+  retain/decref callbacks must keep that behavior inside the helper's explicit
+  low-level ABI; ARC must not duplicate it with a second retain mask.
+
+This is still mechanical ARC metadata. It is not a procedure summary, not a
+borrow-inference result, and not backend policy.
 
 `Box.box` and `Box.unbox` are ordinary value operations for ARC purposes.
 `Box.unbox` does not mean a consuming move-out and does not have a special

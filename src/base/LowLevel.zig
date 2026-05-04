@@ -407,6 +407,8 @@ pub const LowLevel = enum {
         may_allocate: bool = false,
         may_retain_or_release: bool = false,
         may_runtime_uniqueness_check_args: u64 = 0,
+        retain_args: u64 = 0,
+        retain_result: bool = false,
 
         pub fn none() RcEffect {
             return .{};
@@ -416,8 +418,23 @@ pub const LowLevel = enum {
             return .{ .may_allocate = true };
         }
 
+        pub fn allocatesRetainingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = mask != 0,
+                .retain_args = mask,
+            };
+        }
+
         pub fn retainsOrReleases() RcEffect {
             return .{ .may_retain_or_release = true };
+        }
+
+        pub fn retainsResult() RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .retain_result = true,
+            };
         }
 
         pub fn allocatesAndRetainsOrReleases() RcEffect {
@@ -432,6 +449,15 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .may_runtime_uniqueness_check_args = mask,
+            };
+        }
+
+        pub fn runtimeUniquenessRetainingArgs(runtime_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = runtime_mask,
+                .retain_args = retain_mask,
             };
         }
     };
@@ -454,10 +480,8 @@ pub const LowLevel = enum {
             .str_from_utf8,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
-            .list_append_unsafe,
             .list_drop_at,
             .list_sublist,
-            .list_set,
             .list_prepend,
             .list_drop_first,
             .list_drop_last,
@@ -470,12 +494,16 @@ pub const LowLevel = enum {
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
+            .list_append_unsafe => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
+            .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 
             .list_first,
             .list_last,
             .list_get_unsafe,
-            => RcEffect.retainsOrReleases(),
+            => RcEffect.retainsResult(),
 
             .str_repeat,
             .str_from_utf8_lossy,
@@ -498,10 +526,11 @@ pub const LowLevel = enum {
             .f64_to_str,
             .num_to_str,
             .list_with_capacity,
-            .box_box,
             => RcEffect.allocates(),
 
-            .box_unbox => RcEffect.retainsOrReleases(),
+            .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
+
+            .box_unbox => RcEffect.retainsResult(),
 
             .str_is_eq,
             .str_contains,
