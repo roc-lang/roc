@@ -6379,6 +6379,7 @@ pub const CaptureSlotReificationPlan = union(enum) {
     pending,
     serializable_leaf: SerializableCaptureLeafPlan,
     callable_leaf: CallableResultPlanId,
+    callable_schema: canonical.CanonicalTypeKey,
     record: []const CaptureRecordFieldPlan,
     tuple: []const CaptureTupleElemPlan,
     tag_union: []const CaptureTagVariantPlan,
@@ -6752,6 +6753,7 @@ fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReif
         .pending,
         .serializable_leaf,
         .callable_leaf,
+        .callable_schema,
         .box,
         .nominal,
         .recursive_ref,
@@ -7165,6 +7167,7 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
         .pending => std.debug.panic("checked artifact invariant violated: published capture slot reification plan is pending", .{}),
         .serializable_leaf => {},
         .callable_leaf => |callable| verifyCallableResultRef(store, callable),
+        .callable_schema => {},
         .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
         .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
         .tag_union => |variants| for (variants) |variant| {

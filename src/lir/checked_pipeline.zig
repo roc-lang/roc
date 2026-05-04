@@ -1493,8 +1493,22 @@ fn cloneBoxBoundarySpan(
 
 const CapturePlanKey = struct {
     source_ty: canonical.CanonicalTypeKey,
-    value_store_id: repr.ValueInfoStoreId,
-    value_info: repr.ValueInfoId,
+    value_store: u32,
+    value_info: u32,
+
+    const none = std.math.maxInt(u32);
+
+    fn from(
+        source_ty: canonical.CanonicalTypeKey,
+        value_store_id: repr.ValueInfoStoreId,
+        value_info: ?repr.ValueInfoId,
+    ) CapturePlanKey {
+        return .{
+            .source_ty = source_ty,
+            .value_store = @intFromEnum(value_store_id),
+            .value_info = if (value_info) |info| @intFromEnum(info) else none,
+        };
+    }
 };
 
 const CaptureSlotPlanBuilder = struct {
@@ -1513,12 +1527,23 @@ const CaptureSlotPlanBuilder = struct {
         source_ty: canonical.CanonicalTypeKey,
         value_info: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        const resolved_value = self.resolveValueInfoId(value_info);
-        const key = CapturePlanKey{
-            .source_ty = source_ty,
-            .value_store_id = self.value_context.value_store_id,
-            .value_info = resolved_value,
-        };
+        return try self.planForOptional(source_ty, value_info);
+    }
+
+    fn planForTypeOnly(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
+        return try self.planForOptional(source_ty, null);
+    }
+
+    fn planForOptional(
+        self: *CaptureSlotPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        value_info: ?repr.ValueInfoId,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
+        const resolved_value = if (value_info) |info| self.resolveValueInfoId(info) else null;
+        const key = CapturePlanKey.from(source_ty, self.value_context.value_store_id, resolved_value);
         if (self.active.get(key)) |active| {
             const recursive = try self.plans.reserveCaptureSlot(self.allocator);
             self.plans.fillCaptureSlot(recursive, .{ .recursive_ref = active });
@@ -1538,20 +1563,25 @@ const CaptureSlotPlanBuilder = struct {
     fn buildPlan(
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         const checked_ty = self.artifact.checked_types.rootForKey(source_ty) orelse {
             checkedPipelineInvariant("capture slot source type was not published in checked type store");
         };
-        const info = self.valueInfo(value_info_id);
-        if (info.callable != null) {
-            return .{ .callable_leaf = try self.callableLeafPlan(value_info_id) };
+        if (value_info_id) |info_id| {
+            const info = self.valueInfo(info_id);
+            if (info.callable != null) {
+                return .{ .callable_leaf = try self.callableLeafPlan(info_id) };
+            }
         }
 
         return switch (self.artifact.checked_types.payloads[@intFromEnum(checked_ty)]) {
             .pending => checkedPipelineInvariant("capture slot planning reached pending checked type"),
             .flex, .rigid => checkedPipelineInvariant("capture slot planning reached unresolved type variable"),
-            .function => .{ .callable_leaf = try self.callableLeafPlan(value_info_id) },
+            .function => if (value_info_id) |info_id|
+                .{ .callable_leaf = try self.callableLeafPlan(info_id) }
+            else
+                .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .empty_record => .{ .record = &.{} },
             .record => |record| .{ .record = try self.recordFields(record.fields, value_info_id) },
             .record_unbound => |fields| .{ .record = try self.recordFields(fields, value_info_id) },
@@ -1563,7 +1593,7 @@ const CaptureSlotPlanBuilder = struct {
                     .module_name = alias.origin_module,
                     .type_name = alias.name,
                 },
-                .backing = try self.planFor(
+                .backing = try self.planForOptional(
                     self.artifact.checked_types.roots[@intFromEnum(alias.backing)].key,
                     value_info_id,
                 ),
@@ -1618,7 +1648,7 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         checked_ty: checked_artifact.CheckedTypeId,
         source_ty: canonical.CanonicalTypeKey,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         var const_builder = ConstGraphPlanBuilder{
             .allocator = self.allocator,
@@ -1629,7 +1659,12 @@ const CaptureSlotPlanBuilder = struct {
             .active = std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId).init(self.allocator),
         };
         defer const_builder.deinit();
-        const reification_plan = try const_builder.planFor(checked_ty, self.value_context, value_info_id);
+        const const_value_context: ?ConstValueContext = if (value_info_id == null) null else self.value_context;
+        const reification_plan = try const_builder.planFor(
+            checked_ty,
+            const_value_context,
+            value_info_id,
+        );
         return .{ .serializable_leaf = .{
             .requested_source_ty = source_ty,
             .source_scheme = try self.artifact.checked_types.ensureSchemeForRoot(self.allocator, checked_ty),
@@ -1643,7 +1678,7 @@ const CaptureSlotPlanBuilder = struct {
         checked_ty: checked_artifact.CheckedTypeId,
         source_ty: canonical.CanonicalTypeKey,
         nominal: checked_artifact.CheckedNominalType,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         if (nominal.builtin) |builtin_nominal| {
             return switch (builtin_nominal) {
@@ -1669,11 +1704,8 @@ const CaptureSlotPlanBuilder = struct {
                 .list => .{ .list = .{
                     .elem = try self.listElemPlan(nominalArg(nominal, 0), value_info_id),
                 } },
-                .box => if (self.boxPayloadNeedsExecutableMaterialization(value_info_id))
-                    try self.serializableLeafPlan(checked_ty, source_ty, value_info_id)
-                else
-                    .{ .box = try self.boxPayloadPlan(nominalArg(nominal, 0), value_info_id) },
-                .bool => try self.planFor(
+                .box => try self.boxPlan(checked_ty, source_ty, nominalArg(nominal, 0), value_info_id),
+                .bool => try self.planForOptional(
                     self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
                     value_info_id,
                 ),
@@ -1685,17 +1717,33 @@ const CaptureSlotPlanBuilder = struct {
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
             },
-            .backing = try self.planFor(
+            .backing = try self.planForOptional(
                 self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
                 value_info_id,
             ),
         } };
     }
 
+    fn boxPlan(
+        self: *CaptureSlotPlanBuilder,
+        checked_ty: checked_artifact.CheckedTypeId,
+        source_ty: canonical.CanonicalTypeKey,
+        payload_ty: checked_artifact.CheckedTypeId,
+        value_info_id: ?repr.ValueInfoId,
+    ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
+        if (value_info_id) |info_id| {
+            if (self.boxPayloadNeedsExecutableMaterialization(info_id)) {
+                return try self.serializableLeafPlan(checked_ty, source_ty, info_id);
+            }
+            return .{ .box = try self.boxPayloadPlan(payload_ty, info_id) };
+        }
+        return .{ .box = try self.planForTypeOnly(self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key) };
+    }
+
     fn recordFields(
         self: *CaptureSlotPlanBuilder,
         fields: []const checked_artifact.CheckedRecordField,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error![]const checked_artifact.CaptureRecordFieldPlan {
         if (fields.len == 0) return &.{};
         const plans_out = try self.allocator.alloc(checked_artifact.CaptureRecordFieldPlan, fields.len);
@@ -1704,7 +1752,7 @@ const CaptureSlotPlanBuilder = struct {
             const child = self.recordFieldValue(value_info_id, field.name);
             plans_out[i] = .{
                 .field = field.name,
-                .value = try self.planFor(self.artifact.checked_types.roots[@intFromEnum(field.ty)].key, child),
+                .value = try self.planForOptional(self.artifact.checked_types.roots[@intFromEnum(field.ty)].key, child),
             };
         }
         return plans_out;
@@ -1713,7 +1761,7 @@ const CaptureSlotPlanBuilder = struct {
     fn tupleItems(
         self: *CaptureSlotPlanBuilder,
         items: []const checked_artifact.CheckedTypeId,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error![]const checked_artifact.CaptureTupleElemPlan {
         if (items.len == 0) return &.{};
         const plans_out = try self.allocator.alloc(checked_artifact.CaptureTupleElemPlan, items.len);
@@ -1721,7 +1769,7 @@ const CaptureSlotPlanBuilder = struct {
         for (items, 0..) |item, i| {
             plans_out[i] = .{
                 .index = @intCast(i),
-                .value = try self.planFor(
+                .value = try self.planForOptional(
                     self.artifact.checked_types.roots[@intFromEnum(item)].key,
                     self.tupleElemValue(value_info_id, @intCast(i)),
                 ),
@@ -1733,7 +1781,7 @@ const CaptureSlotPlanBuilder = struct {
     fn tagVariants(
         self: *CaptureSlotPlanBuilder,
         tags: []const checked_artifact.CheckedTag,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error![]const checked_artifact.CaptureTagVariantPlan {
         const variants = try self.allocator.alloc(checked_artifact.CaptureTagVariantPlan, tags.len);
         errdefer {
@@ -1746,7 +1794,7 @@ const CaptureSlotPlanBuilder = struct {
             for (tag.args, 0..) |arg_ty, arg_i| {
                 payloads[arg_i] = .{
                     .index = @intCast(arg_i),
-                    .value = try self.planFor(
+                    .value = try self.planForOptional(
                         self.artifact.checked_types.roots[@intFromEnum(arg_ty)].key,
                         self.tagPayloadValue(value_info_id, tag.name, @intCast(arg_i)),
                     ),
@@ -1760,10 +1808,12 @@ const CaptureSlotPlanBuilder = struct {
     fn listElemPlan(
         self: *CaptureSlotPlanBuilder,
         elem_ty: checked_artifact.CheckedTypeId,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
-        const elem_value = self.listRepresentativeValue(value_info_id);
-        return try self.planFor(self.artifact.checked_types.roots[@intFromEnum(elem_ty)].key, elem_value);
+        return try self.planForOptional(
+            self.artifact.checked_types.roots[@intFromEnum(elem_ty)].key,
+            self.listRepresentativeValue(value_info_id),
+        );
     }
 
     fn boxPayloadPlan(
@@ -1815,10 +1865,11 @@ const CaptureSlotPlanBuilder = struct {
 
     fn recordFieldValue(
         self: *CaptureSlotPlanBuilder,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
         label: canonical.RecordFieldLabelId,
-    ) repr.ValueInfoId {
-        const info = self.valueInfo(value_info_id);
+    ) ?repr.ValueInfoId {
+        const info_id = value_info_id orelse return null;
+        const info = self.valueInfo(info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("record capture had no aggregate metadata");
         const record = switch (aggregate) {
             .record => |record| record,
@@ -1835,10 +1886,11 @@ const CaptureSlotPlanBuilder = struct {
 
     fn tupleElemValue(
         self: *CaptureSlotPlanBuilder,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
         index: u32,
-    ) repr.ValueInfoId {
-        const info = self.valueInfo(value_info_id);
+    ) ?repr.ValueInfoId {
+        const info_id = value_info_id orelse return null;
+        const info = self.valueInfo(info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("tuple capture had no aggregate metadata");
         const tuple = switch (aggregate) {
             .tuple => |tuple| tuple,
@@ -1852,11 +1904,12 @@ const CaptureSlotPlanBuilder = struct {
 
     fn tagPayloadValue(
         self: *CaptureSlotPlanBuilder,
-        value_info_id: repr.ValueInfoId,
+        value_info_id: ?repr.ValueInfoId,
         tag_label: canonical.TagLabelId,
         payload_index: u32,
-    ) repr.ValueInfoId {
-        const info = self.valueInfo(value_info_id);
+    ) ?repr.ValueInfoId {
+        const info_id = value_info_id orelse return null;
+        const info = self.valueInfo(info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("tag capture had no aggregate metadata");
         const tag = switch (aggregate) {
             .tag => |tag| tag,
@@ -1864,7 +1917,7 @@ const CaptureSlotPlanBuilder = struct {
         };
         const active_tag = self.value_context.row_shapes.tag(tag.tag);
         if (active_tag.label != tag_label) {
-            checkedPipelineInvariant("tag capture plan selected inactive tag variant");
+            return null;
         }
         const payloads = self.value_context.row_shapes.tagPayloads(tag.tag);
         if (payload_index >= payloads.len) {
@@ -1879,16 +1932,17 @@ const CaptureSlotPlanBuilder = struct {
 
     fn listRepresentativeValue(
         self: *CaptureSlotPlanBuilder,
-        value_info_id: repr.ValueInfoId,
-    ) repr.ValueInfoId {
-        const info = self.valueInfo(value_info_id);
+        value_info_id: ?repr.ValueInfoId,
+    ) ?repr.ValueInfoId {
+        const info_id = value_info_id orelse return null;
+        const info = self.valueInfo(info_id);
         const aggregate = info.aggregate orelse checkedPipelineInvariant("List(T) capture had no aggregate metadata");
         const list = switch (aggregate) {
             .list => |list| list,
             else => checkedPipelineInvariant("List(T) capture value had non-list aggregate metadata"),
         };
         if (list.elems.len == 0) {
-            checkedPipelineInvariant("List(T) capture slot planning needs a representative element plan");
+            return null;
         }
         return list.elems[0];
     }

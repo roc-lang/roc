@@ -7764,6 +7764,7 @@ const CallableResultMemberPlan = struct {
 const CaptureSlotReificationPlan = union(enum) {
     serializable_leaf: SerializableCaptureLeafPlan,
     callable_leaf: CallableResultPlanId,
+    callable_schema: CanonicalTypeKey,
     record: Span(PrivateCaptureFieldPlan),
     tuple: Span(PrivateCaptureElemPlan),
     tag_union: PrivateCaptureTagUnionPlan,
@@ -7787,6 +7788,14 @@ serializable-or-callable test. A serializable leaf gives the resolved source
 type and schema used to copy the interpreter result into
 `CompileTimeValueStore`. A callable leaf names another callable-result plan that
 will be promoted recursively or resolved to an already sealed procedure value.
+`callable_schema` is not a value and is not a callable leaf. It records a
+function-typed source slot that is present in the structural type but has no
+runtime inhabitant at the particular captured value being planned. It may appear
+only under structural positions where no child value exists, such as the element
+schema of an empty `List(I64 -> I64)` capture or the payload schema of an
+inactive tag-union variant. If finalization ever tries to materialize a
+`callable_schema` as a private capture value, that is a compiler bug: debug
+builds assert immediately and release builds use `unreachable`.
 For a finite callable result, `source_fn_ty + callable_set_key + member` is the
 complete selected-member identity. `CallableResultMemberPlan` therefore stores
 only the `member` and its capture-slot reification plans; the member procedure,
@@ -7796,7 +7805,31 @@ values, debug builds must assert that the cache matches the canonical callable
 set and release builds must use `unreachable` for a mismatch.
 Records, tuples, tags, lists, boxes, transparent aliases, and nominals describe
 exactly where those leaves live inside a private promoted-capture value. A
-transparent alias records source/debug provenance only and reifies the
+structural capture plan must preserve inactive and uninhabited child schemas
+without inventing representative values. For an empty captured list, the list
+node records the element capture-slot plan by type. If the element type contains
+function slots, those slots are `callable_schema`; the runtime list value has no
+element bytes to read. For the direct case:
+
+```roc
+make_len : List(I64 -> I64) -> (I64 -> U64)
+make_len = |fns| |_x| List.len(fns)
+
+len_empty : I64 -> U64
+len_empty = make_len([])
+```
+
+checking finalization evaluates `make_len([])` through LIR, promotes the
+resulting callable to a closed procedure, and records the private capture as an
+empty `List(I64 -> I64)` whose element capture-slot plan contains a
+schema-only function slot. At runtime this particular list value is effectively
+`list_of_zst`: it has zero elements and no callable objects. The compiler must
+not call it erased, must not create a runtime thunk or closure object, and must
+not require a representative list element. If a later value of the same source
+type has elements, those element positions must be planned from the actual
+element values and use `callable_leaf`, not `callable_schema`.
+
+A transparent alias records source/debug provenance only and reifies the
 underlying payload; it is not a runtime wrapper. A nominal records the nominal
 representation capability used to materialize the payload. For an erased
 callable result, the plan carries the exact `ErasedFnSigKey`, erased
@@ -8026,9 +8059,10 @@ closure object and does not publish `{ f: ... }` as an importable constant.
 
 The same rule applies to tuples, tags, lists, boxes, transparent aliases, and
 nominals that are captured by a promoted callable. A captured
-`List(I64 -> I64)` is a private capture list whose elements are callable leaves;
-`List(T)` is not an erasure
-boundary. A captured `Box(I64 -> I64)` may introduce erased callable
+`List(I64 -> I64)` is a private capture list whose inhabited elements are
+callable leaves; if the list is empty, its element capture plan is schema-only
+and any function slot under that element schema is `callable_schema`. `List(T)`
+is not an erasure boundary. A captured `Box(I64 -> I64)` may introduce erased callable
 representation only for the boxed payload slot named by an explicit
 `BoxBoundaryId`; a captured `Box(I64)` does not introduce callable erasure, and
 non-`Box(T)` containers never introduce erasure.
