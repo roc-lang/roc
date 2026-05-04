@@ -745,6 +745,11 @@ fn fillDirectCallableBindingInstance(
         .source_fn_ty = request.key.requested_source_fn_ty,
     };
     const instance_ref = try artifact.callable_binding_instances.reserveRequest(allocator, &artifact.checked_types, request);
+    switch (artifact.callable_binding_instances.stateForRef(instance_ref)) {
+        .evaluated => return true,
+        .evaluating => compileTimeFinalizationInvariant("direct callable binding instance was requested recursively while evaluating"),
+        .reserved => {},
+    }
     const dependency_summary = try appendDirectCallableBindingDependencySummary(
         allocator,
         artifact,
@@ -761,6 +766,189 @@ fn fillDirectCallableBindingInstance(
         } },
     });
     return true;
+}
+
+fn ensureCallableBindingInstanceRequest(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+) anyerror!checked_artifact.CallableBindingInstanceRef {
+    const instance_ref = try artifact.callable_binding_instances.reserveRequest(allocator, &artifact.checked_types, request);
+    switch (artifact.callable_binding_instances.stateForRef(instance_ref)) {
+        .evaluated => return instance_ref,
+        .evaluating => compileTimeFinalizationInvariant("callable binding instance dependency cycle reached checking finalization"),
+        .reserved => {},
+    }
+
+    if (try fillDirectCallableBindingInstance(allocator, artifact, import_views, request)) {
+        return instance_ref;
+    }
+
+    artifact.callable_binding_instances.markEvaluating(instance_ref);
+
+    var lowered_request = try lowerSingleCompileTimeRequest(
+        allocator,
+        artifact,
+        import_views,
+        .{ .callable_binding_instance = request },
+    );
+    defer lowered_request.deinit();
+
+    var interpreter = try Interpreter.init(
+        allocator,
+        &lowered_request.lowered.lir_result.store,
+        &lowered_request.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    const result_plan = switch (lowered_request.payload) {
+        .callable_binding_instance => |plan| plan,
+        else => compileTimeFinalizationInvariant("callable binding instance lowering did not publish a callable-result payload"),
+    };
+
+    const result = try evalCompileTimeRoot(&interpreter, lowered_request.lir_root);
+    const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
+    defer interpreter.dropValue(result.value, ret_layout);
+
+    const promotion_context = PromotedCallablePublicationContext{
+        .source_binding = sourceBindingForCallableBindingRequest(artifact, request.key.binding),
+        .base = .{ .callable_binding_instance = request.key },
+    };
+    const callable = switch (artifact.comptime_plans.callableResult(result_plan)) {
+        .finite => blk: {
+            const selected_callable = selectFiniteCallableResult(
+                &artifact.comptime_plans,
+                artifact.callable_set_descriptors.descriptors,
+                &lowered_request.lowered.lir_result.layouts,
+                result_plan,
+                ret_layout,
+                result.value,
+            );
+            break :blk try publishCallableResult(
+                allocator,
+                artifact,
+                &lowered_request.lowered,
+                promotion_context,
+                request.requested_source_fn_ty_payload,
+                result_plan,
+                selected_callable,
+            );
+        },
+        .erased => |erased| try publishErasedCallableResult(
+            allocator,
+            artifact,
+            &lowered_request.lowered,
+            promotion_context,
+            request.requested_source_fn_ty_payload,
+            ret_layout,
+            result.value,
+            result_plan,
+            erased,
+        ),
+    };
+    if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &request.key.requested_source_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("callable binding instance result source type differed from requested source function type");
+    }
+
+    const dependency_summary = try appendConcreteDependencySummaryForCallableRequest(
+        allocator,
+        artifact,
+        request,
+        result_plan,
+        callable.proc_value,
+    );
+    artifact.callable_binding_instances.fill(instance_ref, .{
+        .key = request.key,
+        .dependency_summary = dependency_summary,
+        .proc_value = callable.proc_value,
+        .body = .{ .evaluated = .{
+            .executable_root = .{ .concrete_request = request.key },
+            .result_plan = result_plan,
+            .promotion_plan = callable.promotion_plan,
+            .promotion_output = callable.output,
+        } },
+    });
+    return instance_ref;
+}
+
+fn sourceBindingForCallableBindingRequest(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    binding: checked_artifact.ProcedureBindingRef,
+) ?checked_artifact.CheckedPatternId {
+    return switch (binding) {
+        .top_level => |binding_ref| blk: {
+            for (artifact.top_level_values.entries) |entry| {
+                const candidate = switch (entry.value) {
+                    .procedure_binding => |candidate| candidate,
+                    .const_ref => continue,
+                };
+                if (candidate == binding_ref) break :blk entry.pattern;
+            }
+            break :blk null;
+        },
+        .platform_required => |required| if (std.mem.eql(u8, &required.artifact.bytes, &artifact.key.bytes))
+            required.app_value.pattern
+        else
+            null,
+        .imported,
+        .hosted,
+        .promoted,
+        => null,
+    };
+}
+
+fn appendConcreteDependencySummaryForCallableRequest(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    request: checked_artifact.CallableBindingInstantiationRequest,
+    result_plan: checked_artifact.CallableResultPlanId,
+    published_proc: canonical.ProcedureCallableRef,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
+    defer availability.deinit(allocator);
+    try appendCallableBindingAvailabilityForRequest(allocator, artifact, request.key.binding, &availability);
+
+    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    defer collector.deinit();
+    try collector.collectCallableResult(result_plan);
+    try collector.appendProcedureCallable(published_proc);
+
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = availability.items,
+        .concrete_values = collector.concrete.items,
+    });
+}
+
+fn appendCallableBindingAvailabilityForRequest(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    binding: checked_artifact.ProcedureBindingRef,
+    availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+) Allocator.Error!void {
+    try availability.append(allocator, .{ .procedure_binding = binding });
+    switch (binding) {
+        .top_level => |binding_ref| {
+            const binding_row = artifact.top_level_procedure_bindings.get(binding_ref);
+            switch (binding_row.body) {
+                .direct_template => {},
+                .callable_eval_template => |template_id| {
+                    const template = artifact.callable_eval_templates.get(template_id);
+                    try availability.append(allocator, .{ .local_root = template.root });
+                },
+            }
+        },
+        .platform_required => |required| try availability.append(allocator, .{ .imported_value = required.app_value }),
+        .imported => |imported| try availability.append(allocator, .{ .imported_value = .{
+            .artifact = imported.artifact,
+            .pattern = imported.pattern,
+        } }),
+        .hosted,
+        .promoted,
+        => {},
+    }
 }
 
 fn appendDirectCallableBindingDependencySummary(

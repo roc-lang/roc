@@ -9560,6 +9560,10 @@ pub const ConstInstantiationStore = struct {
         return .{ .owner = self.owner, .key = key, .instance = id };
     }
 
+    pub fn stateForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationState {
+        return self.recordForConstRef(ref).state;
+    }
+
     pub fn get(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstance {
         const record = self.recordForConstRef(ref);
         return switch (record.state) {
@@ -9820,6 +9824,10 @@ pub const CallableBindingInstantiationStore = struct {
     pub fn lookup(self: *const CallableBindingInstantiationStore, key: CallableBindingInstantiationKey) ?CallableBindingInstanceRef {
         const id = self.by_key.get(hashCallableBindingInstantiationKey(key)) orelse return null;
         return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn stateForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationState {
+        return self.recordForConstRef(ref).state;
     }
 
     pub fn get(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstance {
