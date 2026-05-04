@@ -663,24 +663,22 @@ fn ensureConstInstanceRequest(
     switch (source.template.state) {
         .reserved => compileTimeFinalizationInvariant("constant instance request reached unsealed const template"),
         .value_graph_template => |graph| {
+            var dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+            defer dependencies.deinit();
             var cloner = ComptimeGraphCloner.init(
                 allocator,
                 artifact,
                 source.values,
                 source.plans,
+                &dependencies,
             );
             defer cloner.deinit();
 
             const cloned = try cloner.clone(graph.schema, graph.value);
-            const dependency_summary = try appendConcreteDependencySummaryForValueGraph(
-                allocator,
-                artifact,
-                cloned.value,
-            );
             artifact.const_instances.fill(instance_ref, .{
                 .schema = cloned.schema,
                 .value = cloned.value,
-                .dependency_summary = dependency_summary,
+                .dependency_summary = try dependencies.appendSummary(),
                 .reification_plan = null,
                 .generated_procedures = try generatedProceduresForConstInstance(
                     allocator,
@@ -1315,20 +1313,6 @@ fn appendEmptyConcreteDependencySummary(
     });
 }
 
-fn appendConcreteDependencySummaryForValueGraph(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    value: checked_artifact.ComptimeValueId,
-) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
-    var collector = ConcreteDependencyCollector.init(allocator, artifact);
-    defer collector.deinit();
-    try collector.collectComptimeValue(value);
-    return try artifact.comptime_dependencies.appendSummary(allocator, .{
-        .availability_values = &.{},
-        .concrete_values = collector.concrete.items,
-    });
-}
-
 const ConcreteDependencyCollector = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -1372,6 +1356,15 @@ const ConcreteDependencyCollector = struct {
         try self.concrete.append(self.allocator, .{ .const_instance = instance.key });
     }
 
+    fn appendSummary(
+        self: *ConcreteDependencyCollector,
+    ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+        return try self.artifact.comptime_dependencies.appendSummary(self.allocator, .{
+            .availability_values = &.{},
+            .concrete_values = self.concrete.items,
+        });
+    }
+
     fn collectConstGraph(
         self: *ConcreteDependencyCollector,
         root: checked_artifact.ConstGraphReificationPlanId,
@@ -1408,12 +1401,19 @@ const ConcreteDependencyCollector = struct {
             .finite,
             .erased_boxed,
             => |result_plan| try self.collectCallableResult(result_plan),
-            .already_resolved => |resolved| switch (resolved) {
-                .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
-                .erased_boxed => |erased| {
-                    try self.collectErasedCodeRef(erased.code);
-                    try self.collectErasedCaptureExecutableMaterialization(erased.capture);
-                },
+            .already_resolved => |resolved| try self.appendCallableLeafInstance(resolved),
+        }
+    }
+
+    fn appendCallableLeafInstance(
+        self: *ConcreteDependencyCollector,
+        leaf: checked_artifact.CallableLeafInstance,
+    ) Allocator.Error!void {
+        switch (leaf) {
+            .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
+            .erased_boxed => |erased| {
+                try self.collectErasedCodeRef(erased.code);
+                try self.collectErasedCaptureExecutableMaterialization(erased.capture);
             },
         }
     }
@@ -1548,41 +1548,6 @@ const ConcreteDependencyCollector = struct {
         }
     }
 
-    fn collectComptimeValue(
-        self: *ConcreteDependencyCollector,
-        value_id: checked_artifact.ComptimeValueId,
-    ) Allocator.Error!void {
-        const raw = @intFromEnum(value_id);
-        if (raw >= self.artifact.comptime_values.values.items.len) {
-            compileTimeFinalizationInvariant("concrete dependency collection reached missing compile-time value");
-        }
-        switch (self.artifact.comptime_values.values.items[raw]) {
-            .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending compile-time value"),
-            .zst,
-            .int_bytes,
-            .f32,
-            .f64,
-            .dec,
-            .str,
-            => {},
-            .list,
-            .tuple,
-            .record,
-            => |items| for (items) |item| try self.collectComptimeValue(item),
-            .box,
-            .alias,
-            .nominal,
-            => |child| try self.collectComptimeValue(child),
-            .tag_union => |tag| for (tag.payloads) |payload| try self.collectComptimeValue(payload),
-            .callable => |leaf| switch (leaf) {
-                .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
-                .erased_boxed => |erased| {
-                    try self.collectErasedCodeRef(erased.code);
-                    try self.collectErasedCaptureExecutableMaterialization(erased.capture);
-                },
-            },
-        }
-    }
 };
 
 const ConstTemplateSource = struct {
@@ -1625,6 +1590,7 @@ const ComptimeGraphCloner = struct {
     artifact: *checked_artifact.CheckedModuleArtifact,
     source_values: *const checked_artifact.CompileTimeValueStore,
     source_plans: *const checked_artifact.CompileTimePlanStore,
+    dependencies: *ConcreteDependencyCollector,
     schema_map: std.AutoHashMap(checked_artifact.ComptimeSchemaId, checked_artifact.ComptimeSchemaId),
     value_map: std.AutoHashMap(checked_artifact.ComptimeValueId, checked_artifact.ComptimeValueId),
     erased_node_map: std.AutoHashMap(
@@ -1637,12 +1603,14 @@ const ComptimeGraphCloner = struct {
         artifact: *checked_artifact.CheckedModuleArtifact,
         source_values: *const checked_artifact.CompileTimeValueStore,
         source_plans: *const checked_artifact.CompileTimePlanStore,
+        dependencies: *ConcreteDependencyCollector,
     ) ComptimeGraphCloner {
         return .{
             .allocator = allocator,
             .artifact = artifact,
             .source_values = source_values,
             .source_plans = source_plans,
+            .dependencies = dependencies,
             .schema_map = std.AutoHashMap(checked_artifact.ComptimeSchemaId, checked_artifact.ComptimeSchemaId).init(allocator),
             .value_map = std.AutoHashMap(checked_artifact.ComptimeValueId, checked_artifact.ComptimeValueId).init(allocator),
             .erased_node_map = std.AutoHashMap(
@@ -1809,14 +1777,20 @@ const ComptimeGraphCloner = struct {
         leaf: checked_artifact.CallableLeafInstance,
     ) Allocator.Error!checked_artifact.CallableLeafInstance {
         return switch (leaf) {
-            .finite => |finite| .{ .finite = finite },
-            .erased_boxed => |erased| .{ .erased_boxed = .{
-                .source_fn_ty = erased.source_fn_ty,
-                .sig_key = erased.sig_key,
-                .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-                .code = erased.code,
-                .capture = try self.cloneErasedCapturePlan(erased.capture),
-            } },
+            .finite => |finite| blk: {
+                try self.dependencies.appendProcedureCallable(finite.proc_value);
+                break :blk .{ .finite = finite };
+            },
+            .erased_boxed => |erased| blk: {
+                try self.dependencies.collectErasedCodeRef(erased.code);
+                break :blk .{ .erased_boxed = .{
+                    .source_fn_ty = erased.source_fn_ty,
+                    .sig_key = erased.sig_key,
+                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+                    .code = erased.code,
+                    .capture = try self.cloneErasedCapturePlan(erased.capture),
+                } };
+            },
         };
     }
 
@@ -1854,8 +1828,14 @@ const ComptimeGraphCloner = struct {
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
         return switch (node) {
             .pending => compileTimeFinalizationInvariant("constant value graph clone reached pending erased capture node"),
-            .const_instance => |instance| .{ .const_instance = instance },
-            .pure_const => |pure| .{ .pure_const = pure },
+            .const_instance => |instance| blk: {
+                try self.dependencies.appendConstInstance(instance);
+                break :blk .{ .const_instance = instance };
+            },
+            .pure_const => |pure| blk: {
+                try self.dependencies.appendConstInstance(pure.const_instance);
+                break :blk .{ .pure_const = pure };
+            },
             .pure_value => |pure| blk: {
                 const cloned = try self.clone(pure.schema, pure.value);
                 break :blk .{ .pure_value = .{
@@ -1864,19 +1844,31 @@ const ComptimeGraphCloner = struct {
                     .no_reachable_callable_slots = pure.no_reachable_callable_slots,
                 } };
             },
-            .finite_callable_set => |finite| .{ .finite_callable_set = .{
-                .source_fn_ty = finite.source_fn_ty,
-                .callable_set_key = finite.callable_set_key,
-                .selected_member = finite.selected_member,
-                .captures = try self.cloneErasedCapturePlanSpan(finite.captures),
-            } },
-            .erased_callable => |erased| .{ .erased_callable = .{
-                .source_fn_ty = erased.source_fn_ty,
-                .sig_key = erased.sig_key,
-                .code = erased.code,
-                .capture = try self.cloneErasedCapturePlan(erased.capture),
-                .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-            } },
+            .finite_callable_set => |finite| blk: {
+                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                    compileTimeFinalizationInvariant("constant value graph clone reached finite callable set without descriptor");
+                };
+                const member = callableSetMember(descriptor, finite.selected_member) orelse {
+                    compileTimeFinalizationInvariant("constant value graph clone reached finite callable set with missing member");
+                };
+                try self.dependencies.appendProcedureCallable(member.proc_value);
+                break :blk .{ .finite_callable_set = .{
+                    .source_fn_ty = finite.source_fn_ty,
+                    .callable_set_key = finite.callable_set_key,
+                    .selected_member = finite.selected_member,
+                    .captures = try self.cloneErasedCapturePlanSpan(finite.captures),
+                } };
+            },
+            .erased_callable => |erased| blk: {
+                try self.dependencies.collectErasedCodeRef(erased.code);
+                break :blk .{ .erased_callable = .{
+                    .source_fn_ty = erased.source_fn_ty,
+                    .sig_key = erased.sig_key,
+                    .code = erased.code,
+                    .capture = try self.cloneErasedCapturePlan(erased.capture),
+                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+                } };
+            },
             .record => |fields| .{ .record = try self.cloneErasedCaptureRecord(fields) },
             .tuple => |items| .{ .tuple = try self.cloneErasedCapturePlanSpan(items) },
             .tag_union => |tag| .{ .tag_union = .{
@@ -2311,6 +2303,7 @@ fn materializedFiniteCallableSetValue(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("materialized finite erased capture selected member capture schema disagrees with result plan");
     }
+    if (capture_builder.dependencies) |dependencies| try dependencies.appendProcedureCallable(selected.descriptor_member.proc_value);
     const captures = try allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, selected.planned_member.capture_slots.len);
     errdefer allocator.free(captures);
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
@@ -2345,6 +2338,7 @@ fn materializedErasedCallableValue(
         layout_idx,
         value,
     );
+    if (capture_builder.dependencies) |dependencies| try dependencies.collectErasedCodeRef(code);
     return .{
         .source_fn_ty = erased.source_fn_ty,
         .sig_key = erased.sig_key,
@@ -2681,6 +2675,7 @@ const PrivateCaptureBuilder = struct {
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
     owner: ?checked_artifact.PromotedProcedureRef,
     promotion_context: ?PromotedCallablePublicationContext,
+    dependencies: ?*ConcreteDependencyCollector = null,
     next_private_const: u32 = 0,
     active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
     erased_active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId),
@@ -2847,6 +2842,9 @@ const PrivateCaptureBuilder = struct {
             leaf.source_scheme,
         );
 
+        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact);
+        defer leaf_dependencies.deinit();
+
         var reifier = ComptimeReifier{
             .allocator = self.allocator,
             .artifact = self.artifact,
@@ -2857,6 +2855,7 @@ const PrivateCaptureBuilder = struct {
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
             .promotion_context = self.promotion_context,
+            .dependencies = &leaf_dependencies,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
 
@@ -2882,7 +2881,7 @@ const PrivateCaptureBuilder = struct {
         self.artifact.const_instances.fill(instance_ref, .{
             .schema = reified.schema,
             .value = reified.value,
-            .dependency_summary = try appendConcreteDependencySummaryForValueGraph(self.allocator, self.artifact, reified.value),
+            .dependency_summary = try leaf_dependencies.appendSummary(),
             .reification_plan = leaf.reification_plan,
             .generated_procedures = try generatedProceduresForConstInstance(
                 self.allocator,
@@ -2890,6 +2889,7 @@ const PrivateCaptureBuilder = struct {
                 instance_key,
             ),
         });
+        if (self.dependencies) |dependencies| try dependencies.appendConstInstance(instance_ref);
 
         return .{
             .const_ref = const_ref,
@@ -2912,6 +2912,9 @@ const PrivateCaptureBuilder = struct {
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
+        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact);
+        defer leaf_dependencies.deinit();
+
         var reifier = ComptimeReifier{
             .allocator = self.allocator,
             .artifact = self.artifact,
@@ -2922,6 +2925,7 @@ const PrivateCaptureBuilder = struct {
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
             .promotion_context = self.promotion_context,
+            .dependencies = &leaf_dependencies,
         };
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
         if (try constGraphContainsCallableSlots(self.allocator, &self.artifact.comptime_plans, leaf.reification_plan)) {
@@ -2956,7 +2960,7 @@ const PrivateCaptureBuilder = struct {
             self.artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
                 .value = reified.value,
-                .dependency_summary = try appendConcreteDependencySummaryForValueGraph(self.allocator, self.artifact, reified.value),
+                .dependency_summary = try leaf_dependencies.appendSummary(),
                 .reification_plan = leaf.reification_plan,
                 .generated_procedures = try generatedProceduresForConstInstance(
                     self.allocator,
@@ -2964,6 +2968,7 @@ const PrivateCaptureBuilder = struct {
                     instance_key,
                 ),
             });
+            if (self.dependencies) |dependencies| try dependencies.appendConstInstance(instance_ref);
             return .{ .const_instance = instance_ref };
         }
         return .{ .pure_value = .{
@@ -3019,6 +3024,7 @@ const PrivateCaptureBuilder = struct {
                 );
             },
         };
+        if (self.dependencies) |dependencies| try dependencies.appendProcedureCallable(published.proc_value);
         return .{ .proc_value = published.proc_value };
     }
 
@@ -3461,6 +3467,7 @@ const ComptimeReifier = struct {
     lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
     callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
     promotion_context: ?PromotedCallablePublicationContext = null,
+    dependencies: ?*ConcreteDependencyCollector = null,
 
     fn reifyPlan(
         self: *ComptimeReifier,
@@ -3560,9 +3567,12 @@ const ComptimeReifier = struct {
         value: Value,
     ) Allocator.Error!ReifiedValue {
         return switch (leaf) {
-            .already_resolved => |resolved| .{
-                .schema = try self.values.addSchema(.{ .callable = callableLeafSourceFnTy(resolved) }),
-                .value = try self.values.addValue(.{ .callable = resolved }),
+            .already_resolved => |resolved| blk: {
+                if (self.dependencies) |dependencies| try dependencies.appendCallableLeafInstance(resolved);
+                break :blk .{
+                    .schema = try self.values.addSchema(.{ .callable = callableLeafSourceFnTy(resolved) }),
+                    .value = try self.values.addValue(.{ .callable = resolved }),
+                };
             },
             .finite => |result_plan| blk: {
                 const selected_callable = selectFiniteCallableResult(
@@ -3574,6 +3584,7 @@ const ComptimeReifier = struct {
                     value,
                 );
                 const callable_leaf = try self.callableLeafInstance(result_plan, selected_callable);
+                if (self.dependencies) |dependencies| try dependencies.appendCallableLeafInstance(callable_leaf);
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = callableLeafSourceFnTy(callable_leaf) }),
                     .value = try self.values.addValue(.{ .callable = callable_leaf }),
@@ -3586,17 +3597,19 @@ const ComptimeReifier = struct {
                 };
                 const artifact = self.artifact orelse reifierInvariant("erased boxed callable leaf reification requires mutable checked artifact");
                 const lowered = self.lowered orelse reifierInvariant("erased boxed callable leaf reification requires lowered LIR context");
+                const code = resolveErasedCallableResultCode(
+                    artifact,
+                    lowered,
+                    erased,
+                    layout_idx,
+                    value,
+                );
+                if (self.dependencies) |dependencies| try dependencies.collectErasedCodeRef(code);
                 const callable_leaf = checked_artifact.CallableLeafInstance{ .erased_boxed = .{
                     .source_fn_ty = erased.source_fn_ty,
                     .sig_key = erased.sig_key,
                     .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-                    .code = resolveErasedCallableResultCode(
-                        artifact,
-                        lowered,
-                        erased,
-                        layout_idx,
-                        value,
-                    ),
+                    .code = code,
                     .capture = try self.materializeErasedCallableLeafCapture(erased, layout_idx, value),
                 } };
                 break :blk .{
@@ -3623,6 +3636,7 @@ const ComptimeReifier = struct {
             .callable_set_descriptors = self.callable_set_descriptors,
             .owner = null,
             .promotion_context = self.promotion_context,
+            .dependencies = self.dependencies,
             .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(self.allocator),
             .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(self.allocator),
         };

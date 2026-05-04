@@ -7048,30 +7048,65 @@ instances have already been reserved and sealed. Code that constructs a new
 concrete instance must use `ConstInstantiationRequest` or
 `CallableBindingInstantiationRequest`, not the key alone.
 
-Generic templates do not store dependency summaries or any parameterized summary
-data. A `ConstEvalTemplate` or `CallableEvalTemplate` is a reusable checked
-entry template only: it records the checked body/template identity, checked
-source scheme, resolved value-reference table, static-dispatch plans,
+Generic eval templates do not store dependency summaries or any parameterized
+summary data. A `ConstEvalTemplate` or `CallableEvalTemplate` is a reusable
+checked entry template only: it records the checked body/template identity,
+checked source scheme, resolved value-reference table, static-dispatch plans,
 nested-procedure site table, and checked type roots needed to lower a future
-concrete request. A concrete `ConstInstantiationRequest` or
+concrete request. A concrete eval-template `ConstInstantiationRequest` or
 `CallableBindingInstantiationRequest` is summarized by running that exact
 request through summary-only MIR-family lowering in the requesting artifact:
 mono MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR, and executable
 MIR summary records. The resulting concrete `ComptimeDependencySummaryId` is
 stored next to the concrete `ConstInstance` or `CallableBindingInstance`.
 
-This means the generic checked template never contains parameterized
+Value-graph templates are different. A `ConstValueGraphTemplate` already is
+explicit checked-artifact semantic data, not code that needs a private eval
+entrypoint. Instantiating a concrete value-graph request must not create a fake
+MIR procedure, must not run summary-only MIR-family lowering, and must not add a
+dedicated dependency pass. The unavoidable value construction operation is the
+only place that writes the concrete graph and the concrete dependency summary:
+as it copies/remaps/instantiates each value node into the requesting artifact, it
+also appends the corresponding `ConcreteValueUse` or `AvailabilityUse` for that
+same node. There is no "clone, then scan" step, no separate traversal, and no
+post-construction collector that rediscovers callable leaves from the finished
+graph.
+
+For example:
+
+```roc
+id = |x| x
+
+table = { f: id }
+
+use_i64 = table.f(1)
+use_str = table.f("x")
+```
+
+The concrete `table` request used by `use_i64` constructs a graph containing
+`f = proc_value(id, I64 -> I64)` and appends the dependency
+`procedure_callable(id, I64 -> I64)` at that exact construction point. The
+concrete `table` request used by `use_str` constructs a separate graph
+containing `f = proc_value(id, Str -> Str)` and appends
+`procedure_callable(id, Str -> Str)` at that exact construction point. No later
+stage walks either graph to discover those procedure callables.
+
+This means generic checked eval templates never contain parameterized
 availability-use rows, parameterized concrete-value-use rows, or any structure
-that later stages can "instantiate" without lowering the concrete request. The
-summary-only lowering path is the single source of truth for static dispatch,
-finite callable members, erased callable code, callable leaves, promoted
-captures, and concrete top-level value uses for that request. It must not
-manufacture a concrete `ConstInstantiationKey`,
-`CallableBindingInstantiationKey`, `ProcedureCallableRef`, executable
-specialization, or concrete source type payload before the requested source type
-is fully resolved. It must also not scan checked template syntax, collect
-resolved-value refs out of a checked body as a shortcut, run a mono-only static
-dispatch collector, or ask an imported artifact to patch in a missing summary.
+that later stages can "instantiate" without lowering the concrete eval request.
+For eval templates, the summary-only lowering path is the single source of truth
+for static dispatch, finite callable members, erased callable code, callable
+leaves, promoted captures, and concrete top-level value uses for that request.
+For value-graph templates, the source of truth is the value-graph construction
+operation that consumes the explicit template graph and the exact
+`requested_source_ty_payload`. Neither path may manufacture a concrete
+`ConstInstantiationKey`, `CallableBindingInstantiationKey`,
+`ProcedureCallableRef`, executable specialization, or concrete source type
+payload before the requested source type is fully resolved. Neither path may
+scan checked template syntax, collect resolved-value refs out of a checked body
+as a shortcut, run a mono-only static-dispatch collector, walk a finished value
+graph as a separate dependency pass, or ask an imported artifact to patch in a
+missing summary.
 
 This is required for generic constants such as `table = { f: id }`, where
 different consumers of the same exported constant instantiate callable leaves at
@@ -8381,6 +8416,84 @@ target ABI/layout inputs. Target ABI/layout inputs belong only in later caches
 that store target-shaped data, such as finalized layouts, executable MIR
 specializations with target layout commitments, LIR, object code, or constant
 materialization output.
+
+Prepared lowering artifacts and runtime emission are separate concepts.
+Preparing a procedure specialization means the compiler has already built some
+stage output for an exact key. Emitting a procedure means that exact
+specialization is reachable from the final runtime root set and must be present
+in the final binary or runtime image. A prepared entry by itself never implies
+runtime emission.
+
+Checking finalization may prepare procedure bodies while evaluating
+compile-time constants. For example:
+
+```roc
+make_adder = |n| |x| x + n
+
+answer = make_adder(1)(41)
+
+main = answer
+```
+
+The LIR interpreter may need prepared code for the callable produced by
+`make_adder(1)` while computing `answer`. If that callable is only an
+interpreter temporary and does not escape into checked-artifact data, no runtime
+emission entry is created for it.
+
+In contrast:
+
+```roc
+make_adder = |n| |x| x + n
+
+add_one = make_adder(1)
+
+main = add_one(41)
+```
+
+When checking finalization reifies `add_one`, the escaping callable value is
+published as explicit checked-artifact data, such as a promoted procedure value
+or a callable leaf that points at a sealed procedure binding. Later runtime
+lowering reaches that explicit procedure identity from `main`; only that
+runtime-reachable path adds the specialization to the runtime emission set. If
+the same exact stage output was already prepared during compile-time evaluation,
+runtime lowering may reuse it by exact key instead of building it again.
+
+Reuse must use the compiler's existing lowering maps where their keys are exact:
+
+- mono MIR reservation uses `MonoSpecializationKey`, as in the specialization
+  queue's requested map
+- lambda-solved lowering maps `MirProcedureRef` to
+  `ProcRepresentationInstanceId` inside the solve run
+- executable MIR maps representation instances and `MirProcedureRef` values to
+  executable procedure ids inside the executable build
+- IR/LIR lowering maps executable procedure ids to LIR procedure ids inside the
+  lowering result
+
+Those existing maps are per lowering run. If the implementation introduces a
+longer-lived prepared-specialization context shared between checking-finalization
+compile-time evaluation and later runtime lowering for the same module build, it
+must be an exact-keyed preparation store, not a semantic source of truth and not
+part of the checked artifact cache. A cache hit says only "this exact stage
+output has already been prepared." It does not say "this procedure belongs in
+the final binary." A cache miss during runtime lowering performs the normal
+explicit lowering for the requested key and then records the prepared output.
+
+Each prepared cache level must be keyed by all inputs that can affect that stage.
+Mono-stage reuse is keyed by `MonoSpecializationKey` plus the checked artifact
+identities and compiler artifact hash that define the checked templates and
+type payloads. Any executable MIR, IR, LIR, ARC-inserted LIR, object-code, or
+runtime-image reuse must also include target/layout/compiler-runtime inputs and
+the exact representation/executable specialization keys. A stage without a
+complete key must not be reused across lowering requests.
+
+The runtime emission set is still driven only by explicit runtime roots and
+their concrete dependencies. Compile-time execution requests form a separate
+compile-time execution set. Moving a prepared procedure from "available for
+reuse" to "emitted in the final runtime program" is never automatic; it happens
+only when runtime lowering reaches that exact procedure through explicit
+`RootRequest`, `ConstInstance`, `CallableBindingInstance`,
+`ProcedureCallableRef`, finite callable-set member, erased adapter, platform
+required root, or another already-published checked-artifact reference.
 
 The compile-time value store inside a checked artifact is a logical value graph,
 not target-shaped storage. Reification copies interpreter results into logical
@@ -10576,6 +10689,19 @@ procedure, runtime top-level constant thunk, runtime zero-argument wrapper,
 runtime global initializer, runtime top-level closure object, or runtime global
 callable object.
 
+For an exported `ConstValueGraphTemplate`, the private closure must include the
+target-independent schema/value graph, callable leaf templates, erased callable
+materialization nodes, promoted procedure rows, semantic-instantiation procedure
+rows, private capture nodes, checked type roots/schemes, and canonical-name
+tables required to instantiate that graph in the importing artifact. It must not
+include parameterized dependency summary data. The importing artifact produces
+the concrete instance by performing the normal value-graph construction in the
+requesting artifact: every copied/remapped/instantiated node is written once,
+and the concrete dependency summary is accumulated by that same construction
+work. It must not run the LIR interpreter, create a fake MIR entrypoint, invoke
+summary-only MIR-family lowering, or walk the finished graph with a separate
+dependency collector.
+
 Lowering a `ConstInstantiationRequest` for an eval template seeds mono MIR with
 the template's `entry_template` and the request's exact
 `requested_source_ty_payload`. The root metadata for that lowering is private
@@ -10586,9 +10712,13 @@ by the `ConstInstantiationRequest` itself, not by a `CompileTimeRootId`.
 Lowering a `ConstInstantiationRequest` for a value-graph template does not run
 the interpreter. It clones the target-independent value graph into the
 requesting artifact's `CompileTimeValueStore`, instantiates every callable leaf
-through explicit semantic-instantiation procedure requests, builds the concrete
-dependency summary by summary-only MIR-family lowering of the exact concrete
-request, and fills the requesting artifact's `ConstInstantiationStore`.
+through explicit semantic-instantiation procedure requests, accumulates the
+concrete dependency summary while those nodes are being written, and fills the
+requesting artifact's `ConstInstantiationStore`. This construction is the only
+dependency-summary path for value-graph templates. There must be no extra graph
+iteration and no helper shaped like "append a dependency summary for this
+already-built value graph"; if the concrete instance exists, its summary already
+exists next to it.
 
 Lowering a `CallableBindingInstantiationRequest` follows the same ownership
 rule. If the binding is already a direct sealed procedure binding at the
@@ -14499,7 +14629,7 @@ member it can call during compile-time evaluation.
 Generic constant and callable templates store neither concrete dependency
 summaries nor parameterized summary data. `ConstEvalTemplate` and
 `CallableEvalTemplate` are reusable checked entry templates only. A concrete
-`ConstInstance` or `CallableBindingInstance` obtains its
+eval-template `ConstInstance` or `CallableBindingInstance` obtains its
 `ComptimeDependencySummaryId` by running the exact concrete request through
 summary-only MIR-family lowering in the artifact that owns the concrete
 instance. This lowering uses the requested source type payload, cloned checked
@@ -14509,13 +14639,20 @@ callable representation records that executable lowering will consume. It then
 records concrete `AvailabilityUse` and `ConcreteValueUse` keys after static
 dispatch and callable representation are resolved.
 
-The summary-only path must not be replaced by a checked-template scan,
-parameterized dependency rows, a mono-only static-dispatch collector, imported
-artifact mutation, imported root re-execution, or a post-check attempt to infer
-dependencies from source names. This keeps generic templates reusable while
-ensuring every concrete instance has an exact concrete summary and later stages
-never have to infer dependencies, rerun checking, or ask an imported artifact to
-add a missing summary.
+A value-graph-template `ConstInstance` obtains its
+`ComptimeDependencySummaryId` from the existing value-graph construction work
+that creates the concrete instance. As the constructor copies, remaps, or
+instantiates a node, it appends the dependency rows for that node immediately.
+It must not run a MIR-family summary lowering request and must not walk the
+finished graph in a separate collector.
+
+The summary-only eval path and the value-graph construction path must not be
+replaced by a checked-template scan, parameterized dependency rows, a mono-only
+static-dispatch collector, imported artifact mutation, imported root
+re-execution, or a post-check attempt to infer dependencies from source names.
+This keeps generic templates reusable while ensuring every concrete instance has
+an exact concrete summary and later stages never have to infer dependencies,
+rerun checking, or ask an imported artifact to add a missing summary.
 
 For example, these declarations require separate concrete summaries for
 different requested source types:
@@ -16777,8 +16914,10 @@ The cutover is complete only when all of these are true:
   `ConstInstantiationKey`
 - generic `ConstEvalTemplate` and `CallableEvalTemplate` records contain checked
   entry-template data only; concrete `ConstInstance` and
-  `CallableBindingInstance` rows contain concrete dependency summaries produced
-  by summary-only MIR-family lowering in the owning artifact's concrete context
+  `CallableBindingInstance` rows contain concrete dependency summaries; eval
+  templates produce those summaries by summary-only MIR-family lowering in the
+  owning artifact's concrete context, while value-graph templates accumulate
+  them during the existing value-graph construction work with no extra traversal
 - no post-check lowering stage creates or finishes a `ConstInstance`,
   `CallableBindingInstance`, `SemanticInstantiationProcedureTable` row,
   promoted procedure row, private capture graph, callable result plan, callable
