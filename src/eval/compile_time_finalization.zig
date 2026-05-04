@@ -308,9 +308,8 @@ fn constGraphContainsCallableSlotsInner(
 
     return switch (plans.constGraph(root)) {
         .pending => compileTimeFinalizationInvariant("callable-slot scan reached pending const graph plan"),
-        .callable_leaf,
-        .callable_schema,
-        => true,
+        .callable_leaf => true,
+        .callable_schema => false,
         .scalar,
         .string,
         => false,

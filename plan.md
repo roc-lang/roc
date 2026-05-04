@@ -7796,6 +7796,12 @@ schema of an empty `List(I64 -> I64)` capture or the payload schema of an
 inactive tag-union variant. If finalization ever tries to materialize a
 `callable_schema` as a private capture value, that is a compiler bug: debug
 builds assert immediately and release builds use `unreachable`.
+Because `callable_schema` is type-only, it does not count as a reachable
+callable slot for `NoReachableCallableSlotsProof`, private capture const modes,
+or pure executable materialization. Only `callable_leaf` represents an actual
+callable value. This distinction is required for empty callable-containing
+containers: `[]` at source type `List(I64 -> I64)` has a function-typed element
+schema but no reachable callable value.
 For a finite callable result, `source_fn_ty + callable_set_key + member` is the
 complete selected-member identity. `CallableResultMemberPlan` therefore stores
 only the `member` and its capture-slot reification plans; the member procedure,
