@@ -1,8 +1,9 @@
 //! Mechanical ARC insertion for LIR.
 //!
 //! This pass is the only non-builtin stage that may synthesize explicit
-//! `incref`, `decref`, and `free` statements. Backends consume those statements
-//! without doing reference-counting analysis.
+//! baseline automatic `incref` and `decref` statements. `decref` owns ordinary
+//! zero-count cleanup; backends consume explicit RC statements without doing
+//! reference-counting analysis.
 
 const std = @import("std");
 const layout_mod = @import("layout");

@@ -1592,8 +1592,8 @@ order, reading each element with the checked low-level list access operation,
 applying the child value transform to the element, and writing/appending the
 transformed element to the target list. The low-level operations used for the
 loop must have explicit value-flow, ABI, and reference-counting metadata. ARC
-insertion emits the required `incref`, `decref`, and `free`; backends still only
-follow explicit LIR statements.
+insertion emits the required baseline `incref` and `decref` statements;
+backends still only follow explicit LIR statements.
 
 A `box_payload` executable value transform is directional. `payload_to_box`
 transforms an unboxed payload value and allocates a fresh `Box(T)` containing
@@ -6518,13 +6518,27 @@ is in administrative normal form. That pass consumes:
 - explicit low-level RC-effect metadata
 - explicit runtime-uniqueness mutation sites
 
-It produces only explicit LIR reference-counting statements:
+It produces explicit LIR reference-counting statements. The required baseline
+automatic reference-counting statements for this cutover are:
 
 ```text
 incref
 decref
-free
 ```
+
+`decref` owns the ordinary zero-count cleanup path. If decrementing a
+refcounted value reaches zero, the runtime helper reached by the explicit
+`decref` statement frees the value and recursively releases children according
+to the committed layout. The baseline ARC inserter must not require a separate
+statically proven `free` statement for correctness; emitting `decref` at
+last-use points is the simple, correctness-first contract.
+
+LIR may still contain an explicit `free` statement for a future direct-free
+optimization or for a low-level/runtime helper path whose input is already an
+explicitly owned allocation with no remaining aliases. That is not part of the
+required baseline ARC algorithm for this cutover. Backends and interpreters
+must execute `free` mechanically if present, but no backend may decide to turn
+an ordinary `decref` into `free` by doing ownership analysis.
 
 It must not produce or consume semantic parameter modes, alias contracts,
 procedure result contracts, escape summaries, or interprocedural uniqueness
@@ -6640,9 +6654,10 @@ Backends consume LIR only. They must not import MIR, IR builder internals,
 checked CIR, method registries, or reference-counting analysis.
 
 LIR ARC insertion is a value/control-flow pass, not a backend behavior and not a
-semantic procedure-summary pass. It computes where explicit `incref`, `decref`,
-and `free` statements belong from LIR uses, branch joins, call boundaries,
-runtime mutation sites, and refcounted layout metadata.
+semantic procedure-summary pass. Its required baseline computes where explicit
+`incref` and `decref` statements belong from LIR uses, branch joins, call
+boundaries, runtime mutation sites, and refcounted layout metadata. It does not
+need to synthesize `free` to be correct; `decref` handles zero-count cleanup.
 
 LIR writes must expose their ARC write meaning explicitly. ARC insertion must
 not infer write meaning from source syntax, statement position, control-flow
@@ -6714,10 +6729,11 @@ insertion to see what values are produced and consumed mechanically:
 - runtime mutation sites expose the checked value, unique path, shared path, and
   joined result.
 
-`RcInsert` is the only non-builtin stage that emits explicit `incref`, `decref`,
-and `free`. Backends and the ordinary interpreter path execute those statements
-mechanically. They do not branch on layout shape to decide reference-counting
-behavior except while executing the explicit LIR RC statements already present.
+`RcInsert` is the only non-builtin stage that emits baseline automatic
+reference-counting `incref` and `decref` statements. Backends and the ordinary
+interpreter path execute explicit LIR RC statements mechanically. They do not
+branch on layout shape to decide reference-counting behavior except while
+executing the explicit LIR RC statements already present.
 
 Before backend lowering, debug-only assertions must fire if any refcounted
 layout value produced by executable MIR, IR, or LIR lacks the metadata needed by
@@ -14023,8 +14039,9 @@ Commit when executable MIR verification proves:
   boxed payload boundaries, mutation, and bridges exposes explicit operands and
   RC-effect metadata needed by LIR ARC insertion
 - no executable semantic parameter-mode solver exists
-- LIR ARC insertion emits explicit `incref`, `decref`, and `free` from LIR
-  values and control flow, not from procedure contracts
+- LIR ARC insertion emits baseline explicit `incref` and `decref` from LIR
+  values and control flow, not from procedure contracts; `decref` owns ordinary
+  zero-count cleanup
 
 ### 10. Delete Source-Type Reconstruction
 
@@ -15248,11 +15265,11 @@ IR/LIR:
   same committed recursive-slot mapping
 - every value-producing LIR statement exposes sufficient operands and
   refcounted-layout metadata for ARC insertion
-- LIR ARC insertion computes explicit `incref`, `decref`, and `free` from LIR
+- LIR ARC insertion computes baseline explicit `incref` and `decref` from LIR
   values and control flow; it does not infer procedure contracts as semantic
-  truth
-- `RcInsert` is the only non-builtin stage that emits explicit `incref`,
-  `decref`, and `free`
+  truth, and it does not require separate `free` synthesis for correctness
+- `RcInsert` is the only non-builtin stage that emits baseline explicit
+  `incref` and `decref`
 - backends execute explicit LIR RC statements and perform no ordinary RC
   analysis
 
