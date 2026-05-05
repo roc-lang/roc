@@ -4762,10 +4762,14 @@ const BodyBuilder = struct {
         var stmt_ids = std.ArrayList(Ast.StmtId).empty;
         defer stmt_ids.deinit(self.allocator);
 
-        const return_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, self.exprValue(body));
+        const body_value = self.exprValue(body);
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = body_value,
+            .body = body,
+        } }));
+        const return_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, body_value);
         const return_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
         const final_expr = try self.output.addExpr(return_ty, return_value, .{ .value_ref = return_value });
-        if (stmt_ids.items.len == 0) return final_expr;
 
         return try self.output.addExpr(return_ty, return_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
@@ -4905,8 +4909,52 @@ const BodyBuilder = struct {
             .crash,
             .runtime_error,
             => false,
+            .block => |block| self.executableBlockReturnsValue(block.stmts, block.final_expr),
+            .if_ => |if_| self.executableExprReturnsValue(if_.then_body) or
+                self.executableExprReturnsValue(if_.else_body),
+            .source_match => |source_match| self.anyExecutableBranchReturnsValue(source_match.branches),
             else => true,
         };
+    }
+
+    fn executableBlockReturnsValue(
+        self: *const BodyBuilder,
+        stmts: Ast.Span(Ast.StmtId),
+        final_expr: Ast.ExprId,
+    ) bool {
+        const stmt_ids = self.output.stmt_ids.items[stmts.start..][0..stmts.len];
+        for (stmt_ids) |stmt_id| {
+            if (!self.executableStmtCanCompleteNormally(stmt_id)) return false;
+        }
+        return self.executableExprReturnsValue(final_expr);
+    }
+
+    fn executableStmtCanCompleteNormally(self: *const BodyBuilder, stmt_id: Ast.StmtId) bool {
+        return switch (self.output.stmts.items[@intFromEnum(stmt_id)]) {
+            .decl => |decl| self.executableExprReturnsValue(decl.body),
+            .reassign => |reassign| self.executableExprReturnsValue(reassign.body),
+            .expr => |expr| self.executableExprReturnsValue(expr),
+            .debug => |expr| self.executableExprReturnsValue(expr),
+            .expect => |expr| self.executableExprReturnsValue(expr),
+            .crash,
+            .return_,
+            .break_,
+            => false,
+            .for_,
+            .while_,
+            => true,
+        };
+    }
+
+    fn anyExecutableBranchReturnsValue(
+        self: *const BodyBuilder,
+        branches: Ast.Span(Ast.BranchId),
+    ) bool {
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        for (branch_ids) |branch_id| {
+            if (self.executableExprReturnsValue(self.output.branches.items[@intFromEnum(branch_id)].body)) return true;
+        }
+        return false;
     }
 
     fn returnTransformBoundary(

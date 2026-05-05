@@ -4198,7 +4198,7 @@ const BodySolver = struct {
                 const else_body = try self.lowerExpr(if_.else_body);
                 var inputs = std.ArrayList(repr.JoinInputInfo).empty;
                 defer inputs.deinit(self.allocator);
-                if (self.exprReturnsValue(then_body)) {
+                if (self.exprCanCompleteNormally(then_body)) {
                     try inputs.append(self.allocator, .{
                         .source = .{ .if_branch = .{
                             .if_expr = if_expr_id,
@@ -4207,7 +4207,7 @@ const BodySolver = struct {
                         .value = self.exprValue(then_body),
                     });
                 }
-                if (self.exprReturnsValue(else_body)) {
+                if (self.exprCanCompleteNormally(else_body)) {
                     try inputs.append(self.allocator, .{
                         .source = .{ .if_branch = .{
                             .if_expr = if_expr_id,
@@ -4847,7 +4847,7 @@ const BodySolver = struct {
         var input_len: usize = 0;
         for (branch_ids, 0..) |branch_id, i| {
             const body = self.output.branches.items[@intFromEnum(branch_id)].body;
-            if (!self.exprReturnsValue(body)) continue;
+            if (!self.exprCanCompleteNormally(body)) continue;
             inputs[input_len] = .{
                 .source = .{ .source_match_branch = .{
                     .match = match_id,
@@ -4889,14 +4889,59 @@ const BodySolver = struct {
         }
     }
 
-    fn exprReturnsValue(self: *const BodySolver, expr_id: Ast.ExprId) bool {
+    fn exprCanCompleteNormally(self: *const BodySolver, expr_id: Ast.ExprId) bool {
         return switch (self.output.exprs.items[@intFromEnum(expr_id)].data) {
             .return_,
             .crash,
             .runtime_error,
             => false,
+            .block => |block| self.blockCanCompleteNormally(block.stmts, block.final_expr),
+            .if_ => |if_| self.exprCanCompleteNormally(if_.then_body) or
+                self.exprCanCompleteNormally(if_.else_body),
+            .match_ => |match_| self.anyBranchCanCompleteNormally(match_.branches),
             else => true,
         };
+    }
+
+    fn blockCanCompleteNormally(
+        self: *const BodySolver,
+        stmts: Ast.Span(Ast.StmtId),
+        final_expr: Ast.ExprId,
+    ) bool {
+        const stmt_ids = self.output.stmt_ids.items[stmts.start..][0..stmts.len];
+        for (stmt_ids) |stmt_id| {
+            if (!self.stmtCanCompleteNormally(stmt_id)) return false;
+        }
+        return self.exprCanCompleteNormally(final_expr);
+    }
+
+    fn stmtCanCompleteNormally(self: *const BodySolver, stmt_id: Ast.StmtId) bool {
+        return switch (self.output.stmts.items[@intFromEnum(stmt_id)]) {
+            .decl => |decl| self.exprCanCompleteNormally(decl.body),
+            .var_decl => |decl| self.exprCanCompleteNormally(decl.body),
+            .reassign => |reassign| self.exprCanCompleteNormally(reassign.body),
+            .expr => |expr| self.exprCanCompleteNormally(expr),
+            .debug => |expr| self.exprCanCompleteNormally(expr),
+            .expect => |expr| self.exprCanCompleteNormally(expr),
+            .crash,
+            .return_,
+            .break_,
+            => false,
+            .for_,
+            .while_,
+            => true,
+        };
+    }
+
+    fn anyBranchCanCompleteNormally(
+        self: *const BodySolver,
+        branches: Ast.Span(Ast.BranchId),
+    ) bool {
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        for (branch_ids) |branch_id| {
+            if (self.exprCanCompleteNormally(self.output.branches.items[@intFromEnum(branch_id)].body)) return true;
+        }
+        return false;
     }
 
     fn freshSourceMatchId(self: *BodySolver) repr.SourceMatchId {

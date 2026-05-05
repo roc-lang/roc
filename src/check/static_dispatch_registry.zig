@@ -161,7 +161,7 @@ pub const MethodRegistry = struct {
                     .def_idx = def_idx,
                     .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                     .template = template,
-                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(def_idx)),
+                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.defType(def_idx)),
                 },
             });
         }

@@ -1370,8 +1370,8 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         id: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        if (self.substitutions.get(id)) |concrete| return concrete;
-        if (self.concrete_template_refs.get(id)) |existing| return existing;
+        if (self.substitutions.get(id)) |concrete| return self.resolveConcreteRef(concrete);
+        if (self.concrete_template_refs.get(id)) |existing| return self.resolveConcreteRef(existing);
 
         const local_root = try self.materializeTemplateType(id);
         var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
@@ -1868,7 +1868,8 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!Type.TypeId {
-        const root = self.program.concrete_source_types.root(ref);
+        const resolved = self.resolveConcreteRef(ref);
+        const root = self.program.concrete_source_types.root(resolved);
         return switch (root.source) {
             .artifact => |artifact_ref| try self.lowerArtifactRef(artifact_ref),
             .local => |local| blk: {
@@ -1890,6 +1891,18 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         switch (self.templatePayload(template_id)) {
             .flex, .rigid => {
+                const resolved_concrete = self.resolveConcreteRef(concrete);
+                switch (self.concretePayload(resolved_concrete)) {
+                    .flex, .rigid => {
+                        if (self.substitutions.get(template_id)) |existing| {
+                            try self.bindConcreteVariable(resolved_concrete, existing);
+                        } else {
+                            try self.bindTemplateVariable(template_id, resolved_concrete);
+                        }
+                        return;
+                    },
+                    else => {},
+                }
                 try self.bindTemplateVariable(template_id, concrete);
                 return;
             },
@@ -2098,15 +2111,17 @@ const TypeInstantiator = struct {
         template_id: checked_artifact.CheckedTypeId,
         concrete: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
+        const resolved_concrete = self.resolveConcreteRef(concrete);
         const delayed_numeric_default = self.templateVariableAcceptsDelayedNumericDefault(template_id) and
-            try self.concreteRefIsBuiltinDec(concrete);
+            try self.concreteRefIsBuiltinDec(resolved_concrete);
         if (self.substitutions.get(template_id)) |existing| {
-            const existing_key = self.program.concrete_source_types.key(existing);
-            const concrete_key = self.program.concrete_source_types.key(concrete);
+            const resolved_existing = self.resolveConcreteRef(existing);
+            const existing_key = self.program.concrete_source_types.key(resolved_existing);
+            const concrete_key = self.program.concrete_source_types.key(resolved_concrete);
             if (!std.mem.eql(u8, &existing_key.bytes, &concrete_key.bytes)) {
                 if (self.defaulted_numeric_substitutions.contains(template_id)) {
                     if (delayed_numeric_default) return;
-                    try self.substitutions.put(template_id, concrete);
+                    try self.substitutions.put(template_id, resolved_concrete);
                     _ = self.defaulted_numeric_substitutions.remove(template_id);
                     self.clearDerivedTypeCaches();
                     return;
@@ -2116,7 +2131,7 @@ const TypeInstantiator = struct {
             }
             return;
         }
-        try self.substitutions.put(template_id, concrete);
+        try self.substitutions.put(template_id, resolved_concrete);
         if (delayed_numeric_default) try self.defaulted_numeric_substitutions.put(template_id, {});
     }
 
@@ -2125,15 +2140,18 @@ const TypeInstantiator = struct {
         variable: ConcreteSourceType.ConcreteSourceTypeRef,
         concrete: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
+        const resolved_concrete = self.resolveConcreteRef(concrete);
+        if (variable == resolved_concrete) return;
         if (self.concrete_variable_substitutions.get(variable)) |existing| {
-            const existing_key = self.program.concrete_source_types.key(existing);
-            const concrete_key = self.program.concrete_source_types.key(concrete);
+            const resolved_existing = self.resolveConcreteRef(existing);
+            const existing_key = self.program.concrete_source_types.key(resolved_existing);
+            const concrete_key = self.program.concrete_source_types.key(resolved_concrete);
             if (!std.mem.eql(u8, &existing_key.bytes, &concrete_key.bytes)) {
                 invariantViolation("mono specialization target generic variable mapped to incompatible concrete types");
             }
             return;
         }
-        try self.concrete_variable_substitutions.put(variable, concrete);
+        try self.concrete_variable_substitutions.put(variable, resolved_concrete);
         self.clearDerivedTypeCaches();
     }
 
@@ -2175,11 +2193,20 @@ const TypeInstantiator = struct {
         return self.template_types.payloads[raw];
     }
 
-    fn concretePayload(self: *const TypeInstantiator, ref: ConcreteSourceType.ConcreteSourceTypeRef) checked_artifact.CheckedTypePayload {
-        if (self.concrete_variable_substitutions.get(ref)) |substitution| {
-            return self.concretePayload(substitution);
+    fn resolveConcreteRef(
+        self: *const TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) ConcreteSourceType.ConcreteSourceTypeRef {
+        var current = ref;
+        while (self.concrete_variable_substitutions.get(current)) |substitution| {
+            current = substitution;
         }
-        const root = self.program.concrete_source_types.root(ref);
+        return current;
+    }
+
+    fn concretePayload(self: *const TypeInstantiator, ref: ConcreteSourceType.ConcreteSourceTypeRef) checked_artifact.CheckedTypePayload {
+        const resolved = self.resolveConcreteRef(ref);
+        const root = self.program.concrete_source_types.root(resolved);
         return switch (root.source) {
             .artifact => |artifact_ref| blk: {
                 const checked_types = checkedTypesForKey(self.input, artifact_ref.artifact) orelse {
@@ -2204,10 +2231,8 @@ const TypeInstantiator = struct {
         parent: ConcreteSourceType.ConcreteSourceTypeRef,
         child: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        if (self.concrete_variable_substitutions.get(parent)) |substitution| {
-            return try self.concreteChildRef(substitution, child);
-        }
-        const root = self.program.concrete_source_types.root(parent);
+        const resolved = self.resolveConcreteRef(parent);
+        const root = self.program.concrete_source_types.root(resolved);
         return switch (root.source) {
             .artifact => |artifact_ref| blk: {
                 const checked_types = checkedTypesForKey(self.input, artifact_ref.artifact) orelse {
@@ -2228,18 +2253,19 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
-        const root = self.program.concrete_source_types.root(ref);
+        const resolved = self.resolveConcreteRef(ref);
+        const root = self.program.concrete_source_types.root(resolved);
         switch (root.source) {
             .local => |local| return local,
             .artifact => {},
         }
-        if (self.materialized_concrete_roots.get(ref)) |existing| return existing;
+        if (self.materialized_concrete_roots.get(resolved)) |existing| return existing;
 
         const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
-        try self.materialized_concrete_roots.put(ref, local_root);
-        errdefer _ = self.materialized_concrete_roots.remove(ref);
+        try self.materialized_concrete_roots.put(resolved, local_root);
+        errdefer _ = self.materialized_concrete_roots.remove(resolved);
 
-        const payload = try self.materializeConcretePayload(ref, self.concretePayload(ref));
+        const payload = try self.materializeConcretePayload(resolved, self.concretePayload(resolved));
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
         try self.sealMaterializedLocalRoot(local_root);
         return local_root;
@@ -2475,7 +2501,7 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         name: canonical.RecordFieldLabelId,
     ) Allocator.Error!canonical.RecordFieldLabelId {
-        const root = self.program.concrete_source_types.root(ref);
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
         return switch (root.source) {
             .artifact => |artifact_ref| try self.name_resolver.recordFieldLabel(artifact_ref.artifact, name),
             .local => name,
@@ -2487,7 +2513,7 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         name: canonical.TagLabelId,
     ) Allocator.Error!canonical.TagLabelId {
-        const root = self.program.concrete_source_types.root(ref);
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
         return switch (root.source) {
             .artifact => |artifact_ref| try self.name_resolver.tagLabel(artifact_ref.artifact, name),
             .local => name,
@@ -2499,7 +2525,7 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         name: canonical.ModuleNameId,
     ) Allocator.Error!canonical.ModuleNameId {
-        const root = self.program.concrete_source_types.root(ref);
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
         return switch (root.source) {
             .artifact => |artifact_ref| try self.name_resolver.moduleName(artifact_ref.artifact, name),
             .local => name,
@@ -2511,7 +2537,7 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         name: canonical.TypeNameId,
     ) Allocator.Error!canonical.TypeNameId {
-        const root = self.program.concrete_source_types.root(ref);
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
         return switch (root.source) {
             .artifact => |artifact_ref| try self.name_resolver.typeName(artifact_ref.artifact, name),
             .local => name,
@@ -2591,6 +2617,7 @@ const BodyLowerer = struct {
     local_proc_instances: std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol),
     lowered_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId),
     active_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, void),
+    current_return_type: ?ConcreteTypeInfo,
 
     fn init(
         allocator: Allocator,
@@ -2615,6 +2642,7 @@ const BodyLowerer = struct {
             .local_proc_instances = std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol).init(allocator),
             .lowered_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId).init(allocator),
             .active_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, void).init(allocator),
+            .current_return_type = null,
         };
     }
 
@@ -3606,6 +3634,9 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.DefId {
         const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
         const ret_ty = try self.returnTypeFromConcreteFunction(reserved.requested_fn_ty);
+        const previous_return_type = self.current_return_type;
+        self.current_return_type = ret_ty;
+        defer self.current_return_type = previous_return_type;
         const body = try self.lowerExprConcreteExpected(body_expr, ret_ty);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
@@ -3847,6 +3878,16 @@ const BodyLowerer = struct {
         return try self.lowerExprWithExpected(expr_id, .{ .concrete = expected_ty });
     }
 
+    fn lowerReturnValue(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const return_type = self.current_return_type orelse {
+            invariantViolation("mono body lowering reached return without an enclosing procedure return type");
+        };
+        return try self.lowerExprConcreteExpected(expr_id, return_type);
+    }
+
     fn expectedTypeInfo(
         self: *BodyLowerer,
         expected_ty: ExprExpectedType,
@@ -3928,7 +3969,7 @@ const BodyLowerer = struct {
             .return_ => |ret| blk: {
                 _ = ret.lambda;
                 _ = ret.context;
-                const child = try self.lowerExprWithExpected(ret.expr, expected_ty);
+                const child = try self.lowerReturnValue(ret.expr);
                 break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
             },
             .binop => |binop| try self.lowerBinop(ty, binop),
@@ -4179,6 +4220,10 @@ const BodyLowerer = struct {
         defer self.type_instantiator = previous;
 
         const fn_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+        const ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn);
+        const previous_return_type = self.current_return_type;
+        self.current_return_type = ret_ty;
+        defer self.current_return_type = previous_return_type;
         return .{
             .site = self.nestedProcSite(decl.expr, lambda.kind),
             .source_fn_ty = source_fn_ty,
@@ -4189,7 +4234,7 @@ const BodyLowerer = struct {
                 .symbol = instance_symbol,
             },
             .args = try self.lowerParamSpanFromFunction(lambda.args, concrete_fn),
-            .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(concrete_fn)),
+            .body = try self.lowerExprConcreteExpected(lambda.body, ret_ty),
         };
     }
 
@@ -5324,7 +5369,7 @@ const BodyLowerer = struct {
             .expr => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(expr) }),
             .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerBoolConditionExpr(expr) }),
             .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
-            .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerExpr(ret.expr) }),
+            .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerReturnValue(ret.expr) }),
             .break_ => try self.program.ast.addStmt(.break_),
             .for_ => |for_| try self.lowerForStmt(for_.pattern, for_.expr, for_.body),
             .while_ => |while_| try self.program.ast.addStmt(.{ .while_ = .{

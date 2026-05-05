@@ -27,11 +27,23 @@ pub const ConcreteSourceTypeRoot = struct {
     source: ConcreteSourceTypeSource,
 };
 
+const SourceKind = enum {
+    artifact,
+    local,
+};
+
+const SourceKey = struct {
+    kind: SourceKind,
+    artifact: [32]u8 = [_]u8{0} ** 32,
+    ty: u32,
+};
+
 /// Public `Store` declaration.
 pub const Store = struct {
     allocator: Allocator,
     roots: std.ArrayList(ConcreteSourceTypeRoot),
     by_key: std.StringHashMap(ConcreteSourceTypeRef),
+    by_source: std.AutoHashMap(SourceKey, ConcreteSourceTypeRef),
     local_roots: std.ArrayList(checked_artifact.CheckedTypeRoot),
     local_payloads: std.ArrayList(checked_artifact.CheckedTypePayload),
 
@@ -40,6 +52,7 @@ pub const Store = struct {
             .allocator = allocator,
             .roots = .empty,
             .by_key = std.StringHashMap(ConcreteSourceTypeRef).init(allocator),
+            .by_source = std.AutoHashMap(SourceKey, ConcreteSourceTypeRef).init(allocator),
             .local_roots = .empty,
             .local_payloads = .empty,
         };
@@ -52,6 +65,7 @@ pub const Store = struct {
         var keys = self.by_key.keyIterator();
         while (keys.next()) |stored_key| self.allocator.free(stored_key.*);
         self.by_key.deinit();
+        self.by_source.deinit();
         self.roots.deinit(self.allocator);
         self.* = Store.init(self.allocator);
     }
@@ -75,13 +89,16 @@ pub const Store = struct {
             invariantViolation("concrete source type store received a checked type id outside the artifact root table");
         }
 
-        return try self.registerRoot(.{
-            .key = checked_types.roots[raw].key,
-            .source = .{ .artifact = .{
-                .artifact = artifact,
-                .ty = checked_root,
-            } },
-        });
+        return try self.registerRoot(
+            .{
+                .key = checked_types.roots[raw].key,
+                .source = .{ .artifact = .{
+                    .artifact = artifact,
+                    .ty = checked_root,
+                } },
+            },
+            !try checkedTypeContainsIdentityVariables(self.allocator, checked_types.payloads, checked_root),
+        );
     }
 
     pub fn registerLocalRoot(
@@ -93,10 +110,13 @@ pub const Store = struct {
             invariantViolation("concrete source type store received a local checked type id outside the local root table");
         }
 
-        return try self.registerRoot(.{
-            .key = self.local_roots.items[raw].key,
-            .source = .{ .local = checked_root },
-        });
+        return try self.registerRoot(
+            .{
+                .key = self.local_roots.items[raw].key,
+                .source = .{ .local = checked_root },
+            },
+            !try checkedTypeContainsIdentityVariables(self.allocator, self.local_payloads.items, checked_root),
+        );
     }
 
     pub fn reserveLocalRoot(
@@ -160,24 +180,125 @@ pub const Store = struct {
     fn registerRoot(
         self: *Store,
         new_root: ConcreteSourceTypeRoot,
+        dedupe_by_key: bool,
     ) Allocator.Error!ConcreteSourceTypeRef {
-        if (self.by_key.get(new_root.key.bytes[0..])) |existing| {
-            const existing_root = self.root(existing);
-            if (!std.mem.eql(u8, existing_root.key.bytes[0..], new_root.key.bytes[0..])) {
-                invariantViolation("concrete source type store key map returned a non-equivalent payload");
+        const source_key = sourceKey(new_root.source);
+        if (self.by_source.get(source_key)) |existing| return existing;
+
+        if (dedupe_by_key) {
+            if (self.by_key.get(new_root.key.bytes[0..])) |existing| {
+                const existing_root = self.root(existing);
+                if (!std.mem.eql(u8, existing_root.key.bytes[0..], new_root.key.bytes[0..])) {
+                    invariantViolation("concrete source type store key map returned a non-equivalent payload");
+                }
+                return existing;
             }
-            return existing;
         }
 
         const id: ConcreteSourceTypeRef = @enumFromInt(@as(u32, @intCast(self.roots.items.len)));
-        const owned_key = try self.allocator.dupe(u8, new_root.key.bytes[0..]);
-        errdefer self.allocator.free(owned_key);
+        const owned_key = if (dedupe_by_key) try self.allocator.dupe(u8, new_root.key.bytes[0..]) else null;
+        errdefer if (owned_key) |key_bytes| self.allocator.free(key_bytes);
 
         try self.roots.append(self.allocator, new_root);
-        try self.by_key.put(owned_key, id);
+        errdefer _ = self.roots.pop();
+        try self.by_source.put(source_key, id);
+        errdefer _ = self.by_source.remove(source_key);
+        if (owned_key) |key_bytes| try self.by_key.put(key_bytes, id);
         return id;
     }
 };
+
+fn sourceKey(source: ConcreteSourceTypeSource) SourceKey {
+    return switch (source) {
+        .artifact => |artifact| .{
+            .kind = .artifact,
+            .artifact = artifact.artifact.bytes,
+            .ty = @intFromEnum(artifact.ty),
+        },
+        .local => |local| .{
+            .kind = .local,
+            .ty = @intFromEnum(local),
+        },
+    };
+}
+
+fn checkedTypeContainsIdentityVariables(
+    allocator: Allocator,
+    payloads: []const checked_artifact.CheckedTypePayload,
+    root: checked_artifact.CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeContainsIdentityVariablesHelp(payloads, root, &active);
+}
+
+fn checkedTypeContainsIdentityVariablesHelp(
+    payloads: []const checked_artifact.CheckedTypePayload,
+    root: checked_artifact.CheckedTypeId,
+    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+) Allocator.Error!bool {
+    const raw = @intFromEnum(root);
+    if (raw >= payloads.len) invariantViolation("concrete source type identity scan referenced missing payload");
+    if (active.contains(root)) return false;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    return switch (payloads[raw]) {
+        .pending,
+        .flex,
+        .rigid,
+        => true,
+        .alias => |alias| blk: {
+            if (try checkedTypeContainsIdentityVariablesHelp(payloads, alias.backing, active)) break :blk true;
+            for (alias.args) |arg| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            for (record.fields) |field| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, field.ty, active)) break :blk true;
+            }
+            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, record.ext, active);
+        },
+        .record_unbound => |fields| blk: {
+            for (fields) |field| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, field.ty, active)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |items| blk: {
+            for (items) |item| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, item, active)) break :blk true;
+            }
+            break :blk false;
+        },
+        .nominal => |nominal| blk: {
+            if (try checkedTypeContainsIdentityVariablesHelp(payloads, nominal.backing, active)) break :blk true;
+            for (nominal.args) |arg| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
+            }
+            break :blk false;
+        },
+        .function => |function| blk: {
+            for (function.args) |arg| {
+                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
+            }
+            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, function.ret, active);
+        },
+        .empty_record,
+        .empty_tag_union,
+        => false,
+        .tag_union => |tag_union| blk: {
+            for (tag_union.tags) |tag| {
+                for (tag.args) |arg| {
+                    if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
+                }
+            }
+            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, tag_union.ext, active);
+        },
+    };
+}
 
 /// Public `PayloadKeyBuilder` declaration.
 pub const PayloadKeyBuilder = struct {

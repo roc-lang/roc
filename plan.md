@@ -4342,6 +4342,68 @@ emitting the executable return expression or return statement. IR lowering then
 receives an ordinary executable expression for the return value; it must not
 look at procedure result layouts or reconstruct a missing return conversion.
 
+The expected type of a `return` child is the enclosing procedure's return type,
+not the contextual type of the `return` expression itself. This matters for
+statement-position returns and branch-local returns. For example, in the builtin
+list equality implementation:
+
+```roc
+is_eq : List(item), List(item) -> Bool
+    where [item.is_eq : item, item -> Bool]
+is_eq = |self, other| {
+    if self.len() != other.len() {
+        return False
+    }
+
+    var $index = 0
+
+    while $index < self.len() {
+        if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
+            return False
+        }
+
+        $index = $index + 1
+    }
+
+    True
+}
+```
+
+the expression `return False` appears inside a block whose local expression
+result may be `{}` because the block is used as a statement. Mono lowering must
+still lower `False` with expected source type `Bool`, because `False` is the
+procedure return value. Every procedure-body lowering context therefore carries
+the current concrete procedure-return source type separately from the local
+expression expected type, and every `return` expression or statement consumes
+that current return source type.
+
+Non-returning control-flow classification must also be recursive. A block whose
+first statement is `return False` does not produce the block's final `{}` value;
+that final expression is unreachable. Lambda-solved join publication and
+executable join verification must decide whether a branch can complete normally
+by walking already-lowered MIR control flow:
+
+- `return`, `crash`, and `runtime_error` do not complete normally.
+- A block completes normally only if every statement before the final expression
+  can complete normally and the final expression can complete normally.
+- An `if` completes normally if at least one branch can complete normally.
+- A source `match` completes normally if at least one branch can complete
+  normally.
+
+Only branches that can complete normally publish join inputs. Branches that
+cannot complete normally keep their original non-returning executable body and
+must not receive branch-result transforms.
+
+When executable MIR applies a return-value boundary, it must bind the lowered
+return child value before emitting a `value_ref` to the transformed return
+value. A `value_ref` is never a standalone expression that authorizes IR to
+recover the value producer. If the return value is transformed, the executable
+return child is a block that first declares the original child value, applies
+the mandatory boundary, and then returns a `value_ref` that is already bound in
+that block. If the transform is an identity, executable MIR may either return
+the child expression directly or emit the same explicit declaration/value-ref
+shape; in both cases IR must see a bound value, never an unbound value ref.
+
 Intrinsic and low-level value-flow behavior is also represented through this
 same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
 
@@ -10732,15 +10794,36 @@ The shared request payload store is:
 ```zig
 const ConcreteSourceTypeRef = enum(u32) { _ };
 
+const ConcreteSourceTypeSource = union(enum) {
+    artifact: struct {
+        artifact: CheckedModuleArtifactKey,
+        ty: CheckedTypeId,
+    },
+    local: CheckedTypeId,
+};
+
 const ConcreteSourceTypeRoot = struct {
     key: CanonicalTypeKey,
-    root: CheckedTypeId,
+    source: ConcreteSourceTypeSource,
+};
+
+const ConcreteSourceTypeSourceKey = union(enum) {
+    artifact: struct {
+        artifact: CheckedModuleArtifactKey,
+        ty: CheckedTypeId,
+    },
+    local: CheckedTypeId,
 };
 
 const ConcreteSourceTypeStore = struct {
-    checked_types: CheckedTypeStore,
     roots: Store(ConcreteSourceTypeRoot),
+
+    // Closed payloads may be reused by stable canonical key.
     by_key: Map(CanonicalTypeKey, ConcreteSourceTypeRef),
+
+    // Open payloads, generalized variables, and payloads with artifact-local
+    // name owners must be reused only by exact source identity.
+    by_source: Map(ConcreteSourceTypeSourceKey, ConcreteSourceTypeRef),
 };
 
 const ConcreteSourceTypeArg = struct {
@@ -10775,15 +10858,103 @@ data:
   only through their published checked type stores and imported closure views
 
 Registration computes the canonical key from the explicit payload graph and
-stores `key -> payload`. If the same key is registered twice with structurally
+stores both the stable key and exact source owner. Closed payloads whose graphs
+contain no generalized, rigid, flexible, pending, or otherwise identity-bearing
+variables may be deduplicated by `CanonicalTypeKey`. Open payloads must not be
+deduplicated by key alone, because two open graphs with the same printed shape
+can contain different variable identities that must receive independent concrete
+substitutions during mono specialization.
+
+For open payloads, registration reuses a `ConcreteSourceTypeRef` only when the
+source identity is exactly the same artifact/key/type-root tuple or the same
+local checked type root in the current lowering run. The canonical key is still
+stored for naming, equality checks, cache lookup, and debug verification, but it
+is not enough to merge payload identity.
+
+If a closed payload is registered twice with the same key and structurally
 equivalent checked payloads, the existing `ConcreteSourceTypeRef` may be reused.
-If the same key is registered with a non-equivalent payload, that is a compiler
-bug: debug builds assert immediately and release builds use `unreachable`.
+If the same closed key is registered with a non-equivalent payload, that is a
+compiler bug: debug builds assert immediately and release builds use
+`unreachable`.
 Payload refs are construction-run-local handles. They must not be serialized as
 cache keys, written into stable checked artifacts, exposed as public semantic ids,
 or passed to a later independent compiler run. Sealed artifacts may retain the
 canonical key and the artifact-owned checked type graph; any later construction
 run creates its own `ConcreteSourceTypeRef` from that explicit payload.
+
+`ConcreteSourceTypeRef` is also the owner for interpreting ids inside the
+payload graph. A record field label id, tag label id, module-name id, type-name
+id, nominal backing edge, row-extension edge, and checked child type id are all
+artifact-local or lowering-run-local until explicitly remapped. Therefore a
+payload and its owning `ConcreteSourceTypeRef` must never be separated.
+
+Mono specialization may bind one concrete source ref to another while unifying a
+generic target procedure type with the current call-site type. After such a
+binding, every operation that inspects a concrete source type must first resolve
+the ref through the substitution map and use the resolved ref as both:
+
+- the payload source to read
+- the owner used to remap names and checked child ids
+
+This applies to payload lookup, child lookup, record-field lookup, tag lookup,
+nominal key lookup, materialization, function param/return extraction,
+unification, callable-leaf construction, constant reification, and executable
+wrapper construction. It is a compiler bug to read the substituted payload while
+continuing to interpret names or child ids through the original ref's artifact.
+
+Template-variable unification and concrete-variable unification are one logical
+operation even though they use two implementation maps. If a checked template
+variable is unified with an open concrete variable, mono may temporarily record
+the template variable as pointing at that concrete variable. If the template
+variable is already bound to a closed concrete payload and the unifier later
+sees the same template variable against an unbound concrete variable, the
+concrete variable must be bound to the already-known closed payload. It is
+incorrect to compare the open variable's canonical identity key with the closed
+payload's key and reject the unification.
+
+This case happens when unifying a local static-dispatch call type with an
+imported method target type. In:
+
+```roc
+main = {
+    make = || { a: 1.U8, b: 2.U64, c: 3.U16, d: True, e: 4.U8 }
+    wrap = |value| { items: [value], keep: value }
+    wrapped = wrap(make())
+    wrapped.items == [wrapped.keep]
+}
+```
+
+the local equality call first knows that the call-site `item` is the local
+record. The imported `List.is_eq` target still contains its own generic `item`
+variable. When the unifier reaches that imported `item`, the correct action is
+to bind the imported concrete variable to the local record payload. The imported
+generic variable's canonical identity key is not a competing concrete type.
+
+For example, the builtin method:
+
+```roc
+List.is_eq : List(item), List(item) -> Bool
+    where [item.is_eq : item, item -> Bool]
+```
+
+is published by the builtin artifact with generic `item` ids owned by that
+artifact. A local module may then specialize it at:
+
+```roc
+main = {
+    make = || { a: 1.U8, b: 2.U64, c: 3.U16, d: True, e: 4.U8 }
+    wrap = |value| { items: [value], keep: value }
+    wrapped = wrap(make())
+    wrapped.items == [wrapped.keep]
+}
+```
+
+During unification, the builtin `item` ref is substituted with the local record
+ref. After that point, field-name lookup must use the local record ref as owner
+and see the fields `a`, `b`, `c`, `d`, and `e`. It must not read the local record
+payload and remap its field ids through the builtin artifact. Doing so can turn
+the local field ids into unrelated builtin names, such as decimal backing fields,
+even though the canonical type key says the requested type is the record.
 
 No post-check stage may recover a concrete source type payload from a key by
 hashing source text, resolving names, inspecting a foreign `ModuleEnv`, reading
@@ -13716,6 +13887,50 @@ MethodKey {
 ```
 
 to procedure targets with checked callable types.
+
+For every procedure-backed target, the registry's checked callable type is the
+same checked root as the published procedure template's `checked_fn_root`. This
+is a correctness invariant, not a cache convenience. The registry builder must
+not independently recover the callable type from a raw definition-node type
+variable, declaration scan, expression type, body type, or any other module-env
+slot. Those slots can be implementation details of checking and may refer to a
+pre-generalized or body-local variable that is not the procedure's public
+callable binding type.
+
+The procedure template table owns the callable source type for a procedure. If
+the method registry is built in a module that cannot directly import the full
+procedure-template table, checked-artifact publication must still pass the
+exact same type root used to build the template, such as the definition pattern
+type used for `CheckedProcedureTemplate.checked_fn_root`, and debug verification
+must assert that the registry entry's `callable_ty` key is byte-for-byte equal
+to the template's `checked_fn_root` key.
+
+For example, the builtin method:
+
+```roc
+List.is_eq : List(item), List(item) -> Bool
+    where [item.is_eq : item, item -> Bool]
+```
+
+must publish a method target callable type whose element is the generic `item`
+from the procedure binding. It must not accidentally publish a concrete local
+type from the body, such as the `Dec`-defaulted `$index` variable used by the
+implementation loop. If mono specializes:
+
+```roc
+main = {
+    make = || { a: 1.U8, b: 2.U64, c: 3.U16, d: True, e: 4.U8 }
+    wrap = |value| { items: [value], keep: value }
+    wrapped = wrap(make())
+    wrapped.items == [wrapped.keep]
+}
+```
+
+then method lookup chooses `List.is_eq`, and unifying the target callable with
+the call-site callable must produce `List({ a: U8, b: U64, c: U16, d: Bool, e:
+U8 })`, not `List(Dec)`. Publishing the exact procedure-template callable root
+makes this correct by construction and prevents mono from repairing the target
+type later.
 
 If the checked method registry contains a hosted, platform, or intrinsic method
 entry, checking must normalize it to an explicit builtin procedure target with
