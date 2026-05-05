@@ -660,7 +660,9 @@ const Inserter = struct {
             .loop_break,
             .crash,
             => false,
-            .incref, .decref, .free => arcInvariant("ARC liveness scan received already-reference-counted LIR"),
+            .incref => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
+            .decref => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
+            .free => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
         };
     }
 

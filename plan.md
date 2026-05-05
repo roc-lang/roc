@@ -10539,6 +10539,177 @@ and later stages may instantiate, clone, compare, or lower the checked graph
 they were given, but they must not repair collapsed variables by looking at
 source syntax, guessing from record shape, or comparing compatible layouts.
 
+#### Delayed Numeric Defaults For Mono-Resolved Static Dispatch
+
+Checking finalization remains the last stage that may report user-facing
+numeric-literal or static-dispatch errors. However, checking finalization must
+not eagerly default a numeric literal to `Dec` when that literal's final type is
+connected to a `StaticDispatchCallPlan` whose controlling type is intentionally
+resolved during mono specialization.
+
+For example:
+
+```roc
+test = |line| {
+    bytes = line.to_utf8()
+    List.concat([0], bytes)
+}
+
+main = test("abc")
+```
+
+At generic checking time, `line.to_utf8()` is represented by a checked static
+dispatch plan. The checker can prove that the generic template is legal, but it
+cannot know that this specialization will call `Str.to_utf8()` and therefore
+produce `List(U8)` until mono specializes `test` at `line : Str`. The numeric
+literal `0` inside `[0]` must therefore become `U8` in this specialization. It
+must not be published as `Dec` merely because normal checking finalization has
+finished.
+
+The checked artifact must publish this situation explicitly. A checked type
+variable with a `from_numeral` constraint has one of two default phases:
+
+```zig
+const NumericDefaultPhase = union(enum) {
+    /// Checking finalization resolved or defaulted this numeric literal before
+    /// artifact publication. The checked artifact stores the resulting concrete
+    /// checked type graph, such as `Dec`, `U8`, or a user nominal that has
+    /// already satisfied `from_numeral`.
+    checking_finalized,
+
+    /// The numeric variable is legal after checking, but its final owner is
+    /// connected to a mono-resolved static dispatch site. The checked artifact
+    /// stores the variable, its `from_numeral` constraint, its numeral payload,
+    /// and its identity in the checked type graph. Mono must solve/default it
+    /// for each concrete specialization before mono MIR is exported.
+    mono_specialization,
+};
+```
+
+The exact Zig names may differ, but the distinction must exist in the published
+semantic data. This is not an error continuation, a fallback, or a heuristic.
+It is a checked-artifact fact saying when this already-valid numeric variable is
+allowed to receive its concrete default.
+
+Checking finalization decides the phase from the solved type graph and the
+published static-dispatch plans:
+
+- if a `from_numeral` variable is fully determined by checking-time constraints,
+  checking publishes the concrete result
+- if a `from_numeral` variable is unconstrained by any mono-resolved static
+  dispatch site, checking defaults it to `Dec` and publishes the concrete result
+- if a `from_numeral` variable is in the same connected type component as a
+  checked static-dispatch plan whose target type is resolved in mono, checking
+  publishes it as `mono_specialization`
+- if the component is invalid for every possible specialization, checking
+  reports the user-facing error before artifact publication
+
+Mono specialization must instantiate `mono_specialization` numeric variables
+into the same specialization-local source-type graph as the procedure function
+type, static-dispatch callable type, static-dispatch dispatcher type, argument
+types, return type, binder types, and expression result types. It must not
+materialize those variables to `Dec` while the specialization graph is still
+being connected.
+
+For each concrete mono specialization, mono solves numeric variables in this
+order:
+
+1. Clone the checked procedure template and requested concrete function type
+   into one specialization-local source-type graph.
+2. Connect procedure parameters, return slot, local binders, pattern binders,
+   call argument slots, call return slots, static-dispatch callable slots, and
+   static-dispatch dispatcher slots through this one graph.
+3. Lower numeric literal expressions against their current expected slot. If
+   the slot is still an unsolved `mono_specialization` numeric variable, the
+   literal records its numeral payload in that variable instead of choosing a
+   primitive type.
+4. When static dispatch resolves a concrete target, unify the target procedure
+   type with the checked callable type in the same graph. This can determine
+   numeric variables from argument or return positions. In the example above,
+   resolving `line.to_utf8()` for `line : Str` determines `bytes : List(U8)`,
+   which determines the element type of `List.concat([0], bytes)`, which
+   determines the literal `0` as `U8`.
+5. After the body, call sites, and static-dispatch targets for this concrete
+   specialization have been connected, default any still-unsolved
+   `mono_specialization` numeric variables to `Dec` for this specialization.
+6. Seal the concrete source-type payloads and canonical keys only after step 5.
+   The sealed payload for a mono procedure, `call_proc`, `call_value`,
+   `proc_value`, static-dispatch target request, const instance, or callable
+   instance must contain no unresolved numeric variable.
+
+This ordering is required for correctness. Any implementation that seals a
+`ConcreteSourceTypeRef`, computes a `MonoSpecializationKey`, lowers a numeric
+literal to an LIR primitive, or requests a static-dispatch target before the
+specialization-local numeric graph is connected can produce the wrong output.
+
+Mono debug verification must assert that:
+
+- no `mono_specialization` numeric variable leaves mono MIR
+- no `from_numeral` constrained flex is materialized while a surrounding
+  specialization graph is still open
+- every numeric literal lowered under a primitive type satisfies the literal's
+  checked numeral payload
+- every `StaticDispatchCallPlan` callable, dispatcher, target, argument, and
+  return type participates in the same specialization-local graph
+
+Release builds must pay no verifier or deletion-audit cost. If an invariant is
+violated in release, the path is `unreachable`.
+
+#### Type-Only Call Result Queries In Mono
+
+Mono sometimes needs the concrete result type of a checked expression before it
+has lowered that expression as a value. Static dispatch is the most important
+case: a `StaticDispatchCallPlan` whose dispatcher is selected from an argument
+must know the argument's concrete type before method lookup.
+
+For example:
+
+```roc
+main = {
+    x = List.concat([10, 20], [30, 40, 50])
+    first = List.first(x)
+    first
+}
+```
+
+When mono resolves the equality used by evaluation or inspection of `first`, it
+may need the result type of the receiver expression `List.first(x)`. The
+published checked callable type for `List.first` is generic. Mono must not ask
+for the call result by sealing that generic callable type before connecting the
+argument `x`; doing so would leave the target procedure's element variable
+unmapped. The concrete binder for `x` is already known in the current
+specialization as `List(Dec)`, so mono must first unify the `List.first`
+argument slot with that already-known concrete source type, then ask for the
+return slot. The result is `Dec`.
+
+This rule applies to all type-only call result queries:
+
+1. Treat the call's checked source function type as a specialization-local type
+   graph, not as a sealed payload.
+2. Before reading the return slot, connect every call argument whose concrete
+   source type is already known from explicit current-specialization state:
+   procedure params, lowered binders, lowered pattern binders, lowered local
+   values, previously resolved direct calls, and previously resolved static
+   dispatch results.
+3. Do not use source syntax, literal shape, list shape, record shape, tag shape,
+   or expression spelling to invent an argument type. A numeric literal, list
+   literal, empty list, record literal, tag literal, or other context-dependent
+   expression contributes only through its expected slot during normal lowering.
+4. After known argument slots have been connected, read the return slot from the
+   same specialization-local graph.
+5. If a required return slot still contains a generalized or unmapped variable
+   after all explicit current-specialization data has been connected, that is a
+   compiler bug: debug assertion in debug builds and `unreachable` in release
+   builds.
+
+This is required for correctness and for avoiding premature numeric defaults.
+The `List.first(x)` example needs binder information from `x`, but the
+`List.concat([0], bytes)` example in the previous section must not infer `Dec`
+from `[0]` before `bytes : List(U8)` has been connected. Both cases use the same
+principle: only explicit already-known specialization data may constrain a
+type-only query; context-dependent literals are lowered only under their
+expected slots.
+
 #### Concrete Source Type Payloads For Requests
 
 Every construction request that names a concrete source type must carry both:
@@ -13465,8 +13636,13 @@ lowering one concrete mono specialization:
    instantiated mono result type. This must happen before method lookup because
    `dispatcher_ty` may be selected from the return position.
 3. Lower all `args` in the normalized order, using the instantiated callable
-   argument slots as expected types.
-4. Fully resolve the instantiated dispatcher type.
+   argument slots as expected types. Numeric literals whose final type is marked
+   `mono_specialization` bind to these argument slots; they do not default to
+   `Dec` during argument lowering.
+4. Fully resolve the instantiated dispatcher type. If resolving earlier
+   arguments or earlier static-dispatch calls determined delayed numeric
+   variables that feed this dispatcher, those bindings are visible here because
+   all slots are in the same specialization-local graph.
 5. Resolve `MethodOwner` from the fully resolved dispatcher type.
 6. Look up `(MethodOwner, method)` in the checked method registry.
 7. If a target exists, instantiate the target procedure type into the same mono

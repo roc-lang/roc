@@ -5,6 +5,7 @@
 //! type variable explicitly.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
@@ -13,6 +14,7 @@ const checked_ids = @import("checked_ids.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
@@ -151,10 +153,7 @@ pub const MethodRegistry = struct {
 
             try entries.append(allocator, .{
                 .key = .{
-                    .owner = .{ .nominal = .{
-                        .module_name = module_name,
-                        .type_name = try names.internTypeIdent(idents, entry.key.type_ident),
-                    } },
+                    .owner = try methodOwnerForRegistryEntry(module, names, module_name, entry.key.type_ident),
                     .method = try names.internMethodIdent(idents, entry.key.method_ident),
                 },
                 .target = .{
@@ -170,6 +169,51 @@ pub const MethodRegistry = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 };
+
+fn methodOwnerForRegistryEntry(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    module_name: canonical.ModuleNameId,
+    type_ident: Ident.Idx,
+) Allocator.Error!MethodOwner {
+    if (builtinOwnerForRegistryEntry(module, type_ident)) |owner| {
+        return .{ .builtin = owner };
+    }
+    return .{ .nominal = .{
+        .module_name = module_name,
+        .type_name = try names.internTypeIdent(module.identStoreConst(), type_ident),
+    } };
+}
+
+fn builtinOwnerForRegistryEntry(
+    module: TypedCIR.Module,
+    type_ident: Ident.Idx,
+) ?BuiltinOwner {
+    const common = module.moduleEnvConst().idents;
+    const module_ident = module.qualifiedModuleIdent();
+    const is_builtin_module = module_ident.eql(common.builtin_module) or
+        std.mem.eql(u8, module.getIdent(module_ident), module.getIdent(common.builtin_module));
+    if (!is_builtin_module) return null;
+
+    if (type_ident.eql(common.bool) or type_ident.eql(common.bool_type)) return .bool;
+    if (type_ident.eql(common.str) or type_ident.eql(common.builtin_str)) return .str;
+    if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .u8;
+    if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .i8;
+    if (type_ident.eql(common.u16) or type_ident.eql(common.u16_type)) return .u16;
+    if (type_ident.eql(common.i16) or type_ident.eql(common.i16_type)) return .i16;
+    if (type_ident.eql(common.u32) or type_ident.eql(common.u32_type)) return .u32;
+    if (type_ident.eql(common.i32) or type_ident.eql(common.i32_type)) return .i32;
+    if (type_ident.eql(common.u64) or type_ident.eql(common.u64_type)) return .u64;
+    if (type_ident.eql(common.i64) or type_ident.eql(common.i64_type)) return .i64;
+    if (type_ident.eql(common.u128) or type_ident.eql(common.u128_type)) return .u128;
+    if (type_ident.eql(common.i128) or type_ident.eql(common.i128_type)) return .i128;
+    if (type_ident.eql(common.f32) or type_ident.eql(common.f32_type)) return .f32;
+    if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .f64;
+    if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .dec;
+    if (type_ident.eql(common.list)) return .list;
+    if (type_ident.eql(common.box)) return .box;
+    return null;
+}
 
 fn methodKeyEql(a: MethodKey, b: MethodKey) bool {
     return methodOwnerEql(a.owner, b.owner) and a.method == b.method;

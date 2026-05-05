@@ -127,7 +127,7 @@ const Builder = struct {
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                if (self.flexDefaultsToDec(flex)) {
+                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
                     self.writeDefaultDec();
                     return;
                 }
@@ -185,7 +185,7 @@ const Builder = struct {
         switch (content) {
             .err => invariantViolation("canonical type key requested for erroneous checked type"),
             .flex => |flex| {
-                if (self.flexDefaultsToDec(flex)) {
+                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
                     self.writeDefaultDec();
                     return;
                 }
