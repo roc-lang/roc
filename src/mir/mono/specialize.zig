@@ -4219,6 +4219,8 @@ const BodyLowerer = struct {
         self.type_instantiator = &instantiator;
         defer self.type_instantiator = previous;
 
+        try self.type_instantiator.unifyTemplateWithConcrete(self.checkedExpr(decl.expr).ty, concrete_fn);
+
         const fn_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
         const ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn);
         const previous_return_type = self.current_return_type;

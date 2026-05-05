@@ -14530,6 +14530,32 @@ The exact Zig names may differ, but the lifecycle must not:
    store. The requested source function type payload is cloned into that same
    source graph and unified with the cloned template root before mono type
    lowering.
+   Local functions and closures inside that mono body follow the same rule for
+   each concrete local-procedure use. The call site owns a concrete requested
+   source function type payload, but the local function definition owns its own
+   checked function-type root in the body graph. Before mono lowers the local
+   function's parameters or body for that concrete use, it must unify the
+   definition function root with the concrete requested payload. It must not
+   assume the call-site source function type and the definition expression type
+   are the same checked `TypeId`, and it must not wait for field access,
+   numeric low-level operations, or parameter lookup to reconcile them
+   indirectly.
+
+   For example:
+
+   ```roc
+   apply = |x, captures| x + captures.n
+   apply(10, { n: 5 })
+   ```
+
+   The call site has a concrete function request for `apply`; the local
+   function body has a separate checked function root whose argument and return
+   variables are tied together by `x + captures.n`. Mono must bind that
+   definition root to the call request before lowering `x`, `captures`, or the
+   `{ n: 5 }` argument. Otherwise the argument record field and the body result
+   can be materialized/defaulted through different source type identities, which
+   is exactly the kind of competing semantic source that the MIR cutover
+   forbids.
 5. Every checked string literal, bytes literal, string-pattern literal, and
    user-written crash message reached while lowering that checked body is
    resolved from the owning artifact's `CheckedBodyStore.string_literals` and
