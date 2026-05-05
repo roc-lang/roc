@@ -413,6 +413,32 @@ const Lowerer = struct {
         };
     }
 
+    fn assignZst(self: *Lowerer, target: LIR.LocalId, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = LIR.LocalSpan.empty(),
+            .next = next,
+        } });
+    }
+
+    fn lowerFieldRefInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        field_index: u16,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        if (self.isZstLayout(self.store.getLocal(target).layout_idx)) return try self.assignZst(target, next);
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .field = .{
+                .source = source,
+                .field_idx = field_index,
+            } },
+            .next = next,
+        } });
+    }
+
     fn lowerExprInto(self: *Lowerer, target: LIR.LocalId, expr: ir.Ast.Expr, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
         return switch (expr) {
             .var_ => |var_| try self.store.addCFStmt(.{ .assign_ref = .{
@@ -435,11 +461,14 @@ const Lowerer = struct {
                 .value = .null_ptr,
                 .next = next,
             } }),
-            .make_struct => |fields| try self.store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .fields = try self.lowerVarSpan(fields),
-                .next = next,
-            } }),
+            .make_struct => |fields| if (self.isZstLayout(self.store.getLocal(target).layout_idx))
+                try self.assignZst(target, next)
+            else
+                try self.store.addCFStmt(.{ .assign_struct = .{
+                    .target = target,
+                    .fields = try self.lowerVarSpan(fields),
+                    .next = next,
+                } }),
             .make_list => |list| try self.store.addCFStmt(.{ .assign_list = .{
                 .target = target,
                 .elems = try self.lowerVarSpan(list.elems),
@@ -466,14 +495,12 @@ const Lowerer = struct {
                 } },
                 .next = next,
             } }),
-            .get_struct_field => |field| try self.store.addCFStmt(.{ .assign_ref = .{
-                .target = target,
-                .op = .{ .field = .{
-                    .source = try self.lowerVar(field.record),
-                    .field_idx = field.field_index,
-                } },
-                .next = next,
-            } }),
+            .get_struct_field => |field| try self.lowerFieldRefInto(
+                target,
+                try self.lowerVar(field.record),
+                field.field_index,
+                next,
+            ),
             .nominal_reinterpret => |backing| try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .nominal = .{
@@ -697,14 +724,7 @@ const Lowerer = struct {
                 .layout_idx = self.structFieldLayout(source_layout, i),
             });
             current = try self.lowerBridgePlanInto(field_values[i], source_field, child_plans[i], current);
-            current = try self.store.addCFStmt(.{ .assign_ref = .{
-                .target = source_field,
-                .op = .{ .field = .{
-                    .source = source,
-                    .field_idx = @intCast(i),
-                } },
-                .next = current,
-            } });
+            current = try self.lowerFieldRefInto(source_field, source, @intCast(i), current);
         }
         return current;
     }

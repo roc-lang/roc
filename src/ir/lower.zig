@@ -896,11 +896,7 @@ const IrBuilder = struct {
     ) LowerResourceError!void {
         const leaf = self.input.ast.getDecisionLeaf(leaf_id);
         if (leaf.degenerate) {
-            const runtime_error = try self.lowerExpr(leaf.body, stmts);
-            try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
-                .target = result,
-                .value = runtime_error,
-            } }));
+            try self.appendExprResultOrTerminator(leaf.body, result, stmts);
             return;
         }
 
@@ -940,11 +936,7 @@ const IrBuilder = struct {
             return;
         }
 
-        const branch_result = try self.lowerExpr(leaf.body, stmts);
-        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
-            .target = result,
-            .value = branch_result,
-        } }));
+        try self.appendExprResultOrTerminator(leaf.body, result, stmts);
     }
 
     fn clonePathValues(
@@ -964,15 +956,39 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.BlockId {
         var stmts = std.ArrayList(Ast.StmtId).empty;
         defer stmts.deinit(self.allocator);
-        const value = try self.lowerExpr(leaf.body, &stmts);
-        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
-            .target = result,
-            .value = value,
-        } }));
+        try self.appendExprResultOrTerminator(leaf.body, result, &stmts);
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(stmts.items),
             .term = .{ .value = result },
         });
+    }
+
+    fn appendExprResultOrTerminator(
+        self: *IrBuilder,
+        expr_id: Exec.Ast.ExprId,
+        result: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!void {
+        const expr = self.input.ast.getExpr(expr_id);
+        switch (expr.data) {
+            .return_ => |child| {
+                const value = try self.lowerExpr(child, stmts);
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .return_ = value }));
+            },
+            .crash => |literal| try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal })),
+            .runtime_error => try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error)),
+            .block => |block| {
+                try self.lowerStmtSpan(block.stmts, stmts);
+                try self.appendExprResultOrTerminator(block.final_expr, result, stmts);
+            },
+            else => {
+                const value = try self.lowerExpr(expr_id, stmts);
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+                    .target = result,
+                    .value = value,
+                } }));
+            },
+        }
     }
 
     fn unreachableBlock(self: *IrBuilder) LowerResourceError!Ast.BlockId {

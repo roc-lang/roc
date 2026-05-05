@@ -1035,6 +1035,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         const info = value_store.values.items[@intFromEnum(callee)];
         const callable = info.callable orelse checkedPipelineInvariant("erased call_value dependency callee had no callable metadata");
         return switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .pending_proc_value => checkedPipelineInvariant("erased call_value dependency reached pending callable emission"),
             .erase_proc_value => |erase| blk: {
                 if (!repr.erasedFnSigKeyEql(erase.erased_fn_sig_key, sig_key)) {
                     checkedPipelineInvariant("erased call_value dependency signature differs from proc-value erase plan");
@@ -1070,6 +1071,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         const info = value_store.values.items[@intFromEnum(callee)];
         const callable = info.callable orelse checkedPipelineInvariant("erased call_value dependency callee had no callable metadata");
         const provenance = switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .pending_proc_value => checkedPipelineInvariant("erased call provenance reached pending callable emission"),
             .already_erased => |erased| blk: {
                 if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) checkedPipelineInvariant("erased call provenance signature differs from already-erased plan");
                 break :blk erased.provenance;
@@ -1930,6 +1932,7 @@ fn callableResultPlanForRoot(
     };
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
+        .pending_proc_value => checkedPipelineInvariant("callable result plan reached pending callable emission"),
         .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, instance.public_roots.ret, callable, key),
         .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, plans, value_context, erased),
         .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
@@ -2781,6 +2784,7 @@ const CaptureSlotPlanBuilder = struct {
         const callable = info.callable orelse checkedPipelineInvariant("function-typed capture leaf has no callable metadata");
         const emission = self.value_context.representation_store.callableEmissionPlan(callable.emission_plan);
         return switch (emission) {
+            .pending_proc_value => checkedPipelineInvariant("callable capture leaf reached pending callable emission"),
             .finite => |key| try self.finiteCallableResultPlanForValue(value_info_id, callable, key),
             .already_erased => |erased| try alreadyErasedResultPlan(
                 self.allocator,
@@ -3685,6 +3689,7 @@ const ConstGraphPlanBuilder = struct {
         const callable = info.callable orelse checkedPipelineInvariant("function-typed constant leaf has no callable metadata");
         const emission = context.representation_store.callableEmissionPlan(callable.emission_plan);
         return switch (emission) {
+            .pending_proc_value => checkedPipelineInvariant("callable constant leaf reached pending callable emission"),
             .finite => |key| .{ .finite = try finiteCallableResultPlan(
                 self.allocator,
                 self.artifactSink(),

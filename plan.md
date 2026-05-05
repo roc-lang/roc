@@ -1611,6 +1611,22 @@ so that callable leaves are transformed by explicit callable operations.
 identical; if a list element transform changes callable representation, the plan
 must be a recursive list transform that rebuilds or maps the list explicitly.
 
+List construction and list executable type publication are keyed by the solved
+list-element endpoint, not by any representative element value. Lambda-solved
+MIR publishes a `list_elem` representation root for every list aggregate and
+connects that root to each element value root. The executable element payload is
+derived from that `list_elem` root and the logical element type. It must not be
+derived from the first element, the last element, a sample element, or a
+comparison of element value keys. Representative-element logic is incorrect for
+ordinary tag unions such as `[Ok(1), Err({})]`, where different selected tags
+inhabit the same finalized union representation, and it is incorrect for finite
+callable lists such as `[f, g]`, where the element slot representation is the
+unified finite callable set even though each source element value names a
+different selected procedure. Empty and non-empty lists use the same rule: the
+element endpoint is the solved `list_elem` root. Debug verification may assert
+that all element value roots are connected to the list-element root; release
+lowering must not pay to scan or compare elements for representation equality.
+
 Executable value transforms have two lowering modes, and the distinction is
 mandatory:
 
@@ -4579,7 +4595,17 @@ specialization. This is important for correctness and performance:
    scope stack, then emits a value-flow edge from the binding value root to the
    occurrence value root.
 4. Each aggregate construction allocates aggregate member metadata and structural
-   representation edges at the same time.
+   representation edges at the same time. If the constructed value's logical
+   type is a transparent nominal whose backing is the aggregate shape, the
+   aggregate metadata is attached to the nominal backing root, not directly to
+   the nominal value root. The nominal value root owns only the explicit
+   `nominal_backing` edge. For example, a `Result(I64, {})` value constructed as
+   `Ok(1)` or `Err({})` has a nominal executable endpoint whose child endpoint
+   is the finalized backing tag-union endpoint; the selected `Ok` or `Err`
+   payload edges live under that backing endpoint. Lambda-solved MIR must not
+   publish the same logical nominal value as a bare tag-union, record, tuple, or
+   list executable payload merely because the concrete source expression is an
+   aggregate constructor.
 5. Each projection allocates its `ProjectionInfoId` and representation edge at
    the same time.
 6. Each call allocates `CallSiteInfoId`, argument/result value metadata, whole
@@ -5117,6 +5143,145 @@ build representation graph
 -> build executable endpoint payloads from the assigned plans
 -> finalize value transforms, capture transforms, call boundaries, joins, and returns
 ```
+
+This phase boundary is especially important for `proc_value` construction.
+During body building, a `proc_value` occurrence may capture arbitrary values,
+including other function values. Body building has not published solved
+representation classes yet, so it is forbidden to compute any executable
+capture endpoint, capture shape key, callable-set key, descriptor member, erased
+signature, or adapter key for that occurrence at that time.
+
+The body builder must instead record a builder-only pending callable
+construction:
+
+```zig
+const PendingProcValueCallablePlan = struct {
+    result: ValueInfoId,
+    whole_function_root: RepRootId,
+    callable_root: RepRootId,
+    source_proc: MirProcedureRef,
+    target_instance: ProcRepresentationInstanceId,
+    source_fn_ty: CanonicalTypeKey,
+    capture_values: []const ValueInfoId,
+    construction: CallableSetConstructionPlanId,
+};
+```
+
+The exact Zig shape may differ, but the responsibilities must not. This record
+is not executable input and must never be published outside the in-progress
+lambda-solved builder state. It exists only to keep the selected procedure
+instance and source capture values attached to the exact value occurrence until
+representation solving has enough information to derive executable endpoints.
+
+After root classes have been solved and published, emission-plan assignment
+must consume every pending `proc_value` construction and replace it with a final
+plan:
+
+1. Read the exact selected `target_instance` from the pending record.
+2. Read target capture public roots from the selected procedure representation
+   instance.
+3. If any target capture root is itself function-typed, first publish the
+   callable emission for that captured value's solved representation class.
+   This is a dependency between callable classes, not a source lookup. The
+   dependency key is the captured value's solved representation class. The
+   implementation must resolve these dependencies before deriving the enclosing
+   capture slot, because the enclosing slot's executable type key must contain
+   the captured callable's final finite or Box-provenance erased representation,
+   never a placeholder or vacant callable slot.
+4. Derive `CallableSetCaptureSlot` entries from those target capture roots, not
+   from the source capture expressions.
+5. Derive the canonical `CaptureShapeKey` from the solved executable endpoint
+   keys of those target capture roots.
+6. Intern a canonical callable-set descriptor member that includes the exact
+   `ProcedureCallableRef`, source `MirProcedureRef`, exact `target_instance`,
+   canonical capture slots, and canonical capture shape.
+7. Rewrite the occurrence's `CallableSetConstructionPlan` to the final
+   `callable_set_key` and selected descriptor member.
+8. Assign either `finite_callable_set(callable_set_key)` or an explicit
+   Box-provenance erased plan to the occurrence.
+
+The dependency order is visible in ordinary Roc code:
+
+```roc
+{
+    make_adder = |n| |x| x + n
+    add5 = make_adder(5)
+    double_add5 = |x| add5(x) * 2
+    double_add5(10)
+}
+```
+
+The `double_add5` closure captures the already-constructed callable value
+`add5`. The descriptor member for `double_add5` must therefore use a capture
+slot whose executable type is the final callable-set representation of `add5`.
+It is a compiler bug to compute that slot while `add5`'s callable class still
+has no assigned emission. It is also a compiler bug to substitute a vacant
+callable slot, raw source function type, procedure symbol, checked-CIR node, or
+any other placeholder.
+
+Emission assignment may run in an iterative discovery mode before all pending
+`call_value` edges have been connected. In that mode, a callable class whose
+function-valued capture depends on a class with no current callable-set
+membership is simply delayed. Delaying means leaving the builder-only pending
+record in place for this iteration and assigning no executable emission to that
+value yet. The next representation-edge iteration may add the missing callable
+members, after which the class is retried. Delayed classes must not publish
+partial descriptors, vacant callable slots, empty callable sets, raw source-type
+keys, or temporary procedure-symbol keys.
+
+The final strict emission-assignment pass is different. By then all
+cross-procedure call edges and `proc_value` edges for the use-context component
+must have been connected. If a function-valued capture still depends on a class
+with no callable-set membership, that is a compiler invariant violation. Debug
+builds assert immediately; release builds use `unreachable`.
+
+For mutually-recursive callable captures, emission assignment must treat
+callable classes as an SCC. All callable classes in the SCC reserve their final
+class records before member payloads are completed, then complete member capture
+slots through recursive executable payload references. A recursive dependency is
+not a reason to fall back to a raw source type or a guessed layout. If the
+implementation cannot build a recursive callable-class SCC, that is a missing
+implementation of the plan, not a recoverable post-check error.
+
+The session executable type payload store is a keyed interning table with
+reservation. A reserved `pending` entry is an in-progress payload for an exact
+canonical executable type key. If another builder reaches the same key with a
+completed payload before the original reserver fills it, the completed payload
+must fill the pending entry. It must not be discarded as a duplicate while
+leaving the entry pending. If the original reserver later finishes, it may fill
+the same key with an equivalent payload. Debug verification should reject any
+published payload store that still contains `pending` entries after
+lambda-solved sealing. Release builds use `unreachable` if executable MIR ever
+encounters a pending payload.
+
+Value endpoint lowering must decide all forwarding cases before reserving a
+payload-store entry. Alias values, join values, and plain function-typed values
+that forward to their solved callable class do not own a structural payload at
+that value occurrence. They must return the forwarded endpoint without first
+reserving a payload key. Reserving first and then returning a forwarded endpoint
+leaves an orphan `pending` payload, which is a compiler bug.
+
+IR-to-LIR lowering owns zero-sized aggregate elision. If an executable struct,
+tuple, record, or capture record has committed ZST layout, LIR must materialize
+it as a zero-field ZST assignment. It must not emit a struct literal with
+non-empty runtime fields for a ZST layout. Similarly, if a field projection's
+target layout is ZST, LIR must materialize the ZST target directly after the
+source aggregate has been evaluated; it must not emit a runtime field access
+from a ZST base. Backends and the interpreter may assert that runtime
+`assign_struct` and runtime field-access statements are layout-consistent,
+because the IR-to-LIR boundary has already erased the zero-sized operations.
+
+The raw source `capture_values` remain in the construction plan because they are
+the values executable MIR must evaluate at the construction site. They are not
+the source of truth for member identity, payload layout, or hidden capture
+shape. Capture transforms later bridge from each source capture value endpoint
+to the selected target procedure capture endpoint.
+
+The sealed lambda-solved program must contain no pending `proc_value`
+construction or pending callable emission plan. Debug builds assert this
+immediately during lambda-solved verification; release builds use `unreachable`.
+Executable MIR, IR, LIR, ARC, and backends must never see this pending state and
+must not try to finish it.
 
 The value-transform finalizer is forbidden from deciding that a finite callable
 should become erased. By the time a transform boundary is finalized, the source
@@ -7149,16 +7314,42 @@ This is still mechanical ARC metadata. It is not a procedure summary, not a
 borrow-inference result, and not backend policy.
 
 Ordinary direct calls use the same ownership-token principle. LIR call
-arguments transfer their owned tokens to the callee. If the caller semantically
-uses an argument local after the call, ARC emits an `incref` before the call and
-keeps that caller-owned token. If the caller does not use the argument later,
-ARC removes the argument local from the caller's owned set and emits no
-post-call `decref`; the callee owns cleanup for its parameters. This is required
-for calls to ordinary procedures that consume parameters internally through
-explicit low-level operations, such as `List.concat([1, 2], [3, 4])`. The caller
-must not clean up the temporary list arguments after the callee has consumed
-them. This is still simple automatic reference counting, not borrow inference:
-the decision is based only on explicit LIR local uses after the call.
+arguments transfer owned tokens to the callee, and every non-hosted procedure
+body starts with owned tokens for every refcounted parameter. If the caller
+semantically uses an argument local after the call, ARC emits an `incref` before
+the call and keeps that caller-owned token. If the caller does not use an owned
+argument later, ARC removes that argument local from the caller's owned set and
+emits no post-call `decref`; the callee owns cleanup for its parameter.
+
+If a refcounted argument local is not currently owned by the caller, the call is
+not allowed to borrow it silently. ARC must emit an `incref` before the call to
+create the callee's owned parameter token, while leaving the caller's owned set
+unchanged. This is required for loop elements whose `ForListElementSource` is
+`aliases_iterable_element`: passing the element to a callback gives the callback
+an owned argument token, but the original list storage remains owned by the list.
+For example:
+
+```roc
+List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+```
+
+The fold callback receives `x` as an owned `Result(I64, {})` parameter even
+though the `for` element in `List.fold` aliases the input list element storage.
+The call site therefore inserts an `incref` for the aliased element before the
+callback call. The callback may pass that argument onward, return early through
+`?`, or release it normally without corrupting the input list.
+
+If the same refcounted local appears in multiple argument positions, ARC must
+provide one owned token per callee parameter. At most one argument occurrence may
+transfer an existing caller-owned token; every additional occurrence must get an
+`incref` before the call. This is token accounting, not borrow inference.
+
+This is required for calls to ordinary procedures that consume parameters
+internally through explicit low-level operations, such as
+`List.concat([1, 2], [3, 4])`. The caller must not clean up temporary list
+arguments after the callee has consumed them. This is still simple automatic
+reference counting, not borrow inference: the decision is based only on explicit
+LIR local ownership and explicit LIR local uses after the call.
 
 `Box.box` and `Box.unbox` are ordinary value operations for ARC purposes.
 `Box.unbox` does not mean a consuming move-out and does not have a special
@@ -9103,6 +9294,21 @@ Checking finalization order:
    builder-form resolved value-reference table. These records must point at the
    artifact-owned checked type/body stores, not raw checker vars or raw checked
    expression ids.
+   If any checked-artifact table stores checked expression ids, those
+   expressions are semantically owned children of the template/root that
+   references the table entry. Static-dispatch plans are the primary example:
+   the checked expression tree contains a `dispatch_call`, `type_dispatch_call`,
+   or `method_eq` node, but the receiver and explicit arguments live in the
+   `StaticDispatchPlanTable`. Template reachability, imported template closures,
+   resolved value-reference spans, static-dispatch plan spans, nested
+   procedure-site spans, compile-time dependency summaries, and debug artifact
+   verification must traverse both the checked body tree and every checked
+   expression referenced by those owned plan/table payloads. It is a compiler bug
+   for mono to receive a static-dispatch argument lambda, closure, local
+   function, lookup, match, or other checked expression whose enclosing template
+   did not publish the corresponding nested procedure sites and resolved
+   references. Downstream stages must not recover these by scanning source or
+   by inventing sites during lowering.
 4. Build checked procedure templates for direct source procedures, hosted
    wrappers, intrinsic wrappers, entry wrappers, and any other compiler-created
    checked procedure bodies whose bodies do not depend on compile-time callable
@@ -10774,6 +10980,10 @@ published static-dispatch plans:
 
 - if a `from_numeral` variable is fully determined by checking-time constraints,
   checking publishes the concrete result
+- if a variable is in the same connected numeric component as a defaultable
+  desugared arithmetic operator constraint, checking publishes
+  `mono_specialization` for every still-flex variable in that numeric component
+  unless the component is generalized by a checked procedure template
 - if a `from_numeral` variable is unconstrained by any mono-resolved static
   dispatch site, checking defaults it to `Dec` and publishes the concrete result
 - if a `from_numeral` variable is in the same connected type component as a
@@ -10781,6 +10991,14 @@ published static-dispatch plans:
   publishes it as `mono_specialization`
 - if the component is invalid for every possible specialization, checking
   reports the user-facing error before artifact publication
+
+Defaultable desugared arithmetic operator constraints are only the numeric
+operators whose ambiguous concrete type defaults to `Dec`: `plus`, `minus`,
+`times`, `div_by`, `div_trunc_by`, `rem_by`, and unary `negate`. Equality,
+ordering, ordinary method calls, and explicit `where` constraints are not
+numeric defaults by themselves. If such a non-defaultable constrained value must
+be materialized without a concrete demand, checking must have reported the
+ambiguity before artifact publication; if it reaches mono, it is a compiler bug.
 
 Mono specialization must instantiate `mono_specialization` numeric variables
 into the same specialization-local source-type graph as the procedure function
@@ -10887,6 +11105,315 @@ from `[0]` before `bytes : List(U8)` has been connected. Both cases use the same
 principle: only explicit already-known specialization data may constrain a
 type-only query; context-dependent literals are lowered only under their
 expected slots.
+
+#### Finalized Mono Specialization Graph
+
+Mono specialization has an internal type-state boundary before value MIR is
+emitted:
+
+```text
+checked procedure template
++ concrete MonoSpecializationRequest
+-> open specialization-local type graph
+-> finalized mono specialization graph
+-> mono MIR body emission
+```
+
+This graph-finalization boundary is mandatory. It is the production version of
+the correct part of Cor/LSS monotype lowering: clone the checked type graph for
+one concrete specialization, connect the requested function type and every
+reachable type edge in that same clone, then lower values from the connected
+graph. Cor can rely on in-process type pointers. Roc must make the boundary
+explicit because checked artifacts, imports, cache hits, static dispatch,
+compile-time constants, and promoted procedures cross module and process
+boundaries.
+
+`ConcreteSourceTypeRef` payloads may be registered while building the graph, but
+they are not finalized merely because value lowering happened to need a type
+handle. A finalized payload is one whose reachable graph contains no constrained
+flex, unresolved rigid, generalized variable, pending payload, unclosed row
+tail, unclosed tag-union tail, or `mono_specialization` numeric variable.
+
+The finalized mono specialization graph owns concrete source-type slots for at
+least:
+
+- procedure parameters and return value, read from the requested fixed-arity
+  function type
+- every checked expression result that can be reached from the specialization
+  body
+- every pattern binder, declaration binder, mutable version, generated
+  destructuring binder, match binder, `for` binder, and loop/branch join binder
+- every call-site callable type, argument slot, and return slot
+- every `call_proc`, `call_value`, `proc_value`, const instance request,
+  callable instantiation request, static-dispatch target request, equality
+  target request, compile-time root request, and platform-required root request
+- every record field, tuple element, list element, tag payload, nominal backing,
+  alias backing, `Box(T)` payload, match scrutinee, match branch result, and
+  source evaluation-order temporary
+- every local procedure instance, keyed by the owning mono specialization,
+  local procedure binder/site, and finalized requested source function type
+
+Value MIR emission consumes this finalized graph. It must be a lookup-oriented
+operation: given a checked expression id, binder id, pattern id, call edge, field
+edge, tag payload edge, or local procedure instance key, emission reads the
+already-finalized concrete source type and lowers the value. Emission must not
+call a generic "materialize this checked type now" operation that can close a
+row tail, close a tag-union tail, default a numeric variable, choose an empty
+payload, or compute a `MonoSpecializationKey` from a partially-connected graph.
+Pattern emission is included in this rule: after checking, a pattern node's own
+checked type is not a second source of truth that mono may unify into the
+scrutinee slot. Pattern lowering consumes the finalized scrutinee, payload,
+field, list-element, tuple-element, nominal-backing, and binder slots. This is
+especially important for `?` desugaring, because each branch pattern may carry a
+branch-local tag shape while the scrutinee slot carries the full specialized
+`Try(ok, err)` backing. Mono must lower the branch pattern from the finalized
+scrutinee/payload slots, not narrow or repair the scrutinee by unifying it with
+the branch pattern's checked type.
+
+The same rule applies to expression emission under an explicit expected slot.
+When mono lowers a child expression as a function argument, tag payload, record
+field, branch result, return value, or aggregate element, that explicit expected
+slot is the source of truth. The emitter must not begin by unifying the child
+expression's checked result type into the expected slot. Any needed connections
+between the child, the expected slot, and downstream uses must have been made by
+graph finalization before emission starts.
+
+Static-dispatch calls have a stricter version of the same rule. Mono must not
+materialize a `StaticDispatchCallPlan.callable_ty`, compute its canonical
+`MonoSpecializationKey`, lower its arguments, or request its target procedure
+until the static-dispatch graph edges for that call are connected:
+
+1. Connect the plan result slot to the current expected result slot.
+2. Resolve the dispatcher slot from the explicit `dispatcher_ty` and connect it
+   to the concrete dispatcher source type. For receiver-position dispatch and
+   method equality, also connect callable argument slot `0` to that same
+   concrete dispatcher source type. For type dispatch there is no implicit
+   receiver argument; only the explicit arguments participate.
+3. Connect every callable argument slot whose argument expression already has a
+   concrete source type from current specialization state, such as a parameter,
+   local binder, pattern binder, previously resolved call, or previously
+   resolved static-dispatch result. Context-dependent literals, empty
+   containers, records, tags, and lambdas do not invent their own type here;
+   they are lowered later under the finalized argument slot.
+4. Resolve the method owner from the concrete dispatcher source type and look up
+   the checked method target.
+5. If there is a checked method target, connect the target callable type to the
+   plan callable type in the same specialization-local graph.
+6. Only after steps 1 through 5 may mono materialize the final callable type,
+   lower the argument expressions under its finalized argument slots, compute
+   the target `MonoSpecializationKey`, and emit `call_proc`,
+   `structural_eq`, or `bool_not`.
+
+This ordering is required for calls such as:
+
+```roc
+main = {
+    result = [Ok(1), Err({})].map(|x| Ok(x?))
+    List.len(result)
+}
+```
+
+The callback lambda's argument and return types are determined by the concrete
+receiver list, the expected result list, and the resolved `List.map` callable
+type. If mono materializes the `map` callable before connecting those edges, the
+callable still contains generalized variables from the checked method template.
+That is an incomplete specialization graph, not a valid payload. Mono must
+finish the graph first and then lower the lambda under the finalized callback
+function slot.
+
+Every lambda-like body has its own explicit return target while mono emits that
+body. This includes top-level procedure templates, hosted/source procedure
+bodies, local-function declarations, closure expressions, and callable values
+passed directly as arguments. A `return` expression or a `?` desugaring inside
+an inline callback targets the callback's finalized function return slot, never
+the lexically surrounding procedure's return slot. For example:
+
+```roc
+main = {
+    result = [Ok(1), Err({})].map(|x| Ok(x?))
+    List.len(result)
+}
+```
+
+The `?` inside `|x| Ok(x?)` returns `Err({})` from the callback passed to
+`map`; it does not return from `main`. While lowering that callback body, mono
+must set the current return endpoint to the callback's finalized return type.
+Leaving the outer procedure's return endpoint in scope is a compiler bug and can
+make lambda-solved MIR see an impossible transform such as a primitive value
+being returned as a tag union.
+
+The following operations are graph-finalization operations, not value-emission
+operations:
+
+- clone-instantiating checked type roots for a concrete specialization
+- unifying a checked template root with a concrete source type
+- connecting local declaration demand from later uses
+- connecting call arguments and return slots
+- connecting branch and `match` result slots
+- connecting record, tuple, list, tag, nominal, alias, and `Box(T)` child slots
+- specializing parametric alias and nominal backings by substituting their
+  published actual arguments into their published backing graphs
+- resolving mono static dispatch targets and unifying target function types
+- resolving numeric defaults for `mono_specialization` numeric variables
+- closing truly-unobserved row and tag-union tails to explicit zero-field
+  payloads
+- computing canonical keys for sealed mono specialization requests
+
+Parametric wrapper stripping is part of graph finalization, not value emission.
+For a transparent alias or nominal type, the published backing root may already
+be instantiated by checking, or it may still be the declaration backing in terms
+of that wrapper's formal parameters. Mono must handle those two explicit states
+only:
+
+1. If the published backing root contains no remaining formal wrapper
+   parameters, it is already specialized. Mono uses that backing slot as-is.
+2. If the published backing root contains exactly the wrapper's formal
+   parameters, mono creates the specialization-local backing graph where each
+   formal parameter has been replaced by the corresponding published actual
+   argument from the concrete wrapper occurrence.
+
+A concrete occurrence such as `Try(I64, {})` is never allowed to expose a raw
+`Try(a, err)` declaration backing to mono value lowering. Either checking has
+already published the backing as `[Ok(I64), Err({})]`, or mono graph
+finalization substitutes `I64` and `{}` into the declaration backing before any
+consumer can observe it.
+
+For example:
+
+```roc
+main = {
+    result = [Ok(1), Err({})].map(|x| Ok(x?))
+    List.len(result)
+}
+```
+
+The `?` desugaring matches a `Try(I64, {})`. The branch patterns are nominal
+patterns whose backing tags are `Ok` and `Err`. Mono must lower those patterns
+against the specialized backing `[Ok(I64), Err({})]`, never against the raw
+declaration backing `[Ok(a), Err(err)]` and never against a singleton tag source
+shape reconstructed from the pattern syntax. The same rule applies to a
+parametric record nominal, tuple nominal, `Box(T)`, `List(T)`, and transparent
+aliases.
+
+This rule is exactly why alias/nominal backing lookup is forbidden in
+`MonoBodyEmitter`. Following `nominal.backing` or `alias.backing` as a plain
+child loses the actual argument context and can map the same formal backing
+variable to incompatible concrete types across two different instantiations.
+The finalized graph must own a distinct specialized backing slot keyed by the
+wrapper occurrence plus its actual argument slots. Pattern lowering, tag payload
+lookup, record-field lookup, tuple/list/box child lookup, source type keys, and
+later layout construction all consume that specialized backing slot.
+
+If the published backing graph contains some formal variables but they cannot be
+paired one-for-one with the wrapper occurrence's published actual arguments,
+that is a checked-artifact invariant violation. Debug builds assert immediately
+and release builds use `unreachable`. A post-check stage must not recover by
+guessing parameter order, using source names, defaulting the variables, or
+falling back to the raw backing graph.
+
+After graph finalization, every source-type payload consumed by mono MIR output
+is sealed. Before graph finalization, payload handles are graph nodes, not
+permission to emit MIR or enqueue executable work. If value emission asks for a
+slot that the finalized graph does not contain, that is a compiler invariant
+violation: debug builds assert immediately and release builds use
+`unreachable`.
+
+The implementation must make the invalid operation hard to reintroduce. The
+preferred shape is an API split:
+
+```zig
+const MonoSpecializationGraphBuilder = struct {
+    // May clone, connect, unify, default, and close.
+};
+
+const FinalizedMonoSpecializationGraph = struct {
+    // Lookup-only. No unification, no defaulting, no row-tail closure.
+};
+
+const MonoBodyEmitter = struct {
+    graph: *const FinalizedMonoSpecializationGraph,
+    // Emits mono MIR from graph lookups.
+};
+```
+
+The exact Zig names may differ, but the capability split must not. Any helper
+whose behavior can seal an unconstrained flex, close a row/tag tail, or choose a
+numeric default belongs to the graph builder and must be unavailable to
+`MonoBodyEmitter`.
+
+#### Block-Local Demand Propagation In Mono
+
+Mono body lowering must not choose concrete types for local declarations solely
+from source statement order. A later local use can be the first explicit place
+where a local value receives the concrete type needed by an earlier declaration.
+This is especially common for function-valued locals whose bodies contain
+numeric or static-dispatch constraints.
+
+For example:
+
+```roc
+main = {
+    a = 10
+    b = 20
+    f = if (True) |x| x + a else |x| x + b
+    f(5)
+}
+```
+
+The declaration `f = ...` has a checked function type whose argument and return
+slots are still connected to numeric/static-dispatch constraints. Mono must not
+seal that checked type when lowering the `f` declaration, because doing so would
+try to materialize a constrained flex before the call `f(5)` has connected the
+function argument and result slots in the specialization-local graph.
+
+The correct mono rule is:
+
+1. Each block creates a specialization-local demand table keyed by checked
+   binding identity, not by source name.
+2. When mono sees a resolved local lookup in a concrete expected position, it
+   records that concrete source type against the referenced binder before any
+   declaration for that binder needs to be emitted.
+3. A local call such as `f(5)` records the concrete callable source type for
+   `f` from the call's checked source function type after connecting any
+   already-known argument and return slots in the same specialization-local
+   graph.
+4. A local declaration first asks the demand table for its binder's concrete
+   source type. If present, the declaration lowers its body against that exact
+   type. If absent, it may materialize the checked pattern type only if that type
+   contains no constrained flex, rigid variable, generalized variable, or pending
+   payload.
+5. Branch and `match` bodies that produce function-valued results lower against
+   the shared expected result slot from the branch join. They must not seal each
+   branch's checked lambda type independently.
+6. Record, tuple, tag, list, and `Box(T)` constructions that contain local
+   function-valued fields propagate the field's expected concrete source type
+   into the child expression before the child is lowered.
+
+This is not source recovery. Mono consumes checked expression nodes, checked
+source function types, resolved local value references, and the current
+specialization-local type graph that checking has already published. It must not
+inspect source spelling, infer a type from literal shape, or scan names in an
+environment. A missing local demand after all explicit current-specialization
+uses have been connected is a compiler bug if the declaration type still
+contains a constrained flex; in debug builds this is an assertion, and in
+release builds the path is `unreachable`.
+
+This rule also covers ordinary local aliases:
+
+```roc
+main = {
+    f = if (True) |x| x + 1 else |x| x + 2
+    g = f
+    g(40)
+}
+```
+
+The concrete callable demand from `g(40)` flows to `g`, then through the alias
+`g = f` to `f`, before either declaration is emitted. Mono must lower the
+conditional closure join using that one concrete callable type and later
+lambda-solved MIR must decide the finite callable-set representation from value
+flow. Mono must not create a thunk, choose a direct-call shortcut, or rebuild
+the callable member set from syntax.
 
 #### Concrete Source Type Payloads For Requests
 
@@ -11116,6 +11643,19 @@ They must not store raw `CIR.Expr.Idx`, raw `CIR.Pattern.Idx`, raw `types.Var`,
 raw `Ident.Idx`, source-name lookup handles, or pointers into another module's
 checked store as semantic payload. Source regions may be retained for
 diagnostics and debugging, but source regions are never lookup keys for lowering.
+
+Artifact tables referenced from checked body nodes are not side channels. They
+are part of the checked body graph. If `CheckedExprData.dispatch_call` stores a
+`StaticDispatchPlanId`, then the plan's `args` are owned child expressions of
+that dispatch expression for every reachability purpose, even though the
+`CheckedExprData` node itself does not duplicate those children. The same rule
+applies to any future checked-artifact table that stores checked expression,
+pattern, statement, or checked body ids: the publisher must provide one
+centralized traversal that follows those ids when building template closures,
+resolved-reference spans, static-dispatch spans, nested procedure sites,
+compile-time dependency records, and debug-only reachability verification.
+Failing to traverse such payloads is not an optimization opportunity; it
+publishes an incomplete artifact.
 
 Checked body string literal ids are also artifact-local payload ids, not final
 program ids. `CheckedStringLiteralId` values index
@@ -15052,6 +15592,10 @@ Commit when lambda-solved MIR verification proves:
 - every `proc_value` occurrence has `CallableValueInfo` that names the occurrence
   procedure, occurrence capture values, whole function root, callable child root,
   and emission plan
+- no pending `proc_value` callable construction remains after
+  `CallableValueEmissionPlan` assignment; all builder-only pending construction
+  records have been consumed into canonical callable-set descriptors, final
+  selected members, and finite or Box-provenance erased emission plans
 - every callable alias has value-flow edges from producer occurrence to binder
   and from binder to every use; no exported callable alias map exists
 - every callable value inside a record, tuple, tag payload, list, capture,
@@ -15138,6 +15682,19 @@ before projecting individual binders by finalized path ids, handle records,
 tuples, lists, literals, opaque unwraps, newtypes, and guards through explicit
 decision-path records, and join returning branches into one `result_tmp` through
 mandatory branch result transforms, including identity.
+
+IR lowering of executable source `match`, `if`, loop bodies, callable-match
+branches, and any other expression-to-block boundary must be terminator-aware.
+A `return` expression is a control-flow terminator for the current procedure; it
+is never a normal value that can be assigned to the surrounding branch join. For
+example, in `|x| Ok(x?)`, the `Err` branch created by the `?` desugaring returns
+the callback's `Result` value immediately. That branch must not write the
+`Err` value into the `I64` payload slot expected by the surrounding `Ok`
+constructor. IR blocks therefore carry a terminal of `value`, `return`, `crash`,
+or `unreachable`, and source-match decision leaves that lower to `return` must
+emit the return terminal instead of setting the match result temp. Treating a
+returning leaf as a completing value is a compiler bug, even if some backend
+happens to ignore the impossible continuation.
 
 Enforce single-evaluation boundary discipline: source operands lower once to
 `ExecutableValueRef` handles in source order, and bridges, calls, aggregate
@@ -16469,6 +17026,9 @@ Executable MIR:
   `CallableValueInfo`, has `construction.result` equal to that occurrence's
   `ValueInfoId`, and the occurrence's `CallableValueEmissionPlan` is
   `finite_callable_set(construction.callable_set_key)`
+- no builder-only pending `proc_value` callable construction reaches executable
+  MIR; executable MIR only consumes the final rewritten
+  `CallableSetConstructionPlan` and final `CallableValueEmissionPlan`
 - no finite non-erased `proc_value` occurrence that must be emitted as a value
   reaches executable MIR without a `CallableSetConstructionPlan`, and no carried
   finite callable-set value from a parameter, projection, branch join, call

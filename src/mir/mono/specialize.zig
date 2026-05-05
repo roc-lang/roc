@@ -1247,6 +1247,9 @@ const TypeInstantiator = struct {
     materialized_concrete_roots: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
     concrete_template_refs: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
 
+    const ConcreteRefSubstitutions = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, ConcreteSourceType.ConcreteSourceTypeRef);
+    const ConcreteRefMaterializationMap = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId);
+
     const ConcreteRecordFieldEntry = struct {
         name: canonical.RecordFieldLabelId,
         owner: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -1635,7 +1638,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         const payload = self.concretePayload(ref);
         switch (payload) {
-            .alias => |alias| try self.collectConcreteRecordFields(try self.concreteChildRef(ref, alias.backing), out),
+            .alias => |alias| try self.collectConcreteRecordFields(try self.concreteAliasBackingRef(ref, alias), out),
             .empty_record => {},
             .flex => |flex| self.verifyClosableRowTail(flex),
             .record_unbound => |fields| {
@@ -1666,7 +1669,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         const payload = self.concretePayload(ref);
         switch (payload) {
-            .alias => |alias| try self.collectConcreteRecordFieldEntries(try self.concreteChildRef(ref, alias.backing), out),
+            .alias => |alias| try self.collectConcreteRecordFieldEntries(try self.concreteAliasBackingRef(ref, alias), out),
             .empty_record => {},
             .flex => |flex| self.verifyClosableRowTail(flex),
             .record_unbound => |fields| {
@@ -1760,7 +1763,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!void {
         const payload = self.concretePayload(ref);
         switch (payload) {
-            .alias => |alias| try self.collectConcreteTags(try self.concreteChildRef(ref, alias.backing), out),
+            .alias => |alias| try self.collectConcreteTags(try self.concreteAliasBackingRef(ref, alias), out),
             .empty_tag_union => {},
             .flex => |flex| self.verifyClosableRowTail(flex),
             .tag_union => |tag_union| {
@@ -1774,7 +1777,7 @@ const TypeInstantiator = struct {
                 }
                 try self.collectConcreteTags(try self.concreteChildRef(ref, tag_union.ext), out);
             },
-            .nominal => |nominal| try self.collectConcreteTags(try self.concreteChildRef(ref, nominal.backing), out),
+            .nominal => |nominal| try self.collectConcreteTags(try self.concreteNominalBackingRef(ref, nominal), out),
             else => invariantViolation("mono specialization concrete tag-union extension resolved to a non-tag-union type"),
         }
     }
@@ -1919,7 +1922,7 @@ const TypeInstantiator = struct {
                 return;
             },
             .alias => |alias| {
-                try self.unifyTemplateWithConcrete(template_id, try self.concreteChildRef(concrete, alias.backing));
+                try self.unifyTemplateWithConcrete(template_id, try self.concreteAliasBackingRef(concrete, alias));
                 return;
             },
             else => {},
@@ -2180,7 +2183,7 @@ const TypeInstantiator = struct {
         var current = ref;
         while (true) {
             switch (self.concretePayload(current)) {
-                .alias => |alias| current = try self.concreteChildRef(current, alias.backing),
+                .alias => |alias| current = try self.concreteAliasBackingRef(current, alias),
                 .nominal => |nominal| return nominal.builtin == .dec,
                 else => return false,
             }
@@ -2249,6 +2252,37 @@ const TypeInstantiator = struct {
         };
     }
 
+    fn concreteAliasBackingRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        alias: checked_artifact.CheckedAliasType,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return try self.concreteSpecializedWrapperBackingRef(ref, alias.backing, alias.args);
+    }
+
+    fn concreteNominalBackingRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return try self.concreteSpecializedWrapperBackingRef(ref, nominal.backing, nominal.args);
+    }
+
+    fn concreteSpecializedWrapperBackingRef(
+        self: *TypeInstantiator,
+        wrapper_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        backing: checked_artifact.CheckedTypeId,
+        args: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const backing_ref = try self.concreteChildRef(wrapper_ref, backing);
+        if (args.len == 0) return backing_ref;
+
+        var active = ConcreteRefMaterializationMap.init(self.allocator);
+        defer active.deinit();
+        const root = try self.materializeSpecializedWrapperBackingRoot(wrapper_ref, backing, args, null, &active);
+        return try self.program.concrete_source_types.registerLocalRoot(root);
+    }
+
     fn materializeConcreteRef(
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -2269,6 +2303,247 @@ const TypeInstantiator = struct {
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
         try self.sealMaterializedLocalRoot(local_root);
         return local_root;
+    }
+
+    fn materializeSpecializedWrapperBackingRoot(
+        self: *TypeInstantiator,
+        wrapper_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        backing: checked_artifact.CheckedTypeId,
+        args: []const checked_artifact.CheckedTypeId,
+        parent_substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const backing_ref = try self.concreteChildRef(wrapper_ref, backing);
+
+        var substitutions = ConcreteRefSubstitutions.init(self.allocator);
+        defer substitutions.deinit();
+
+        const parent_count: usize = if (parent_substitutions) |parent| parent.count() else 0;
+        try substitutions.ensureTotalCapacity(@intCast(parent_count + args.len));
+
+        if (parent_substitutions) |parent| {
+            var it = parent.iterator();
+            while (it.next()) |entry| {
+                substitutions.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
+        if (args.len != 0) {
+            var params = std.ArrayList(ConcreteSourceType.ConcreteSourceTypeRef).empty;
+            defer params.deinit(self.allocator);
+            var seen = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void).init(self.allocator);
+            defer seen.deinit();
+            try self.collectWrapperBackingParams(backing_ref, &params, &seen);
+
+            if (params.items.len == 0) {
+                return try self.materializeConcreteRefWithSubstitutions(backing_ref, parent_substitutions, active);
+            }
+            if (params.items.len != args.len) {
+                invariantViolation("mono specialization wrapper backing formal parameter count did not match actual arguments");
+            }
+
+            for (params.items, args) |param, arg| {
+                const key = self.resolveConcreteRef(param);
+                const value = self.resolveConcreteRef(try self.concreteChildRef(wrapper_ref, arg));
+                const gop = try substitutions.getOrPut(key);
+                if (gop.found_existing) {
+                    if (gop.value_ptr.* != value) {
+                        invariantViolation("mono specialization wrapper backing formal parameter mapped to incompatible actual arguments");
+                    }
+                } else {
+                    gop.value_ptr.* = value;
+                }
+            }
+        }
+
+        return try self.materializeConcreteRefWithSubstitutions(backing_ref, &substitutions, active);
+    }
+
+    fn collectWrapperBackingParams(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(ConcreteSourceType.ConcreteSourceTypeRef),
+        seen: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void),
+    ) Allocator.Error!void {
+        const resolved = self.resolveConcreteRef(ref);
+        const gop = try seen.getOrPut(resolved);
+        if (gop.found_existing) return;
+
+        switch (self.concretePayload(resolved)) {
+            .flex, .rigid => try out.append(self.allocator, resolved),
+            .alias => |alias| {
+                for (alias.args) |arg| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, field.ty), out, seen);
+                }
+                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, record.ext), out, seen);
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, field.ty), out, seen);
+                }
+            },
+            .tuple => |items| {
+                for (items) |item| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, item), out, seen);
+                }
+            },
+            .nominal => |nominal| {
+                for (nominal.args) |arg| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
+                }
+            },
+            .function => |func| {
+                for (func.args) |arg| {
+                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
+                }
+                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, func.ret), out, seen);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.args) |arg| {
+                        try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
+                    }
+                }
+                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, tag_union.ext), out, seen);
+            },
+            .empty_record, .empty_tag_union, .pending => {},
+        }
+    }
+
+    fn materializeConcreteRefWithSubstitutions(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const resolved = self.resolveConcreteRef(ref);
+        if (substitutions) |map| {
+            if (map.get(resolved)) |replacement| {
+                return try self.materializeConcreteRefWithSubstitutions(replacement, map, active);
+            }
+        }
+        if (active.get(resolved)) |existing| return existing;
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try active.put(resolved, local_root);
+        errdefer _ = active.remove(resolved);
+
+        const payload = try self.materializeConcretePayloadWithSubstitutions(resolved, self.concretePayload(resolved), substitutions, active);
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        try self.sealMaterializedLocalRoot(local_root);
+        return local_root;
+    }
+
+    fn materializeConcretePayloadWithSubstitutions(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        payload: checked_artifact.CheckedTypePayload,
+        substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
+            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
+            .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
+                try self.materializeDefaultDecPayload()
+            else
+                invariantViolation("mono specialization reached an unsolved rigid type variable in a concrete source type"),
+            .alias => |alias| .{ .alias = .{
+                .name = try self.typeNameForConcreteRef(ref, alias.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
+                .backing = try self.materializeSpecializedWrapperBackingRoot(ref, alias.backing, alias.args, substitutions, active),
+                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, alias.args, substitutions, active),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFieldsWithSubstitutions(ref, fields, substitutions, active) },
+            .record => |record| .{ .record = .{
+                .fields = try self.materializeConcreteRecordFieldsWithSubstitutions(ref, record.fields, substitutions, active),
+                .ext = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, record.ext), substitutions, active),
+            } },
+            .tuple => |items| .{ .tuple = try self.materializeConcreteTypeIdsWithSubstitutions(ref, items, substitutions, active) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.typeNameForConcreteRef(ref, nominal.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.materializeSpecializedWrapperBackingRoot(ref, nominal.backing, nominal.args, substitutions, active),
+                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, nominal.args, substitutions, active),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = func.kind,
+                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, func.args, substitutions, active),
+                .ret = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, func.ret), substitutions, active),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.materializeConcreteTagsWithSubstitutions(ref, tag_union.tags, substitutions, active),
+                .ext = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, tag_union.ext), substitutions, active),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn materializeConcreteTypeIdsWithSubstitutions(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        ids: []const checked_artifact.CheckedTypeId,
+        substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(parent, id), substitutions, active);
+        }
+        return out;
+    }
+
+    fn materializeConcreteRecordFieldsWithSubstitutions(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+        substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.recordFieldNameForConcreteRef(parent, field.name),
+                .ty = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(parent, field.ty), substitutions, active),
+            };
+        }
+        return out;
+    }
+
+    fn materializeConcreteTagsWithSubstitutions(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        tags: []const checked_artifact.CheckedTag,
+        substitutions: ?*ConcreteRefSubstitutions,
+        active: *ConcreteRefMaterializationMap,
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.tagNameForConcreteRef(parent, tag.name),
+                .args = try self.materializeConcreteTypeIdsWithSubstitutions(parent, tag.args, substitutions, active),
+            };
+        }
+        return out;
     }
 
     fn sealMaterializedLocalRootRef(
@@ -2371,10 +2646,8 @@ const TypeInstantiator = struct {
     ) bool {
         _ = self;
         if (flex.numeric_default_phase != .mono_specialization) return false;
-        for (flex.constraints) |constraint| {
-            if (constraint.origin == .from_numeral) return true;
-        }
-        invariantViolation("mono specialization numeric-default phase did not publish a from_numeral constraint");
+        if (flex.constraints.len == 0) invariantViolation("mono specialization numeric-default phase did not publish a numeric constraint");
+        return true;
     }
 
     fn materializeConcretePayload(
@@ -2392,7 +2665,7 @@ const TypeInstantiator = struct {
             .alias => |alias| .{ .alias = .{
                 .name = try self.typeNameForConcreteRef(ref, alias.name),
                 .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
-                .backing = try self.materializeConcreteRef(try self.concreteChildRef(ref, alias.backing)),
+                .backing = try self.materializeConcreteRef(try self.concreteAliasBackingRef(ref, alias)),
                 .args = try self.materializeConcreteTypeIds(ref, alias.args),
             } },
             .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFields(ref, fields) },
@@ -2406,7 +2679,7 @@ const TypeInstantiator = struct {
                 .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
-                .backing = try self.materializeConcreteRef(try self.concreteChildRef(ref, nominal.backing)),
+                .backing = try self.materializeConcreteRef(try self.concreteNominalBackingRef(ref, nominal)),
                 .args = try self.materializeConcreteTypeIds(ref, nominal.args),
             } },
             .function => |func| .{ .function = .{
@@ -3694,7 +3967,7 @@ const BodyLowerer = struct {
         while (true) {
             switch (self.type_instantiator.concretePayload(current)) {
                 .alias => |alias| {
-                    current = try self.type_instantiator.concreteChildRef(current, alias.backing);
+                    current = try self.type_instantiator.concreteAliasBackingRef(current, alias);
                 },
                 .function => |function| {
                     const out = try self.allocator.alloc(ConcreteTypeInfo, function.args.len);
@@ -3722,7 +3995,7 @@ const BodyLowerer = struct {
         while (true) {
             switch (self.type_instantiator.concretePayload(current)) {
                 .alias => |alias| {
-                    current = try self.type_instantiator.concreteChildRef(current, alias.backing);
+                    current = try self.type_instantiator.concreteAliasBackingRef(current, alias);
                 },
                 .function => |function| {
                     const ret_ref = try self.type_instantiator.concreteChildRef(current, function.ret);
@@ -3771,18 +4044,20 @@ const BodyLowerer = struct {
         pattern_id: checked_artifact.CheckedPatternId,
     ) Allocator.Error!Ast.TypedSymbol {
         const pattern = self.checkedPattern(pattern_id);
-        const binder = self.binderForSimplePattern(pattern.data);
         const source_ref = try self.type_instantiator.concreteRefForTemplateType(pattern.ty);
         const concrete_ty = ConcreteTypeInfo{
             .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
             .source_ty = self.program.concrete_source_types.key(source_ref),
             .source_ref = source_ref,
         };
-        try self.recordConcreteTypeForBinder(binder, concrete_ty);
+        const symbol = if (self.binderForSimplePatternMaybe(pattern.data)) |binder| blk: {
+            try self.recordConcreteTypeForBinder(binder, concrete_ty);
+            break :blk try self.symbolForBinder(binder);
+        } else try self.program.addSyntheticSymbol();
         return .{
             .ty = concrete_ty.ty,
             .source_ty = concrete_ty.source_ty,
-            .symbol = try self.symbolForBinder(binder),
+            .symbol = symbol,
         };
     }
 
@@ -3792,12 +4067,14 @@ const BodyLowerer = struct {
         param_ty: ConcreteTypeInfo,
     ) Allocator.Error!Ast.TypedSymbol {
         const pattern = self.checkedPattern(pattern_id);
-        const binder = self.binderForSimplePattern(pattern.data);
-        try self.recordConcreteTypeForBinder(binder, param_ty);
+        const symbol = if (self.binderForSimplePatternMaybe(pattern.data)) |binder| blk: {
+            try self.recordConcreteTypeForBinder(binder, param_ty);
+            break :blk try self.symbolForBinder(binder);
+        } else try self.program.addSyntheticSymbol();
         return .{
             .ty = param_ty.ty,
             .source_ty = param_ty.source_ty,
-            .symbol = try self.symbolForBinder(binder),
+            .symbol = symbol,
         };
     }
 
@@ -3805,11 +4082,20 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         data: checked_artifact.CheckedPatternData,
     ) checked_artifact.PatternBinderId {
+        return self.binderForSimplePatternMaybe(data) orelse
+            invariantViolation("mono body lowering requires destructuring parameters to be lowered into explicit local bindings before procedure entry");
+    }
+
+    fn binderForSimplePatternMaybe(
+        self: *BodyLowerer,
+        data: checked_artifact.CheckedPatternData,
+    ) ?checked_artifact.PatternBinderId {
         _ = self;
         return switch (data) {
             .assign => |binder| binder,
             .as => |as| as.binder,
-            else => invariantViolation("mono body lowering requires destructuring parameters to be lowered into explicit local bindings before procedure entry"),
+            .underscore => null,
+            else => null,
         };
     }
 
@@ -3850,6 +4136,41 @@ const BodyLowerer = struct {
             else => return null,
         };
         return self.local_symbol_types.get(binder);
+    }
+
+    fn concreteTypeForPatternBinder(
+        self: *const BodyLowerer,
+        pattern_id: checked_artifact.CheckedPatternId,
+    ) ?ConcreteTypeInfo {
+        const pattern = self.checkedPattern(pattern_id);
+        const binder = switch (pattern.data) {
+            .assign => |binder| binder,
+            .as => |as| as.binder,
+            else => return null,
+        };
+        return self.local_symbol_types.get(binder);
+    }
+
+    fn recordConcreteTypeForLocalLookup(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        ty: ConcreteTypeInfo,
+    ) Allocator.Error!void {
+        const expr = self.checkedExpr(expr_id);
+        const ref_id = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved orelse return,
+            else => return,
+        };
+        const record = self.resolvedValueRef(ref_id);
+        const binder = switch (record.ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            => |local| local.binder,
+            else => return,
+        };
+        try self.recordConcreteTypeForBinder(binder, ty);
     }
 
     fn lowerExpr(
@@ -3912,15 +4233,7 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         const expr = self.checkedExpr(expr_id);
         const expected_info = try self.expectedTypeInfo(expected_ty);
-        switch (expr.data) {
-            .call,
-            .list,
-            .empty_list,
-            .num,
-            .block,
-            => {},
-            else => try self.type_instantiator.unifyTemplateWithConcrete(expr.ty, expected_info.source_ref),
-        }
+        try self.recordConcreteTypeForLocalLookup(expr_id, expected_info);
         const ty = expected_info.ty;
         const source_ty = expected_info.source_ty;
         const lowered = switch (expr.data) {
@@ -3941,7 +4254,7 @@ const BodyLowerer = struct {
             .empty_list => try self.program.ast.addExpr(ty, .{ .list = Ast.Span(Ast.ExprId).empty() }),
             .tuple => |items| try self.lowerTuple(ty, items),
             .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr, expected_ty),
-            .record => |record| try self.lowerRecord(ty, record),
+            .record => |record| try self.lowerRecord(ty, expected_info.source_ref, record),
             .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
             .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .local_function, lambda.args, lambda.body),
             .call => |call| try self.lowerCall(expected_info, expr_id, call),
@@ -3958,7 +4271,7 @@ const BodyLowerer = struct {
                 break :blk try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
             .closure => |closure| try self.lowerCheckedClosureExpr(ty, expr_id, closure),
-            .field_access => |access| try self.lowerFieldAccess(ty, access.receiver, try self.recordFieldLabel(access.field_name)),
+            .field_access => |access| try self.lowerFieldAccess(expected_info, access.receiver, try self.recordFieldLabel(access.field_name)),
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
                 break :blk try self.program.ast.addExpr(ty, .{ .tuple_access = .{
@@ -4343,7 +4656,7 @@ const BodyLowerer = struct {
         var current = source_list;
         while (true) {
             switch (self.type_instantiator.concretePayload(current)) {
-                .alias => |alias| current = try self.type_instantiator.concreteChildRef(current, alias.backing),
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
                 .nominal => |nominal| {
                     if (nominal.builtin != .list or nominal.args.len != 1) {
                         invariantViolation("mono body lowering expected concrete list type for list literal");
@@ -4408,6 +4721,7 @@ const BodyLowerer = struct {
         }
 
         const final = try self.lowerExprWithExpected(final_expr, final_expected_ty);
+
         const generated_count = generated_local_fns.items.len;
         const normal_count = lowered_stmts.items.len;
         const combined = try self.allocator.alloc(Ast.StmtId, generated_count + normal_count);
@@ -4427,6 +4741,7 @@ const BodyLowerer = struct {
     fn lowerRecord(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         record: anytype,
     ) Allocator.Error!Ast.ExprId {
         if (record.ext) |ext| return try self.lowerRecordUpdate(ty, ext, record.fields);
@@ -4434,12 +4749,70 @@ const BodyLowerer = struct {
         const fields = try self.allocator.alloc(Ast.FieldExpr, record.fields.len);
         defer self.allocator.free(fields);
         for (record.fields, 0..) |field, i| {
+            const label = try self.recordFieldLabel(field.label);
+            const field_info = try self.concreteRecordFieldInfo(source_ref, label);
             fields[i] = .{
-                .field = try self.recordFieldLabel(field.label),
-                .value = try self.lowerExpr(field.value),
+                .field = label,
+                .value = try self.lowerExprConcreteExpected(field.value, field_info),
             };
         }
         return try self.program.ast.addExpr(ty, .{ .record = try self.program.ast.addFieldExprSpan(fields) });
+    }
+
+    fn concreteRecordFieldInfo(
+        self: *BodyLowerer,
+        record_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        field_name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!ConcreteTypeInfo {
+        const field_ref = try self.concreteRecordFieldRef(record_ref, field_name);
+        return .{
+            .ty = try self.type_instantiator.lowerConcreteRef(field_ref),
+            .source_ty = self.program.concrete_source_types.key(field_ref),
+            .source_ref = field_ref,
+        };
+    }
+
+    fn concreteRecordFieldRef(
+        self: *BodyLowerer,
+        record_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        field_name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        var current = record_ref;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
+                .nominal => |nominal| current = try self.type_instantiator.concreteNominalBackingRef(current, nominal),
+                .record_unbound => |fields| return try self.concreteRecordFieldRefInFields(current, fields, field_name),
+                .record => |record| {
+                    if (try self.concreteRecordFieldRefInFieldsMaybe(current, record.fields, field_name)) |field_ref| return field_ref;
+                    current = try self.type_instantiator.concreteChildRef(current, record.ext);
+                },
+                else => invariantViolation("mono body lowering expected concrete record type for record field"),
+            }
+        }
+    }
+
+    fn concreteRecordFieldRefInFields(
+        self: *BodyLowerer,
+        owner: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+        field_name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return (try self.concreteRecordFieldRefInFieldsMaybe(owner, fields, field_name)) orelse
+            invariantViolation("mono body lowering could not find concrete record field");
+    }
+
+    fn concreteRecordFieldRefInFieldsMaybe(
+        self: *BodyLowerer,
+        owner: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+        field_name: canonical.RecordFieldLabelId,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        for (fields) |field| {
+            if (try self.type_instantiator.recordFieldNameForConcreteRef(owner, field.name) != field_name) continue;
+            return try self.type_instantiator.concreteChildRef(owner, field.ty);
+        }
+        return null;
     }
 
     fn lowerRecordUpdate(
@@ -4519,7 +4892,11 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(site_expr).ty);
         const args = try self.lowerParamSpanFromFunction(arg_patterns, source_fn_ref);
-        const body = try self.lowerExprConcreteExpected(body_expr, try self.returnTypeFromConcreteFunction(source_fn_ref));
+        const ret_ty = try self.returnTypeFromConcreteFunction(source_fn_ref);
+        const previous_return_type = self.current_return_type;
+        self.current_return_type = ret_ty;
+        defer self.current_return_type = previous_return_type;
+        const body = try self.lowerExprConcreteExpected(body_expr, ret_ty);
         const source_fn_ty = self.program.concrete_source_types.key(source_fn_ref);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
             .site = self.nestedProcSite(site_expr, site_kind),
@@ -4695,16 +5072,32 @@ const BodyLowerer = struct {
 
         const dispatcher_info = try self.staticDispatchDispatcherType(plan);
         try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
+        try self.bindStaticDispatchKnownArgumentTypes(plan, dispatcher_info);
 
-        const initial_requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
-        const initial_callable_ty = try self.type_instantiator.lowerConcreteRef(initial_requested_fn_ty);
-        const callable = switch (self.program.types.getType(initial_callable_ty)) {
+        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_info.ty);
+        const method = try self.methodName(plan.method);
+        const target = try self.lookupMethodTarget(owner, method);
+
+        if (target) |method_target| {
+            const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
+        } else switch (plan.result_mode) {
+            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .equality => |equality| {
+                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
+                if (plan.args.len != 2) invariantViolation("mono static dispatch equality did not have exactly two operands");
+            },
+        }
+
+        const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
+        const callable_ty = try self.type_instantiator.lowerConcreteRef(requested_fn_ty);
+        const callable = switch (self.program.types.getType(callable_ty)) {
             .func => |func| func,
             else => invariantViolation("mono static dispatch callable type did not resolve to a fixed-arity function"),
         };
         if (callable.args.len != plan.args.len) invariantViolation("mono static dispatch argument count did not match callable arity");
 
-        const param_types = try self.paramTypesFromConcreteFunction(initial_requested_fn_ty);
+        const param_types = try self.paramTypesFromConcreteFunction(requested_fn_ty);
         defer self.allocator.free(param_types);
         const lowered_args = try self.lowerExprSpanConcrete(plan.args, param_types);
         const arg_items = self.program.ast.sliceExprSpan(lowered_args);
@@ -4715,16 +5108,8 @@ const BodyLowerer = struct {
             }
         }
 
-        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_info.ty);
-        const method = try self.methodName(plan.method);
-        const target = try self.lookupMethodTarget(owner, method);
-
         if (target) |method_target| {
             const template = try self.name_resolver.procedureTemplateRef(method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template"));
-            const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
-            try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
-            const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
-            const callable_ty = try self.type_instantiator.lowerConcreteRef(requested_fn_ty);
             const ret_info = try self.returnTypeFromConcreteFunction(requested_fn_ty);
             const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
                 .template = template,
@@ -4752,10 +5137,8 @@ const BodyLowerer = struct {
         }
 
         return switch (plan.result_mode) {
-            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .value => unreachable,
             .equality => |equality| blk: {
-                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
-                if (plan.args.len != 2) invariantViolation("mono static dispatch equality did not have exactly two operands");
                 const lhs = arg_items[0];
                 const rhs = arg_items[1];
                 const structural = try self.program.ast.addExpr(expected.ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
@@ -4763,6 +5146,32 @@ const BodyLowerer = struct {
                 break :blk try self.program.ast.addExpr(expected.ty, .{ .bool_not = structural });
             },
         };
+    }
+
+    fn bindStaticDispatchKnownArgumentTypes(
+        self: *BodyLowerer,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_info: ConcreteTypeInfo,
+    ) Allocator.Error!void {
+        const param_templates = try self.templateFunctionArgTypes(plan.callable_ty);
+        if (param_templates.len != plan.args.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
+
+        const expr = self.checkedExpr(plan.expr);
+        switch (expr.data) {
+            .dispatch_call,
+            .method_eq,
+            => {
+                if (param_templates.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument slot");
+                try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_info.source_ref);
+            },
+            .type_dispatch_call => {},
+            else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
+        }
+
+        for (plan.args, param_templates) |arg, param_template| {
+            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse continue;
+            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
+        }
     }
 
     fn concreteRefForMethodTargetCallable(
@@ -4842,17 +5251,17 @@ const BodyLowerer = struct {
         match_: anytype,
         expected_result_ty: ExprExpectedType,
     ) Allocator.Error!Ast.ExprId {
-        const cond = try self.lowerExpr(match_.cond);
+        const cond_info = try self.concreteResultTypeForExpr(match_.cond, self.checkedExpr(match_.cond).ty);
+        const cond = try self.lowerExprConcreteExpected(match_.cond, cond_info);
         if (match_.branches.len == 0) invariantViolation("mono body lowering received a checked match with no branches");
 
         var branches = std.ArrayList(Ast.Branch).empty;
         defer branches.deinit(self.allocator);
-        const cond_ty = self.program.ast.getExpr(cond).ty;
         for (match_.branches) |branch| {
             if (branch.patterns.len == 0) invariantViolation("mono body lowering received a checked match branch with no alternatives");
             for (branch.patterns) |branch_pattern| {
                 try branches.append(self.allocator, .{
-                    .pat = try self.lowerPatternWithRemaps(cond_ty, branch_pattern.pattern, branch_pattern.binder_remaps),
+                    .pat = try self.lowerPatternWithRemaps(cond_info, branch_pattern.pattern, branch_pattern.binder_remaps),
                     .guard = if (branch_pattern.degenerate or branch.guard == null) null else try self.lowerBoolConditionExpr(branch.guard.?),
                     .body = if (branch_pattern.degenerate) try self.program.ast.addExpr(ty, .runtime_error) else try self.lowerExprWithExpected(branch.value, expected_result_ty),
                     .degenerate = branch_pattern.degenerate,
@@ -4897,17 +5306,68 @@ const BodyLowerer = struct {
 
     fn lowerFieldAccess(
         self: *BodyLowerer,
-        ty: Type.TypeId,
+        field_info: ConcreteTypeInfo,
         receiver: checked_artifact.CheckedExprId,
         field_name: canonical.RecordFieldLabelId,
     ) Allocator.Error!Ast.ExprId {
-        const record = try self.lowerExpr(receiver);
+        const ty = field_info.ty;
+        try self.bindRecordFieldExpectedType(self.checkedExpr(receiver).ty, field_name, field_info);
+        const receiver_ty = try self.concreteTypeInfoForChecked(self.checkedExpr(receiver).ty);
+        const record = try self.lowerExprConcreteExpected(receiver, receiver_ty);
         const record_ty = self.program.ast.getExpr(record).ty;
         return try self.program.ast.addExpr(ty, .{ .access = .{
             .record = record,
             .field = field_name,
             .field_index = self.recordFieldIndex(record_ty, field_name),
         } });
+    }
+
+    fn bindRecordFieldExpectedType(
+        self: *BodyLowerer,
+        record_ty: checked_artifact.CheckedTypeId,
+        field_name: canonical.RecordFieldLabelId,
+        field_info: ConcreteTypeInfo,
+    ) Allocator.Error!void {
+        var current = record_ty;
+        while (true) {
+            switch (self.type_instantiator.templatePayload(current)) {
+                .alias => |alias| current = alias.backing,
+                .nominal => |nominal| current = nominal.backing,
+                .record_unbound => |fields| {
+                    try self.bindRecordFieldInFieldSet(fields, field_name, field_info);
+                    return;
+                },
+                .record => |record| {
+                    if (try self.bindRecordFieldInFieldSetMaybe(record.fields, field_name, field_info)) return;
+                    current = record.ext;
+                },
+                else => invariantViolation("mono body lowering expected checked record type for field access"),
+            }
+        }
+    }
+
+    fn bindRecordFieldInFieldSet(
+        self: *BodyLowerer,
+        fields: []const checked_artifact.CheckedRecordField,
+        field_name: canonical.RecordFieldLabelId,
+        field_info: ConcreteTypeInfo,
+    ) Allocator.Error!void {
+        if (try self.bindRecordFieldInFieldSetMaybe(fields, field_name, field_info)) return;
+        invariantViolation("mono body lowering could not find checked record field for field access");
+    }
+
+    fn bindRecordFieldInFieldSetMaybe(
+        self: *BodyLowerer,
+        fields: []const checked_artifact.CheckedRecordField,
+        field_name: canonical.RecordFieldLabelId,
+        field_info: ConcreteTypeInfo,
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if (try self.name_resolver.recordFieldLabel(self.template_lookup.artifact, field.name) != field_name) continue;
+            try self.type_instantiator.unifyTemplateWithConcrete(field.ty, field_info.source_ref);
+            return true;
+        }
+        return false;
     }
 
     fn lowerForExpr(
@@ -4917,10 +5377,11 @@ const BodyLowerer = struct {
         iterable: checked_artifact.CheckedExprId,
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const pattern_ty = try self.type_instantiator.lowerTemplateType(self.checkedPattern(pattern).ty);
+        const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
+        const pattern_ty = try self.listElementTypeFromConcrete(iterable_info.source_ref);
         return try self.program.ast.addExpr(ty, .{ .for_ = .{
             .patt = try self.lowerPattern(pattern_ty, pattern),
-            .iterable = try self.lowerExpr(iterable),
+            .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),
             .body = try self.lowerExpr(body),
         } });
     }
@@ -5022,29 +5483,33 @@ const BodyLowerer = struct {
 
     fn lowerPattern(
         self: *BodyLowerer,
-        expected_ty: Type.TypeId,
+        expected: ConcreteTypeInfo,
         pattern_id: checked_artifact.CheckedPatternId,
     ) Allocator.Error!Ast.PatId {
-        return try self.lowerPatternWithRemaps(expected_ty, pattern_id, &.{});
+        return try self.lowerPatternWithRemaps(expected, pattern_id, &.{});
     }
 
     fn lowerPatternWithRemaps(
         self: *BodyLowerer,
-        expected_ty: Type.TypeId,
+        expected: ConcreteTypeInfo,
         pattern_id: checked_artifact.CheckedPatternId,
         binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
     ) Allocator.Error!Ast.PatId {
         const pattern = self.checkedPattern(pattern_id);
-        const ty = try self.type_instantiator.lowerTemplateType(pattern.ty);
-        const source_ty = try self.sourceTypeKey(pattern.ty);
-        if (!self.program.types.equalIds(ty, expected_ty)) invariantViolation("mono body lowering pattern type did not match its scrutinee type");
+        const ty = expected.ty;
         const lowered = switch (pattern.data) {
-            .assign => |binder| try self.program.ast.addPat(.{ .ty = ty, .data = .{
-                .var_ = try self.symbolForBinder(self.representativeBinderForCandidate(binder, binder_remaps)),
-            } }),
+            .assign => |binder| blk: {
+                const representative = self.representativeBinderForCandidate(binder, binder_remaps);
+                try self.recordConcreteTypeForBinder(representative, expected);
+                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{
+                    .var_ = try self.symbolForBinder(representative),
+                } });
+            },
             .as => |as| {
-                const symbol = try self.symbolForBinder(self.representativeBinderForCandidate(as.binder, binder_remaps));
-                const nested = try self.lowerPatternWithRemaps(ty, as.pattern, binder_remaps);
+                const representative = self.representativeBinderForCandidate(as.binder, binder_remaps);
+                try self.recordConcreteTypeForBinder(representative, expected);
+                const symbol = try self.symbolForBinder(representative);
+                const nested = try self.lowerPatternWithRemaps(expected, as.pattern, binder_remaps);
                 return try self.program.ast.addPat(.{ .ty = ty, .data = .{ .as = .{
                     .pattern = nested,
                     .symbol = symbol,
@@ -5059,10 +5524,13 @@ const BodyLowerer = struct {
 
                 const tag_info = self.tagInfoForUnionType(ty, tag_name);
                 if (tag_info.payload_count != tag.args.len) invariantViolation("mono body lowering tag pattern arity did not match its resolved type");
+                const payload_types = try self.concreteTagPayloadInfosForUnionType(expected.source_ref, tag_name);
+                defer if (payload_types.len != 0) self.allocator.free(payload_types);
+                if (payload_types.len != tag.args.len) invariantViolation("mono body lowering concrete tag pattern payload arity did not match resolved type");
                 const args = try self.allocator.alloc(Ast.PatId, tag.args.len);
                 defer self.allocator.free(args);
                 for (tag.args, 0..) |arg, i| {
-                    args[i] = try self.lowerPatternWithRemaps(tag_info.payload_types[i], arg, binder_remaps);
+                    args[i] = try self.lowerPatternWithRemaps(payload_types[i], arg, binder_remaps);
                 }
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tag = .{
                     .name = tag_name,
@@ -5071,7 +5539,7 @@ const BodyLowerer = struct {
                 } } });
             },
             .nominal => |nominal| blk: {
-                const backing = self.nominalBackingType(ty);
+                const backing = try self.concreteNominalBackingInfo(expected);
                 break :blk try self.program.ast.addPat(.{
                     .ty = ty,
                     .data = .{ .nominal = try self.lowerPatternWithRemaps(backing, nominal.backing_pattern, binder_remaps) },
@@ -5086,16 +5554,17 @@ const BodyLowerer = struct {
                     switch (destruct.kind) {
                         .required, .sub_pattern => |field_pattern| {
                             const label = destruct.label;
+                            const field_info = try self.concreteRecordFieldInfo(expected.source_ref, label);
                             fields[field_count] = .{
                                 .field = label,
-                                .pattern = try self.lowerPatternWithRemaps(self.recordFieldType(ty, label), field_pattern, binder_remaps),
+                                .pattern = try self.lowerPatternWithRemaps(field_info, field_pattern, binder_remaps),
                             };
                             field_count += 1;
                         },
                         .rest => |rest_pattern| {
                             if (rest != null) invariantViolation("mono body lowering record pattern had duplicate rest binders");
                             const rest_checked = self.checkedPattern(rest_pattern);
-                            const rest_ty = try self.type_instantiator.lowerTemplateType(rest_checked.ty);
+                            const rest_ty = try self.concreteTypeInfoForChecked(rest_checked.ty);
                             rest = try self.lowerPatternWithRemaps(rest_ty, rest_pattern, binder_remaps);
                         },
                     }
@@ -5106,7 +5575,8 @@ const BodyLowerer = struct {
                 } } });
             },
             .tuple => |items| blk: {
-                const item_types = self.tupleElementTypes(ty, items.len);
+                const item_types = try self.concreteTupleElementInfos(expected.source_ref, items.len);
+                defer if (item_types.len != 0) self.allocator.free(item_types);
                 const lowered = try self.allocator.alloc(Ast.PatId, items.len);
                 defer self.allocator.free(lowered);
                 for (items, 0..) |item, i| {
@@ -5115,7 +5585,7 @@ const BodyLowerer = struct {
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .tuple = try self.program.ast.addPatSpan(lowered) } });
             },
             .list => |list| blk: {
-                const elem_ty = self.listElementType(ty);
+                const elem_ty = try self.listElementTypeFromConcrete(expected.source_ref);
                 const lowered = try self.allocator.alloc(Ast.PatId, list.patterns.len);
                 defer self.allocator.free(lowered);
                 for (list.patterns, 0..) |item, i| {
@@ -5123,7 +5593,7 @@ const BodyLowerer = struct {
                 }
                 const rest: ?Ast.ListRestPattern = if (list.rest) |rest_info| .{
                     .index = rest_info.index,
-                    .pattern = if (rest_info.pattern) |rest_pattern| try self.lowerPatternWithRemaps(ty, rest_pattern, binder_remaps) else null,
+                    .pattern = if (rest_info.pattern) |rest_pattern| try self.lowerPatternWithRemaps(expected, rest_pattern, binder_remaps) else null,
                 } else null;
                 break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .list = .{
                     .items = try self.program.ast.addPatSpan(lowered),
@@ -5140,7 +5610,7 @@ const BodyLowerer = struct {
             .runtime_error => invariantViolation("mono body lowering reached runtime_error checked pattern"),
             .pending => invariantViolation("mono body lowering reached an unresolved checked pattern"),
         };
-        self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = source_ty;
+        self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = expected.source_ty;
         return lowered;
     }
 
@@ -5156,22 +5626,6 @@ const BodyLowerer = struct {
         return binder;
     }
 
-    fn recordFieldType(
-        self: *BodyLowerer,
-        record_ty: Type.TypeId,
-        field_name: canonical.RecordFieldLabelId,
-    ) Type.TypeId {
-        return switch (self.program.types.getType(record_ty)) {
-            .record => |record| {
-                for (record.fields) |field| {
-                    if (field.name == field_name) return field.ty;
-                }
-                invariantViolation("mono body lowering could not find record pattern field in resolved record type");
-            },
-            else => invariantViolation("mono body lowering expected a resolved record type for record pattern"),
-        };
-    }
-
     fn nominalBackingType(self: *BodyLowerer, nominal_ty: Type.TypeId) Type.TypeId {
         return switch (self.program.types.getTypePreservingNominal(nominal_ty)) {
             .nominal => |nominal| nominal.backing,
@@ -5179,21 +5633,43 @@ const BodyLowerer = struct {
         };
     }
 
-    fn tupleElementTypes(self: *BodyLowerer, tuple_ty: Type.TypeId, expected_len: usize) []const Type.TypeId {
-        switch (self.program.types.getType(tuple_ty)) {
-            .tuple => |items| {
-                if (items.len != expected_len) invariantViolation("mono body lowering tuple pattern arity did not match its resolved type");
-                return items;
-            },
-            else => invariantViolation("mono body lowering expected a resolved tuple type"),
+    fn concreteNominalBackingInfo(
+        self: *BodyLowerer,
+        nominal_info: ConcreteTypeInfo,
+    ) Allocator.Error!ConcreteTypeInfo {
+        var current = nominal_info.source_ref;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
+                .nominal => |nominal| {
+                    const backing_ref = try self.type_instantiator.concreteNominalBackingRef(current, nominal);
+                    return .{
+                        .ty = self.nominalBackingType(nominal_info.ty),
+                        .source_ty = self.program.concrete_source_types.key(backing_ref),
+                        .source_ref = backing_ref,
+                    };
+                },
+                else => invariantViolation("mono body lowering expected concrete nominal type for nominal pattern"),
+            }
         }
     }
 
-    fn listElementType(self: *BodyLowerer, list_ty: Type.TypeId) Type.TypeId {
-        return switch (self.program.types.getType(list_ty)) {
-            .list => |elem| elem,
-            else => invariantViolation("mono body lowering expected a resolved List(T) type"),
-        };
+    fn concreteTupleElementInfos(
+        self: *BodyLowerer,
+        tuple_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        expected_len: usize,
+    ) Allocator.Error![]const ConcreteTypeInfo {
+        var current = tuple_ref;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
+                .tuple => |items| {
+                    if (items.len != expected_len) invariantViolation("mono body lowering tuple pattern arity did not match concrete source type");
+                    return try self.concreteTypeInfosForChildren(current, items);
+                },
+                else => invariantViolation("mono body lowering expected concrete tuple type for tuple pattern"),
+            }
+        }
     }
 
     const TagInfo = struct {
@@ -5245,8 +5721,8 @@ const BodyLowerer = struct {
         name: canonical.TagLabelId,
     ) Allocator.Error![]const ConcreteTypeInfo {
         return switch (self.type_instantiator.concretePayload(union_ref)) {
-            .alias => |alias| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteChildRef(union_ref, alias.backing), name),
-            .nominal => |nominal| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteChildRef(union_ref, nominal.backing), name),
+            .alias => |alias| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteAliasBackingRef(union_ref, alias), name),
+            .nominal => |nominal| try self.concreteTagPayloadInfosForUnionType(try self.type_instantiator.concreteNominalBackingRef(union_ref, nominal), name),
             .tag_union => |tag_union| blk: {
                 if (try self.type_instantiator.findConcreteTag(union_ref, tag_union.tags, name)) |tag| {
                     break :blk try self.concreteTypeInfosForChildren(union_ref, tag.args);
@@ -5346,7 +5822,8 @@ const BodyLowerer = struct {
         const statement = self.checkedStatement(statement_id);
         return switch (statement.data) {
             .decl => |decl| blk: {
-                const body_ty = try self.concreteResultTypeForExpr(decl.expr, self.checkedPattern(decl.pattern).ty);
+                const body_ty = self.concreteTypeForPatternBinder(decl.pattern) orelse
+                    try self.concreteResultTypeForExpr(decl.expr, self.checkedPattern(decl.pattern).ty);
                 const bind = try self.lowerParamPatternWithType(decl.pattern, body_ty);
                 if (try self.lowerLocalFunctionDecl(bind, decl.expr)) |local_fn| {
                     break :blk try self.program.ast.addStmt(.{ .local_fn = local_fn });
@@ -5395,10 +5872,11 @@ const BodyLowerer = struct {
         iterable: checked_artifact.CheckedExprId,
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.StmtId {
-        const pattern_ty = try self.type_instantiator.lowerTemplateType(self.checkedPattern(pattern).ty);
+        const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
+        const pattern_ty = try self.listElementTypeFromConcrete(iterable_info.source_ref);
         return try self.program.ast.addStmt(.{ .for_ = .{
             .patt = try self.lowerPattern(pattern_ty, pattern),
-            .iterable = try self.lowerExpr(iterable),
+            .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),
             .body = try self.lowerExpr(body),
         } });
     }

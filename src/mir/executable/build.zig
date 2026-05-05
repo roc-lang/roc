@@ -332,6 +332,7 @@ fn collectErasedAdapterKeys(
                 .already_erased,
                 .finite,
                 .erase_proc_value,
+                .pending_proc_value,
                 => {},
             }
         }
@@ -6267,6 +6268,7 @@ const BodyBuilder = struct {
         const callable = value_info.callable orelse executableInvariant("executable proc_value reached value without callable metadata");
         const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
         switch (emission) {
+            .pending_proc_value => executableInvariant("executable proc_value reached pending callable emission"),
             .finite => {},
             .erase_proc_value => |erase| return try self.lowerProcValueErased(source_ty, value_info_id, callable, proc_value, erase),
             .erase_finite_set => |erase| return try self.lowerFiniteSetValueErased(source_ty, value_info_id, callable, proc_value, erase),
@@ -6624,6 +6626,7 @@ const BodyBuilder = struct {
         const callable = func_value_info.callable orelse executableInvariant("executable call_value callee has no callable metadata");
         const emission = self.representation_store.callableEmissionPlan(callable.emission_plan);
         switch (emission) {
+            .pending_proc_value => executableInvariant("executable call_value finite dispatch reached pending callable emission"),
             .finite => |key| if (!repr.callableSetKeyEql(key, callable_set_key)) {
                 executableInvariant("executable call_value call-site dispatch differs from callee finite emission");
             },
@@ -6770,6 +6773,7 @@ const BodyBuilder = struct {
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
         const callable = func_value_info.callable orelse executableInvariant("executable erased call_value callee has no callable metadata");
         switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .pending_proc_value => executableInvariant("executable erased call_value reached pending callable emission"),
             .already_erased => |erased| if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
                 executableInvariant("executable erased call_value call-site dispatch differs from already-erased callee emission");
             },

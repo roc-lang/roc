@@ -24,6 +24,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         const body = proc.body orelse continue;
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
+        for (store.getLocalSpan(proc.args)) |param| {
+            inserter.addOwnedIfRc(&owned, param);
+        }
         proc.body = try inserter.rewritePath(body, &owned, .{});
     }
 }
@@ -38,6 +41,11 @@ const RewriteOptions = struct {
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
+
+    const CallArgOwnership = struct {
+        retain_mask: u64 = 0,
+        transfer_mask: u64 = 0,
+    };
 
     fn rewritePath(self: *Inserter, start: LIR.CFStmtId, owned: *OwnedSet, options: RewriteOptions) ResourceError!LIR.CFStmtId {
         if (options.stop) |stop| {
@@ -76,13 +84,11 @@ const Inserter = struct {
             },
             .assign_call => |assign| {
                 var current_start = start;
-                const preserve_args = try self.preserveCallArgMask(assign.args, assign.next, assign.target);
-                if (self.spanUsesLocal(assign.args, assign.target)) {
-                    owned.unset(assign.target);
-                } else {
+                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target);
+                if (!self.spanUsesLocal(assign.args, assign.target)) {
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
                 }
-                self.unsetMaskedArgsExcept(owned, assign.args, ~preserve_args, assign.target);
+                self.unsetMaskedArgs(owned, assign.args, arg_ownership.transfer_mask);
                 self.addOwnedIfRc(owned, assign.target);
                 const next = try self.rewritePath(assign.next, owned, options);
                 self.store.getCFStmtPtr(start).* = .{ .assign_call = .{
@@ -91,7 +97,7 @@ const Inserter = struct {
                     .args = assign.args,
                     .next = next,
                 } };
-                current_start = try self.retainMaskedArgs(assign.args, preserve_args, current_start);
+                current_start = try self.retainMaskedArgs(assign.args, arg_ownership.retain_mask, current_start);
                 return current_start;
             },
             .assign_call_erased => |assign| {
@@ -550,21 +556,34 @@ const Inserter = struct {
         return preserve;
     }
 
-    fn preserveCallArgMask(
+    fn callArgOwnership(
         self: *Inserter,
+        owned: *const OwnedSet,
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-    ) ResourceError!u64 {
-        var preserve: u64 = 0;
+    ) ResourceError!CallArgOwnership {
+        var result = CallArgOwnership{};
+        var transferred = try OwnedSet.init(self.store.allocator, owned.bits.len);
+        defer transferred.deinit();
+
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
-            if (local == target) continue;
-            if (try self.localUsedInPath(next, local)) {
-                preserve |= argMaskBit(i);
+            if (!self.localContainsRefcounted(local)) continue;
+
+            const bit = argMaskBit(i);
+            const used_after_call = local != target and try self.localUsedInPath(next, local);
+            const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
+
+            if (can_transfer) {
+                result.transfer_mask |= bit;
+                transferred.set(local);
+            } else {
+                result.retain_mask |= bit;
             }
         }
-        return preserve;
+
+        return result;
     }
 
     fn maskedArgsContainLocal(self: *Inserter, span: LIR.LocalSpan, mask: u64, needle: LIR.LocalId) bool {
@@ -587,6 +606,21 @@ const Inserter = struct {
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
             if ((mask & argMaskBit(i)) != 0 and local != except) {
+                owned.unset(local);
+            }
+        }
+    }
+
+    fn unsetMaskedArgs(
+        self: *Inserter,
+        owned: *OwnedSet,
+        span: LIR.LocalSpan,
+        mask: u64,
+    ) void {
+        if (mask == 0) return;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if ((mask & argMaskBit(i)) != 0) {
                 owned.unset(local);
             }
         }

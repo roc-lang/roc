@@ -1297,8 +1297,29 @@ fn numericDefaultPhaseForConstraints(
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
     for (constraints) |constraint| {
         if (constraint.origin == .from_numeral) return .mono_specialization;
+        if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
     return null;
+}
+
+fn isDefaultableArithmeticConstraint(
+    module: TypedCIR.Module,
+    constraint: types.StaticDispatchConstraint,
+) bool {
+    const idents = module.commonIdents();
+    return switch (constraint.origin) {
+        .desugared_binop => constraint.fn_name.eql(idents.plus) or
+            constraint.fn_name.eql(idents.minus) or
+            constraint.fn_name.eql(idents.times) or
+            constraint.fn_name.eql(idents.div_by) or
+            constraint.fn_name.eql(idents.div_trunc_by) or
+            constraint.fn_name.eql(idents.rem_by),
+        .desugared_unaryop => constraint.fn_name.eql(idents.negate),
+        .from_numeral,
+        .method_call,
+        .where_clause,
+        => false,
+    };
 }
 
 fn copyCheckedFlatType(
@@ -4730,7 +4751,7 @@ fn sealCheckedProcedureTemplateRefs(
     static_dispatch_plans: *static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: *ResolvedValueRefTable,
 ) Allocator.Error!void {
-    var collector = CheckedTemplateRefCollector.init(allocator, checked_bodies);
+    var collector = CheckedTemplateRefCollector.init(allocator, checked_bodies, static_dispatch_plans);
     defer collector.deinit();
 
     for (templates.templates) |*template| {
@@ -4795,16 +4816,22 @@ fn sealConstEvalTemplatesForRoots(
 const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     value_refs: std.ArrayList(ResolvedValueRefId),
     dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
     visited_exprs: std.AutoHashMap(CheckedExprId, void),
     visited_patterns: std.AutoHashMap(CheckedPatternId, void),
     visited_statements: std.AutoHashMap(CheckedStatementId, void),
 
-    fn init(allocator: Allocator, checked_bodies: *const CheckedBodyStore) CheckedTemplateRefCollector {
+    fn init(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) CheckedTemplateRefCollector {
         return .{
             .allocator = allocator,
             .checked_bodies = checked_bodies,
+            .static_dispatch_plans = static_dispatch_plans,
             .value_refs = .empty,
             .dispatch_refs = .empty,
             .visited_exprs = std.AutoHashMap(CheckedExprId, void).init(allocator),
@@ -4848,7 +4875,9 @@ const CheckedTemplateRefCollector = struct {
             .method_eq,
             .type_dispatch_call,
             => |plan_id| {
-                if (plan_id) |id| try self.dispatch_refs.append(self.allocator, id);
+                const id = plan_id orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
             },
             .str,
             .list,
@@ -4941,6 +4970,18 @@ const CheckedTemplateRefCollector = struct {
             .pending,
             => {},
         }
+    }
+
+    fn collectStaticDispatchPlanArgs(
+        self: *CheckedTemplateRefCollector,
+        plan_id: static_dispatch.StaticDispatchPlanId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.static_dispatch_plans.plans.len) {
+            checkedArtifactInvariant("checked template static-dispatch plan id was outside the plan table", .{});
+        }
+        const plan = self.static_dispatch_plans.plans[raw];
+        for (plan.args) |arg| try self.collectExpr(arg);
     }
 
     fn collectPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {
@@ -5079,10 +5120,11 @@ pub const NestedProcSiteTable = struct {
     pub fn fromTemplates(
         allocator: Allocator,
         checked_bodies: *const CheckedBodyStore,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
     ) Allocator.Error!NestedProcSiteTable {
-        var builder = NestedProcSiteBuilder.init(allocator, checked_bodies);
+        var builder = NestedProcSiteBuilder.init(allocator, checked_bodies, static_dispatch_plans);
         defer builder.deinitScratch();
         errdefer builder.deinitAll();
 
@@ -5348,14 +5390,20 @@ pub const CheckedProcedureTemplateTableView = struct {
 const NestedProcSiteBuilder = struct {
     allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     sites: std.ArrayList(NestedProcSite),
     template_refs: std.ArrayList(canonical.NestedProcSiteId),
     path: std.ArrayList(NestedProcPathComponent),
 
-    fn init(allocator: Allocator, checked_bodies: *const CheckedBodyStore) NestedProcSiteBuilder {
+    fn init(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) NestedProcSiteBuilder {
         return .{
             .allocator = allocator,
             .checked_bodies = checked_bodies,
+            .static_dispatch_plans = static_dispatch_plans,
             .sites = .empty,
             .template_refs = .empty,
             .path = .empty,
@@ -5371,7 +5419,7 @@ const NestedProcSiteBuilder = struct {
         self.sites.deinit(self.allocator);
         self.template_refs.deinit(self.allocator);
         self.path.deinit(self.allocator);
-        self.* = NestedProcSiteBuilder.init(self.allocator, self.checked_bodies);
+        self.* = NestedProcSiteBuilder.init(self.allocator, self.checked_bodies, self.static_dispatch_plans);
     }
 
     fn scanCheckedBody(
@@ -5492,6 +5540,10 @@ const NestedProcSiteBuilder = struct {
                 // lowering, not an owned child expression.
             },
             .field_access => |field| try self.scanExpr(field.receiver, owner, false),
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
@@ -5526,9 +5578,6 @@ const NestedProcSiteBuilder = struct {
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .dispatch_call,
-            .method_eq,
-            .type_dispatch_call,
             .runtime_error,
             .crash,
             .ellipsis,
@@ -5536,6 +5585,19 @@ const NestedProcSiteBuilder = struct {
             .pending,
             => {},
         }
+    }
+
+    fn scanStaticDispatchPlanArgs(
+        self: *NestedProcSiteBuilder,
+        plan_id: static_dispatch.StaticDispatchPlanId,
+        owner: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.static_dispatch_plans.plans.len) {
+            checkedArtifactInvariant("checked template static-dispatch plan id was outside the plan table", .{});
+        }
+        const plan = self.static_dispatch_plans.plans[raw];
+        for (plan.args) |arg| try self.scanExpr(arg, owner, false);
     }
 
     fn scanPattern(
@@ -12797,7 +12859,7 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
     );
 
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &entry_wrappers, &checked_procedure_templates);
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, &checked_bodies, &static_dispatch_plans, &entry_wrappers, &checked_procedure_templates);
     errdefer nested_proc_sites.deinit(allocator);
 
     sealConstEvalTemplatesForRoots(
