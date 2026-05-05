@@ -3003,14 +3003,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (inputs.len == 0) {
             representationInvariant("session executable type payload join has no returning inputs");
         }
-        const first = try self.endpointForValue(inputs[0].value);
-        for (inputs[1..]) |input| {
-            const endpoint = try self.endpointForValue(input.value);
-            if (!canonicalExecValueTypeKeyEql(first.key, endpoint.key)) {
-                representationInvariant("session executable type payload join inputs have different executable representations");
-            }
-        }
-        return first;
+        return try self.endpointForRootType(join.root, values.values.items[@intFromEnum(value)].logical_ty);
     }
 
     fn childForType(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayloadChild {
@@ -4042,14 +4035,15 @@ const ExecValueTypeKeyBuilder = struct {
         if (inputs.len == 0) {
             representationInvariant("executable value type key join has no returning inputs");
         }
-        const first = try self.valueKeySnapshot(inputs[0].value);
-        for (inputs[1..]) |input| {
-            const input_key = try self.valueKeySnapshot(input.value);
-            if (!canonicalExecValueTypeKeyEql(first, input_key)) {
-                representationInvariant("executable value type key join inputs have different executable representations");
-            }
-        }
-        return first;
+        return try execValueTypeKeyForRootType(
+            self.allocator,
+            self.names,
+            self.rowShapes(),
+            self.types,
+            self.representationStore(),
+            join.root,
+            values.values.items[@intFromEnum(value)].logical_ty,
+        );
     }
 
     fn writeValue(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!void {

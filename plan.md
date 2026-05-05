@@ -4311,6 +4311,36 @@ lambda-solved lowering. Later stages must not infer those ids from source syntax
 pattern text, branch body equality, or the index of a value in the join input
 array.
 
+The join result's executable representation is owned by `JoinInfo.result` and
+`JoinInfo.root`, not by any particular incoming value. Lambda-solved MIR must
+compute the join result executable type key and endpoint from:
+
+- the result value's logical type
+- the result value's `RepRootId`
+- the solved representation class reachable from that result root
+
+It must not compute the join result key by choosing the first incoming branch
+value, and it must not require incoming branch executable representations to be
+byte-identical. Different incoming branch values often have different immediate
+construction representations even though they flow into one checked result
+type. For example:
+
+```roc
+x = Ok(1)
+y = if Bool.False Ok(1) else Err(1)
+
+x == y
+```
+
+The `then` branch constructs the `Ok` payload directly and the `else` branch
+constructs the `Err` payload directly. The `if` result is the full
+`[Ok(I64), Err(I64)]` join result, with one mandatory input transform from each
+returning branch into the join endpoint. The same rule applies to source
+`match` branch results and loop phis. Treating different branch input
+representations as an invariant violation is a compiler bug in the lowering
+implementation, not a user-facing type error and not a reason to rebuild shape
+information downstream.
+
 Only incoming expressions that actually produce the join value appear in
 `inputs`. A branch body that is `return`, `crash`, or `runtime_error` does not
 flow a value into the surrounding join, so lambda-solved MIR must not publish a
