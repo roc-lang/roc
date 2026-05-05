@@ -133,10 +133,6 @@ pub fn run(
     program.row_shapes = input.row_shapes;
     input.row_shapes = MonoRow.Store.init(allocator);
 
-    var proc_map = std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId).init(allocator);
-    defer proc_map.deinit();
-    var proc_instance_map = std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId).init(allocator);
-    defer proc_instance_map.deinit();
     var proc_exec_map = std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId).init(allocator);
     defer proc_exec_map.deinit();
     const normal_proc_count = input.procs.items.len;
@@ -146,18 +142,10 @@ pub fn run(
     const erased_adapter_proc_count = erased_adapter_keys.items.len;
     const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_adapter_proc_count;
 
-    try proc_map.ensureTotalCapacity(@intCast(total_proc_count));
-    try proc_instance_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len));
     for (input.procs.items, 0..) |proc, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
-        proc_map.putAssumeCapacity(proc.proc, executable_proc);
-        proc_instance_map.putAssumeCapacity(proc.proc, proc.representation_instance);
         proc_exec_map.putAssumeCapacity(proc.representation_instance, executable_proc);
-    }
-    for (input.executable_synthetic_procs.items, 0..) |proc, i| {
-        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + i)));
-        proc_map.putAssumeCapacity(proc.source_proc, executable_proc);
     }
     try program.erased_adapter_procs.ensureTotalCapacity(allocator, erased_adapter_proc_count);
     for (erased_adapter_keys.items, 0..) |adapter, i| {
@@ -197,8 +185,6 @@ pub fn run(
             .proc_instances = input.proc_instances.items,
             .solve_sessions = input.solve_sessions.items,
             .value_stores = input.value_stores.items,
-            .proc_map = &proc_map,
-            .proc_instance_map = &proc_instance_map,
             .proc_exec_map = &proc_exec_map,
             .erased_adapter_procs = program.erased_adapter_procs.items,
         };
@@ -222,7 +208,7 @@ pub fn run(
         program.procs.appendAssumeCapacity(.{
             .executable_proc = adapter.executable_proc,
             .origin = .{ .erased_adapter = adapter.key },
-            .body = try lowerErasedFiniteSetAdapterProc(allocator, &program, &input, &type_lowerer, &proc_map, &proc_instance_map, &proc_exec_map, adapter.key, adapter.executable_proc),
+            .body = try lowerErasedFiniteSetAdapterProc(allocator, &program, &input, &type_lowerer, &proc_exec_map, adapter.key, adapter.executable_proc),
         });
     }
 
@@ -878,8 +864,6 @@ fn lowerErasedFiniteSetAdapterProc(
     program: *Program,
     input: *const LambdaSolved.Solve.Program,
     type_lowerer: *TypeLowerer,
-    proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
-    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
     adapter: repr.ErasedAdapterKey,
     executable_proc: Ast.ExecutableProcId,
@@ -892,9 +876,7 @@ fn lowerErasedFiniteSetAdapterProc(
     }
 
     const first_member = descriptor.members[0];
-    const first_instance_id = proc_instance_map.get(first_member.source_proc) orelse {
-        executableInvariant("executable erased finite-set adapter first member has no representation instance");
-    };
+    const first_instance_id = first_member.target_instance;
     const first_instance = &input.proc_instances.items[@intFromEnum(first_instance_id)];
     if (!repr.canonicalTypeKeyEql(first_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
         executableInvariant("executable erased finite-set adapter source function type differs from first member specialization");
@@ -922,8 +904,6 @@ fn lowerErasedFiniteSetAdapterProc(
         .proc_instances = input.proc_instances.items,
         .solve_sessions = input.solve_sessions.items,
         .value_stores = input.value_stores.items,
-        .proc_map = proc_map,
-        .proc_instance_map = proc_instance_map,
         .proc_exec_map = proc_exec_map,
         .erased_adapter_procs = program.erased_adapter_procs.items,
     };
@@ -1076,13 +1056,14 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
         if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, adapter.source_fn_ty)) {
             executableInvariant("executable erased finite-set adapter member source type differs from adapter key");
         }
-        const executable_proc = builder.proc_map.get(member.source_proc) orelse {
+        const target_instance_id = member.target_instance;
+        const executable_proc = builder.proc_exec_map.get(target_instance_id) orelse {
             executableInvariant("executable erased finite-set adapter member target was not reserved");
         };
-        const target_instance_id = builder.proc_instance_map.get(member.source_proc) orelse {
-            executableInvariant("executable erased finite-set adapter member target has no representation instance");
-        };
         const target_instance = builder.proc_instances[@intFromEnum(target_instance_id)];
+        if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+            executableInvariant("executable erased finite-set adapter member target instance differs from descriptor source procedure");
+        }
         if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
             executableInvariant("executable erased finite-set adapter member target specialization source type differs from adapter key");
         }
@@ -4176,8 +4157,6 @@ const BodyBuilder = struct {
     proc_instances: []const repr.ProcRepresentationInstance,
     solve_sessions: []const repr.RepresentationSolveSession,
     value_stores: []const repr.ValueInfoStore,
-    proc_map: *const std.AutoHashMap(canonical.MirProcedureRef, Ast.ExecutableProcId),
-    proc_instance_map: *const std.AutoHashMap(canonical.MirProcedureRef, repr.ProcRepresentationInstanceId),
     proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
     erased_adapter_procs: []const ErasedAdapterProcReservation,
     capture_record_arg: ?Ast.TypedValue = null,
@@ -6968,6 +6947,9 @@ const BodyBuilder = struct {
         }
         if (capture_info.source_capture_value != source_capture) {
             executableInvariant("executable callable construction capture boundary source differs from capture arg");
+        }
+        if (capture_info.target_instance != member.target_instance) {
+            executableInvariant("executable callable construction capture boundary target instance differs from descriptor member");
         }
         const from = switch (boundary.from_endpoint.owner) {
             .local_value => |value| value,

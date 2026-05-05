@@ -1916,7 +1916,7 @@ const ComptimeGraphCloner = struct {
 
 fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
-    descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     layouts: *const layout_mod.Store,
     result_plan_id: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
@@ -2659,7 +2659,7 @@ const PrivateCaptureBuilder = struct {
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     layouts: *const layout_mod.Store,
-    callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    callable_set_descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     owner: ?checked_artifact.PromotedProcedureRef,
     promotion_context: ?PromotedCallablePublicationContext,
     dependencies: ?*ConcreteDependencyCollector = null,
@@ -3344,9 +3344,9 @@ fn callableResultMember(
 }
 
 fn callableSetDescriptor(
-    descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     key: check.CanonicalNames.CanonicalCallableSetKey,
-) ?*const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor {
+) ?*const check.CanonicalNames.CanonicalCallableSetDescriptor {
     for (descriptors) |*descriptor| {
         if (mir.LambdaSolved.Representation.callableSetKeyEql(descriptor.key, key)) return descriptor;
     }
@@ -3354,7 +3354,7 @@ fn callableSetDescriptor(
 }
 
 fn callableSetMember(
-    descriptor: *const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    descriptor: *const check.CanonicalNames.CanonicalCallableSetDescriptor,
     member_id: check.CanonicalNames.CallableSetMemberId,
 ) ?*const check.CanonicalNames.CanonicalCallableSetMember {
     for (descriptor.members) |*member| {
@@ -3452,7 +3452,7 @@ const ComptimeReifier = struct {
     checked_types: *const checked_artifact.CheckedTypeStore,
     layouts: *const layout_mod.Store,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
-    callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+    callable_set_descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     promotion_context: ?PromotedCallablePublicationContext = null,
     dependencies: ?*ConcreteDependencyCollector = null,
 

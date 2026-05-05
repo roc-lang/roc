@@ -2889,10 +2889,11 @@ This is also mandatory for `proc_value`. A `proc_value` may become a
 callable-set value or packed erased function value later, but lambda-solved MIR
 must own that decision.
 
-Lambda-solved callable sets are canonical finite maps:
+Lambda-solved callable sets are canonical finite maps of exact callable member
+instances:
 
 ```text
-ProcedureCallableRef -> capture slots with capture types
+(ProcedureCallableRef, ProcRepresentationInstanceId) -> capture slots with capture types
 ```
 
 Unification of two callable sets is exact:
@@ -2916,12 +2917,97 @@ const CallableMemberInstanceId = struct {
 };
 ```
 
-The exact Zig field names may differ, but the scope must not. A capture-slot
-mismatch is an invariant violation only when both callable-set entries refer to
-the same `CallableMemberInstanceId` in the same specialization-local
-lambda-solved type store. The same source procedure may appear in different mono
-or executable specializations with different instantiated capture types; those
-are different callable member instances, not a global capture-slot conflict.
+The exact Zig field names may differ, but the scope must not. The callable-set
+descriptor member must carry the exact `ProcRepresentationInstanceId` selected
+when the `proc_value`, promoted callable, erased adapter, or callable-match
+member was reserved. A descriptor member may also carry the source
+`MirProcedureRef` for debug verification and executable origin metadata, but
+`source_proc` is not a target lookup key after lambda-solved reservation.
+
+Every later edge and lowering step must use the descriptor member's exact
+`ProcRepresentationInstanceId`:
+
+- call-value finite branch argument and result edges target that instance
+- callable construction capture edges target that instance's public capture
+  roots
+- capture executable payload publication reads that instance's capture roots
+- finite-set erased adapter lowering emits branches to that instance's
+  executable procedure
+- executable `callable_match` branches verify that the branch target instance's
+  `proc` matches the descriptor member's `source_proc`
+
+Looking up a callable-set branch target by `source_proc`, source symbol,
+procedure display name, source function type, or descriptor member index is
+forbidden. Those lookups are not precise enough because one source procedure at
+one fixed-arity source function type may legitimately have multiple provisional
+representation instances in the same solve session. For example:
+
+```roc
+{
+    apply = |f, x| f(x)
+    a = 10
+    b = 20
+
+    r1 = apply(|x| x + a, 5)
+    r2 = apply(|x| x + b, 5)
+
+    r1 + r2
+}
+```
+
+Here `apply` itself may be reserved once as a finite procedure value and also
+reserved from the two direct uses that invoke it. The lambda-solved graph must
+not recover the selected branch target by asking for "the instance whose source
+procedure is `apply`"; that can select the wrong provisional instance and leave
+another instance with a function-typed parameter but no finite callable members.
+The callable-set member already knows the exact reserved instance, and that is
+the single source of truth.
+
+Checked artifacts may still publish target-free callable-set descriptor
+metadata for compile-time value reification, cache validation, and dependency
+summaries. That artifact metadata is not an executable lowering descriptor. It
+may contain `ProcedureCallableRef`, `source_proc`, member ids, capture slot
+schemas, and `capture_shape_key`, but it must not pretend to know a
+`ProcRepresentationInstanceId` from a previous lowering run. A
+`ProcRepresentationInstanceId` is local to one lambda-solved solve session.
+
+Therefore the compiler has two distinct descriptor roles:
+
+```zig
+const ArtifactCallableSetMember = struct {
+    member: CallableSetMemberId,
+    proc_value: ProcedureCallableRef,
+    source_proc: MirProcedureRef,
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+
+const LambdaSolvedCallableSetMember = struct {
+    member: CallableSetMemberId,
+    proc_value: ProcedureCallableRef,
+    source_proc: MirProcedureRef,
+    target_instance: ProcRepresentationInstanceId,
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+```
+
+Artifact descriptors are allowed only in artifact publication/reification code.
+Lambda-solved descriptors are required for executable MIR, value-transform
+finalization, finite callable-set erased adapters, `callable_match`, compile-time
+dependency summaries for the current lowering run, and any stage that must emit
+or call code. Moving from an artifact finite callable descriptor to executable
+code requires re-entering the normal MIR-family lowering path so the current
+solve session reserves exact member instances. It must not reuse or recover a
+session-local target id from cached artifact data, and it must not look up a
+target by `source_proc`.
+
+A capture-slot mismatch is an invariant violation only when both callable-set
+entries refer to the same `CallableMemberInstanceId` in the same
+specialization-local lambda-solved type store. The same source procedure may
+appear in different mono or executable specializations with different
+instantiated capture types; those are different callable member instances, not a
+global capture-slot conflict.
 
 This algebra is not an optimization. It is the exported lambda-solved contract
 that executable MIR consumes.

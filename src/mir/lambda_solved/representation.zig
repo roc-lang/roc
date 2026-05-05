@@ -255,9 +255,23 @@ pub const ErasedFnAbiStore = canonical.ErasedFnAbiStore;
 pub const ErasedFnSigKey = canonical.ErasedFnSigKey;
 pub const CallableSetMemberRef = canonical.CallableSetMemberRef;
 pub const CallableSetCaptureSlot = canonical.CallableSetCaptureSlot;
-pub const CanonicalCallableSetMember = canonical.CanonicalCallableSetMember;
-pub const CanonicalCallableSetDescriptor = canonical.CanonicalCallableSetDescriptor;
 pub const ExecutablePrimitive = checked_artifact.ExecutablePrimitive;
+
+/// Public `CanonicalCallableSetMember` declaration.
+pub const CanonicalCallableSetMember = struct {
+    member: CallableSetMemberId,
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+    target_instance: ProcRepresentationInstanceId,
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+
+/// Public `CanonicalCallableSetDescriptor` declaration.
+pub const CanonicalCallableSetDescriptor = struct {
+    key: CanonicalCallableSetKey,
+    members: []const CanonicalCallableSetMember,
+};
 
 /// Public `SessionExecutableTypePayloadId` declaration.
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
@@ -2007,13 +2021,14 @@ pub const RepresentationStore = struct {
         errdefer if (!descriptor_owned and capture_slots.len > 0) self.allocator.free(capture_slots);
 
         const proc_callable = proc.callable;
-        const callable_set_key = singletonCallableSetKey(proc_callable, capture_shape_key, capture_slots);
+        const callable_set_key = singletonCallableSetKey(proc_callable, target_instance, capture_shape_key, capture_slots);
         const member_id: CallableSetMemberId = @enumFromInt(0);
         if (self.callableSetDescriptor(callable_set_key) == null) {
             const members = try self.allocator.dupe(CanonicalCallableSetMember, &.{.{
                 .member = member_id,
                 .proc_value = proc_callable,
                 .source_proc = proc,
+                .target_instance = target_instance,
                 .capture_slots = capture_slots,
                 .capture_shape_key = capture_shape_key,
             }});
@@ -2186,6 +2201,7 @@ pub const RepresentationStore = struct {
             .member = @enumFromInt(0),
             .proc_value = members[0].proc_value,
             .source_proc = members[0].source_proc,
+            .target_instance = members[0].target_instance,
             .capture_slots = &.{},
             .capture_shape_key = .{},
         };
@@ -2200,6 +2216,7 @@ pub const RepresentationStore = struct {
                 .member = @enumFromInt(@as(u32, @intCast(i))),
                 .proc_value = member.proc_value,
                 .source_proc = member.source_proc,
+                .target_instance = member.target_instance,
                 .capture_slots = if (member.capture_slots.len == 0)
                     &.{}
                 else
@@ -3866,12 +3883,14 @@ const SessionExecutableTypePayloadBuilder = struct {
 /// Public `singletonCallableSetKey` function.
 pub fn singletonCallableSetKey(
     proc_callable: canonical.ProcedureCallableRef,
+    target_instance: ProcRepresentationInstanceId,
     capture_shape_key: CaptureShapeKey,
     capture_slots: []const CallableSetCaptureSlot,
 ) CanonicalCallableSetKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "singleton_callable_set");
     writeProcedureCallableRef(&hasher, proc_callable);
+    writeHashU32(&hasher, @intFromEnum(target_instance));
     hasher.update(&capture_shape_key.bytes);
     writeHashU32(&hasher, @intCast(capture_slots.len));
     for (capture_slots) |slot| {
@@ -3889,6 +3908,7 @@ pub fn callableSetKeyForMembers(
     if (members.len == 1) {
         return singletonCallableSetKey(
             members[0].proc_value,
+            members[0].target_instance,
             members[0].capture_shape_key,
             members[0].capture_slots,
         );
@@ -3901,6 +3921,7 @@ pub fn callableSetKeyForMembers(
         writeHashU32(&hasher, @intFromEnum(member.member));
         writeMirProcedureRef(&hasher, member.source_proc);
         writeProcedureCallableRef(&hasher, member.proc_value);
+        writeHashU32(&hasher, @intFromEnum(member.target_instance));
         hasher.update(&member.capture_shape_key.bytes);
         writeHashU32(&hasher, @intCast(member.capture_slots.len));
         for (member.capture_slots) |slot| {

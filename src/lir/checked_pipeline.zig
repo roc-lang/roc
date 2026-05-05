@@ -276,6 +276,7 @@ pub fn summarizeCompileTimeDependencies(
         artifacts.root.artifact,
         artifact_sink,
         &solved,
+        callable_set_descriptors.descriptors,
         selected_entrypoints,
         compile_time_payloads,
     );
@@ -433,26 +434,24 @@ fn callableSetDescriptorsForLowering(
     roots: RootRequestSet,
     artifact_state: ArtifactState,
 ) Allocator.Error!CallableSetDescriptorsForLowering {
+    var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
+    defer descriptors.deinit(allocator);
+    for (solved.solve_sessions.items) |*session| {
+        try descriptors.appendSlice(allocator, session.representation_store.callable_set_descriptors);
+    }
+    const owned = try descriptors.toOwnedSlice(allocator);
+    errdefer allocator.free(owned);
+
     switch (artifact_state) {
         .published => {
-            var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
-            defer descriptors.deinit(allocator);
-            try descriptors.appendSlice(allocator, artifact.callable_set_descriptors.descriptors);
-            for (solved.solve_sessions.items) |*session| {
-                for (session.representation_store.callable_set_descriptors) |descriptor| {
-                    var found = false;
-                    for (descriptors.items) |published| {
-                        if (!repr.callableSetKeyEql(published.key, descriptor.key)) continue;
-                        found = true;
-                        if (builtin.mode == .Debug and !callableSetDescriptorEql(published, descriptor)) {
-                            checkedPipelineInvariant("published checked artifact callable-set descriptor differs from solved descriptor");
-                        }
-                        break;
+            if (builtin.mode == .Debug) {
+                for (owned) |descriptor| {
+                    const published = artifact.callable_set_descriptors.descriptorFor(descriptor.key) orelse continue;
+                    if (!publishedCallableSetDescriptorMatchesSolved(published.*, descriptor)) {
+                        checkedPipelineInvariant("published checked artifact callable-set descriptor differs from solved descriptor");
                     }
-                    if (!found) try descriptors.append(allocator, descriptor);
                 }
             }
-            const owned = try descriptors.toOwnedSlice(allocator);
             return .{
                 .descriptors = owned,
                 .owned_shell = owned,
@@ -464,21 +463,22 @@ fn callableSetDescriptorsForLowering(
                 checkedPipelineInvariant("checking-finalization descriptor publication artifact sink does not match root artifact");
             }
 
-            var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
-            defer descriptors.deinit(allocator);
-            for (solved.solve_sessions.items) |*session| {
-                try descriptors.appendSlice(allocator, session.representation_store.callable_set_descriptors);
-            }
-            try artifact_sink.callable_set_descriptors.publishFromDescriptors(allocator, descriptors.items);
-            return .{ .descriptors = artifact_sink.callable_set_descriptors.descriptors };
+            try publishCallableSetDescriptorsToArtifact(allocator, artifact_sink, owned);
+            return .{
+                .descriptors = owned,
+                .owned_shell = owned,
+            };
         },
     }
 }
 
-fn callableSetDescriptorEql(a: repr.CanonicalCallableSetDescriptor, b: repr.CanonicalCallableSetDescriptor) bool {
-    if (!repr.callableSetKeyEql(a.key, b.key)) return false;
-    if (a.members.len != b.members.len) return false;
-    for (a.members, b.members) |left, right| {
+fn publishedCallableSetDescriptorMatchesSolved(
+    published: canonical.CanonicalCallableSetDescriptor,
+    solved: repr.CanonicalCallableSetDescriptor,
+) bool {
+    if (!repr.callableSetKeyEql(published.key, solved.key)) return false;
+    if (published.members.len != solved.members.len) return false;
+    for (published.members, solved.members) |left, right| {
         if (left.member != right.member) return false;
         if (!canonical.procedureCallableRefEql(left.proc_value, right.proc_value)) return false;
         if (!canonical.mirProcedureRefEql(left.source_proc, right.source_proc)) return false;
@@ -491,6 +491,45 @@ fn callableSetDescriptorEql(a: repr.CanonicalCallableSetDescriptor, b: repr.Cano
         }
     }
     return true;
+}
+
+fn publishCallableSetDescriptorsToArtifact(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
+) Allocator.Error!void {
+    if (descriptors.len == 0) return;
+    const canonical_descriptors = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, descriptors.len);
+    defer allocator.free(canonical_descriptors);
+
+    var member_shells = try allocator.alloc([]canonical.CanonicalCallableSetMember, descriptors.len);
+    defer allocator.free(member_shells);
+    for (member_shells) |*members| members.* = &.{};
+    defer {
+        for (member_shells) |members| {
+            if (members.len > 0) allocator.free(members);
+        }
+    }
+
+    for (descriptors, 0..) |descriptor, i| {
+        const members = try allocator.alloc(canonical.CanonicalCallableSetMember, descriptor.members.len);
+        member_shells[i] = members;
+        for (descriptor.members, 0..) |member, member_i| {
+            members[member_i] = .{
+                .member = member.member,
+                .proc_value = member.proc_value,
+                .source_proc = member.source_proc,
+                .capture_slots = member.capture_slots,
+                .capture_shape_key = member.capture_shape_key,
+            };
+        }
+        canonical_descriptors[i] = .{
+            .key = descriptor.key,
+            .members = members,
+        };
+    }
+
+    try artifact.callable_set_descriptors.publishFromDescriptors(allocator, canonical_descriptors);
 }
 
 fn publishErasedFnAbisForLowering(
@@ -599,6 +638,7 @@ fn publishCompileTimeDependencySummariesFromSolved(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     solved: *const mir.LambdaSolved.Solve.Program,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     payloads: []const checked_artifact.CompileTimeEvaluationPayload,
 ) Allocator.Error![]const ?checked_artifact.ComptimeDependencySummaryId {
@@ -606,7 +646,7 @@ fn publishCompileTimeDependencySummariesFromSolved(
         checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
     }
 
-    var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved);
+    var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved, callable_set_descriptors);
     defer collector.deinit();
 
     const summary_ids = try allocator.alloc(?checked_artifact.ComptimeDependencySummaryId, selected_entrypoints.len);
@@ -657,6 +697,7 @@ const CompileTimeDependencySummaryBuilder = struct {
     artifact: *const checked_artifact.CheckedModuleArtifact,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     solved: *const mir.LambdaSolved.Solve.Program,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     proc_summary_ids: std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId),
     transitive_proc_visits: std.AutoHashMap(repr.ProcRepresentationInstanceId, void),
 
@@ -665,12 +706,14 @@ const CompileTimeDependencySummaryBuilder = struct {
         artifact: *const checked_artifact.CheckedModuleArtifact,
         artifact_sink: *checked_artifact.CheckedModuleArtifact,
         solved: *const mir.LambdaSolved.Solve.Program,
+        callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     ) CompileTimeDependencySummaryBuilder {
         return .{
             .allocator = allocator,
             .artifact = artifact,
             .artifact_sink = artifact_sink,
             .solved = solved,
+            .callable_set_descriptors = callable_set_descriptors,
             .proc_summary_ids = std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId).init(allocator),
             .transitive_proc_visits = std.AutoHashMap(repr.ProcRepresentationInstanceId, void).init(allocator),
         };
@@ -1136,7 +1179,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         switch (self.artifact_sink.comptime_plans.callableResult(plan_id)) {
             .finite => |finite| {
                 const descriptor = self.callableSetDescriptor(finite.callable_set_key);
-                for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
                 for (finite.members) |member| {
                     for (member.capture_slots) |capture| try self.collectCaptureSlotPlan(capture, availability, concrete);
                 }
@@ -1147,7 +1190,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                         .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
                         .finite_set_adapter => |adapter| {
                             const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
-                            for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                            for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
                         },
                     },
                     .read_from_interpreted_erased_value => {},
@@ -1210,7 +1253,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                 .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
                 .finite_set_adapter => |adapter| {
                     const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
-                    for (descriptor.members) |member| try self.collectTransitiveProc(self.procInstanceIdForMir(member.source_proc), availability, concrete);
+                    for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
                 },
             },
         }
@@ -1268,7 +1311,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             self.allocator.free(out);
         }
         for (descriptor.members, 0..) |member, i| {
-            out[i] = try self.cloneExecutableKeyForInstance(self.procInstanceIdForMir(member.source_proc));
+            out[i] = try self.cloneExecutableKeyForInstance(member.target_instance);
             initialized += 1;
         }
         return out;
@@ -1285,20 +1328,11 @@ const CompileTimeDependencySummaryBuilder = struct {
     fn callableSetDescriptor(
         self: *CompileTimeDependencySummaryBuilder,
         key: canonical.CanonicalCallableSetKey,
-    ) *const canonical.CanonicalCallableSetDescriptor {
-        return self.artifact_sink.callable_set_descriptors.descriptorFor(key) orelse {
-            checkedPipelineInvariant("compile-time dependency summary referenced missing callable-set descriptor");
-        };
-    }
-
-    fn procInstanceIdForMir(
-        self: *CompileTimeDependencySummaryBuilder,
-        proc: canonical.MirProcedureRef,
-    ) repr.ProcRepresentationInstanceId {
-        for (self.solved.procs.items) |record| {
-            if (canonical.mirProcedureRefEql(record.proc, proc)) return record.representation_instance;
+    ) *const repr.CanonicalCallableSetDescriptor {
+        for (self.callable_set_descriptors) |*descriptor| {
+            if (repr.callableSetKeyEql(descriptor.key, key)) return descriptor;
         }
-        checkedPipelineInvariant("compile-time dependency summary referenced missing procedure instance");
+        checkedPipelineInvariant("compile-time dependency summary referenced missing callable-set descriptor");
     }
 
     fn procInstanceIdForExecutableKey(
@@ -2617,6 +2651,9 @@ const CaptureSlotPlanBuilder = struct {
             if (capture.source_capture_value != constructed.capture_values[slot_i]) {
                 checkedPipelineInvariant("captured finite compile-time callable result capture transform source value disagrees with construction");
             }
+            if (capture.target_instance != member.target_instance) {
+                checkedPipelineInvariant("captured finite compile-time callable result target capture instance disagrees with descriptor member instance");
+            }
             const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(capture.target_instance)];
             if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
                 checkedPipelineInvariant("captured finite compile-time callable result target capture instance disagrees with descriptor member");
@@ -2645,7 +2682,10 @@ const CaptureSlotPlanBuilder = struct {
         if (slot_plans.len != member.capture_slots.len) {
             checkedPipelineInvariant("finite executable callable result capture plan arity differs from descriptor");
         }
-        const target_instance = procRepresentationInstanceForRoot(self.value_context.solved, member.source_proc);
+        const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(member.target_instance)];
+        if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+            checkedPipelineInvariant("finite executable callable result target instance disagrees with descriptor source procedure");
+        }
         const target_context = constValueContextForInstance(self.value_context.solved, target_instance);
         const target_captures = target_context.value_store.sliceValueSpan(target_instance.public_roots.captures);
         if (target_captures.len != member.capture_slots.len) {
@@ -3280,17 +3320,6 @@ const CaptureSlotPlanBuilder = struct {
         checkedPipelineInvariant("capture slot value alias chain is cyclic");
     }
 };
-
-fn procRepresentationInstanceForRoot(
-    solved: *const mir.LambdaSolved.Solve.Program,
-    root_proc: canonical.MirProcedureRef,
-) repr.ProcRepresentationInstance {
-    for (solved.procs.items) |proc| {
-        if (!canonical.mirProcedureRefEql(proc.proc, root_proc)) continue;
-        return solved.proc_instances.items[@intFromEnum(proc.representation_instance)];
-    }
-    checkedPipelineInvariant("compile-time root procedure has no lambda-solved representation instance");
-}
 
 fn compileTimeRootForRequest(
     artifact: *const checked_artifact.CheckedModuleArtifact,

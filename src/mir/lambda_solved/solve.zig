@@ -547,7 +547,7 @@ const SessionExecutablePayloadPublisher = struct {
             }
             for (descriptor.members) |member| {
                 if (member.capture_slots.len == 0) continue;
-                const target_instance = self.procInstanceForSource(member.source_proc);
+                const target_instance = self.procInstance(member.target_instance);
                 const target_value_store = self.valueStoreFor(target_instance);
                 const target_captures = target_value_store.sliceValueSpan(target_instance.public_roots.captures);
                 if (target_captures.len != member.capture_slots.len) {
@@ -641,16 +641,6 @@ const SessionExecutablePayloadPublisher = struct {
         instance: *const repr.ProcRepresentationInstance,
     ) *repr.ValueInfoStore {
         return &self.program.value_stores.items[@intFromEnum(instance.value_store)];
-    }
-
-    fn procInstanceForSource(
-        self: *SessionExecutablePayloadPublisher,
-        proc: canonical.MirProcedureRef,
-    ) *const repr.ProcRepresentationInstance {
-        for (self.program.proc_instances.items) |*instance| {
-            if (instance.solve_session == self.session_id and canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
-        }
-        lambdaInvariant("lambda-solved executable payload publication referenced missing procedure instance");
     }
 
     fn procInstance(
@@ -798,8 +788,7 @@ const CrossProcedureRepresentationLinker = struct {
             lambdaInvariant("lambda-solved finite call_value representation edge reached empty callable-set descriptor");
         }
         for (descriptor.members) |member| {
-            const target_id = self.procInstanceForSource(member.source_proc);
-            try self.appendDirectCallEdges(call_site, target_id);
+            try self.appendDirectCallEdges(call_site, member.target_instance);
         }
     }
 
@@ -846,7 +835,7 @@ const CrossProcedureRepresentationLinker = struct {
                 .proc_value => |source| source,
                 else => continue,
             };
-            const target_id = self.procInstanceForSource(source.proc);
+            const target_id = source.target_instance;
             const target = self.procInstance(target_id);
             const source_captures = source.captures;
             const target_captures = self.valueStoreFor(target).sliceValueSpan(target.public_roots.captures);
@@ -887,18 +876,6 @@ const CrossProcedureRepresentationLinker = struct {
             .instance = target_id,
             .rep_root = root,
         };
-    }
-
-    fn procInstanceForSource(
-        self: *CrossProcedureRepresentationLinker,
-        proc: canonical.MirProcedureRef,
-    ) repr.ProcRepresentationInstanceId {
-        for (self.records, 0..) |record, raw| {
-            if (record.solve_session == self.record.solve_session and canonical.mirProcedureRefEql(record.proc, proc)) {
-                return @enumFromInt(@as(u32, @intCast(raw)));
-            }
-        }
-        lambdaInvariant("lambda-solved cross-procedure representation edge referenced missing procedure instance");
     }
 
     fn procInstance(
@@ -1629,7 +1606,7 @@ const CallableEmissionAssigner = struct {
         const capture_shape_key = repr.captureShapeKeyForExecKeys(&hidden_capture_keys);
         const sig_key = try self.erasedSignatureForTargetProc(
             first_member.proc_value.source_fn_ty,
-            self.recordForInstance(self.procInstanceForSource(first_member.source_proc)),
+            self.recordForInstance(first_member.target_instance),
             hidden_capture_key,
         );
         const adapter = repr.ErasedAdapterKey{
@@ -1770,18 +1747,6 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved erased requirement referenced missing BoxBoundary");
         }
         return self.representationStore().box_boundaries[index];
-    }
-
-    fn procInstanceForSource(
-        self: *CallableEmissionAssigner,
-        proc: canonical.MirProcedureRef,
-    ) repr.ProcRepresentationInstanceId {
-        for (self.records, 0..) |record, raw| {
-            if (record.solve_session == self.session_id and canonical.mirProcedureRefEql(record.proc, proc)) {
-                return @enumFromInt(@as(u32, @intCast(raw)));
-            }
-        }
-        lambdaInvariant("lambda-solved callable emission assignment referenced missing procedure instance");
     }
 
     fn recordForInstance(
@@ -2161,6 +2126,7 @@ fn callableSetMemberEquivalent(
 ) bool {
     if (!canonical.mirProcedureRefEql(a.source_proc, b.source_proc)) return false;
     if (!canonical.procedureCallableRefEql(a.proc_value, b.proc_value)) return false;
+    if (a.target_instance != b.target_instance) return false;
     if (!repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return false;
     if (a.capture_slots.len != b.capture_slots.len) return false;
     for (a.capture_slots, b.capture_slots) |left, right| {
@@ -2384,7 +2350,7 @@ const ValueTransformFinalizer = struct {
 
         const result_to = try self.localEndpoint(call_site.result);
         for (descriptor.members, 0..) |member, i| {
-            const target_id = self.procInstanceForSource(member.source_proc);
+            const target_id = member.target_instance;
             const target_instance = self.procInstance(target_id);
             const result_from = try self.targetReturnEndpoint(target_id, target_instance);
             const kind: repr.ValueTransformBoundaryKind = .{ .callable_match_branch_result = .{
@@ -2518,6 +2484,9 @@ const ValueTransformFinalizer = struct {
         };
         const target_id = construction_snapshot.target_instance;
         const target_instance = self.procInstance(target_id);
+        if (target_id != member.target_instance) {
+            lambdaInvariant("lambda-solved callable construction target instance differs from selected member instance");
+        }
         if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
             lambdaInvariant("lambda-solved callable construction target instance differs from selected member source");
         }
@@ -3525,18 +3494,6 @@ const ValueTransformFinalizer = struct {
             .ty = payload,
             .key = key,
         };
-    }
-
-    fn procInstanceForSource(
-        self: *ValueTransformFinalizer,
-        proc: canonical.MirProcedureRef,
-    ) repr.ProcRepresentationInstanceId {
-        for (self.program.proc_instances.items, 0..) |instance, raw| {
-            if (instance.solve_session == self.instance.solve_session and canonical.mirProcedureRefEql(instance.proc, proc)) {
-                return @enumFromInt(@as(u32, @intCast(raw)));
-            }
-        }
-        lambdaInvariant("lambda-solved finite call boundary finalization referenced missing member procedure");
     }
 
     fn procInstance(
