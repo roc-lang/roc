@@ -551,7 +551,6 @@ const BodyFinalizer = struct {
                 .captures = try self.lowerCaptureArgSpan(proc_value.captures),
                 .fn_ty = proc_value.fn_ty,
             } },
-            .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,
                 .rc_effect = low_level.rc_effect,

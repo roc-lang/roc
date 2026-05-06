@@ -220,7 +220,6 @@ pub const Expr = struct {
             captures: Span(CaptureArg),
             fn_ty: TypeVarId,
         },
-        inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,
             rc_effect: base.LowLevel.RcEffect,

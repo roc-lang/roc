@@ -249,9 +249,11 @@ pub const Store = struct {
 
     pub const GraphCommit = struct {
         root_idx: Idx,
+        raw_layouts: []Idx,
         value_layouts: []Idx,
 
         pub fn deinit(self_commit: *GraphCommit, allocator: std.mem.Allocator) void {
+            allocator.free(self_commit.raw_layouts);
             allocator.free(self_commit.value_layouts);
         }
     };
@@ -727,14 +729,16 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
+                .raw_layouts = try self.allocator.alloc(Idx, 0),
                 .value_layouts = try self.allocator.alloc(Idx, 0),
             },
             .local => {},
         }
 
         const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        defer self.allocator.free(raw_layouts);
+        errdefer self.allocator.free(raw_layouts);
         const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
+        errdefer self.allocator.free(value_layouts);
         const resolved = try self.allocator.alloc(bool, graph.nodes.items.len);
         defer self.allocator.free(resolved);
         const recursive_nodes = try self.allocator.alloc(bool, graph.nodes.items.len);
@@ -1357,6 +1361,7 @@ pub const Store = struct {
 
         return .{
             .root_idx = root_idx,
+            .raw_layouts = raw_layouts,
             .value_layouts = value_layouts,
         };
     }

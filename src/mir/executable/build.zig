@@ -28,6 +28,8 @@ pub const ArtifactViews = struct {
 };
 
 const MaterializationStores = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    canonical_names: *const canonical.CanonicalNameStore,
     plans: *const checked_artifact.CompileTimePlanStore,
     values: *const checked_artifact.CompileTimeValueStore,
 };
@@ -70,6 +72,7 @@ pub const Program = struct {
     erased_adapter_procs: std.ArrayList(ErasedAdapterProcReservation),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
+    lowered_session_types_by_key: std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
     artifact_views: ArtifactViews = .{},
     layouts: ?Layouts.Layouts = null,
@@ -88,11 +91,13 @@ pub const Program = struct {
             .erased_adapter_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
+            .lowered_session_types_by_key = std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId).init(allocator),
         };
     }
 
     pub fn deinit(self: *Program) void {
         if (self.layouts) |*layouts| layouts.deinit();
+        self.lowered_session_types_by_key.deinit();
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.erased_adapter_procs.deinit(self.allocator);
@@ -172,7 +177,7 @@ pub fn run(
             .output = &program.ast,
             .canonical_names = &program.canonical_names,
             .type_lowerer = &type_lowerer,
-            .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types),
+            .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types, &program.lowered_session_types_by_key),
             .value_store = value_store,
             .representation_store = representation_store,
             .callable_set_descriptors = program.callable_set_descriptors,
@@ -892,7 +897,7 @@ fn lowerErasedFiniteSetAdapterProc(
         .output = &program.ast,
         .canonical_names = &program.canonical_names,
         .type_lowerer = type_lowerer,
-        .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types),
+        .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types, &program.lowered_session_types_by_key),
         .value_store = value_store,
         .representation_store = representation_store,
         .callable_set_descriptors = program.callable_set_descriptors,
@@ -1127,6 +1132,8 @@ fn lowerErasedPromotedWrapperProc(
     var published_types = PublishedTypeLowerer.init(
         allocator,
         synthetic.executable_type_payloads,
+        canonicalNamesForArtifactInViews(program.artifact_views, synthetic.artifact),
+        &program.canonical_names,
         &program.types,
         &program.row_shapes,
     );
@@ -1141,10 +1148,12 @@ fn lowerErasedPromotedWrapperProc(
     const body = try lowerErasedPromotedWrapperBody(
         allocator,
         program,
-        .{
-            .plans = synthetic.comptime_plans,
-            .values = synthetic.comptime_values,
-        },
+        materializationStoresForArtifact(
+            synthetic.artifact,
+            canonicalNamesForArtifactInViews(program.artifact_views, synthetic.artifact),
+            synthetic.comptime_plans,
+            synthetic.comptime_values,
+        ),
         synthetic.artifact,
         synthetic.executable_value_transforms,
         &published_types,
@@ -1352,6 +1361,7 @@ fn applyPublishedExecutableValueTransform(
             const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
             const bridge = try lowerPublishedExecutableValueTransformAsBridge(
                 program,
+                materialization,
                 published_types,
                 transforms,
                 transform_id,
@@ -1481,7 +1491,7 @@ fn applyRecordValueTransform(
     defer program.allocator.free(output_fields);
     for (target.fields, 0..) |target_field, target_i| {
         const label = program.row_shapes.recordField(target_field.field).label;
-        const field_plan = findValueTransformRecordField(fields, label, seen) orelse {
+        const field_plan = (try findValueTransformRecordField(program, materialization, fields, label, seen)) orelse {
             executableInvariant("record value transform omitted a target field");
         };
         const source_field = recordFieldForLabel(program, source, label);
@@ -1525,12 +1535,15 @@ fn applyRecordValueTransform(
 }
 
 fn findValueTransformRecordField(
+    program: *Program,
+    materialization: MaterializationStores,
     fields: []const checked_artifact.ValueTransformRecordField,
     label: canonical.RecordFieldLabelId,
     seen: []bool,
-) ?checked_artifact.ValueTransformRecordField {
+) Allocator.Error!?checked_artifact.ValueTransformRecordField {
     for (fields, 0..) |field, i| {
-        if (field.field != label) continue;
+        const field_label = try materializationRecordFieldLabel(program, materialization, field.field);
+        if (field_label != label) continue;
         if (seen[i]) executableInvariant("record value transform duplicated a field");
         seen[i] = true;
         return field;
@@ -1558,7 +1571,8 @@ fn applyNominalValueTransform(
         .nominal => |target| target,
         else => executableInvariant("nominal value transform target endpoint is not nominal"),
     };
-    if (!nominalTypeKeyEql(target.nominal, nominal.nominal)) {
+    const remapped_nominal = try materializationNominalTypeKey(program, materialization, nominal.nominal);
+    if (!nominalTypeKeyEql(target.nominal, remapped_nominal)) {
         executableInvariant("nominal value transform target nominal differs from plan");
     }
     if (!repr.canonicalTypeKeyEql(target.source_ty, nominal.source_ty)) {
@@ -1768,10 +1782,11 @@ fn applyTagUnionValueTransform(
     defer program.allocator.free(branches);
     for (source.tags, 0..) |source_tag, source_i| {
         const source_label = program.row_shapes.tag(source_tag.tag).label;
-        const case = findValueTransformTagCase(cases, source_label, seen_cases) orelse {
+        const case = (try findValueTransformTagCase(program, materialization, cases, source_label, seen_cases)) orelse {
             executableInvariant("tag-union value transform omitted a source tag case");
         };
-        const target_tag = tagTypeForLabel(program, target, case.target_tag);
+        const target_label = try materializationTagLabel(program, materialization, case.target_tag);
+        const target_tag = tagTypeForLabel(program, target, target_label);
 
         var branch_stmts = std.ArrayList(Ast.StmtId).empty;
         defer branch_stmts.deinit(program.allocator);
@@ -1886,12 +1901,15 @@ fn tagUnionValueTransformBranchBody(
 }
 
 fn findValueTransformTagCase(
+    program: *Program,
+    materialization: MaterializationStores,
     cases: []const checked_artifact.ValueTransformTagCase,
     source_label: canonical.TagLabelId,
     seen: []bool,
-) ?checked_artifact.ValueTransformTagCase {
+) Allocator.Error!?checked_artifact.ValueTransformTagCase {
     for (cases, 0..) |case, i| {
-        if (case.source_tag != source_label) continue;
+        const case_label = try materializationTagLabel(program, materialization, case.source_tag);
+        if (case_label != source_label) continue;
         if (seen[i]) executableInvariant("tag-union value transform duplicated a source tag case");
         seen[i] = true;
         return case;
@@ -2208,6 +2226,7 @@ fn erasedFnType(program: *const Program, ty: Type.TypeId) Type.ErasedFnType {
 
 fn lowerPublishedExecutableValueTransformAsBridge(
     program: *Program,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     transform_id: checked_artifact.ExecutableValueTransformPlanId,
@@ -2216,11 +2235,12 @@ fn lowerPublishedExecutableValueTransformAsBridge(
     const plan = transforms.get(transform_id);
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
-    return try lowerExecutableStructuralBridgePlan(program, published_types, transforms, from_ty, to_ty, structural);
+    return try lowerExecutableStructuralBridgePlan(program, materialization, published_types, transforms, from_ty, to_ty, structural);
 }
 
 fn lowerExecutableValueChildBridge(
     program: *Program,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     child: checked_artifact.ExecutableValueTransformPlanId,
@@ -2230,6 +2250,7 @@ fn lowerExecutableValueChildBridge(
         .identity => try program.ast.addBridgePlan(.direct),
         .structural_bridge => |structural| try lowerPublishedExecutableValueTransformAsBridge(
             program,
+            materialization,
             published_types,
             transforms,
             child,
@@ -2241,6 +2262,7 @@ fn lowerExecutableValueChildBridge(
 
 fn lowerExecutableStructuralBridgePlan(
     program: *Program,
+    materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     from_ty: Type.TypeId,
@@ -2252,17 +2274,17 @@ fn lowerExecutableStructuralBridgePlan(
         .zst => .zst,
         .list_reinterpret => .list_reinterpret,
         .nominal_reinterpret => .nominal_reinterpret,
-        .box_unbox => |child| .{ .box_unbox = try lowerExecutableValueChildBridge(program, published_types, transforms, child) },
-        .box_box => |child| .{ .box_box = try lowerExecutableValueChildBridge(program, published_types, transforms, child) },
+        .box_unbox => |child| .{ .box_unbox = try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, child) },
+        .box_box => |child| .{ .box_box = try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, child) },
         .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
             .source_payload = from_ty,
-            .target_discriminant = try tagDiscriminantForLabel(program, to_ty, singleton.target_tag),
-            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, published_types, transforms, payload) else null,
+            .target_discriminant = try tagDiscriminantForLabel(program, to_ty, try materializationTagLabel(program, materialization, singleton.target_tag)),
+            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload) else null,
         } },
         .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
             .target_payload = to_ty,
-            .source_discriminant = try tagDiscriminantForLabel(program, from_ty, singleton.source_tag),
-            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, published_types, transforms, payload) else null,
+            .source_discriminant = try tagDiscriminantForLabel(program, from_ty, try materializationTagLabel(program, materialization, singleton.source_tag)),
+            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload) else null,
         } },
     };
     return try program.ast.addBridgePlan(plan);
@@ -2481,10 +2503,12 @@ fn resolvePublishedTransformContextInArtifactViews(
         if (artifactKeyEql(root.artifact.key, artifact)) {
             return .{
                 .artifact = root.artifact.key,
-                .materialization = .{
-                    .plans = &root.artifact.comptime_plans,
-                    .values = &root.artifact.comptime_values,
-                },
+                .materialization = materializationStoresForArtifact(
+                    root.artifact.key,
+                    &root.artifact.canonical_names,
+                    &root.artifact.comptime_plans,
+                    &root.artifact.comptime_values,
+                ),
                 .executable_type_payloads = &root.artifact.executable_type_payloads,
                 .executable_value_transforms = &root.artifact.executable_value_transforms,
             };
@@ -2504,10 +2528,12 @@ fn resolvePublishedTransformContextInArtifactViews(
 fn publishedTransformContextFromImportedView(view: checked_artifact.ImportedModuleView) PublishedTransformContext {
     return .{
         .artifact = view.key,
-        .materialization = .{
-            .plans = view.comptime_plans,
-            .values = view.comptime_values,
-        },
+        .materialization = materializationStoresForArtifact(
+            view.key,
+            view.canonical_names,
+            view.comptime_plans,
+            view.comptime_values,
+        ),
         .executable_type_payloads = view.executable_type_payloads,
         .executable_value_transforms = view.executable_value_transforms,
     };
@@ -2520,30 +2546,74 @@ fn resolveConstInstanceInArtifactViews(
     if (artifact_views.root) |root| {
         if (artifactKeyEql(root.artifact.key, ref.owner)) {
             return resolveConstInstanceInView(
-                .{
-                    .plans = &root.artifact.comptime_plans,
-                    .values = &root.artifact.comptime_values,
-                },
+                materializationStoresForArtifact(
+                    root.artifact.key,
+                    &root.artifact.canonical_names,
+                    &root.artifact.comptime_plans,
+                    &root.artifact.comptime_values,
+                ),
                 root.artifact.const_instances.view(),
                 ref,
             );
         }
         for (root.relation_artifacts) |related| {
             if (!artifactKeyEql(related.key, ref.owner)) continue;
-            return resolveConstInstanceInView(.{
-                .plans = related.comptime_plans,
-                .values = related.comptime_values,
-            }, related.const_instances, ref);
+            return resolveConstInstanceInView(
+                materializationStoresForArtifact(
+                    related.key,
+                    related.canonical_names,
+                    related.comptime_plans,
+                    related.comptime_values,
+                ),
+                related.const_instances,
+                ref,
+            );
         }
     }
     for (artifact_views.imports) |imported| {
         if (!artifactKeyEql(imported.key, ref.owner)) continue;
-        return resolveConstInstanceInView(.{
-            .plans = imported.comptime_plans,
-            .values = imported.comptime_values,
-        }, imported.const_instances, ref);
+        return resolveConstInstanceInView(
+            materializationStoresForArtifact(
+                imported.key,
+                imported.canonical_names,
+                imported.comptime_plans,
+                imported.comptime_values,
+            ),
+            imported.const_instances,
+            ref,
+        );
     }
     executableInvariant("executable constant materialization referenced an artifact that was not published to executable MIR");
+}
+
+fn materializationStoresForArtifact(
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    canonical_names: *const canonical.CanonicalNameStore,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    values: *const checked_artifact.CompileTimeValueStore,
+) MaterializationStores {
+    return .{
+        .owner = owner,
+        .canonical_names = canonical_names,
+        .plans = plans,
+        .values = values,
+    };
+}
+
+fn canonicalNamesForArtifactInViews(
+    artifact_views: ArtifactViews,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+) *const canonical.CanonicalNameStore {
+    if (artifact_views.root) |root| {
+        if (artifactKeyEql(root.artifact.key, artifact)) return &root.artifact.canonical_names;
+        for (root.relation_artifacts) |related| {
+            if (artifactKeyEql(related.key, artifact)) return related.canonical_names;
+        }
+    }
+    for (artifact_views.imports) |imported| {
+        if (artifactKeyEql(imported.key, artifact)) return imported.canonical_names;
+    }
+    executableInvariant("executable materialization referenced an artifact name store that was not published");
 }
 
 fn resolveConstInstanceInView(
@@ -2604,6 +2674,24 @@ fn lowerComptimeValueExpr(
 ) Allocator.Error!Ast.ExprId {
     const schema = comptimeSchema(materialization.values, schema_id);
     const value = comptimeValue(materialization.values, value_id);
+    if (schema != .nominal and schema != .alias) {
+        switch (program.types.getType(expected_ty)) {
+            .nominal => |nominal| {
+                const backing = try lowerComptimeValueExpr(
+                    allocator,
+                    program,
+                    materialization,
+                    nominal.backing,
+                    schema_id,
+                    value_id,
+                    allow_callable,
+                );
+                const out = program.ast.freshValueRef();
+                return try program.ast.addExpr(expected_ty, out, .{ .nominal_reinterpret = backing });
+            },
+            else => {},
+        }
+    }
     return switch (schema) {
         .pending => executableInvariant("executable pure compile-time materialization reached pending schema"),
         .zst => blk: {
@@ -2779,8 +2867,8 @@ fn lowerPureComptimeRecordExpr(
         .record => |fields| fields,
         else => executableInvariant("executable pure compile-time record materialization value mismatch"),
     };
-    if (schema_fields.len != value_fields.len or record_ty.fields.len != value_fields.len) {
-        executableInvariant("executable pure compile-time record materialization field count mismatch");
+    if (schema_fields.len != value_fields.len) {
+        executableInvariant("executable pure compile-time record materialization schema/value field count mismatch");
     }
     const seen = try allocator.alloc(bool, schema_fields.len);
     defer allocator.free(seen);
@@ -2789,8 +2877,8 @@ fn lowerPureComptimeRecordExpr(
     defer allocator.free(output_fields);
     for (record_ty.fields, 0..) |expected_field, expected_i| {
         const expected_label = program.row_shapes.recordField(expected_field.field).label;
-        const materialized = findPureComptimeRecordField(schema_fields, value_fields, expected_label, seen) orelse {
-            executableInvariant("executable pure compile-time record materialization missing expected field");
+        const materialized = (try findPureComptimeRecordField(program, materialization, schema_fields, value_fields, expected_label, seen)) orelse missing: {
+            break :missing executableInvariant("executable pure compile-time record materialization missing expected field");
         };
         const lowered = try lowerComptimeValueExpr(
             allocator,
@@ -2808,7 +2896,6 @@ fn lowerPureComptimeRecordExpr(
             .value = program.ast.getExpr(lowered).value,
         };
     }
-    verifyAllSeen(seen, "executable pure compile-time record materialization had extra field");
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .record = .{
         .shape = record_ty.shape,
@@ -2822,13 +2909,16 @@ const PureComptimeField = struct {
 };
 
 fn findPureComptimeRecordField(
+    program: *Program,
+    materialization: MaterializationStores,
     schemas: []const checked_artifact.ComptimeFieldSchema,
     values: []const checked_artifact.ComptimeValueId,
     label: canonical.RecordFieldLabelId,
     seen: []bool,
-) ?PureComptimeField {
+) Allocator.Error!?PureComptimeField {
     for (schemas, 0..) |schema, i| {
-        if (schema.name != label) continue;
+        const schema_label = try materializationRecordFieldLabel(program, materialization, schema.name);
+        if (schema_label != label) continue;
         if (seen[i]) executableInvariant("executable pure compile-time record materialization duplicated field");
         seen[i] = true;
         return .{
@@ -2850,7 +2940,10 @@ fn lowerPureComptimeTagExpr(
 ) Allocator.Error!Ast.ExprId {
     const tag_union_ty = switch (program.types.getType(expected_ty)) {
         .tag_union => |tag_union| tag_union,
-        else => executableInvariant("executable pure compile-time tag materialization expected tag-union type"),
+        else => |content| executableInvariantFmt(
+            "executable pure compile-time tag materialization expected tag-union type, found {s}",
+            .{@tagName(content)},
+        ),
     };
     const variant_value = switch (value) {
         .tag_union => |tag| tag,
@@ -2864,7 +2957,8 @@ fn lowerPureComptimeTagExpr(
     if (schema_variant.payloads.len != variant_value.payloads.len) {
         executableInvariant("executable pure compile-time tag materialization payload count mismatch");
     }
-    const selected = findPureComptimeTagType(program, tag_union_ty, schema_variant.name) orelse {
+    const selected_label = try materializationTagLabel(program, materialization, schema_variant.name);
+    const selected = findPureComptimeTagType(program, tag_union_ty, selected_label) orelse {
         executableInvariant("executable pure compile-time tag materialization selected tag missing from expected type");
     };
     if (selected.payloads.len != schema_variant.payloads.len) {
@@ -2928,7 +3022,8 @@ fn lowerPureComptimeWrappedExpr(
         .nominal => |expected| expected,
         else => executableInvariant("executable pure compile-time wrapped materialization expected nominal type"),
     };
-    if (!nominalTypeKeyEql(expected_nominal.nominal, nominal)) {
+    const remapped_nominal = try materializationNominalTypeKey(program, materialization, nominal);
+    if (!nominalTypeKeyEql(expected_nominal.nominal, remapped_nominal)) {
         executableInvariant("executable pure compile-time wrapped materialization nominal key mismatch");
     }
     const backing_value = switch (wrapper) {
@@ -3155,7 +3250,7 @@ fn lowerErasedCaptureRecordMaterialization(
     defer allocator.free(output_fields);
     for (record_ty.fields, 0..) |expected_field, expected_i| {
         const expected_label = program.row_shapes.recordField(expected_field.field).label;
-        const materialized = findErasedCaptureRecordField(fields, expected_label, seen) orelse {
+        const materialized = (try findErasedCaptureRecordField(program, materialization, fields, expected_label, seen)) orelse {
             executableInvariant("executable erased capture record materialization missing expected field");
         };
         const lowered = try lowerErasedCaptureExecutableMaterializationPlanExpr(
@@ -3182,12 +3277,15 @@ fn lowerErasedCaptureRecordMaterialization(
 }
 
 fn findErasedCaptureRecordField(
+    program: *Program,
+    materialization: MaterializationStores,
     fields: []const checked_artifact.ErasedCaptureExecutableMaterializationRecordField,
     expected_label: canonical.RecordFieldLabelId,
     seen: []bool,
-) ?checked_artifact.ErasedCaptureExecutableMaterializationRecordField {
+) Allocator.Error!?checked_artifact.ErasedCaptureExecutableMaterializationRecordField {
     for (fields, 0..) |field, i| {
-        if (field.field != expected_label) continue;
+        const field_label = try materializationRecordFieldLabel(program, materialization, field.field);
+        if (field_label != expected_label) continue;
         if (seen[i]) executableInvariant("executable erased capture record materialization duplicated field");
         seen[i] = true;
         return field;
@@ -3229,7 +3327,8 @@ fn lowerErasedCaptureTagMaterialization(
         .tag_union => |tag_union| tag_union,
         else => executableInvariant("executable erased capture tag materialization expected a tag-union type"),
     };
-    const selected = findErasedCaptureTagType(program, tag_union_ty, tag.tag) orelse {
+    const selected_label = try materializationTagLabel(program, materialization, tag.tag);
+    const selected = findErasedCaptureTagType(program, tag_union_ty, selected_label) orelse {
         executableInvariant("executable erased capture tag materialization selected tag missing from expected type");
     };
     if (selected.payloads.len != tag.payloads.len) {
@@ -3348,7 +3447,8 @@ fn lowerErasedCaptureNominalMaterialization(
         .nominal => |expected_nominal| expected_nominal,
         else => executableInvariant("executable erased capture nominal materialization expected a nominal type"),
     };
-    if (!nominalTypeKeyEql(expected_nominal.nominal, nominal.nominal)) {
+    const remapped_nominal = try materializationNominalTypeKey(program, materialization, nominal.nominal);
+    if (!nominalTypeKeyEql(expected_nominal.nominal, remapped_nominal)) {
         executableInvariant("executable erased capture nominal materialization nominal type differs from expected type");
     }
     const backing = try lowerErasedCaptureExecutableMaterializationPlanExpr(
@@ -3364,6 +3464,57 @@ fn lowerErasedCaptureNominalMaterialization(
 
 fn nominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
     return a.module_name == b.module_name and a.type_name == b.type_name;
+}
+
+fn materializationRecordFieldLabel(
+    program: *Program,
+    materialization: MaterializationStores,
+    label: canonical.RecordFieldLabelId,
+) Allocator.Error!canonical.RecordFieldLabelId {
+    return try program.canonical_names.internRecordFieldLabel(sourceRecordFieldLabelText(materialization.canonical_names, label));
+}
+
+fn materializationTagLabel(
+    program: *Program,
+    materialization: MaterializationStores,
+    label: canonical.TagLabelId,
+) Allocator.Error!canonical.TagLabelId {
+    return try program.canonical_names.internTagLabel(sourceTagLabelText(materialization.canonical_names, label));
+}
+
+fn materializationNominalTypeKey(
+    program: *Program,
+    materialization: MaterializationStores,
+    nominal: canonical.NominalTypeKey,
+) Allocator.Error!canonical.NominalTypeKey {
+    return .{
+        .module_name = try program.canonical_names.internModuleName(sourceModuleNameText(materialization.canonical_names, nominal.module_name)),
+        .type_name = try program.canonical_names.internTypeName(sourceTypeNameText(materialization.canonical_names, nominal.type_name)),
+    };
+}
+
+fn sourceModuleNameText(names: *const canonical.CanonicalNameStore, id: canonical.ModuleNameId) []const u8 {
+    const index: usize = @intFromEnum(id);
+    if (index >= names.module_names.items.len) executableInvariant("executable materialization module name id is outside owning artifact name table");
+    return names.module_names.items[index];
+}
+
+fn sourceTypeNameText(names: *const canonical.CanonicalNameStore, id: canonical.TypeNameId) []const u8 {
+    const index: usize = @intFromEnum(id);
+    if (index >= names.type_names.items.len) executableInvariant("executable materialization type name id is outside owning artifact name table");
+    return names.type_names.items[index];
+}
+
+fn sourceRecordFieldLabelText(names: *const canonical.CanonicalNameStore, id: canonical.RecordFieldLabelId) []const u8 {
+    const index: usize = @intFromEnum(id);
+    if (index >= names.record_field_labels.items.len) executableInvariant("executable materialization record field label id is outside owning artifact name table");
+    return names.record_field_labels.items[index];
+}
+
+fn sourceTagLabelText(names: *const canonical.CanonicalNameStore, id: canonical.TagLabelId) []const u8 {
+    const index: usize = @intFromEnum(id);
+    if (index >= names.tag_labels.items.len) executableInvariant("executable materialization tag label id is outside owning artifact name table");
+    return names.tag_labels.items[index];
 }
 
 fn verifyAllSeen(seen: []const bool, comptime message: []const u8) void {
@@ -3561,6 +3712,8 @@ fn executableProcForErasedAdapter(
 const PublishedTypeLowerer = struct {
     allocator: Allocator,
     payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    source_names: *const canonical.CanonicalNameStore,
+    lowering_names: *canonical.CanonicalNameStore,
     output: *Type.Store,
     row_shapes: *MonoRow.Store,
     active: std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId),
@@ -3568,12 +3721,16 @@ const PublishedTypeLowerer = struct {
     fn init(
         allocator: Allocator,
         payloads: *const checked_artifact.ExecutableTypePayloadStore,
+        source_names: *const canonical.CanonicalNameStore,
+        lowering_names: *canonical.CanonicalNameStore,
         output: *Type.Store,
         row_shapes: *MonoRow.Store,
     ) PublishedTypeLowerer {
         return .{
             .allocator = allocator,
             .payloads = payloads,
+            .source_names = source_names,
+            .lowering_names = lowering_names,
             .output = output,
             .row_shapes = row_shapes,
             .active = std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId).init(allocator),
@@ -3628,7 +3785,7 @@ const PublishedTypeLowerer = struct {
             .list => |child| .{ .list = try self.lower(child.ty, child.key) },
             .box => |child| .{ .box = try self.lower(child.ty, child.key) },
             .nominal => |nominal| .{ .nominal = .{
-                .nominal = nominal.nominal,
+                .nominal = try self.remapNominalTypeKey(nominal.nominal),
                 .source_ty = nominal.source_ty,
                 .backing = try self.lower(nominal.backing, nominal.backing_key),
             } },
@@ -3652,7 +3809,7 @@ const PublishedTypeLowerer = struct {
     ) Allocator.Error!Type.Content {
         const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
         defer self.allocator.free(labels);
-        for (fields, 0..) |field, i| labels[i] = field.field;
+        for (fields, 0..) |field, i| labels[i] = try self.remapRecordFieldLabel(field.field);
         const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
         const shape_fields = self.row_shapes.recordShapeFields(shape);
         if (shape_fields.len != fields.len) {
@@ -3704,7 +3861,7 @@ const PublishedTypeLowerer = struct {
         defer self.allocator.free(descriptors);
         for (variants, 0..) |variant, i| {
             descriptors[i] = .{
-                .name = variant.tag,
+                .name = try self.remapTagLabel(variant.tag),
                 .payload_arity = @intCast(variant.payloads.len),
             };
         }
@@ -3771,23 +3928,50 @@ const PublishedTypeLowerer = struct {
             .members = members,
         } };
     }
+
+    fn remapRecordFieldLabel(
+        self: *PublishedTypeLowerer,
+        label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        return try self.lowering_names.internRecordFieldLabel(sourceRecordFieldLabelText(self.source_names, label));
+    }
+
+    fn remapTagLabel(
+        self: *PublishedTypeLowerer,
+        tag: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        return try self.lowering_names.internTagLabel(sourceTagLabelText(self.source_names, tag));
+    }
+
+    fn remapNominalTypeKey(
+        self: *PublishedTypeLowerer,
+        nominal: canonical.NominalTypeKey,
+    ) Allocator.Error!canonical.NominalTypeKey {
+        return .{
+            .module_name = try self.lowering_names.internModuleName(sourceModuleNameText(self.source_names, nominal.module_name)),
+            .type_name = try self.lowering_names.internTypeName(sourceTypeNameText(self.source_names, nominal.type_name)),
+        };
+    }
 };
 
 const SessionTypeLowerer = struct {
     allocator: Allocator,
     payloads: *const repr.SessionExecutableTypePayloadStore,
     output: *Type.Store,
+    lowered_by_key: *std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     active: std.AutoHashMap(repr.SessionExecutableTypePayloadId, Type.TypeId),
 
     fn init(
         allocator: Allocator,
         payloads: *const repr.SessionExecutableTypePayloadStore,
         output: *Type.Store,
+        lowered_by_key: *std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     ) SessionTypeLowerer {
         return .{
             .allocator = allocator,
             .payloads = payloads,
             .output = output,
+            .lowered_by_key = lowered_by_key,
             .active = std.AutoHashMap(repr.SessionExecutableTypePayloadId, Type.TypeId).init(allocator),
         };
     }
@@ -3808,18 +3992,30 @@ const SessionTypeLowerer = struct {
         if (!repr.canonicalExecValueTypeKeyEql(actual_key, expected_key)) {
             executableInvariant("executable session type payload key differs from endpoint key");
         }
-        return try self.lowerPayload(ref.payload);
+        if (self.lowered_by_key.get(expected_key)) |existing| return existing;
+        return try self.lowerPayloadWithKey(ref.payload, expected_key);
     }
 
     fn lowerPayload(
         self: *SessionTypeLowerer,
         id: repr.SessionExecutableTypePayloadId,
     ) Allocator.Error!Type.TypeId {
+        return try self.lowerPayloadWithKey(id, self.payloads.keyFor(id));
+    }
+
+    fn lowerPayloadWithKey(
+        self: *SessionTypeLowerer,
+        id: repr.SessionExecutableTypePayloadId,
+        key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!Type.TypeId {
+        if (self.lowered_by_key.get(key)) |existing| return existing;
         if (self.active.get(id)) |existing| return existing;
 
         const ty = try self.output.addType(.placeholder);
         try self.active.put(id, ty);
         errdefer _ = self.active.remove(id);
+        try self.lowered_by_key.put(key, ty);
+        errdefer _ = self.lowered_by_key.remove(key);
 
         const lowered = try self.lowerPayloadContent(self.payloads.get(id));
         self.output.types.items[@intFromEnum(ty)] = lowered;
@@ -3998,6 +4194,7 @@ const TypeLowerer = struct {
     output: *Type.Store,
     row_shapes: *MonoRow.Store,
     active: std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId),
+    lowered: std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId),
 
     fn init(
         allocator: Allocator,
@@ -4011,15 +4208,18 @@ const TypeLowerer = struct {
             .output = output,
             .row_shapes = row_shapes,
             .active = std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId).init(allocator),
+            .lowered = std.AutoHashMap(LambdaSolved.Type.TypeVarId, Type.TypeId).init(allocator),
         };
     }
 
     fn deinit(self: *TypeLowerer) void {
+        self.lowered.deinit();
         self.active.deinit();
     }
 
     fn lowerType(self: *TypeLowerer, source: LambdaSolved.Type.TypeVarId) Allocator.Error!Type.TypeId {
         const root = self.input.unlinkConst(source);
+        if (self.lowered.get(root)) |existing| return existing;
         if (self.active.get(root)) |existing| return existing;
 
         const target = try self.output.addType(.placeholder);
@@ -4058,6 +4258,7 @@ const TypeLowerer = struct {
 
         self.output.types.items[@intFromEnum(target)] = lowered;
         _ = self.active.remove(root);
+        try self.lowered.put(root, target);
         return target;
     }
 
@@ -4308,6 +4509,7 @@ const BodyBuilder = struct {
             self.allocator,
             &representation_store.session_executable_type_payloads,
             &self.program.types,
+            &self.program.lowered_session_types_by_key,
         );
         defer lowerer.deinit();
         return try lowerer.lower(endpoint.ty, endpoint.key);
@@ -4465,10 +4667,15 @@ const BodyBuilder = struct {
             .frac_f64_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .frac_f64_lit = literal }),
             .dec_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .dec_lit = literal }),
             .str_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .str_lit = literal }),
-            .bool_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .bool_lit = literal }),
+            .bool_lit => |literal| try self.lowerBoolLiteralExpr(expr.ty, expr.value_info, literal),
             .unit => try self.addValueExpr(expr.ty, expr.value_info, .unit),
             .const_instance => |const_instance| blk: {
                 const resolved = resolveConstInstanceForExecutable(self.program, const_instance);
+                if (@import("builtin").mode == .Debug and
+                    !std.mem.eql(u8, &const_instance.key.requested_source_ty.bytes, &expr.source_ty.bytes))
+                {
+                    executableInvariant("executable const_instance expression source type disagrees with requested source type");
+                }
                 break :blk try lowerComptimeValueExpr(
                     self.allocator,
                     self.program,
@@ -4481,9 +4688,10 @@ const BodyBuilder = struct {
             },
             .const_ref => executableInvariant("executable lowering reached non-runnable compile-time dependency const_ref"),
             .record => |record| blk: {
-                const fields = try self.lowerRecordFields(record.assembly_order);
+                const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.assembly_order, ty);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    ty,
                     self.output.freshValueRef(),
                     .{ .record = .{
                         .shape = record.shape,
@@ -4492,21 +4700,25 @@ const BodyBuilder = struct {
                 );
             },
             .nominal_reinterpret => |backing| blk: {
-                const lowered_backing = try self.lowerExpr(backing);
+                const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const lowered_backing = try self.lowerNominalBackingAtType(expr.value_info, backing, ty);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    ty,
                     self.output.freshValueRef(),
                     .{ .nominal_reinterpret = lowered_backing },
                 );
             },
             .tag => |tag| blk: {
-                const payloads = try self.lowerTagPayloadValues(tag.assembly_order);
+                const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const resolved_tag = self.tagTypeForType(ty, tag.tag);
+                const tag_id = resolved_tag.tag_type.tag;
+                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.assembly_order);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    ty,
                     self.output.freshValueRef(),
                     .{ .tag = .{
-                        .union_shape = tag.union_shape,
-                        .tag = tag.tag,
+                        .union_shape = resolved_tag.union_shape,
+                        .tag = tag_id,
                         .payloads = payloads,
                     } },
                 );
@@ -4560,25 +4772,28 @@ const BodyBuilder = struct {
                 );
             },
             .tuple => |items| blk: {
-                const items_span = try self.lowerExprIds(items);
+                const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const items_span = try self.lowerTupleItemsForType(expr.value_info, items, ty);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    ty,
                     self.output.freshValueRef(),
                     .{ .tuple = items_span },
                 );
             },
             .list => |items| blk: {
-                const items_span = try self.lowerExprIds(items);
+                const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const items_span = try self.lowerListItemsForType(expr.value_info, items, ty);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    ty,
                     self.output.freshValueRef(),
                     .{ .list = items_span },
                 );
             },
             .tag_payload => |payload| blk: {
                 const tag_union = try self.lowerExpr(payload.tag_union);
+                const tag_union_ty = self.output.getExpr(tag_union).ty;
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    self.tagPayloadTypeForPattern(tag_union_ty, payload.payload),
                     self.output.freshValueRef(),
                     .{ .tag_payload = .{
                         .tag_union = tag_union,
@@ -4632,11 +4847,15 @@ const BodyBuilder = struct {
             },
             .bool_not => |child| blk: {
                 const lowered_child = try self.lowerExpr(child);
-                break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
-                    self.output.freshValueRef(),
-                    .{ .bool_not = lowered_child },
-                );
+                const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                const false_expr = try self.addBoolTagExpr(result_ty, false);
+                const true_expr = try self.addBoolTagExpr(result_ty, true);
+                break :blk try self.output.addExpr(result_ty, self.output.freshValueRef(), .{ .if_ = .{
+                    .cond = lowered_child,
+                    .true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(lowered_child).ty),
+                    .then_body = false_expr,
+                    .else_body = true_expr,
+                } });
             },
             .crash => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .crash = literal }),
             .runtime_error => try self.addValueExpr(expr.ty, expr.value_info, .runtime_error),
@@ -4667,11 +4886,13 @@ const BodyBuilder = struct {
                 const else_body = try self.lowerExpr(if_.else_body);
                 const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
                 const transformed = try self.wrapIfBranches(if_.join_info, then_body, else_body, result_ty);
+                const true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(cond).ty);
                 break :blk try self.output.addExpr(
                     result_ty,
                     self.output.freshValueRef(),
                     .{ .if_ = .{
                         .cond = cond,
+                        .true_discriminant = true_discriminant,
                         .then_body = transformed.then_body,
                         .else_body = transformed.else_body,
                     } },
@@ -4682,22 +4903,146 @@ const BodyBuilder = struct {
             .call_value => |call| try self.lowerCallValue(expr.ty, call),
             .call_proc => |call| try self.lowerCallProc(expr.ty, call),
             .proc_value => |proc_value| try self.lowerProcValue(expr.ty, expr.value_info, proc_value),
-            .inspect => |child| blk: {
-                const value = try self.lowerExpr(child);
-                const debug_stmt = try self.output.addStmt(.{ .debug = value });
-                const stmts = try self.output.addStmtSpan(&.{debug_stmt});
-                break :blk try self.output.addExpr(
-                    self.output.getExpr(value).ty,
-                    self.exprValue(value),
-                    .{ .block = .{
-                        .stmts = stmts,
-                        .final_expr = value,
-                    } },
-                );
-            },
         };
         try self.expr_map.put(expr_id, lowered);
         return lowered;
+    }
+
+    fn lowerExprAtType(
+        self: *BodyBuilder,
+        expr_id: LambdaSolved.Ast.ExprId,
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.input.exprs.items[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .record => |record| blk: {
+                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.assembly_order, expected_ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .record = .{
+                        .shape = record.shape,
+                        .fields = fields,
+                    } },
+                );
+            },
+            .nominal_reinterpret => |backing| blk: {
+                const lowered_backing = try self.lowerNominalBackingAtType(expr.value_info, backing, expected_ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .nominal_reinterpret = lowered_backing },
+                );
+            },
+            .tag => |tag| blk: {
+                const resolved_tag = self.tagTypeForType(expected_ty, tag.tag);
+                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.assembly_order);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .tag = .{
+                        .union_shape = resolved_tag.union_shape,
+                        .tag = resolved_tag.tag_type.tag,
+                        .payloads = payloads,
+                    } },
+                );
+            },
+            .tuple => |items| blk: {
+                const items_span = try self.lowerTupleItemsForType(expr.value_info, items, expected_ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .tuple = items_span },
+                );
+            },
+            .list => |items| blk: {
+                const items_span = try self.lowerListItemsForType(expr.value_info, items, expected_ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .list = items_span },
+                );
+            },
+            .let_ => |let_| blk: {
+                const body = try self.lowerExpr(let_.body);
+                const previous = try self.env.fetchPut(let_.bind.binding_info, self.exprValue(body));
+                defer {
+                    if (previous) |entry| {
+                        self.env.put(let_.bind.binding_info, entry.value) catch unreachable;
+                    } else {
+                        _ = self.env.remove(let_.bind.binding_info);
+                    }
+                }
+                const rest = try self.lowerExprAtType(let_.rest, expected_ty);
+                const stmt = try self.output.addStmt(.{ .decl = .{
+                    .value = self.exprValue(body),
+                    .body = body,
+                } });
+                const stmt_span = try self.output.addStmtSpan(&.{stmt});
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.exprValue(rest),
+                    .{ .block = .{
+                        .stmts = stmt_span,
+                        .final_expr = rest,
+                    } },
+                );
+            },
+            .block => |block| blk: {
+                const stmts = try self.lowerStmtSpan(block.stmts);
+                const final_expr = try self.lowerExprAtType(block.final_expr, expected_ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.exprValue(final_expr),
+                    .{ .block = .{
+                        .stmts = stmts,
+                        .final_expr = final_expr,
+                    } },
+                );
+            },
+            else => self.lowerExpr(expr_id),
+        };
+    }
+
+    fn lowerExprAtConsumerUse(
+        self: *BodyBuilder,
+        expr_id: LambdaSolved.Ast.ExprId,
+        use_id: repr.ConsumerUsePlanId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan = self.representation_store.consumerUsePlan(use_id);
+        const source_expr = self.input.exprs.items[@intFromEnum(expr_id)];
+        if (source_expr.value_info != plan.child_value) {
+            executableInvariant("executable consumer-use plan child value differs from expression value");
+        }
+        const expected_ty = try self.lowerSessionExecutableEndpointType(plan.expected_endpoint);
+        return switch (plan.lowering) {
+            .construct_directly,
+            .lower_control_flow_contextually,
+            => try self.lowerExprAtType(expr_id, expected_ty),
+            .existing_value => |boundary_id| blk: {
+                const lowered = try self.lowerExpr(expr_id);
+                const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+                if (boundary.from_value != plan.child_value) {
+                    executableInvariant("executable consumer-use existing transform source value differs from plan child");
+                }
+                if (!sessionExecutableValueEndpointEql(boundary.to_endpoint, plan.expected_endpoint)) {
+                    executableInvariant("executable consumer-use existing transform target endpoint differs from plan endpoint");
+                }
+                var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+                defer stmt_ids.deinit(self.allocator);
+                const lowered_value = self.exprValue(lowered);
+                try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                    .value = lowered_value,
+                    .body = lowered,
+                } }));
+                const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, lowered_value);
+                const final_expr = try self.output.addExpr(expected_ty, transformed, .{ .value_ref = transformed });
+                break :blk try self.output.addExpr(expected_ty, transformed, .{ .block = .{
+                    .stmts = try self.output.addStmtSpan(stmt_ids.items),
+                    .final_expr = final_expr,
+                } });
+            },
+        };
     }
 
     const PendingPatternTest = struct {
@@ -4894,6 +5239,73 @@ const BodyBuilder = struct {
                 self.executableExprReturnsValue(if_.else_body),
             .source_match => |source_match| self.anyExecutableBranchReturnsValue(source_match.branches),
             else => true,
+        };
+    }
+
+    fn boolTrueDiscriminant(self: *const BodyBuilder, ty: Type.TypeId) u16 {
+        return switch (self.program.types.getType(ty)) {
+            .link => |next| self.boolTrueDiscriminant(next),
+            .nominal => |nominal| self.boolTrueDiscriminant(nominal.backing),
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    if (tag.payloads.len != 0) continue;
+                    const label = self.program.row_shapes.tag(tag.tag).label;
+                    if (std.mem.eql(u8, self.program.canonical_names.tagLabelText(label), "True")) {
+                        break :blk @intCast(self.program.row_shapes.tag(tag.tag).logical_index);
+                    }
+                }
+                executableInvariant("executable Bool condition had no zero-payload True tag");
+            },
+            else => executableInvariant("executable Bool condition expected ordinary Bool tag-union type"),
+        };
+    }
+
+    fn lowerBoolLiteralExpr(
+        self: *BodyBuilder,
+        source_ty: LambdaSolved.Type.TypeVarId,
+        value_info: repr.ValueInfoId,
+        literal: bool,
+    ) Allocator.Error!Ast.ExprId {
+        const ty = try self.lowerExecutableValueType(source_ty, value_info);
+        return try self.addBoolTagExpr(ty, literal);
+    }
+
+    fn addBoolTagExpr(
+        self: *BodyBuilder,
+        ty: Type.TypeId,
+        literal: bool,
+    ) Allocator.Error!Ast.ExprId {
+        const tag = self.boolTagForType(ty, literal);
+        return try self.output.addExpr(ty, self.output.freshValueRef(), .{ .tag = .{
+            .union_shape = tag.union_shape,
+            .tag = tag.tag,
+            .payloads = Ast.Span(Ast.TagPayloadExpr).empty(),
+        } });
+    }
+
+    fn boolTagForType(
+        self: *const BodyBuilder,
+        ty: Type.TypeId,
+        literal: bool,
+    ) TypeTag {
+        return switch (self.program.types.getType(ty)) {
+            .link => |next| self.boolTagForType(next, literal),
+            .nominal => |nominal| self.boolTagForType(nominal.backing, literal),
+            .tag_union => |tag_union| blk: {
+                const expected = if (literal) "True" else "False";
+                for (tag_union.tags) |tag| {
+                    if (tag.payloads.len != 0) continue;
+                    const label = self.program.row_shapes.tag(tag.tag).label;
+                    if (std.mem.eql(u8, self.program.canonical_names.tagLabelText(label), expected)) {
+                        break :blk .{
+                            .union_shape = tag_union.shape,
+                            .tag = tag.tag,
+                        };
+                    }
+                }
+                executableInvariant("executable Bool literal had no matching zero-payload tag");
+            },
+            else => executableInvariant("executable Bool literal expected ordinary Bool tag-union type"),
         };
     }
 
@@ -5330,10 +5742,6 @@ const BodyBuilder = struct {
                 .tag => |right| left == right,
                 else => false,
             },
-            .bool_literal => |left| switch (b) {
-                .bool_literal => |right| left == right,
-                else => false,
-            },
             .int_literal => |left| switch (b) {
                 .int_literal => |right| left == right,
                 else => false,
@@ -5565,7 +5973,6 @@ const BodyBuilder = struct {
                 try self.collectPatternDecisionData(as.pattern, path_value, tests, bindings, path_plans);
             },
             .nominal => |child| try self.collectPatternDecisionData(child, path_value, tests, bindings, path_plans),
-            .bool_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .bool_literal = literal } }),
             .int_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .int_literal = literal } }),
             .frac_f32_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .float_f32_literal = literal } }),
             .frac_f64_lit => |literal| try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .float_f64_literal = literal } }),
@@ -5616,7 +6023,8 @@ const BodyBuilder = struct {
                 const payload_patterns = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_patterns.len == 0) return;
 
-                const payload_record_ty = try self.payloadRecordTypeForPattern(pat.ty, tag.tag);
+                const parent_path = self.output.getPatternPathValuePlan(path_value);
+                const payload_record_ty = try self.payloadRecordTypeForPattern(parent_path.ty, tag.tag);
                 const payload_record_path = try self.addChildPatternPathValuePlan(
                     path_plans,
                     path_value,
@@ -5625,13 +6033,13 @@ const BodyBuilder = struct {
                     payload_record_ty,
                 );
                 for (payload_patterns) |payload_pattern| {
-                    const child = self.output.pats.items[@intFromEnum(payload_pattern.pattern)];
+                    const child_ty = self.tagPayloadTypeForPattern(parent_path.ty, payload_pattern.payload);
                     const child_path = try self.addChildPatternPathValuePlan(
                         path_plans,
                         payload_record_path,
                         .{ .tag_payload = payload_pattern.payload },
                         .{ .tag_payload_field = .{ .parent_payload_record = payload_record_path, .payload = payload_pattern.payload } },
-                        child.ty,
+                        child_ty,
                     );
                     try self.collectPatternDecisionData(payload_pattern.pattern, child_path, tests, bindings, path_plans);
                 }
@@ -5809,7 +6217,14 @@ const BodyBuilder = struct {
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.pats.items[@intFromEnum(pat_id)];
         return try self.output.addPat(.{ .ty = ty, .data = switch (pat.data) {
-            .bool_lit => |literal| .{ .bool_lit = literal },
+            .bool_lit => |literal| blk: {
+                const resolved_tag = self.boolTagForType(ty, literal);
+                break :blk .{ .tag = .{
+                    .union_shape = resolved_tag.union_shape,
+                    .tag = resolved_tag.tag,
+                    .payloads = Ast.Span(Ast.TagPayloadPattern).empty(),
+                } };
+            },
             .int_lit => |literal| .{ .int_lit = literal },
             .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
             .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
@@ -5841,11 +6256,14 @@ const BodyBuilder = struct {
                 const value = try self.bindPatternValue(var_.binding_info, saved);
                 break :blk .{ .bind = value };
             },
-            .tag => |tag| .{ .tag = .{
-                .union_shape = tag.union_shape,
-                .tag = tag.tag,
-                .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
-            } },
+            .tag => |tag| blk: {
+                const resolved_tag = self.tagForType(ty, tag.tag);
+                break :blk .{ .tag = .{
+                    .union_shape = resolved_tag.union_shape,
+                    .tag = resolved_tag.tag,
+                    .payloads = try self.lowerTagPayloadPatternSpanForTag(resolved_tag.tag, tag.payloads, saved),
+                } };
+            },
         } });
     }
 
@@ -6063,56 +6481,407 @@ const BodyBuilder = struct {
         return try self.output.addBranchSpan(branches);
     }
 
-    fn lowerTagPayloadPatternSpan(
+    const TypeTag = struct {
+        union_shape: MonoRow.TagUnionShapeId,
+        tag: MonoRow.TagId,
+    };
+
+    const TypeTagConstruction = struct {
+        union_shape: MonoRow.TagUnionShapeId,
+        tag_type: Type.TagType,
+    };
+
+    fn tagForType(
         self: *BodyBuilder,
+        ty: Type.TypeId,
+        source_tag: MonoRow.TagId,
+    ) TypeTag {
+        const resolved = self.tagTypeForType(ty, source_tag);
+        return .{
+            .union_shape = resolved.union_shape,
+            .tag = resolved.tag_type.tag,
+        };
+    }
+
+    fn tagTypeForType(
+        self: *BodyBuilder,
+        ty: Type.TypeId,
+        source_tag: MonoRow.TagId,
+    ) TypeTagConstruction {
+        return switch (self.program.types.getType(ty)) {
+            .tag_union => |tag_union| self.tagTypeForTagUnionType(tag_union, source_tag),
+            .nominal => |nominal| self.tagTypeForType(nominal.backing, source_tag),
+            else => executableInvariant("executable tag construction expected a tag-union endpoint"),
+        };
+    }
+
+    fn tagTypeForTagUnionType(
+        self: *BodyBuilder,
+        tag_union: Type.TagUnionType,
+        source_tag: MonoRow.TagId,
+    ) TypeTagConstruction {
+        const source_info = self.program.row_shapes.tag(source_tag);
+        const source_payloads = self.program.row_shapes.tagPayloads(source_tag);
+        for (tag_union.tags) |target_tag| {
+            const target_info = self.program.row_shapes.tag(target_tag.tag);
+            if (target_info.label != source_info.label) continue;
+            if (target_tag.payloads.len != source_payloads.len) {
+                executableInvariant("executable tag row re-keying found tag label with different payload arity");
+            }
+            return .{
+                .union_shape = tag_union.shape,
+                .tag_type = target_tag,
+            };
+        }
+        executableInvariant("executable tag row re-keying could not find tag label in expression type");
+    }
+
+    fn recordTypeForConstruction(
+        self: *BodyBuilder,
+        ty: Type.TypeId,
+    ) Type.RecordType {
+        return switch (self.program.types.getType(ty)) {
+            .record => |record| record,
+            .nominal => |nominal| self.recordTypeForConstruction(nominal.backing),
+            else => executableInvariant("executable record construction expected a record endpoint"),
+        };
+    }
+
+    fn recordFieldForConstruction(
+        self: *BodyBuilder,
+        record: Type.RecordType,
+        source_field: MonoRow.RecordFieldId,
+    ) Type.RecordFieldType {
+        const source_label = self.program.row_shapes.recordField(source_field).label;
+        for (record.fields) |target_field| {
+            const target_label = self.program.row_shapes.recordField(target_field.field).label;
+            if (target_label == source_label) return target_field;
+        }
+        executableInvariant("executable record construction could not find field label in expected endpoint");
+    }
+
+    fn tupleTypesForConstruction(
+        self: *BodyBuilder,
+        ty: Type.TypeId,
+    ) []const Type.TypeId {
+        return switch (self.program.types.getType(ty)) {
+            .tuple => |items| items,
+            .nominal => |nominal| self.tupleTypesForConstruction(nominal.backing),
+            else => executableInvariant("executable tuple construction expected a tuple endpoint"),
+        };
+    }
+
+    fn listElemTypeForConstruction(
+        self: *BodyBuilder,
+        ty: Type.TypeId,
+    ) Type.TypeId {
+        return switch (self.program.types.getType(ty)) {
+            .list => |elem| elem,
+            .nominal => |nominal| self.listElemTypeForConstruction(nominal.backing),
+            else => executableInvariant("executable list construction expected a list endpoint"),
+        };
+    }
+
+    fn payloadForTag(
+        self: *BodyBuilder,
+        target_tag: MonoRow.TagId,
+        source_payload: MonoRow.TagPayloadId,
+    ) MonoRow.TagPayloadId {
+        const source_payload_info = self.program.row_shapes.tagPayload(source_payload);
+        const source_tag_info = self.program.row_shapes.tag(source_payload_info.tag);
+        const target_tag_info = self.program.row_shapes.tag(target_tag);
+        if (source_tag_info.label != target_tag_info.label) {
+            executableInvariant("executable tag payload row re-keying crossed tag labels");
+        }
+        const target_payloads = self.program.row_shapes.tagPayloads(target_tag);
+        const payload_index: usize = @intCast(source_payload_info.logical_index);
+        if (payload_index >= target_payloads.len) {
+            executableInvariant("executable tag payload row re-keying source index exceeded target arity");
+        }
+        return target_payloads[payload_index];
+    }
+
+    fn payloadTypeForTagType(
+        self: *BodyBuilder,
+        target_tag: Type.TagType,
+        source_payload: MonoRow.TagPayloadId,
+    ) Type.TagPayloadType {
+        const target_payload = self.payloadForTag(target_tag.tag, source_payload);
+        for (target_tag.payloads) |payload| {
+            if (payload.payload == target_payload) return payload;
+        }
+        executableInvariant("executable tag construction could not find payload in expected endpoint");
+    }
+
+    fn lowerTagPayloadPatternSpanForTag(
+        self: *BodyBuilder,
+        target_tag: MonoRow.TagId,
         span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadPattern),
         saved: *std.ArrayList(SavedBinding),
     ) Allocator.Error!Ast.Span(Ast.TagPayloadPattern) {
-        if (span.len == 0) return Ast.Span(Ast.TagPayloadPattern).empty();
+        const target_payloads = self.program.row_shapes.tagPayloads(target_tag);
+        if (span.len == 0) {
+            if (target_payloads.len != 0) {
+                executableInvariant("executable tag pattern row re-keying payload arity mismatch");
+            }
+            return Ast.Span(Ast.TagPayloadPattern).empty();
+        }
         const input_items = self.input.tag_payload_patterns.items[span.start..][0..span.len];
+        if (input_items.len != target_payloads.len) {
+            executableInvariant("executable tag pattern row re-keying payload arity mismatch");
+        }
         const payloads = try self.allocator.alloc(Ast.TagPayloadPattern, input_items.len);
         defer self.allocator.free(payloads);
+        var seen = try self.allocator.alloc(bool, target_payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
         for (input_items, 0..) |payload, i| {
+            const target_payload = self.payloadForTag(target_tag, payload.payload);
+            const payload_index: usize = @intCast(self.program.row_shapes.tagPayload(target_payload).logical_index);
+            if (seen[payload_index]) {
+                executableInvariant("executable tag pattern row re-keying duplicated payload");
+            }
+            seen[payload_index] = true;
             payloads[i] = .{
-                .payload = payload.payload,
+                .payload = target_payload,
                 .pattern = try self.lowerPatScoped(payload.pattern, saved),
             };
         }
+        verifyAllSeen(seen, "executable tag pattern row re-keying omitted payload");
         return try self.output.addTagPayloadPatternSpan(payloads);
     }
 
-    fn lowerRecordFields(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly)) Allocator.Error!Ast.Span(Ast.RecordFieldExpr) {
-        if (span.len == 0) return Ast.Span(Ast.RecordFieldExpr).empty();
+    fn lowerNominalBackingAtType(
+        self: *BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        backing: LambdaSolved.Ast.ExprId,
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const use_id = self.nominalBackingConsumerUse(parent_value) orelse {
+            return switch (self.program.types.getType(expected_ty)) {
+                .nominal => |nominal| try self.lowerExprAtType(backing, nominal.backing),
+                else => try self.lowerExprAtType(backing, expected_ty),
+            };
+        };
+        return try self.lowerExprAtConsumerUse(backing, use_id);
+    }
+
+    fn nominalBackingConsumerUse(
+        self: *const BodyBuilder,
+        parent_value: repr.ValueInfoId,
+    ) ?repr.ConsumerUsePlanId {
+        return self.value_store.values.items[@intFromEnum(parent_value)].nominal_backing_consumer_use;
+    }
+
+    fn recordFieldConsumerUse(
+        self: *const BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        field: MonoRow.RecordFieldId,
+    ) ?repr.ConsumerUsePlanId {
+        const aggregate = self.value_store.values.items[@intFromEnum(parent_value)].aggregate orelse return null;
+        const record = switch (aggregate) {
+            .record => |record| record,
+            else => return null,
+        };
+        for (record.fields) |candidate| {
+            if (candidate.field == field) return candidate.consumer_use;
+        }
+        return null;
+    }
+
+    fn tupleElemConsumerUse(
+        self: *const BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        index: u32,
+    ) ?repr.ConsumerUsePlanId {
+        const aggregate = self.value_store.values.items[@intFromEnum(parent_value)].aggregate orelse return null;
+        const elems = switch (aggregate) {
+            .tuple => |elems| elems,
+            else => return null,
+        };
+        for (elems) |candidate| {
+            if (candidate.index == index) return candidate.consumer_use;
+        }
+        return null;
+    }
+
+    fn tagPayloadConsumerUse(
+        self: *const BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        payload: MonoRow.TagPayloadId,
+    ) ?repr.ConsumerUsePlanId {
+        const aggregate = self.value_store.values.items[@intFromEnum(parent_value)].aggregate orelse return null;
+        const tag = switch (aggregate) {
+            .tag => |tag| tag,
+            else => return null,
+        };
+        for (tag.payloads) |candidate| {
+            if (candidate.payload == payload) return candidate.consumer_use;
+        }
+        return null;
+    }
+
+    fn listElemConsumerUse(
+        self: *const BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        index: u32,
+    ) ?repr.ConsumerUsePlanId {
+        const aggregate = self.value_store.values.items[@intFromEnum(parent_value)].aggregate orelse return null;
+        const list = switch (aggregate) {
+            .list => |list| list,
+            else => return null,
+        };
+        for (list.elems) |candidate| {
+            if (candidate.index == index) return candidate.consumer_use;
+        }
+        return null;
+    }
+
+    fn lowerRecordFieldsForType(
+        self: *BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly),
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.RecordFieldExpr) {
+        const record_ty = self.recordTypeForConstruction(expected_ty);
+        if (span.len == 0) {
+            if (record_ty.fields.len != 0) {
+                executableInvariant("executable record construction expected fields but source assembly was empty");
+            }
+            return Ast.Span(Ast.RecordFieldExpr).empty();
+        }
         const input_items = self.input.record_field_assemblies.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(Ast.RecordFieldExpr, input_items.len);
+        if (input_items.len != record_ty.fields.len) {
+            executableInvariant("executable record construction field arity disagreed with expected endpoint");
+        }
+        const values = try self.allocator.alloc(Ast.RecordFieldExpr, record_ty.fields.len);
         defer self.allocator.free(values);
-        for (input_items, 0..) |field, i| {
-            const lowered = try self.lowerExpr(field.value);
-            values[i] = .{
-                .field = field.field,
+        const seen = try self.allocator.alloc(bool, record_ty.fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (input_items) |field| {
+            const target_field = self.recordFieldForConstruction(record_ty, field.field);
+            const field_index: usize = @intCast(self.program.row_shapes.recordField(target_field.field).logical_index);
+            if (field_index >= values.len) {
+                executableInvariant("executable record construction field index exceeded expected endpoint arity");
+            }
+            if (seen[field_index]) {
+                executableInvariant("executable record construction saw duplicate field");
+            }
+            seen[field_index] = true;
+            const use_id = self.recordFieldConsumerUse(parent_value, field.field) orelse
+                executableInvariant("executable record construction field had no published consumer-use plan");
+            const lowered = try self.lowerExprAtConsumerUse(field.value, use_id);
+            values[field_index] = .{
+                .field = target_field.field,
                 .expr = lowered,
-                .ty = self.output.getExpr(lowered).ty,
+                .ty = target_field.ty,
                 .value = self.exprValue(lowered),
             };
         }
+        verifyAllSeen(seen, "executable record construction omitted field");
         return try self.output.addRecordFieldExprSpan(values);
     }
 
-    fn lowerTagPayloadValues(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly)) Allocator.Error!Ast.Span(Ast.TagPayloadExpr) {
-        if (span.len == 0) return Ast.Span(Ast.TagPayloadExpr).empty();
+    fn lowerTagPayloadValuesForTagType(
+        self: *BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        target_tag: Type.TagType,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly),
+    ) Allocator.Error!Ast.Span(Ast.TagPayloadExpr) {
+        if (span.len == 0) {
+            if (target_tag.payloads.len != 0) {
+                executableInvariant("executable tag construction expected payloads but source assembly was empty");
+            }
+            return Ast.Span(Ast.TagPayloadExpr).empty();
+        }
         const input_items = self.input.tag_payload_assemblies.items[span.start..][0..span.len];
-        const values = try self.allocator.alloc(Ast.TagPayloadExpr, input_items.len);
+        if (input_items.len != target_tag.payloads.len) {
+            executableInvariant("executable tag construction payload arity disagreed with expected endpoint");
+        }
+        const values = try self.allocator.alloc(Ast.TagPayloadExpr, target_tag.payloads.len);
         defer self.allocator.free(values);
-        for (input_items, 0..) |payload, i| {
-            const lowered = try self.lowerExpr(payload.value);
-            values[i] = .{
-                .payload = payload.payload,
+        const seen = try self.allocator.alloc(bool, target_tag.payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+        for (input_items) |payload| {
+            const target_payload = self.payloadTypeForTagType(target_tag, payload.payload);
+            const payload_index: usize = @intCast(self.program.row_shapes.tagPayload(target_payload.payload).logical_index);
+            if (payload_index >= values.len) {
+                executableInvariant("executable tag construction payload index exceeded expected endpoint arity");
+            }
+            if (seen[payload_index]) {
+                executableInvariant("executable tag construction saw duplicate payload");
+            }
+            seen[payload_index] = true;
+            const use_id = self.tagPayloadConsumerUse(parent_value, payload.payload) orelse
+                executableInvariant("executable tag construction payload had no published consumer-use plan");
+            const plan = self.representation_store.consumerUsePlan(use_id);
+            const planned_ty = try self.lowerSessionExecutableEndpointType(plan.expected_endpoint);
+            if (planned_ty != target_payload.ty) {
+                executableInvariantFmt(
+                    "executable tag payload consumer-use endpoint disagreed with target payload type: planned={} target={}",
+                    .{ planned_ty, target_payload.ty },
+                );
+            }
+            const lowered = try self.lowerExprAtConsumerUse(payload.value, use_id);
+            values[payload_index] = .{
+                .payload = target_payload.payload,
                 .expr = lowered,
-                .ty = self.output.getExpr(lowered).ty,
+                .ty = target_payload.ty,
                 .value = self.exprValue(lowered),
             };
         }
+        verifyAllSeen(seen, "executable tag construction omitted payload");
         return try self.output.addTagPayloadExprSpan(values);
+    }
+
+    fn lowerTupleItemsForType(
+        self: *BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId),
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const tuple_tys = self.tupleTypesForConstruction(expected_ty);
+        if (span.len == 0) {
+            if (tuple_tys.len != 0) {
+                executableInvariant("executable tuple construction expected elements but source assembly was empty");
+            }
+            return Ast.Span(Ast.ExprId).empty();
+        }
+        const input_items = self.input.expr_ids.items[span.start..][0..span.len];
+        if (input_items.len != tuple_tys.len) {
+            executableInvariant("executable tuple construction arity disagreed with expected endpoint");
+        }
+        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(exprs);
+        for (input_items, tuple_tys, 0..) |expr, elem_ty, i| {
+            _ = elem_ty;
+            const use_id = self.tupleElemConsumerUse(parent_value, @intCast(i)) orelse
+                executableInvariant("executable tuple construction element had no published consumer-use plan");
+            exprs[i] = try self.lowerExprAtConsumerUse(expr, use_id);
+        }
+        return try self.output.addExprSpan(exprs);
+    }
+
+    fn lowerListItemsForType(
+        self: *BodyBuilder,
+        parent_value: repr.ValueInfoId,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId),
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (span.len == 0) return Ast.Span(Ast.ExprId).empty();
+        const elem_ty = self.listElemTypeForConstruction(expected_ty);
+        const input_items = self.input.expr_ids.items[span.start..][0..span.len];
+        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(exprs);
+        for (input_items, 0..) |expr, i| {
+            _ = elem_ty;
+            const use_id = self.listElemConsumerUse(parent_value, @intCast(i)) orelse
+                executableInvariant("executable list construction element had no published consumer-use plan");
+            exprs[i] = try self.lowerExprAtConsumerUse(expr, use_id);
+        }
+        return try self.output.addExprSpan(exprs);
     }
 
     fn lowerCallProc(
@@ -7112,6 +7881,8 @@ const BodyBuilder = struct {
         var published_types = PublishedTypeLowerer.init(
             self.allocator,
             context.executable_type_payloads,
+            context.materialization.canonical_names,
+            &self.program.canonical_names,
             &self.program.types,
             &self.program.row_shapes,
         );
@@ -7595,12 +8366,15 @@ const BodyBuilder = struct {
                 var published_types = PublishedTypeLowerer.init(
                     self.allocator,
                     context.executable_type_payloads,
+                    context.materialization.canonical_names,
+                    &self.program.canonical_names,
                     &self.program.types,
                     &self.program.row_shapes,
                 );
                 defer published_types.deinit();
                 break :blk try lowerExecutableValueChildBridge(
                     self.program,
+                    context.materialization,
                     &published_types,
                     context.executable_value_transforms,
                     published.transform,
@@ -7722,6 +8496,11 @@ fn executableInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+fn executableInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(fmt, args);
+    unreachable;
+}
+
 /// Public `verifyCallableMatchBranch` function.
 pub fn verifyCallableMatchBranch(
     representation_store: *const repr.RepresentationStore,
@@ -7796,10 +8575,46 @@ fn sessionExecutableValueEndpointOwnerEql(
                 repr.callableSetKeyEql(branch.member.callable_set_key, other.member.callable_set_key),
             else => false,
         },
+        .consumer_use => |owner| switch (b) {
+            .consumer_use => |other| consumerUseOwnerEql(owner, other),
+            else => false,
+        },
         .transform_child => |child| switch (b) {
             .transform_child => |other| child.scope == other.scope and
                 child.side == other.side and
                 child.path == other.path,
+            else => false,
+        },
+    };
+}
+
+fn consumerUseOwnerEql(
+    a: repr.ConsumerUseOwner,
+    b: repr.ConsumerUseOwner,
+) bool {
+    return switch (a) {
+        .record_field => |field| switch (b) {
+            .record_field => |other| field.parent == other.parent and field.field == other.field,
+            else => false,
+        },
+        .tuple_elem => |elem| switch (b) {
+            .tuple_elem => |other| elem.parent == other.parent and elem.index == other.index,
+            else => false,
+        },
+        .tag_payload => |payload| switch (b) {
+            .tag_payload => |other| payload.parent == other.parent and
+                payload.tag == other.tag and
+                payload.payload == other.payload,
+            else => false,
+        },
+        .list_elem => |elem| switch (b) {
+            .list_elem => |other| elem.parent == other.parent and elem.index == other.index,
+            else => false,
+        },
+        .nominal_backing => |backing| switch (b) {
+            .nominal_backing => |other| backing.parent == other.parent and
+                backing.nominal.module_name == other.nominal.module_name and
+                backing.nominal.type_name == other.nominal.type_name,
             else => false,
         },
     };

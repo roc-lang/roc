@@ -43,6 +43,7 @@ pub const MonoSpecializationReason = union(enum) {
     semantic_instantiation_procedure: checked_artifact.SemanticInstantiationProcedureId,
     erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
     erased_finite_capture_member: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+    str_inspect_nested: canonical.ProcedureTemplateRef,
 };
 
 /// Public `Input` declaration.
@@ -1246,14 +1247,29 @@ const TypeInstantiator = struct {
     materialized_template_roots: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId),
     materialized_concrete_roots: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
     concrete_template_refs: std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef),
-
-    const ConcreteRefSubstitutions = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, ConcreteSourceType.ConcreteSourceTypeRef);
-    const ConcreteRefMaterializationMap = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId);
+    row_clone_template_roots: std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId),
+    row_clone_concrete_roots: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
 
     const ConcreteRecordFieldEntry = struct {
         name: canonical.RecordFieldLabelId,
         owner: ConcreteSourceType.ConcreteSourceTypeRef,
         ty: checked_artifact.CheckedTypeId,
+    };
+
+    const ConcreteRecordTail = struct {
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        is_open: bool,
+    };
+
+    const ConcreteTagEntry = struct {
+        name: canonical.TagLabelId,
+        owner: ConcreteSourceType.ConcreteSourceTypeRef,
+        tag: checked_artifact.CheckedTag,
+    };
+
+    const ConcreteTagTail = struct {
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        is_open: bool,
     };
 
     fn init(
@@ -1278,10 +1294,14 @@ const TypeInstantiator = struct {
             .materialized_template_roots = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId).init(allocator),
             .materialized_concrete_roots = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId).init(allocator),
             .concrete_template_refs = std.AutoHashMap(checked_artifact.CheckedTypeId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
+            .row_clone_template_roots = std.AutoHashMap(checked_artifact.CheckedTypeId, checked_artifact.CheckedTypeId).init(allocator),
+            .row_clone_concrete_roots = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiator) void {
+        self.row_clone_concrete_roots.deinit();
+        self.row_clone_template_roots.deinit();
         self.concrete_template_refs.deinit();
         self.materialized_concrete_roots.deinit();
         self.materialized_template_roots.deinit();
@@ -1352,6 +1372,18 @@ const TypeInstantiator = struct {
             child.concrete_template_refs.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        try child.row_clone_template_roots.ensureTotalCapacity(self.row_clone_template_roots.count());
+        var cloned_templates = self.row_clone_template_roots.iterator();
+        while (cloned_templates.next()) |entry| {
+            child.row_clone_template_roots.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        try child.row_clone_concrete_roots.ensureTotalCapacity(self.row_clone_concrete_roots.count());
+        var cloned_concrete = self.row_clone_concrete_roots.iterator();
+        while (cloned_concrete.next()) |entry| {
+            child.row_clone_concrete_roots.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
         return child;
     }
 
@@ -1389,6 +1421,322 @@ const TypeInstantiator = struct {
         return concrete;
     }
 
+    fn concreteRefForTemplateTypePreservingVariables(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        if (self.substitutions.get(id)) |concrete| return self.resolveConcreteRef(concrete);
+        const local = try self.cloneTemplateTypeForRowEquation(id);
+        return try self.program.concrete_source_types.registerLocalRoot(local);
+    }
+
+    fn cloneTemplateTypeForRowEquation(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        if (self.substitutions.get(id)) |concrete| return try self.cloneConcreteTypeForRowEquation(concrete);
+        if (self.row_clone_template_roots.get(id)) |existing| return existing;
+
+        switch (self.templatePayload(id)) {
+            .flex => |flex| return try self.cloneTemplateVariableForRowEquation(id, .flex, flex),
+            .rigid => |rigid| return try self.cloneTemplateVariableForRowEquation(id, .rigid, rigid),
+            else => {},
+        }
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.row_clone_template_roots.put(id, local_root);
+        errdefer _ = self.row_clone_template_roots.remove(id);
+
+        const payload = try self.cloneTemplatePayloadForRowEquation(self.templatePayload(id));
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        try self.sealReachableMaterializedLocalGraph(local_root);
+        return local_root;
+    }
+
+    fn cloneTemplateVariableForRowEquation(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+        comptime kind: enum { flex, rigid },
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.row_clone_template_roots.put(id, local_root);
+        errdefer _ = self.row_clone_template_roots.remove(id);
+
+        const payload: checked_artifact.CheckedTypePayload = switch (kind) {
+            .flex => .{ .flex = try self.copyTemplateVariable(variable) },
+            .rigid => .{ .rigid = try self.copyTemplateVariable(variable) },
+        };
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        const concrete = try self.sealMaterializedLocalRootRef(local_root);
+        try self.substitutions.put(id, concrete);
+        self.clearLoweredTypeCaches();
+        return local_root;
+    }
+
+    fn cloneConcreteTypeForRowEquation(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const resolved = self.resolveConcreteRef(ref);
+        const root = self.program.concrete_source_types.root(resolved);
+        switch (root.source) {
+            .local => |local| return local,
+            .artifact => {},
+        }
+        if (self.row_clone_concrete_roots.get(resolved)) |existing| return existing;
+
+        switch (self.concretePayload(resolved)) {
+            .flex => |flex| return try self.cloneConcreteVariableForRowEquation(resolved, .flex, flex),
+            .rigid => |rigid| return try self.cloneConcreteVariableForRowEquation(resolved, .rigid, rigid),
+            else => {},
+        }
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.row_clone_concrete_roots.put(resolved, local_root);
+        errdefer _ = self.row_clone_concrete_roots.remove(resolved);
+
+        const payload = try self.cloneConcretePayloadForRowEquation(resolved, self.concretePayload(resolved));
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        try self.sealReachableMaterializedLocalGraph(local_root);
+        return local_root;
+    }
+
+    fn cloneConcreteVariableForRowEquation(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        comptime kind: enum { flex, rigid },
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.row_clone_concrete_roots.put(ref, local_root);
+        errdefer _ = self.row_clone_concrete_roots.remove(ref);
+
+        const payload: checked_artifact.CheckedTypePayload = switch (kind) {
+            .flex => .{ .flex = try self.copyConcreteVariable(variable) },
+            .rigid => .{ .rigid = try self.copyConcreteVariable(variable) },
+        };
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        const concrete = try self.sealMaterializedLocalRootRef(local_root);
+        try self.bindConcreteVariable(ref, concrete);
+        return local_root;
+    }
+
+    fn cloneTemplatePayloadForRowEquation(
+        self: *TypeInstantiator,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
+            .flex => |flex| .{ .flex = try self.copyTemplateVariable(flex) },
+            .rigid => |rigid| .{ .rigid = try self.copyTemplateVariable(rigid) },
+            .alias => |alias| .{ .alias = .{
+                .name = try self.name_resolver.typeName(self.template_artifact, alias.name),
+                .origin_module = try self.name_resolver.moduleName(self.template_artifact, alias.origin_module),
+                .backing = try self.cloneTemplateTypeForRowEquation(alias.backing),
+                .args = try self.cloneTemplateTypeIdsForRowEquation(alias.args),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.cloneTemplateRecordFieldsForRowEquation(fields) },
+            .record => |record| .{ .record = .{
+                .fields = try self.cloneTemplateRecordFieldsForRowEquation(record.fields),
+                .ext = try self.cloneTemplateTypeForRowEquation(record.ext),
+            } },
+            .tuple => |items| .{ .tuple = try self.cloneTemplateTypeIdsForRowEquation(items) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
+                .origin_module = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.cloneTemplateTypeForRowEquation(nominal.backing),
+                .args = try self.cloneTemplateTypeIdsForRowEquation(nominal.args),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = func.kind,
+                .args = try self.cloneTemplateTypeIdsForRowEquation(func.args),
+                .ret = try self.cloneTemplateTypeForRowEquation(func.ret),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.cloneTemplateTagsForRowEquation(tag_union.tags),
+                .ext = try self.cloneTemplateTypeForRowEquation(tag_union.ext),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn cloneConcretePayloadForRowEquation(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
+            .flex => |flex| .{ .flex = try self.copyConcreteVariable(flex) },
+            .rigid => |rigid| .{ .rigid = try self.copyConcreteVariable(rigid) },
+            .alias => |alias| .{ .alias = .{
+                .name = try self.typeNameForConcreteRef(ref, alias.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
+                .backing = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, alias.backing)),
+                .args = try self.cloneConcreteTypeIdsForRowEquation(ref, alias.args),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.cloneConcreteRecordFieldsForRowEquation(ref, fields) },
+            .record => |record| .{ .record = .{
+                .fields = try self.cloneConcreteRecordFieldsForRowEquation(ref, record.fields),
+                .ext = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, record.ext)),
+            } },
+            .tuple => |items| .{ .tuple = try self.cloneConcreteTypeIdsForRowEquation(ref, items) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.typeNameForConcreteRef(ref, nominal.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, nominal.backing)),
+                .args = try self.cloneConcreteTypeIdsForRowEquation(ref, nominal.args),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = func.kind,
+                .args = try self.cloneConcreteTypeIdsForRowEquation(ref, func.args),
+                .ret = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, func.ret)),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.cloneConcreteTagsForRowEquation(ref, tag_union.tags),
+                .ext = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, tag_union.ext)),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn cloneTemplateTypeIdsForRowEquation(
+        self: *TypeInstantiator,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.cloneTemplateTypeForRowEquation(id);
+        }
+        return out;
+    }
+
+    fn cloneConcreteTypeIdsForRowEquation(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(parent, id));
+        }
+        return out;
+    }
+
+    fn cloneTemplateRecordFieldsForRowEquation(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name),
+                .ty = try self.cloneTemplateTypeForRowEquation(field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn cloneConcreteRecordFieldsForRowEquation(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.recordFieldNameForConcreteRef(parent, field.name),
+                .ty = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(parent, field.ty)),
+            };
+        }
+        return out;
+    }
+
+    fn cloneTemplateTagsForRowEquation(
+        self: *TypeInstantiator,
+        tags: []const checked_artifact.CheckedTag,
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.name_resolver.tagLabel(self.template_artifact, tag.name),
+                .args = try self.cloneTemplateTypeIdsForRowEquation(tag.args),
+            };
+        }
+        return out;
+    }
+
+    fn cloneConcreteTagsForRowEquation(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        tags: []const checked_artifact.CheckedTag,
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.tagNameForConcreteRef(parent, tag.name),
+                .args = try self.cloneConcreteTypeIdsForRowEquation(parent, tag.args),
+            };
+        }
+        return out;
+    }
+
+    fn copyTemplateVariable(
+        self: *TypeInstantiator,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
+        return .{
+            .name = try self.copyOptionalText(variable.name),
+            .constraints = &.{},
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
+    fn copyConcreteVariable(
+        self: *TypeInstantiator,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
+        return .{
+            .name = try self.copyOptionalText(variable.name),
+            .constraints = &.{},
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
+    fn copyOptionalText(self: *TypeInstantiator, maybe_text: ?[]const u8) Allocator.Error!?[]const u8 {
+        if (maybe_text) |text| return try self.allocator.dupe(u8, text);
+        return null;
+    }
+
     fn materializeTemplateType(
         self: *TypeInstantiator,
         id: checked_artifact.CheckedTypeId,
@@ -1402,7 +1750,7 @@ const TypeInstantiator = struct {
 
         const payload = try self.materializeTemplatePayload(self.templatePayload(id));
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
-        try self.sealMaterializedLocalRoot(local_root);
+        try self.sealReachableMaterializedLocalGraph(local_root);
         return local_root;
     }
 
@@ -1662,51 +2010,6 @@ const TypeInstantiator = struct {
         }
     }
 
-    fn collectConcreteRecordFieldEntries(
-        self: *TypeInstantiator,
-        ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        out: *std.ArrayList(ConcreteRecordFieldEntry),
-    ) Allocator.Error!void {
-        const payload = self.concretePayload(ref);
-        switch (payload) {
-            .alias => |alias| try self.collectConcreteRecordFieldEntries(try self.concreteAliasBackingRef(ref, alias), out),
-            .empty_record => {},
-            .flex => |flex| self.verifyClosableRowTail(flex),
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    try out.append(self.allocator, .{
-                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
-                        .owner = ref,
-                        .ty = field.ty,
-                    });
-                }
-            },
-            .record => |record| {
-                for (record.fields) |field| {
-                    try out.append(self.allocator, .{
-                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
-                        .owner = ref,
-                        .ty = field.ty,
-                    });
-                }
-                try self.collectConcreteRecordFieldEntries(try self.concreteChildRef(ref, record.ext), out);
-            },
-            else => invariantViolation("mono specialization concrete record extension resolved to a non-record type"),
-        }
-    }
-
-    fn templateRecordExtIsClosed(
-        self: *TypeInstantiator,
-        ext: checked_artifact.CheckedTypeId,
-    ) bool {
-        if (self.substitutions.get(ext)) |_| return false;
-        return switch (self.templatePayload(ext)) {
-            .alias => |alias| self.templateRecordExtIsClosed(alias.backing),
-            .empty_record => true,
-            else => false,
-        };
-    }
-
     fn lowerTemplateTagUnion(
         self: *TypeInstantiator,
         tag_union: checked_artifact.CheckedTagUnionType,
@@ -1810,7 +2113,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!Type.Content {
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
-                .bool => return .{ .primitive = .bool },
+                .bool => return .{ .link = try self.lowerTemplateType(nominal.backing) },
                 .str => return .{ .primitive = .str },
                 .u8 => return .{ .primitive = .u8 },
                 .i8 => return .{ .primitive = .i8 },
@@ -1939,15 +2242,18 @@ const TypeInstantiator = struct {
         const template = self.templatePayload(template_id);
         const concrete_payload = self.concretePayload(concrete);
         switch (template) {
-            .record => |record| switch (concrete_payload) {
-                .record => |concrete_record| try self.unifyRecords(record, concrete, concrete_record),
-                .empty_record => if (record.fields.len != 0) invariantViolation("mono specialization record arity mismatch"),
+            .record => switch (concrete_payload) {
+                .record, .record_unbound, .empty_record, .nominal => {
+                    try self.unifyConcreteRefs(try self.concreteRefForTemplateTypePreservingVariables(template_id), concrete);
+                },
                 else => invariantViolation("mono specialization expected a concrete record"),
             },
-            .record_unbound => |fields| switch (concrete_payload) {
-                .record, .record_unbound => try self.unifyRecordFieldSet(fields, concrete),
-                .empty_record => if (fields.len != 0) invariantViolation("mono specialization record arity mismatch"),
-                else => invariantViolation("mono specialization expected a concrete record row"),
+            .record_unbound => switch (concrete_payload) {
+                .record, .record_unbound, .empty_record => {
+                    try self.unifyConcreteRefs(try self.concreteRefForTemplateTypePreservingVariables(template_id), concrete);
+                },
+                .nominal => |nominal| try self.unifyTemplateWithConcrete(template_id, try self.concreteNominalBackingRef(concrete, nominal)),
+                else => invariantViolation("mono specialization expected a concrete record"),
             },
             .tuple => |items| switch (concrete_payload) {
                 .tuple => |concrete_items| try self.unifyTypeLists(items, concrete, concrete_items),
@@ -1955,7 +2261,7 @@ const TypeInstantiator = struct {
             },
             .nominal => |nominal| switch (concrete_payload) {
                 .nominal => |concrete_nominal| try self.unifyNominals(nominal, concrete, concrete_nominal),
-                else => invariantViolation("mono specialization expected a concrete nominal"),
+                else => try self.unifyTemplateWithConcrete(nominal.backing, concrete),
             },
             .function => |func| switch (concrete_payload) {
                 .function => |concrete_func| {
@@ -1966,96 +2272,25 @@ const TypeInstantiator = struct {
             },
             .empty_record => switch (concrete_payload) {
                 .empty_record => {},
-                .record => |record| if (record.fields.len != 0) invariantViolation("mono specialization empty record mismatch"),
+                .record, .record_unbound, .nominal => {
+                    try self.unifyConcreteRefs(try self.concreteRefForTemplateTypePreservingVariables(template_id), concrete);
+                },
                 else => invariantViolation("mono specialization expected an empty concrete record"),
             },
-            .tag_union => |tag_union| switch (concrete_payload) {
-                .tag_union => |concrete_tag_union| try self.unifyTagUnions(tag_union, concrete, concrete_tag_union),
-                .empty_tag_union => if (tag_union.tags.len != 0) invariantViolation("mono specialization tag-union mismatch"),
+            .tag_union => switch (concrete_payload) {
+                .tag_union, .empty_tag_union, .nominal => {
+                    try self.unifyConcreteRefs(try self.concreteRefForTemplateTypePreservingVariables(template_id), concrete);
+                },
                 else => invariantViolation("mono specialization expected a concrete tag union"),
             },
             .empty_tag_union => switch (concrete_payload) {
                 .empty_tag_union => {},
-                .tag_union => |tag_union| if (tag_union.tags.len != 0) invariantViolation("mono specialization empty tag-union mismatch"),
+                .tag_union, .nominal => {
+                    try self.unifyConcreteRefs(try self.concreteRefForTemplateTypePreservingVariables(template_id), concrete);
+                },
                 else => invariantViolation("mono specialization expected an empty concrete tag union"),
             },
             .pending, .flex, .rigid, .alias => unreachable,
-        }
-    }
-
-    fn unifyRecords(
-        self: *TypeInstantiator,
-        template: checked_artifact.CheckedRecordType,
-        concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        concrete_record: checked_artifact.CheckedRecordType,
-    ) Allocator.Error!void {
-        if (self.templateRecordExtIsClosed(template.ext)) {
-            try self.unifyClosedRecordFields(template.fields, concrete_ref);
-            return;
-        }
-        try self.unifyRecordFields(template.fields, concrete_ref, concrete_record.fields);
-        try self.unifyTemplateWithConcrete(template.ext, try self.concreteChildRef(concrete_ref, concrete_record.ext));
-    }
-
-    fn unifyClosedRecordFields(
-        self: *TypeInstantiator,
-        template_fields: []const checked_artifact.CheckedRecordField,
-        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
-    ) Allocator.Error!void {
-        var concrete_fields = std.ArrayList(ConcreteRecordFieldEntry).empty;
-        defer concrete_fields.deinit(self.allocator);
-        try self.collectConcreteRecordFieldEntries(concrete, &concrete_fields);
-
-        const consumed = try self.allocator.alloc(bool, concrete_fields.items.len);
-        defer self.allocator.free(consumed);
-        @memset(consumed, false);
-
-        for (template_fields) |field| {
-            const expected_name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name);
-            var matched: ?usize = null;
-            for (concrete_fields.items, 0..) |entry, i| {
-                if (!consumed[i] and entry.name == expected_name) {
-                    matched = i;
-                    break;
-                }
-            }
-            const index = matched orelse {
-                invariantViolation("mono specialization record field was missing in concrete type");
-            };
-            consumed[index] = true;
-            const entry = concrete_fields.items[index];
-            try self.unifyTemplateWithConcrete(field.ty, try self.concreteChildRef(entry.owner, entry.ty));
-        }
-
-        for (consumed) |was_consumed| {
-            if (!was_consumed) invariantViolation("mono specialization closed record concrete type had an extra field");
-        }
-    }
-
-    fn unifyRecordFieldSet(
-        self: *TypeInstantiator,
-        fields: []const checked_artifact.CheckedRecordField,
-        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
-    ) Allocator.Error!void {
-        switch (self.concretePayload(concrete)) {
-            .record => |record| try self.unifyRecordFields(fields, concrete, record.fields),
-            .record_unbound => |concrete_fields| try self.unifyRecordFields(fields, concrete, concrete_fields),
-            else => invariantViolation("mono specialization expected concrete record fields"),
-        }
-    }
-
-    fn unifyRecordFields(
-        self: *TypeInstantiator,
-        fields: []const checked_artifact.CheckedRecordField,
-        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
-        concrete_fields: []const checked_artifact.CheckedRecordField,
-    ) Allocator.Error!void {
-        for (fields) |field| {
-            const expected_name = try self.name_resolver.recordFieldLabel(self.template_artifact, field.name);
-            const concrete_field = (try self.findConcreteRecordField(concrete, concrete_fields, expected_name)) orelse {
-                invariantViolation("mono specialization record field was missing in concrete type");
-            };
-            try self.unifyTemplateWithConcrete(field.ty, try self.concreteChildRef(concrete, concrete_field.ty));
         }
     }
 
@@ -2079,22 +2314,6 @@ const TypeInstantiator = struct {
             }
         }
         try self.unifyTypeLists(template.args, concrete_ref, concrete.args);
-    }
-
-    fn unifyTagUnions(
-        self: *TypeInstantiator,
-        template: checked_artifact.CheckedTagUnionType,
-        concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        concrete: checked_artifact.CheckedTagUnionType,
-    ) Allocator.Error!void {
-        for (template.tags) |tag| {
-            const expected_name = try self.name_resolver.tagLabel(self.template_artifact, tag.name);
-            const concrete_tag = (try self.findConcreteTag(concrete_ref, concrete.tags, expected_name)) orelse {
-                invariantViolation("mono specialization tag was missing in concrete type");
-            };
-            try self.unifyTypeLists(tag.args, concrete_ref, concrete_tag.args);
-        }
-        try self.unifyTemplateWithConcrete(template.ext, try self.concreteChildRef(concrete_ref, concrete.ext));
     }
 
     fn unifyTypeLists(
@@ -2130,12 +2349,505 @@ const TypeInstantiator = struct {
                     return;
                 }
                 if (delayed_numeric_default) return;
-                invariantViolation("mono specialization generic variable mapped to incompatible concrete types");
+                try self.unifyConcreteRefs(resolved_existing, resolved_concrete);
+                if (self.preferredNominalBinding(resolved_existing, resolved_concrete)) |preferred| {
+                    try self.substitutions.put(template_id, preferred);
+                    self.clearDerivedTypeCaches();
+                }
             }
             return;
         }
         try self.substitutions.put(template_id, resolved_concrete);
+        self.clearDerivedTypeCaches();
         if (delayed_numeric_default) try self.defaulted_numeric_substitutions.put(template_id, {});
+    }
+
+    fn unifyConcreteRefs(
+        self: *TypeInstantiator,
+        lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const lhs = self.resolveConcreteRef(lhs_ref);
+        const rhs = self.resolveConcreteRef(rhs_ref);
+        if (lhs == rhs) return;
+
+        const lhs_payload = self.concretePayload(lhs);
+        switch (lhs_payload) {
+            .flex,
+            .rigid,
+            => {
+                try self.bindConcreteVariable(lhs, rhs);
+                return;
+            },
+            .alias => |alias| {
+                try self.unifyConcreteRefs(try self.concreteAliasBackingRef(lhs, alias), rhs);
+                return;
+            },
+            else => {},
+        }
+
+        const rhs_payload = self.concretePayload(rhs);
+        switch (rhs_payload) {
+            .flex,
+            .rigid,
+            => {
+                try self.bindConcreteVariable(rhs, lhs);
+                return;
+            },
+            .alias => |alias| {
+                try self.unifyConcreteRefs(lhs, try self.concreteAliasBackingRef(rhs, alias));
+                return;
+            },
+            else => {},
+        }
+
+        try self.unifyConcretePayloads(lhs, lhs_payload, rhs, rhs_payload);
+    }
+
+    fn unifyConcretePayloads(
+        self: *TypeInstantiator,
+        lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs: checked_artifact.CheckedTypePayload,
+        rhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!void {
+        switch (lhs) {
+            .record => switch (rhs) {
+                .record, .record_unbound, .empty_record => try self.unifyConcreteRecordRows(lhs_ref, rhs_ref),
+                .nominal => |nominal| try self.unifyConcreteRefs(lhs_ref, try self.concreteNominalBackingRef(rhs_ref, nominal)),
+                else => invariantViolation("mono specialization expected matching concrete records"),
+            },
+            .record_unbound => switch (rhs) {
+                .record, .record_unbound, .empty_record => try self.unifyConcreteRecordRows(lhs_ref, rhs_ref),
+                else => invariantViolation("mono specialization expected matching concrete record rows"),
+            },
+            .tuple => |items| switch (rhs) {
+                .tuple => |rhs_items| try self.unifyConcreteTypeLists(lhs_ref, items, rhs_ref, rhs_items),
+                .nominal => |nominal| try self.unifyConcreteRefs(lhs_ref, try self.concreteNominalBackingRef(rhs_ref, nominal)),
+                else => invariantViolation("mono specialization expected matching concrete tuples"),
+            },
+            .nominal => |nominal| switch (rhs) {
+                .nominal => |rhs_nominal| try self.unifyConcreteNominals(lhs_ref, nominal, rhs_ref, rhs_nominal),
+                else => try self.unifyConcreteRefs(try self.concreteNominalBackingRef(lhs_ref, nominal), rhs_ref),
+            },
+            .function => |func| switch (rhs) {
+                .function => |rhs_func| {
+                    if (func.kind != rhs_func.kind or func.args.len != rhs_func.args.len) {
+                        invariantViolation("mono specialization concrete function shape mismatch");
+                    }
+                    try self.unifyConcreteTypeLists(lhs_ref, func.args, rhs_ref, rhs_func.args);
+                    try self.unifyConcreteRefs(
+                        try self.concreteChildRef(lhs_ref, func.ret),
+                        try self.concreteChildRef(rhs_ref, rhs_func.ret),
+                    );
+                },
+                else => invariantViolation("mono specialization expected matching concrete functions"),
+            },
+            .empty_record => switch (rhs) {
+                .empty_record => {},
+                .record, .record_unbound => try self.unifyConcreteRecordRows(lhs_ref, rhs_ref),
+                .nominal => |nominal| try self.unifyConcreteRefs(lhs_ref, try self.concreteNominalBackingRef(rhs_ref, nominal)),
+                else => invariantViolation("mono specialization expected matching empty concrete records"),
+            },
+            .tag_union => switch (rhs) {
+                .tag_union => try self.unifyConcreteTagRows(lhs_ref, rhs_ref),
+                .empty_tag_union => try self.unifyConcreteTagRows(lhs_ref, rhs_ref),
+                .nominal => |nominal| try self.unifyConcreteRefs(lhs_ref, try self.concreteNominalBackingRef(rhs_ref, nominal)),
+                else => invariantViolation("mono specialization expected matching concrete tag unions"),
+            },
+            .empty_tag_union => switch (rhs) {
+                .empty_tag_union => {},
+                .tag_union => try self.unifyConcreteTagRows(lhs_ref, rhs_ref),
+                .nominal => |nominal| try self.unifyConcreteRefs(lhs_ref, try self.concreteNominalBackingRef(rhs_ref, nominal)),
+                else => invariantViolation("mono specialization expected matching empty concrete tag unions"),
+            },
+            .pending, .flex, .rigid, .alias => unreachable,
+        }
+    }
+
+    fn preferredNominalBinding(
+        self: *TypeInstantiator,
+        lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) ?ConcreteSourceType.ConcreteSourceTypeRef {
+        const lhs = self.resolveConcreteRef(lhs_ref);
+        if (self.concretePayload(lhs) == .nominal) return lhs;
+        const rhs = self.resolveConcreteRef(rhs_ref);
+        if (self.concretePayload(rhs) == .nominal) return rhs;
+        return null;
+    }
+
+    fn unifyConcreteRecordRows(
+        self: *TypeInstantiator,
+        lhs_row: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_row: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        var lhs_entries = std.ArrayList(ConcreteRecordFieldEntry).empty;
+        defer lhs_entries.deinit(self.allocator);
+        const lhs_tail = try self.collectConcreteRecordRowEntries(lhs_row, &lhs_entries);
+
+        var rhs_entries = std.ArrayList(ConcreteRecordFieldEntry).empty;
+        defer rhs_entries.deinit(self.allocator);
+        const rhs_tail = try self.collectConcreteRecordRowEntries(rhs_row, &rhs_entries);
+
+        const rhs_consumed = try self.allocator.alloc(bool, rhs_entries.items.len);
+        defer self.allocator.free(rhs_consumed);
+        @memset(rhs_consumed, false);
+
+        var lhs_only = std.ArrayList(ConcreteRecordFieldEntry).empty;
+        defer lhs_only.deinit(self.allocator);
+
+        for (lhs_entries.items) |lhs_entry| {
+            if (findUnconsumedConcreteRecordFieldEntry(rhs_entries.items, rhs_consumed, lhs_entry.name)) |rhs_index| {
+                rhs_consumed[rhs_index] = true;
+                const rhs_entry = rhs_entries.items[rhs_index];
+                try self.unifyConcreteRefs(
+                    try self.concreteChildRef(lhs_entry.owner, lhs_entry.ty),
+                    try self.concreteChildRef(rhs_entry.owner, rhs_entry.ty),
+                );
+            } else {
+                try lhs_only.append(self.allocator, lhs_entry);
+            }
+        }
+
+        var rhs_only = std.ArrayList(ConcreteRecordFieldEntry).empty;
+        defer rhs_only.deinit(self.allocator);
+        for (rhs_entries.items, 0..) |rhs_entry, index| {
+            if (!rhs_consumed[index]) try rhs_only.append(self.allocator, rhs_entry);
+        }
+
+        try self.reconcileConcreteRecordTails(lhs_tail, lhs_only.items, rhs_tail, rhs_only.items);
+    }
+
+    fn collectConcreteRecordRowEntries(
+        self: *TypeInstantiator,
+        row: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(ConcreteRecordFieldEntry),
+    ) Allocator.Error!ConcreteRecordTail {
+        var current = row;
+        while (true) {
+            switch (self.concretePayload(current)) {
+                .alias => |alias| current = try self.concreteAliasBackingRef(current, alias),
+                .nominal => |nominal| current = try self.concreteNominalBackingRef(current, nominal),
+                .empty_record => return .{ .ref = current, .is_open = false },
+                .record_unbound => |fields| {
+                    for (fields) |field| {
+                        try out.append(self.allocator, .{
+                            .name = try self.recordFieldNameForConcreteRef(current, field.name),
+                            .owner = current,
+                            .ty = field.ty,
+                        });
+                    }
+                    return .{ .ref = try self.emptyConcreteRecordTailRef(), .is_open = false };
+                },
+                .flex, .rigid => return .{ .ref = current, .is_open = true },
+                .record => |record| {
+                    for (record.fields) |field| {
+                        try out.append(self.allocator, .{
+                            .name = try self.recordFieldNameForConcreteRef(current, field.name),
+                            .owner = current,
+                            .ty = field.ty,
+                        });
+                    }
+                    current = try self.concreteChildRef(current, record.ext);
+                },
+                else => invariantViolation("mono specialization concrete record row resolved to a non-record type"),
+            }
+        }
+    }
+
+    fn reconcileConcreteRecordTails(
+        self: *TypeInstantiator,
+        lhs_tail: ConcreteRecordTail,
+        lhs_only: []const ConcreteRecordFieldEntry,
+        rhs_tail: ConcreteRecordTail,
+        rhs_only: []const ConcreteRecordFieldEntry,
+    ) Allocator.Error!void {
+        if (!lhs_tail.is_open and rhs_only.len != 0) {
+            invariantViolation("mono specialization closed concrete record row was missing required fields");
+        }
+        if (!rhs_tail.is_open and lhs_only.len != 0) {
+            invariantViolation("mono specialization closed concrete record row was missing required fields");
+        }
+
+        if (lhs_tail.is_open and rhs_tail.is_open) {
+            if (lhs_only.len == 0 and rhs_only.len == 0) {
+                try self.unifyConcreteRefs(lhs_tail.ref, rhs_tail.ref);
+                return;
+            }
+            const shared_tail = try self.freshConcreteRecordTailRef();
+            try self.bindOpenConcreteRecordTail(lhs_tail.ref, rhs_only, shared_tail);
+            try self.bindOpenConcreteRecordTail(rhs_tail.ref, lhs_only, shared_tail);
+            return;
+        }
+
+        if (lhs_tail.is_open) {
+            try self.bindOpenConcreteRecordTail(lhs_tail.ref, rhs_only, rhs_tail.ref);
+        }
+        if (rhs_tail.is_open) {
+            try self.bindOpenConcreteRecordTail(rhs_tail.ref, lhs_only, lhs_tail.ref);
+        }
+    }
+
+    fn bindOpenConcreteRecordTail(
+        self: *TypeInstantiator,
+        tail: ConcreteSourceType.ConcreteSourceTypeRef,
+        entries: []const ConcreteRecordFieldEntry,
+        residual_tail: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        if (entries.len == 0) {
+            try self.bindConcreteVariable(tail, residual_tail);
+            return;
+        }
+        try self.bindConcreteVariable(tail, try self.buildConcreteRecordRow(entries, residual_tail));
+    }
+
+    fn buildConcreteRecordRow(
+        self: *TypeInstantiator,
+        entries: []const ConcreteRecordFieldEntry,
+        residual_tail: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const fields = try self.allocator.alloc(checked_artifact.CheckedRecordField, entries.len);
+        errdefer self.allocator.free(fields);
+        for (entries, 0..) |entry, i| {
+            fields[i] = .{
+                .name = entry.name,
+                .ty = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(entry.owner, entry.ty)),
+            };
+        }
+        std.mem.sort(checked_artifact.CheckedRecordField, fields, {}, struct {
+            fn lessThan(_: void, a: checked_artifact.CheckedRecordField, b: checked_artifact.CheckedRecordField) bool {
+                return @intFromEnum(a.name) < @intFromEnum(b.name);
+            }
+        }.lessThan);
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        self.program.concrete_source_types.fillLocalRoot(local_root, .{ .record = .{
+            .fields = fields,
+            .ext = try self.cloneConcreteTypeForRowEquation(residual_tail),
+        } });
+        return try self.sealMaterializedLocalRootRef(local_root);
+    }
+
+    fn emptyConcreteRecordTailRef(
+        self: *TypeInstantiator,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return try self.materializeSyntheticPayloadRef(.empty_record);
+    }
+
+    fn freshConcreteRecordTailRef(
+        self: *TypeInstantiator,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return try self.materializeSyntheticPayloadRef(.{ .flex = .{} });
+    }
+
+    fn findUnconsumedConcreteRecordFieldEntry(
+        entries: []const ConcreteRecordFieldEntry,
+        consumed: []const bool,
+        name: canonical.RecordFieldLabelId,
+    ) ?usize {
+        for (entries, 0..) |entry, index| {
+            if (!consumed[index] and entry.name == name) return index;
+        }
+        return null;
+    }
+
+    fn unifyConcreteNominals(
+        self: *TypeInstantiator,
+        lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs: checked_artifact.CheckedNominalType,
+        rhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!void {
+        if (lhs.builtin != rhs.builtin or lhs.args.len != rhs.args.len) {
+            invariantViolation("mono specialization concrete nominal mismatch");
+        }
+        if (lhs.builtin == null) {
+            const lhs_key = try self.nominalKeyForConcreteRef(lhs_ref, lhs.origin_module, lhs.name);
+            const rhs_key = try self.nominalKeyForConcreteRef(rhs_ref, rhs.origin_module, rhs.name);
+            if (lhs_key.module_name != rhs_key.module_name or lhs_key.type_name != rhs_key.type_name) {
+                invariantViolation("mono specialization concrete nominal mismatch");
+            }
+        }
+        try self.unifyConcreteTypeLists(lhs_ref, lhs.args, rhs_ref, rhs.args);
+    }
+
+    fn unifyConcreteTagRows(
+        self: *TypeInstantiator,
+        lhs_row: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_row: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        var lhs_entries = std.ArrayList(ConcreteTagEntry).empty;
+        defer lhs_entries.deinit(self.allocator);
+        const lhs_tail = try self.collectConcreteTagEntries(lhs_row, &lhs_entries);
+
+        var rhs_entries = std.ArrayList(ConcreteTagEntry).empty;
+        defer rhs_entries.deinit(self.allocator);
+        const rhs_tail = try self.collectConcreteTagEntries(rhs_row, &rhs_entries);
+
+        const rhs_consumed = try self.allocator.alloc(bool, rhs_entries.items.len);
+        defer self.allocator.free(rhs_consumed);
+        @memset(rhs_consumed, false);
+
+        var lhs_only = std.ArrayList(ConcreteTagEntry).empty;
+        defer lhs_only.deinit(self.allocator);
+
+        for (lhs_entries.items) |lhs_entry| {
+            if (findUnconsumedConcreteTagEntry(rhs_entries.items, rhs_consumed, lhs_entry.name)) |rhs_index| {
+                rhs_consumed[rhs_index] = true;
+                const rhs_entry = rhs_entries.items[rhs_index];
+                try self.unifyConcreteTypeLists(lhs_entry.owner, lhs_entry.tag.args, rhs_entry.owner, rhs_entry.tag.args);
+            } else {
+                try lhs_only.append(self.allocator, lhs_entry);
+            }
+        }
+
+        var rhs_only = std.ArrayList(ConcreteTagEntry).empty;
+        defer rhs_only.deinit(self.allocator);
+        for (rhs_entries.items, 0..) |rhs_entry, index| {
+            if (!rhs_consumed[index]) try rhs_only.append(self.allocator, rhs_entry);
+        }
+
+        try self.reconcileConcreteTagTails(lhs_tail, lhs_only.items, rhs_tail, rhs_only.items);
+    }
+
+    fn collectConcreteTagEntries(
+        self: *TypeInstantiator,
+        row: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(ConcreteTagEntry),
+    ) Allocator.Error!ConcreteTagTail {
+        var current = row;
+        while (true) {
+            switch (self.concretePayload(current)) {
+                .alias => |alias| current = try self.concreteAliasBackingRef(current, alias),
+                .nominal => |nominal| current = try self.concreteNominalBackingRef(current, nominal),
+                .empty_tag_union => return .{ .ref = current, .is_open = false },
+                .flex, .rigid => return .{ .ref = current, .is_open = true },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| {
+                        try out.append(self.allocator, .{
+                            .name = try self.tagNameForConcreteRef(current, tag.name),
+                            .owner = current,
+                            .tag = tag,
+                        });
+                    }
+                    current = try self.concreteChildRef(current, tag_union.ext);
+                },
+                else => invariantViolation("mono specialization concrete tag row resolved to a non-tag-union type"),
+            }
+        }
+    }
+
+    fn reconcileConcreteTagTails(
+        self: *TypeInstantiator,
+        lhs_tail: ConcreteTagTail,
+        lhs_only: []const ConcreteTagEntry,
+        rhs_tail: ConcreteTagTail,
+        rhs_only: []const ConcreteTagEntry,
+    ) Allocator.Error!void {
+        if (!lhs_tail.is_open and rhs_only.len != 0) {
+            invariantViolation("mono specialization closed concrete tag row was missing required tags");
+        }
+        if (!rhs_tail.is_open and lhs_only.len != 0) {
+            invariantViolation("mono specialization closed concrete tag row was missing required tags");
+        }
+
+        if (lhs_tail.is_open and rhs_tail.is_open) {
+            if (lhs_only.len == 0 and rhs_only.len == 0) {
+                try self.unifyConcreteRefs(lhs_tail.ref, rhs_tail.ref);
+                return;
+            }
+            const shared_tail = try self.freshConcreteTagTailRef();
+            try self.bindOpenConcreteTagTail(lhs_tail.ref, rhs_only, shared_tail);
+            try self.bindOpenConcreteTagTail(rhs_tail.ref, lhs_only, shared_tail);
+            return;
+        }
+
+        if (lhs_tail.is_open) {
+            try self.bindOpenConcreteTagTail(lhs_tail.ref, rhs_only, rhs_tail.ref);
+        }
+        if (rhs_tail.is_open) {
+            try self.bindOpenConcreteTagTail(rhs_tail.ref, lhs_only, lhs_tail.ref);
+        }
+    }
+
+    fn bindOpenConcreteTagTail(
+        self: *TypeInstantiator,
+        tail: ConcreteSourceType.ConcreteSourceTypeRef,
+        entries: []const ConcreteTagEntry,
+        residual_tail: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        if (entries.len == 0) {
+            try self.bindConcreteVariable(tail, residual_tail);
+            return;
+        }
+        try self.bindConcreteVariable(tail, try self.buildConcreteTagRow(entries, residual_tail));
+    }
+
+    fn buildConcreteTagRow(
+        self: *TypeInstantiator,
+        entries: []const ConcreteTagEntry,
+        residual_tail: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const tags = try self.allocator.alloc(checked_artifact.CheckedTag, entries.len);
+        for (tags) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (tags) |tag| self.allocator.free(tag.args);
+            self.allocator.free(tags);
+        }
+        for (entries, 0..) |entry, i| {
+            tags[i] = .{
+                .name = entry.name,
+                .args = try self.cloneConcreteTypeIdsForRowEquation(entry.owner, entry.tag.args),
+            };
+        }
+        std.mem.sort(checked_artifact.CheckedTag, tags, {}, struct {
+            fn lessThan(_: void, a: checked_artifact.CheckedTag, b: checked_artifact.CheckedTag) bool {
+                return @intFromEnum(a.name) < @intFromEnum(b.name);
+            }
+        }.lessThan);
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        self.program.concrete_source_types.fillLocalRoot(local_root, .{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.cloneConcreteTypeForRowEquation(residual_tail),
+        } });
+        return try self.sealMaterializedLocalRootRef(local_root);
+    }
+
+    fn freshConcreteTagTailRef(
+        self: *TypeInstantiator,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        self.program.concrete_source_types.fillLocalRoot(local_root, .{ .flex = .{} });
+        return try self.sealMaterializedLocalRootRef(local_root);
+    }
+
+    fn findUnconsumedConcreteTagEntry(
+        entries: []const ConcreteTagEntry,
+        consumed: []const bool,
+        name: canonical.TagLabelId,
+    ) ?usize {
+        for (entries, 0..) |entry, index| {
+            if (!consumed[index] and entry.name == name) return index;
+        }
+        return null;
+    }
+
+    fn unifyConcreteTypeLists(
+        self: *TypeInstantiator,
+        lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs: []const checked_artifact.CheckedTypeId,
+        rhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (lhs.len != rhs.len) invariantViolation("mono specialization concrete type arity mismatch");
+        for (lhs, rhs) |lhs_id, rhs_id| {
+            try self.unifyConcreteRefs(
+                try self.concreteChildRef(lhs_ref, lhs_id),
+                try self.concreteChildRef(rhs_ref, rhs_id),
+            );
+        }
     }
 
     fn bindConcreteVariable(
@@ -2150,7 +2862,7 @@ const TypeInstantiator = struct {
             const existing_key = self.program.concrete_source_types.key(resolved_existing);
             const concrete_key = self.program.concrete_source_types.key(resolved_concrete);
             if (!std.mem.eql(u8, &existing_key.bytes, &concrete_key.bytes)) {
-                invariantViolation("mono specialization target generic variable mapped to incompatible concrete types");
+                try self.unifyConcreteRefs(resolved_existing, resolved_concrete);
             }
             return;
         }
@@ -2158,11 +2870,17 @@ const TypeInstantiator = struct {
         self.clearDerivedTypeCaches();
     }
 
-    fn clearDerivedTypeCaches(self: *TypeInstantiator) void {
+    fn clearLoweredTypeCaches(self: *TypeInstantiator) void {
         self.lowered_template.clearRetainingCapacity();
         self.materialized_template_roots.clearRetainingCapacity();
         self.materialized_concrete_roots.clearRetainingCapacity();
         self.concrete_template_refs.clearRetainingCapacity();
+    }
+
+    fn clearDerivedTypeCaches(self: *TypeInstantiator) void {
+        self.clearLoweredTypeCaches();
+        self.row_clone_template_roots.clearRetainingCapacity();
+        self.row_clone_concrete_roots.clearRetainingCapacity();
     }
 
     fn templateVariableAcceptsDelayedNumericDefault(
@@ -2257,7 +2975,7 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         alias: checked_artifact.CheckedAliasType,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        return try self.concreteSpecializedWrapperBackingRef(ref, alias.backing, alias.args);
+        return try self.concreteChildRef(ref, alias.backing);
     }
 
     fn concreteNominalBackingRef(
@@ -2265,22 +2983,80 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         nominal: checked_artifact.CheckedNominalType,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        return try self.concreteSpecializedWrapperBackingRef(ref, nominal.backing, nominal.args);
+        if (nominal.builtin == null) {
+            if (try self.publishedNominalBackingRef(ref, nominal)) |published| {
+                return published;
+            }
+        }
+        return try self.concreteChildRef(ref, nominal.backing);
     }
 
-    fn concreteSpecializedWrapperBackingRef(
+    fn publishedNominalBackingRef(
         self: *TypeInstantiator,
-        wrapper_ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        backing: checked_artifact.CheckedTypeId,
-        args: []const checked_artifact.CheckedTypeId,
-    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        const backing_ref = try self.concreteChildRef(wrapper_ref, backing);
-        if (args.len == 0) return backing_ref;
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        const nominal_key = try self.nominalKeyForConcreteRef(ref, nominal.origin_module, nominal.name);
+        const arg_keys = try self.allocator.alloc(canonical.CanonicalTypeKey, nominal.args.len);
+        defer self.allocator.free(arg_keys);
+        for (nominal.args, 0..) |arg, i| {
+            arg_keys[i] = self.program.concrete_source_types.key(try self.concreteChildRef(ref, arg));
+        }
 
-        var active = ConcreteRefMaterializationMap.init(self.allocator);
-        defer active.deinit();
-        const root = try self.materializeSpecializedWrapperBackingRoot(wrapper_ref, backing, args, null, &active);
-        return try self.program.concrete_source_types.registerLocalRoot(root);
+        if (try self.publishedNominalBackingRefInArtifact(
+            self.input.root.artifact.key,
+            self.input.root.artifact.checked_types.view(),
+            &self.input.root.artifact.interface_capabilities,
+            nominal_key,
+            arg_keys,
+        )) |published| return published;
+
+        for (self.input.imports) |imported| {
+            if (try self.publishedNominalBackingRefInArtifact(
+                imported.key,
+                imported.checked_types,
+                imported.interface_capabilities,
+                nominal_key,
+                arg_keys,
+            )) |published| return published;
+        }
+
+        for (self.input.root.relation_artifacts) |related| {
+            if (try self.publishedNominalBackingRefInArtifact(
+                related.key,
+                related.checked_types,
+                related.interface_capabilities,
+                nominal_key,
+                arg_keys,
+            )) |published| return published;
+        }
+
+        return null;
+    }
+
+    fn publishedNominalBackingRefInArtifact(
+        self: *TypeInstantiator,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_types: checked_artifact.CheckedTypeStoreView,
+        capabilities: *const checked_artifact.ModuleInterfaceCapabilities,
+        nominal_key: canonical.NominalTypeKey,
+        arg_keys: []const canonical.CanonicalTypeKey,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        for (capabilities.exported_nominal_representations) |representation| {
+            const remapped_nominal = canonical.NominalTypeKey{
+                .module_name = try self.name_resolver.moduleName(artifact, representation.nominal.module_name),
+                .type_name = try self.name_resolver.typeName(artifact, representation.nominal.type_name),
+            };
+            if (remapped_nominal.module_name != nominal_key.module_name or remapped_nominal.type_name != nominal_key.type_name) continue;
+            const capability = capabilities.boxPayloadCapability(representation.box_payload_capability);
+            if (!canonicalTypeKeySliceEql(capability.instantiated_args, arg_keys)) continue;
+            return try self.program.concrete_source_types.registerArtifactRoot(
+                artifact,
+                checked_types,
+                capability.backing_ty,
+            );
+        }
+        return null;
     }
 
     fn materializeConcreteRef(
@@ -2301,249 +3077,8 @@ const TypeInstantiator = struct {
 
         const payload = try self.materializeConcretePayload(resolved, self.concretePayload(resolved));
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
-        try self.sealMaterializedLocalRoot(local_root);
+        try self.sealReachableMaterializedLocalGraph(local_root);
         return local_root;
-    }
-
-    fn materializeSpecializedWrapperBackingRoot(
-        self: *TypeInstantiator,
-        wrapper_ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        backing: checked_artifact.CheckedTypeId,
-        args: []const checked_artifact.CheckedTypeId,
-        parent_substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error!checked_artifact.CheckedTypeId {
-        const backing_ref = try self.concreteChildRef(wrapper_ref, backing);
-
-        var substitutions = ConcreteRefSubstitutions.init(self.allocator);
-        defer substitutions.deinit();
-
-        const parent_count: usize = if (parent_substitutions) |parent| parent.count() else 0;
-        try substitutions.ensureTotalCapacity(@intCast(parent_count + args.len));
-
-        if (parent_substitutions) |parent| {
-            var it = parent.iterator();
-            while (it.next()) |entry| {
-                substitutions.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
-            }
-        }
-
-        if (args.len != 0) {
-            var params = std.ArrayList(ConcreteSourceType.ConcreteSourceTypeRef).empty;
-            defer params.deinit(self.allocator);
-            var seen = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void).init(self.allocator);
-            defer seen.deinit();
-            try self.collectWrapperBackingParams(backing_ref, &params, &seen);
-
-            if (params.items.len == 0) {
-                return try self.materializeConcreteRefWithSubstitutions(backing_ref, parent_substitutions, active);
-            }
-            if (params.items.len != args.len) {
-                invariantViolation("mono specialization wrapper backing formal parameter count did not match actual arguments");
-            }
-
-            for (params.items, args) |param, arg| {
-                const key = self.resolveConcreteRef(param);
-                const value = self.resolveConcreteRef(try self.concreteChildRef(wrapper_ref, arg));
-                const gop = try substitutions.getOrPut(key);
-                if (gop.found_existing) {
-                    if (gop.value_ptr.* != value) {
-                        invariantViolation("mono specialization wrapper backing formal parameter mapped to incompatible actual arguments");
-                    }
-                } else {
-                    gop.value_ptr.* = value;
-                }
-            }
-        }
-
-        return try self.materializeConcreteRefWithSubstitutions(backing_ref, &substitutions, active);
-    }
-
-    fn collectWrapperBackingParams(
-        self: *TypeInstantiator,
-        ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        out: *std.ArrayList(ConcreteSourceType.ConcreteSourceTypeRef),
-        seen: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void),
-    ) Allocator.Error!void {
-        const resolved = self.resolveConcreteRef(ref);
-        const gop = try seen.getOrPut(resolved);
-        if (gop.found_existing) return;
-
-        switch (self.concretePayload(resolved)) {
-            .flex, .rigid => try out.append(self.allocator, resolved),
-            .alias => |alias| {
-                for (alias.args) |arg| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
-                }
-            },
-            .record => |record| {
-                for (record.fields) |field| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, field.ty), out, seen);
-                }
-                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, record.ext), out, seen);
-            },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, field.ty), out, seen);
-                }
-            },
-            .tuple => |items| {
-                for (items) |item| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, item), out, seen);
-                }
-            },
-            .nominal => |nominal| {
-                for (nominal.args) |arg| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
-                }
-            },
-            .function => |func| {
-                for (func.args) |arg| {
-                    try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
-                }
-                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, func.ret), out, seen);
-            },
-            .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    for (tag.args) |arg| {
-                        try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, arg), out, seen);
-                    }
-                }
-                try self.collectWrapperBackingParams(try self.concreteChildRef(resolved, tag_union.ext), out, seen);
-            },
-            .empty_record, .empty_tag_union, .pending => {},
-        }
-    }
-
-    fn materializeConcreteRefWithSubstitutions(
-        self: *TypeInstantiator,
-        ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error!checked_artifact.CheckedTypeId {
-        const resolved = self.resolveConcreteRef(ref);
-        if (substitutions) |map| {
-            if (map.get(resolved)) |replacement| {
-                return try self.materializeConcreteRefWithSubstitutions(replacement, map, active);
-            }
-        }
-        if (active.get(resolved)) |existing| return existing;
-
-        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
-        try active.put(resolved, local_root);
-        errdefer _ = active.remove(resolved);
-
-        const payload = try self.materializeConcretePayloadWithSubstitutions(resolved, self.concretePayload(resolved), substitutions, active);
-        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
-        try self.sealMaterializedLocalRoot(local_root);
-        return local_root;
-    }
-
-    fn materializeConcretePayloadWithSubstitutions(
-        self: *TypeInstantiator,
-        ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        payload: checked_artifact.CheckedTypePayload,
-        substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error!checked_artifact.CheckedTypePayload {
-        return switch (payload) {
-            .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
-            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
-            .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
-                try self.materializeDefaultDecPayload()
-            else
-                invariantViolation("mono specialization reached an unsolved rigid type variable in a concrete source type"),
-            .alias => |alias| .{ .alias = .{
-                .name = try self.typeNameForConcreteRef(ref, alias.name),
-                .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
-                .backing = try self.materializeSpecializedWrapperBackingRoot(ref, alias.backing, alias.args, substitutions, active),
-                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, alias.args, substitutions, active),
-            } },
-            .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFieldsWithSubstitutions(ref, fields, substitutions, active) },
-            .record => |record| .{ .record = .{
-                .fields = try self.materializeConcreteRecordFieldsWithSubstitutions(ref, record.fields, substitutions, active),
-                .ext = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, record.ext), substitutions, active),
-            } },
-            .tuple => |items| .{ .tuple = try self.materializeConcreteTypeIdsWithSubstitutions(ref, items, substitutions, active) },
-            .nominal => |nominal| .{ .nominal = .{
-                .name = try self.typeNameForConcreteRef(ref, nominal.name),
-                .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
-                .builtin = nominal.builtin,
-                .is_opaque = nominal.is_opaque,
-                .backing = try self.materializeSpecializedWrapperBackingRoot(ref, nominal.backing, nominal.args, substitutions, active),
-                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, nominal.args, substitutions, active),
-            } },
-            .function => |func| .{ .function = .{
-                .kind = func.kind,
-                .args = try self.materializeConcreteTypeIdsWithSubstitutions(ref, func.args, substitutions, active),
-                .ret = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, func.ret), substitutions, active),
-                .needs_instantiation = false,
-            } },
-            .empty_record => .empty_record,
-            .tag_union => |tag_union| .{ .tag_union = .{
-                .tags = try self.materializeConcreteTagsWithSubstitutions(ref, tag_union.tags, substitutions, active),
-                .ext = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(ref, tag_union.ext), substitutions, active),
-            } },
-            .empty_tag_union => .empty_tag_union,
-        };
-    }
-
-    fn materializeConcreteTypeIdsWithSubstitutions(
-        self: *TypeInstantiator,
-        parent: ConcreteSourceType.ConcreteSourceTypeRef,
-        ids: []const checked_artifact.CheckedTypeId,
-        substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
-        if (ids.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
-        errdefer self.allocator.free(out);
-        for (ids, 0..) |id, i| {
-            out[i] = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(parent, id), substitutions, active);
-        }
-        return out;
-    }
-
-    fn materializeConcreteRecordFieldsWithSubstitutions(
-        self: *TypeInstantiator,
-        parent: ConcreteSourceType.ConcreteSourceTypeRef,
-        fields: []const checked_artifact.CheckedRecordField,
-        substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
-        if (fields.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
-        errdefer self.allocator.free(out);
-        for (fields, 0..) |field, i| {
-            out[i] = .{
-                .name = try self.recordFieldNameForConcreteRef(parent, field.name),
-                .ty = try self.materializeConcreteRefWithSubstitutions(try self.concreteChildRef(parent, field.ty), substitutions, active),
-            };
-        }
-        return out;
-    }
-
-    fn materializeConcreteTagsWithSubstitutions(
-        self: *TypeInstantiator,
-        parent: ConcreteSourceType.ConcreteSourceTypeRef,
-        tags: []const checked_artifact.CheckedTag,
-        substitutions: ?*ConcreteRefSubstitutions,
-        active: *ConcreteRefMaterializationMap,
-    ) Allocator.Error![]const checked_artifact.CheckedTag {
-        if (tags.len == 0) return &.{};
-        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
-        errdefer {
-            for (out) |tag| self.allocator.free(tag.args);
-            self.allocator.free(out);
-        }
-        for (tags, 0..) |tag, i| {
-            out[i] = .{
-                .name = try self.tagNameForConcreteRef(parent, tag.name),
-                .args = try self.materializeConcreteTypeIdsWithSubstitutions(parent, tag.args, substitutions, active),
-            };
-        }
-        return out;
     }
 
     fn sealMaterializedLocalRootRef(
@@ -2564,6 +3099,197 @@ const TypeInstantiator = struct {
         root: checked_artifact.CheckedTypeId,
     ) Allocator.Error!void {
         _ = try self.sealMaterializedLocalRootRef(root);
+    }
+
+    fn sealReachableMaterializedLocalGraph(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (try self.localGraphHasPendingPayload(root)) return;
+
+        var reachable = std.ArrayList(checked_artifact.CheckedTypeId).empty;
+        defer reachable.deinit(self.allocator);
+
+        var visited = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+
+        try self.collectReachableLocalTypes(root, &visited, &reachable);
+        for (reachable.items) |local_root| {
+            try self.sealMaterializedLocalRoot(local_root);
+        }
+    }
+
+    fn localGraphHasPendingPayload(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var visited = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.localGraphHasPendingPayloadHelp(root, &visited);
+    }
+
+    fn localGraphHasPendingPayloadHelp(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        const payload = self.localConcretePayload(root);
+        return switch (payload) {
+            .pending => true,
+            .flex => |flex| try self.localConstraintsHavePendingPayload(flex.constraints, visited),
+            .rigid => |rigid| try self.localConstraintsHavePendingPayload(rigid.constraints, visited),
+            .alias => |alias| blk: {
+                if (try self.localGraphHasPendingPayloadHelp(alias.backing, visited)) break :blk true;
+                break :blk try self.localTypeIdsHavePendingPayload(alias.args, visited);
+            },
+            .record_unbound => |fields| try self.localRecordFieldsHavePendingPayload(fields, visited),
+            .record => |record| blk: {
+                if (try self.localRecordFieldsHavePendingPayload(record.fields, visited)) break :blk true;
+                break :blk try self.localGraphHasPendingPayloadHelp(record.ext, visited);
+            },
+            .tuple => |items| try self.localTypeIdsHavePendingPayload(items, visited),
+            .nominal => |nominal| blk: {
+                if (try self.localGraphHasPendingPayloadHelp(nominal.backing, visited)) break :blk true;
+                break :blk try self.localTypeIdsHavePendingPayload(nominal.args, visited);
+            },
+            .function => |function| blk: {
+                if (try self.localTypeIdsHavePendingPayload(function.args, visited)) break :blk true;
+                break :blk try self.localGraphHasPendingPayloadHelp(function.ret, visited);
+            },
+            .empty_record,
+            .empty_tag_union,
+            => false,
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    if (try self.localTypeIdsHavePendingPayload(tag.args, visited)) break :blk true;
+                }
+                break :blk try self.localGraphHasPendingPayloadHelp(tag_union.ext, visited);
+            },
+        };
+    }
+
+    fn localConstraintsHavePendingPayload(
+        self: *TypeInstantiator,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (constraints) |constraint| {
+            if (try self.localGraphHasPendingPayloadHelp(constraint.fn_ty, visited)) return true;
+        }
+        return false;
+    }
+
+    fn localTypeIdsHavePendingPayload(
+        self: *TypeInstantiator,
+        ids: []const checked_artifact.CheckedTypeId,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (ids) |id| {
+            if (try self.localGraphHasPendingPayloadHelp(id, visited)) return true;
+        }
+        return false;
+    }
+
+    fn localRecordFieldsHavePendingPayload(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if (try self.localGraphHasPendingPayloadHelp(field.ty, visited)) return true;
+        }
+        return false;
+    }
+
+    fn collectReachableLocalTypes(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+        out: *std.ArrayList(checked_artifact.CheckedTypeId),
+    ) Allocator.Error!void {
+        if (visited.contains(root)) return;
+        try visited.put(root, {});
+        try out.append(self.allocator, root);
+
+        const payload = self.localConcretePayload(root);
+        switch (payload) {
+            .pending => invariantViolation("mono specialization tried to seal a pending local concrete source type"),
+            .flex => |flex| try self.collectReachableLocalConstraints(flex.constraints, visited, out),
+            .rigid => |rigid| try self.collectReachableLocalConstraints(rigid.constraints, visited, out),
+            .alias => |alias| {
+                try self.collectReachableLocalTypes(alias.backing, visited, out);
+                try self.collectReachableLocalTypeIds(alias.args, visited, out);
+            },
+            .record_unbound => |fields| try self.collectReachableLocalRecordFields(fields, visited, out),
+            .record => |record| {
+                try self.collectReachableLocalRecordFields(record.fields, visited, out);
+                try self.collectReachableLocalTypes(record.ext, visited, out);
+            },
+            .tuple => |items| try self.collectReachableLocalTypeIds(items, visited, out),
+            .nominal => |nominal| {
+                try self.collectReachableLocalTypes(nominal.backing, visited, out);
+                try self.collectReachableLocalTypeIds(nominal.args, visited, out);
+            },
+            .function => |function| {
+                try self.collectReachableLocalTypeIds(function.args, visited, out);
+                try self.collectReachableLocalTypes(function.ret, visited, out);
+            },
+            .empty_record,
+            .empty_tag_union,
+            => {},
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    try self.collectReachableLocalTypeIds(tag.args, visited, out);
+                }
+                try self.collectReachableLocalTypes(tag_union.ext, visited, out);
+            },
+        }
+    }
+
+    fn collectReachableLocalConstraints(
+        self: *TypeInstantiator,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+        out: *std.ArrayList(checked_artifact.CheckedTypeId),
+    ) Allocator.Error!void {
+        for (constraints) |constraint| {
+            try self.collectReachableLocalTypes(constraint.fn_ty, visited, out);
+        }
+    }
+
+    fn collectReachableLocalTypeIds(
+        self: *TypeInstantiator,
+        ids: []const checked_artifact.CheckedTypeId,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+        out: *std.ArrayList(checked_artifact.CheckedTypeId),
+    ) Allocator.Error!void {
+        for (ids) |id| {
+            try self.collectReachableLocalTypes(id, visited, out);
+        }
+    }
+
+    fn collectReachableLocalRecordFields(
+        self: *TypeInstantiator,
+        fields: []const checked_artifact.CheckedRecordField,
+        visited: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+        out: *std.ArrayList(checked_artifact.CheckedTypeId),
+    ) Allocator.Error!void {
+        for (fields) |field| {
+            try self.collectReachableLocalTypes(field.ty, visited, out);
+        }
+    }
+
+    fn localConcretePayload(
+        self: *TypeInstantiator,
+        root: checked_artifact.CheckedTypeId,
+    ) checked_artifact.CheckedTypePayload {
+        const raw = @intFromEnum(root);
+        const local_payloads = self.program.concrete_source_types.local_payloads.items;
+        if (raw >= local_payloads.len) invariantViolation("mono specialization local concrete source type referenced missing payload");
+        return local_payloads[raw];
     }
 
     fn materializeEmptyRecordRowTail(
@@ -2624,6 +3350,14 @@ const TypeInstantiator = struct {
         return root;
     }
 
+    fn materializeSyntheticPayloadRef(
+        self: *TypeInstantiator,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const root = try self.materializeSyntheticPayload(payload);
+        return try self.program.concrete_source_types.registerLocalRoot(root);
+    }
+
     fn verifyClosableRowTail(
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
@@ -2646,7 +3380,6 @@ const TypeInstantiator = struct {
     ) bool {
         _ = self;
         if (flex.numeric_default_phase != .mono_specialization) return false;
-        if (flex.constraints.len == 0) invariantViolation("mono specialization numeric-default phase did not publish a numeric constraint");
         return true;
     }
 
@@ -2829,16 +3562,15 @@ const TypeInstantiator = struct {
         };
     }
 
-    fn findConcreteRecordField(
-        self: *TypeInstantiator,
-        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
-        fields: []const checked_artifact.CheckedRecordField,
-        name: canonical.RecordFieldLabelId,
-    ) Allocator.Error!?checked_artifact.CheckedRecordField {
-        for (fields) |field| {
-            if ((try self.recordFieldNameForConcreteRef(concrete, field.name)) == name) return field;
+    fn canonicalTypeKeySliceEql(
+        a: []const canonical.CanonicalTypeKey,
+        b: []const canonical.CanonicalTypeKey,
+    ) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |left, right| {
+            if (!std.mem.eql(u8, &left.bytes, &right.bytes)) return false;
         }
-        return null;
+        return true;
     }
 
     fn findConcreteTag(
@@ -2958,14 +3690,19 @@ const BodyLowerer = struct {
             else => invariantViolation("mono body lowering expected intrinsic wrapper type to be a function"),
         };
         const source_ty = reserved.proc.specialization.requested_mono_fn_ty;
-        const params = try self.lowerIntrinsicParamBundle(func.args);
+        const param_infos = try self.paramTypesFromConcreteFunction(reserved.requested_fn_ty);
+        defer if (param_infos.len > 0) self.allocator.free(param_infos);
+        if (param_infos.len != func.args.len) {
+            invariantViolation("mono body lowering intrinsic wrapper parameter count disagreed with concrete source type");
+        }
+        const params = try self.lowerIntrinsicParamBundle(param_infos);
         defer if (params.exprs.len > 0) self.allocator.free(params.exprs);
         const body = switch (wrapper.intrinsic) {
             .str_inspect => blk: {
                 if (params.exprs.len != 1) {
                     invariantViolation("mono body lowering expected Str.inspect intrinsic to have exactly one argument");
                 }
-                break :blk try self.lowerStrInspectIntrinsic(func.ret, params.exprs[0], func.args[0]);
+                break :blk try self.lowerStrInspectIntrinsic(func.ret, params.exprs[0], param_infos[0]);
             },
             .structural_eq => blk: {
                 if (params.exprs.len != 2) {
@@ -3002,25 +3739,25 @@ const BodyLowerer = struct {
 
     fn lowerIntrinsicParamBundle(
         self: *BodyLowerer,
-        arg_tys: []const Type.TypeId,
+        arg_infos: []const ConcreteTypeInfo,
     ) Allocator.Error!IntrinsicParamBundle {
-        if (arg_tys.len == 0) return .{
+        if (arg_infos.len == 0) return .{
             .args = Ast.Span(Ast.TypedSymbol).empty(),
             .exprs = &.{},
         };
-        const args = try self.allocator.alloc(Ast.TypedSymbol, arg_tys.len);
+        const args = try self.allocator.alloc(Ast.TypedSymbol, arg_infos.len);
         defer self.allocator.free(args);
-        const exprs = try self.allocator.alloc(Ast.ExprId, arg_tys.len);
+        const exprs = try self.allocator.alloc(Ast.ExprId, arg_infos.len);
         errdefer self.allocator.free(exprs);
 
-        for (arg_tys, 0..) |arg_ty, i| {
+        for (arg_infos, 0..) |arg_info, i| {
             const symbol = try self.program.addSyntheticSymbol();
             args[i] = .{
-                .ty = arg_ty,
-                .source_ty = .{},
+                .ty = arg_info.ty,
+                .source_ty = arg_info.source_ty,
                 .symbol = symbol,
             };
-            exprs[i] = try self.program.ast.addExpr(arg_ty, .{ .var_ = symbol });
+            exprs[i] = try self.program.ast.addExprWithSource(arg_info.ty, arg_info.source_ty, .{ .var_ = symbol });
         }
 
         return .{
@@ -3033,9 +3770,9 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ret_ty: Type.TypeId,
         arg_expr: Ast.ExprId,
-        arg_ty: Type.TypeId,
+        arg_info: ConcreteTypeInfo,
     ) Allocator.Error!Ast.ExprId {
-        return switch (self.program.types.getType(arg_ty)) {
+        return switch (self.program.types.getType(arg_info.ty)) {
             .primitive => |prim| switch (prim) {
                 .str => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .str_inspect, arg_expr),
                 .bool => try self.lowerBoolInspectIntrinsic(ret_ty, arg_expr),
@@ -3055,12 +3792,192 @@ const BodyLowerer = struct {
                 => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .num_to_str, arg_expr),
                 .erased => invariantViolation("Str.inspect intrinsic cannot inspect erased values directly"),
             },
-            .tuple => |items| try self.lowerTupleInspectIntrinsic(ret_ty, arg_expr, items),
-            .list => |elem_ty| try self.lowerListInspectIntrinsic(ret_ty, arg_expr, arg_ty, elem_ty),
-            .record => |record| try self.lowerRecordInspectIntrinsic(ret_ty, arg_expr, record.fields),
-            .tag_union => |tag_union| try self.lowerTagUnionInspectIntrinsic(ret_ty, arg_expr, arg_ty, tag_union.tags),
+            .tuple => |items| try self.lowerTupleInspectIntrinsic(ret_ty, arg_expr, arg_info, items),
+            .list => |elem_ty| try self.lowerListInspectIntrinsic(ret_ty, arg_expr, arg_info, elem_ty),
+            .record => |record| try self.lowerRecordInspectIntrinsic(ret_ty, arg_expr, arg_info, record.fields),
+            .tag_union => |tag_union| try self.lowerTagUnionInspectIntrinsic(ret_ty, arg_expr, arg_info, tag_union.tags),
             else => invariantViolation("Str.inspect intrinsic reached unsupported mono argument type"),
         };
+    }
+
+    const StrInspectCallTarget = struct {
+        proc: canonical.MirProcedureRef,
+        fn_ty: Type.TypeId,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    };
+
+    const StrInspectTemplate = struct {
+        template: canonical.ProcedureTemplateRef,
+        checked_fn_root: checked_artifact.CheckedTypeId,
+        imported_closure: ?checked_artifact.ImportedTemplateClosureView,
+    };
+
+    fn lowerStrInspectCall(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
+    ) Allocator.Error!Ast.ExprId {
+        const target = try self.strInspectCallTarget(arg_info, ret_ty);
+        const args = [_]Ast.ExprId{arg_expr};
+        return try self.program.ast.addExpr(ret_ty, .{ .call_proc = .{
+            .proc = target.proc,
+            .args = try self.program.ast.addExprSpan(&args),
+            .requested_fn_ty = target.fn_ty,
+            .requested_source_fn_ty = target.source_fn_ty,
+        } });
+    }
+
+    fn strInspectCallTarget(
+        self: *BodyLowerer,
+        arg_info: ConcreteTypeInfo,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!StrInspectCallTarget {
+        const inspect = try self.strInspectTemplate();
+        const requested_fn_ty = try self.strInspectFunctionTypeForArg(inspect, arg_info.source_ref);
+        const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+            .template = inspect.template,
+            .requested_fn_ty = requested_fn_ty,
+            .reason = .{ .str_inspect_nested = inspect.template },
+            .imported_closure = inspect.imported_closure,
+        });
+        return .{
+            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .fn_ty = try self.monoFunctionTypeForStrInspectCall(arg_info.ty, ret_ty),
+            .source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
+        };
+    }
+
+    fn monoFunctionTypeForStrInspectCall(
+        self: *BodyLowerer,
+        arg_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const args = try self.allocator.alloc(Type.TypeId, 1);
+        args[0] = arg_ty;
+        return try self.program.types.internResolved(.{ .func = .{
+            .args = args,
+            .lambdas = &.{},
+            .ret = ret_ty,
+        } });
+    }
+
+    fn strInspectFunctionTypeForArg(
+        self: *BodyLowerer,
+        inspect: StrInspectTemplate,
+        arg_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const ret_ref = try self.strInspectReturnSourceRef(inspect);
+        const args = try self.allocator.alloc(checked_artifact.CheckedTypeId, 1);
+        errdefer self.allocator.free(args);
+        args[0] = try self.type_instantiator.materializeConcreteRef(arg_ref);
+        const ret = try self.type_instantiator.materializeConcreteRef(ret_ref);
+
+        const fn_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        self.program.concrete_source_types.fillLocalRoot(fn_root, .{ .function = .{
+            .kind = .pure,
+            .args = args,
+            .ret = ret,
+            .needs_instantiation = false,
+        } });
+        return try self.type_instantiator.sealMaterializedLocalRootRef(fn_root);
+    }
+
+    fn strInspectReturnSourceRef(
+        self: *BodyLowerer,
+        inspect: StrInspectTemplate,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const checked_types = checkedTypesForKey(self.input, .{ .bytes = inspect.template.artifact.bytes }) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: Str.inspect template artifact was not available");
+            unreachable;
+        };
+        var current = try self.program.concrete_source_types.registerArtifactRoot(
+            .{ .bytes = inspect.template.artifact.bytes },
+            checked_types,
+            inspect.checked_fn_root,
+        );
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
+                .function => |function| return try self.type_instantiator.concreteChildRef(current, function.ret),
+                else => invariantViolation("mono body lowering expected Str.inspect template type to be a function"),
+            }
+        }
+    }
+
+    fn strInspectTemplate(self: *BodyLowerer) Allocator.Error!StrInspectTemplate {
+        if (try self.currentTemplateIsStrInspect()) |current| return current;
+        if (try self.strInspectTemplateInRoot()) |found| return found;
+        for (self.input.imports) |imported| {
+            if (try self.strInspectTemplateInImported(imported)) |found| return found;
+        }
+        for (self.input.root.relation_artifacts) |related| {
+            if (try self.strInspectTemplateInImported(related)) |found| return found;
+        }
+        invariantViolation("mono body lowering could not find published Builtin.Str.inspect intrinsic wrapper");
+    }
+
+    fn currentTemplateIsStrInspect(self: *BodyLowerer) Allocator.Error!?StrInspectTemplate {
+        switch (self.template_lookup.template.body) {
+            .intrinsic_wrapper => |wrapper_id| {
+                const wrapper = self.template_lookup.intrinsic_wrappers.get(wrapper_id);
+                if (wrapper.intrinsic != .str_inspect) return null;
+                const template = canonical.ProcedureTemplateRef{
+                    .artifact = .{ .bytes = self.template_lookup.artifact.bytes },
+                    .proc_base = self.template_lookup.template.proc_base,
+                    .template = self.template_lookup.template.template_id,
+                };
+                return .{
+                    .template = try self.name_resolver.procedureTemplateRef(template),
+                    .checked_fn_root = wrapper.checked_fn_root,
+                    .imported_closure = self.template_lookup.imported_closure,
+                };
+            },
+            else => return null,
+        }
+    }
+
+    fn strInspectTemplateInRoot(self: *BodyLowerer) Allocator.Error!?StrInspectTemplate {
+        for (self.input.root.artifact.intrinsic_wrappers.wrappers) |wrapper| {
+            if (wrapper.intrinsic != .str_inspect) continue;
+            return .{
+                .template = try self.name_resolver.procedureTemplateRef(wrapper.template),
+                .checked_fn_root = wrapper.checked_fn_root,
+                .imported_closure = null,
+            };
+        }
+        return null;
+    }
+
+    fn strInspectTemplateInImported(
+        self: *BodyLowerer,
+        imported: checked_artifact.ImportedModuleView,
+    ) Allocator.Error!?StrInspectTemplate {
+        for (imported.intrinsic_wrappers.wrappers) |wrapper| {
+            if (wrapper.intrinsic != .str_inspect) continue;
+            const closure = self.exportedTemplateClosureForImported(imported, wrapper.template) orelse {
+                debug.invariant(false, "mono body lowering invariant violated: imported Builtin.Str.inspect intrinsic wrapper was not exported");
+                unreachable;
+            };
+            return .{
+                .template = try self.name_resolver.procedureTemplateRef(wrapper.template),
+                .checked_fn_root = wrapper.checked_fn_root,
+                .imported_closure = closure,
+            };
+        }
+        return null;
+    }
+
+    fn exportedTemplateClosureForImported(
+        self: *const BodyLowerer,
+        imported: checked_artifact.ImportedModuleView,
+        template: canonical.ProcedureTemplateRef,
+    ) ?checked_artifact.ImportedTemplateClosureView {
+        _ = self;
+        for (imported.exported_procedure_templates.templates) |exported| {
+            if (exported.template.template == template.template) return exported.template_closure;
+        }
+        return null;
     }
 
     fn lowerUnaryIntrinsicLowLevel(
@@ -3096,16 +4013,24 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ret_ty: Type.TypeId,
         arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
         items: []const Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const source_items = try self.concreteTupleElementInfos(arg_info.source_ref, items.len);
+        defer if (source_items.len > 0) self.allocator.free(source_items);
         var current = try self.lowerStringLiteralExpr(ret_ty, "(");
-        for (items, 0..) |item_ty, i| {
+        for (items, source_items, 0..) |item_ty, source_item, i| {
+            const item_info = ConcreteTypeInfo{
+                .ty = item_ty,
+                .source_ty = source_item.source_ty,
+                .source_ref = source_item.source_ref,
+            };
             if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
-            const item_expr = try self.program.ast.addExpr(item_ty, .{ .tuple_access = .{
+            const item_expr = try self.program.ast.addExprWithSource(item_info.ty, item_info.source_ty, .{ .tuple_access = .{
                 .tuple = arg_expr,
                 .elem_index = @intCast(i),
             } });
-            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, item_expr, item_ty);
+            const inspected = try self.lowerStrInspectCall(ret_ty, item_expr, item_info);
             current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
         }
         return try self.lowerStrConcatBytes(ret_ty, current, ")");
@@ -3115,21 +4040,29 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ret_ty: Type.TypeId,
         arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
         fields: []const Type.Field,
     ) Allocator.Error!Ast.ExprId {
         if (fields.len == 0) return try self.lowerStringLiteralExpr(ret_ty, "{}");
 
         var current = try self.lowerStringLiteralExpr(ret_ty, "{ ");
         for (fields, 0..) |field, i| {
+            const field_ref = try self.concreteRecordFieldRef(arg_info.source_ref, field.name);
+            const source_field = try self.concreteTypeInfoForRef(field_ref);
+            const field_info = ConcreteTypeInfo{
+                .ty = field.ty,
+                .source_ty = source_field.source_ty,
+                .source_ref = source_field.source_ref,
+            };
             if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
             current = try self.lowerStrConcatBytes(ret_ty, current, self.program.canonical_names.recordFieldLabelText(field.name));
             current = try self.lowerStrConcatBytes(ret_ty, current, ": ");
-            const field_expr = try self.program.ast.addExpr(field.ty, .{ .access = .{
+            const field_expr = try self.program.ast.addExprWithSource(field_info.ty, field_info.source_ty, .{ .access = .{
                 .record = arg_expr,
                 .field = field.name,
                 .field_index = @intCast(i),
             } });
-            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, field_expr, field.ty);
+            const inspected = try self.lowerStrInspectCall(ret_ty, field_expr, field_info);
             current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
         }
         return try self.lowerStrConcatBytes(ret_ty, current, " }");
@@ -3139,12 +4072,18 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ret_ty: Type.TypeId,
         arg_expr: Ast.ExprId,
-        arg_ty: Type.TypeId,
+        arg_info: ConcreteTypeInfo,
         elem_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const source_elem = try self.listElementTypeFromConcrete(arg_info.source_ref);
+        const elem_info = ConcreteTypeInfo{
+            .ty = elem_ty,
+            .source_ty = source_elem.source_ty,
+            .source_ref = source_elem.source_ref,
+        };
         const unit_ty = try self.ensureUnitType();
-        const bool_ty = try self.ensurePrimitiveBoolType();
-        const bool_source_ty = try self.program.boolSourceTypeKey();
+        const bool_info = try self.boolConcreteTypeInfo();
+        const bool_ty = bool_info.ty;
 
         const result_symbol = try self.program.addSyntheticSymbol();
         const first_symbol = try self.program.addSyntheticSymbol();
@@ -3161,20 +4100,20 @@ const BodyLowerer = struct {
         const first_decl = try self.program.ast.addStmt(.{ .var_decl = .{
             .bind = .{
                 .ty = bool_ty,
-                .source_ty = bool_source_ty,
+                .source_ty = bool_info.source_ty,
                 .symbol = first_symbol,
             },
-            .body = try self.program.ast.addExpr(bool_ty, .{ .bool_lit = true }),
+            .body = try self.lowerBoolLiteral(bool_info, true),
         } });
 
-        const elem_expr = try self.program.ast.addExpr(elem_ty, .{ .var_ = elem_symbol });
-        const inspected_elem = try self.lowerStrInspectIntrinsic(ret_ty, elem_expr, elem_ty);
+        const elem_expr = try self.program.ast.addExprWithSource(elem_info.ty, elem_info.source_ty, .{ .var_ = elem_symbol });
+        const inspected_elem = try self.lowerStrInspectCall(ret_ty, elem_expr, elem_info);
         const result_expr_for_first = try self.program.ast.addExpr(ret_ty, .{ .var_ = result_symbol });
         const first_append = try self.lowerStrConcatExpr(ret_ty, result_expr_for_first, inspected_elem);
         const first_stmts = [_]Ast.StmtId{
             try self.program.ast.addStmt(.{ .reassign = .{
                 .target = first_symbol,
-                .body = try self.program.ast.addExpr(bool_ty, .{ .bool_lit = false }),
+                .body = try self.lowerBoolLiteral(bool_info, false),
             } }),
             try self.program.ast.addStmt(.{ .reassign = .{
                 .target = result_symbol,
@@ -3209,7 +4148,8 @@ const BodyLowerer = struct {
             .else_body = else_body,
         } });
         const elem_pat = try self.program.ast.addPat(.{
-            .ty = elem_ty,
+            .ty = elem_info.ty,
+            .source_ty = elem_info.source_ty,
             .data = .{ .var_ = elem_symbol },
         });
         const for_stmt = try self.program.ast.addStmt(.{ .for_ = .{
@@ -3221,7 +4161,6 @@ const BodyLowerer = struct {
         const result_before_close = try self.program.ast.addExpr(ret_ty, .{ .var_ = result_symbol });
         const final = try self.lowerStrConcatBytes(ret_ty, result_before_close, "]");
         const stmts = [_]Ast.StmtId{ result_decl, first_decl, for_stmt };
-        _ = arg_ty;
         return try self.program.ast.addExpr(ret_ty, .{ .block = .{
             .stmts = try self.program.ast.addStmtSpan(&stmts),
             .final_expr = final,
@@ -3232,7 +4171,7 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ret_ty: Type.TypeId,
         arg_expr: Ast.ExprId,
-        arg_ty: Type.TypeId,
+        arg_info: ConcreteTypeInfo,
         tags: []const Type.Tag,
     ) Allocator.Error!Ast.ExprId {
         if (tags.len == 0) invariantViolation("Str.inspect intrinsic reached an uninhabited tag union");
@@ -3240,22 +4179,35 @@ const BodyLowerer = struct {
         var branches = std.ArrayList(Ast.Branch).empty;
         defer branches.deinit(self.allocator);
         for (tags, 0..) |tag, tag_index| {
+            const payload_infos = try self.concreteTagPayloadInfosForUnionType(arg_info.source_ref, tag.name);
+            defer if (payload_infos.len > 0) self.allocator.free(payload_infos);
+            if (payload_infos.len != tag.args.len) invariantViolation("Str.inspect tag payload source count disagreed with tag type");
+
             const payload_pats = try self.allocator.alloc(Ast.PatId, tag.args.len);
             defer self.allocator.free(payload_pats);
             const payload_exprs = try self.allocator.alloc(Ast.ExprId, tag.args.len);
             defer self.allocator.free(payload_exprs);
+            const actual_payload_infos = try self.allocator.alloc(ConcreteTypeInfo, tag.args.len);
+            defer self.allocator.free(actual_payload_infos);
 
             for (tag.args, 0..) |payload_ty, payload_index| {
+                actual_payload_infos[payload_index] = .{
+                    .ty = payload_ty,
+                    .source_ty = payload_infos[payload_index].source_ty,
+                    .source_ref = payload_infos[payload_index].source_ref,
+                };
                 const symbol = try self.program.addSyntheticSymbol();
                 payload_pats[payload_index] = try self.program.ast.addPat(.{
                     .ty = payload_ty,
+                    .source_ty = actual_payload_infos[payload_index].source_ty,
                     .data = .{ .var_ = symbol },
                 });
-                payload_exprs[payload_index] = try self.program.ast.addExpr(payload_ty, .{ .var_ = symbol });
+                payload_exprs[payload_index] = try self.program.ast.addExprWithSource(payload_ty, actual_payload_infos[payload_index].source_ty, .{ .var_ = symbol });
             }
 
             const pat = try self.program.ast.addPat(.{
-                .ty = arg_ty,
+                .ty = arg_info.ty,
+                .source_ty = arg_info.source_ty,
                 .data = .{ .tag = .{
                     .name = tag.name,
                     .discriminant = @intCast(tag_index),
@@ -3265,7 +4217,7 @@ const BodyLowerer = struct {
 
             try branches.append(self.allocator, .{
                 .pat = pat,
-                .body = try self.lowerTagInspectBranch(ret_ty, tag, payload_exprs),
+                .body = try self.lowerTagInspectBranch(ret_ty, tag, payload_exprs, actual_payload_infos),
             });
         }
 
@@ -3281,16 +4233,18 @@ const BodyLowerer = struct {
         ret_ty: Type.TypeId,
         tag: Type.Tag,
         payload_exprs: []const Ast.ExprId,
+        payload_infos: []const ConcreteTypeInfo,
     ) Allocator.Error!Ast.ExprId {
         const tag_name = self.program.canonical_names.tagLabelText(tag.name);
         if (tag.args.len != payload_exprs.len) invariantViolation("Str.inspect tag payload count disagreed with tag type");
+        if (payload_infos.len != payload_exprs.len) invariantViolation("Str.inspect tag payload source count disagreed with tag type");
         if (tag.args.len == 0) return try self.lowerStringLiteralExpr(ret_ty, tag_name);
 
         var current = try self.lowerStringLiteralExpr(ret_ty, tag_name);
         current = try self.lowerStrConcatBytes(ret_ty, current, "(");
-        for (tag.args, payload_exprs, 0..) |payload_ty, payload_expr, i| {
+        for (payload_infos, payload_exprs, 0..) |payload_info, payload_expr, i| {
             if (i != 0) current = try self.lowerStrConcatBytes(ret_ty, current, ", ");
-            const inspected = try self.lowerStrInspectIntrinsic(ret_ty, payload_expr, payload_ty);
+            const inspected = try self.lowerStrInspectCall(ret_ty, payload_expr, payload_info);
             current = try self.lowerStrConcatExpr(ret_ty, current, inspected);
         }
         return try self.lowerStrConcatBytes(ret_ty, current, ")");
@@ -3905,12 +4859,13 @@ const BodyLowerer = struct {
         arg_patterns: []const checked_artifact.CheckedPatternId,
         body_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.DefId {
-        const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
+        const params = try self.lowerParamBundleFromFunction(arg_patterns, reserved.requested_fn_ty);
+        defer self.deinitParamBundle(params);
         const ret_ty = try self.returnTypeFromConcreteFunction(reserved.requested_fn_ty);
         const previous_return_type = self.current_return_type;
         self.current_return_type = ret_ty;
         defer self.current_return_type = previous_return_type;
-        const body = try self.lowerExprConcreteExpected(body_expr, ret_ty);
+        const body = try self.lowerBodyWithParamDestructures(body_expr, ret_ty, params.destructures);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
             .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -3923,7 +4878,7 @@ const BodyLowerer = struct {
                 .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
                 .recursive = false,
                 .bind = bind,
-                .args = args,
+                .args = params.args,
                 .body = body,
             } },
         });
@@ -3935,9 +4890,27 @@ const BodyLowerer = struct {
         source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
     };
 
+    const CallInstantiationInfo = struct {
+        concrete_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+        func_ty: Type.TypeId,
+        requested_source_fn_ty: canonical.CanonicalTypeKey,
+        ret_ty: ConcreteTypeInfo,
+    };
+
     const ExprExpectedType = union(enum) {
         checked: checked_artifact.CheckedTypeId,
         concrete: ConcreteTypeInfo,
+    };
+
+    const ParamDestructure = struct {
+        symbol: Ast.Symbol,
+        pattern: checked_artifact.CheckedPatternId,
+        param_ty: ConcreteTypeInfo,
+    };
+
+    const LoweredParamBundle = struct {
+        args: Ast.Span(Ast.TypedSymbol),
+        destructures: []ParamDestructure,
     };
 
     fn lowerParamSpanFromFunction(
@@ -3945,18 +4918,110 @@ const BodyLowerer = struct {
         patterns: []const checked_artifact.CheckedPatternId,
         source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!Ast.Span(Ast.TypedSymbol) {
+        const bundle = try self.lowerParamBundleFromFunction(patterns, source_fn);
+        defer self.deinitParamBundle(bundle);
+        if (bundle.destructures.len != 0) {
+            invariantViolation("mono body lowering reached destructuring procedure parameters without a body to destructure");
+        }
+        return bundle.args;
+    }
+
+    fn lowerParamBundleFromFunction(
+        self: *BodyLowerer,
+        patterns: []const checked_artifact.CheckedPatternId,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!LoweredParamBundle {
         const param_types = try self.paramTypesFromConcreteFunction(source_fn);
         defer self.allocator.free(param_types);
         if (patterns.len != param_types.len) {
             invariantViolation("mono body lowering procedure parameter count disagreed with requested function type");
         }
-        if (patterns.len == 0) return Ast.Span(Ast.TypedSymbol).empty();
+        if (patterns.len == 0) return .{
+            .args = Ast.Span(Ast.TypedSymbol).empty(),
+            .destructures = &.{},
+        };
         const args = try self.allocator.alloc(Ast.TypedSymbol, patterns.len);
         defer self.allocator.free(args);
+        var destructures = std.ArrayList(ParamDestructure).empty;
+        errdefer destructures.deinit(self.allocator);
         for (patterns, param_types, 0..) |pattern, param_ty, i| {
-            args[i] = try self.lowerParamPatternWithType(pattern, param_ty);
+            args[i] = try self.lowerEntryParamPatternWithType(pattern, param_ty, &destructures);
         }
-        return try self.program.ast.addTypedSymbolSpan(args);
+        return .{
+            .args = try self.program.ast.addTypedSymbolSpan(args),
+            .destructures = if (destructures.items.len == 0) &.{} else try destructures.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn deinitParamBundle(self: *BodyLowerer, bundle: LoweredParamBundle) void {
+        if (bundle.destructures.len != 0) self.allocator.free(bundle.destructures);
+    }
+
+    fn lowerEntryParamPatternWithType(
+        self: *BodyLowerer,
+        pattern_id: checked_artifact.CheckedPatternId,
+        param_ty: ConcreteTypeInfo,
+        destructures: *std.ArrayList(ParamDestructure),
+    ) Allocator.Error!Ast.TypedSymbol {
+        const pattern = self.checkedPattern(pattern_id);
+        const symbol = switch (pattern.data) {
+            .assign => |binder| blk: {
+                try self.recordConcreteTypeForBinder(binder, param_ty);
+                break :blk try self.symbolForBinder(binder);
+            },
+            .underscore => try self.program.addSyntheticSymbol(),
+            else => blk: {
+                const synthetic = try self.program.addSyntheticSymbol();
+                try destructures.append(self.allocator, .{
+                    .symbol = synthetic,
+                    .pattern = pattern_id,
+                    .param_ty = param_ty,
+                });
+                break :blk synthetic;
+            },
+        };
+        return .{
+            .ty = param_ty.ty,
+            .source_ty = param_ty.source_ty,
+            .symbol = symbol,
+        };
+    }
+
+    fn lowerBodyWithParamDestructures(
+        self: *BodyLowerer,
+        body_expr: checked_artifact.CheckedExprId,
+        ret_ty: ConcreteTypeInfo,
+        destructures: []const ParamDestructure,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.lowerBodyWithParamDestructuresFromIndex(body_expr, ret_ty, destructures, 0);
+    }
+
+    fn lowerBodyWithParamDestructuresFromIndex(
+        self: *BodyLowerer,
+        body_expr: checked_artifact.CheckedExprId,
+        ret_ty: ConcreteTypeInfo,
+        destructures: []const ParamDestructure,
+        index: usize,
+    ) Allocator.Error!Ast.ExprId {
+        if (index >= destructures.len) return try self.lowerExprConcreteExpected(body_expr, ret_ty);
+
+        const destructure = destructures[index];
+        const cond = try self.program.ast.addExprWithSource(destructure.param_ty.ty, destructure.param_ty.source_ty, .{
+            .var_ = destructure.symbol,
+        });
+        const pat = try self.lowerPatternWithRemaps(destructure.param_ty, destructure.pattern, &.{});
+        const body = try self.lowerBodyWithParamDestructuresFromIndex(body_expr, ret_ty, destructures, index + 1);
+        const branch = Ast.Branch{
+            .pat = pat,
+            .guard = null,
+            .body = body,
+            .degenerate = false,
+        };
+        return try self.program.ast.addExprWithSource(ret_ty.ty, ret_ty.source_ty, .{ .match_ = .{
+            .cond = cond,
+            .branches = try self.program.ast.addBranchSpan(&.{branch}),
+            .is_try_suffix = false,
+        } });
     }
 
     fn paramTypesFromConcreteFunction(
@@ -4030,11 +5095,7 @@ const BodyLowerer = struct {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
         const expr = self.checkedExpr(expr_id);
         return switch (expr.data) {
-            .call => |call| blk: {
-                try self.bindKnownCallArgumentTypes(call.source_fn_ty_payload, call.args);
-                const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
-                break :blk try self.returnTypeFromConcreteFunction(concrete_fn);
-            },
+            .call => |call| try self.callResultTypeInFreshInstantiation(call.source_fn_ty_payload, call.args, null),
             else => try self.concreteTypeInfoForChecked(fallback_checked_ty),
         };
     }
@@ -4256,7 +5317,7 @@ const BodyLowerer = struct {
             .block => |block| try self.lowerBlock(ty, block.statements, block.final_expr, expected_ty),
             .record => |record| try self.lowerRecord(ty, expected_info.source_ref, record),
             .empty_record => try self.program.ast.addExpr(ty, .{ .record = Ast.Span(Ast.FieldExpr).empty() }),
-            .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .local_function, lambda.args, lambda.body),
+            .lambda => |lambda| try self.lowerClosureExpr(ty, expected_info.source_ref, expr_id, .local_function, lambda.args, lambda.body),
             .call => |call| try self.lowerCall(expected_info, expr_id, call),
             .structural_eq => |eq| try self.lowerStructuralEq(ty, eq),
             .unary_not => |child| blk: {
@@ -4270,7 +5331,7 @@ const BodyLowerer = struct {
                 _ = tag.closure_name;
                 break :blk try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
-            .closure => |closure| try self.lowerCheckedClosureExpr(ty, expr_id, closure),
+            .closure => |closure| try self.lowerCheckedClosureExpr(ty, expected_info.source_ref, expr_id, closure),
             .field_access => |access| try self.lowerFieldAccess(expected_info, access.receiver, try self.recordFieldLabel(access.field_name)),
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
@@ -4298,10 +5359,7 @@ const BodyLowerer = struct {
             .method_eq => |plan| try self.lowerStaticDispatch(expected_info, plan orelse invariantViolation("checked method equality reached mono without a StaticDispatchCallPlan")),
             .type_dispatch_call => |plan| try self.lowerStaticDispatch(expected_info, plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan")),
             .hosted_lambda => invariantViolation("mono body lowering reached hosted lambda as an expression; hosted lambdas must be published as procedure templates"),
-            .dbg => |child| blk: {
-                const value = try self.lowerExpr(child);
-                break :blk try self.program.ast.addExpr(ty, .{ .inspect = value });
-            },
+            .dbg => |child| try self.lowerDbgExpression(ty, child),
             .expect => |child| blk: {
                 const condition = try self.lowerBoolConditionExpr(child);
                 const expect_stmt = try self.program.ast.addStmt(.{ .expect = condition });
@@ -4327,30 +5385,80 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
         const expr = self.checkedExpr(expr_id);
-        const bool_ty = try self.ensurePrimitiveBoolType();
-        const bool_source_ty = try self.program.boolSourceTypeKey();
+        const bool_info = try self.boolConcreteTypeInfo();
+        const bool_ty = bool_info.ty;
         const lowered = switch (expr.data) {
-            .tag => |tag| try self.lowerTag(bool_ty, null, try self.tagLabel(tag.name), tag.args),
+            .tag => |tag| try self.lowerTag(bool_ty, bool_info.source_ref, try self.tagLabel(tag.name), tag.args),
             .zero_argument_tag => |tag| blk: {
                 _ = tag.closure_name;
-                break :blk try self.lowerTag(bool_ty, null, try self.tagLabel(tag.name), &.{});
+                break :blk try self.lowerTag(bool_ty, bool_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
             .unary_not => |child| blk: {
                 const value = try self.lowerBoolConditionExpr(child);
                 break :blk try self.program.ast.addExpr(bool_ty, .{ .bool_not = value });
             },
-            else => return try self.lowerExpr(expr_id),
+            else => return try self.lowerExprConcreteExpected(expr_id, bool_info),
         };
-        self.program.ast.setExprSourceTy(lowered, bool_source_ty);
+        self.program.ast.setExprSourceTy(lowered, bool_info.source_ty);
         return lowered;
     }
 
-    fn ensurePrimitiveBoolType(self: *BodyLowerer) Allocator.Error!Type.TypeId {
-        return try self.program.types.internResolved(.{ .primitive = .bool });
+    fn boolConcreteTypeInfo(self: *BodyLowerer) Allocator.Error!ConcreteTypeInfo {
+        const source_ty = try self.program.boolSourceTypeKey();
+        const source_ref = self.program.concrete_source_types.refForKey(source_ty) orelse {
+            invariantViolation("mono body lowering Bool source type was not registered");
+        };
+        return .{
+            .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
+            .source_ty = source_ty,
+            .source_ref = source_ref,
+        };
+    }
+
+    fn lowerBoolLiteral(
+        self: *BodyLowerer,
+        bool_info: ConcreteTypeInfo,
+        literal: bool,
+    ) Allocator.Error!Ast.ExprId {
+        const label = try self.program.canonical_names.internTagLabel(if (literal) "True" else "False");
+        return try self.lowerTag(bool_info.ty, bool_info.source_ref, label, &.{});
     }
 
     fn ensureUnitType(self: *BodyLowerer) Allocator.Error!Type.TypeId {
         return try self.program.types.internResolved(.{ .record = .{ .fields = &.{} } });
+    }
+
+    fn ensureStrType(self: *BodyLowerer) Allocator.Error!Type.TypeId {
+        return try self.program.types.internResolved(.{ .primitive = .str });
+    }
+
+    fn lowerDbgExpression(
+        self: *BodyLowerer,
+        unit_ty: Type.TypeId,
+        child: checked_artifact.CheckedExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const child_info = try self.concreteResultTypeForExpr(child, self.checkedExpr(child).ty);
+        const value_expr = try self.lowerExprConcreteExpected(child, child_info);
+        const value_symbol = try self.program.addSyntheticSymbol();
+
+        const value_decl = try self.program.ast.addStmt(.{ .decl = .{
+            .bind = .{
+                .ty = child_info.ty,
+                .source_ty = child_info.source_ty,
+                .symbol = value_symbol,
+            },
+            .body = value_expr,
+        } });
+
+        const value_ref = try self.program.ast.addExprWithSource(child_info.ty, child_info.source_ty, .{ .var_ = value_symbol });
+        const msg = try self.lowerStrInspectCall(try self.ensureStrType(), value_ref, child_info);
+        const debug_stmt = try self.program.ast.addStmt(.{ .debug = msg });
+        const unit = try self.program.ast.addExpr(unit_ty, .unit);
+        const stmts = [_]Ast.StmtId{ value_decl, debug_stmt };
+        return try self.program.ast.addExpr(unit_ty, .{ .block = .{
+            .stmts = try self.program.ast.addStmtSpan(&stmts),
+            .final_expr = unit,
+        } });
     }
 
     fn lowerIntegerLiteralExpr(
@@ -4525,6 +5633,18 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.LetFn {
         const lambda = self.localProcLambda(decl.expr);
 
+        var saved_local_symbols = try self.local_symbols.clone();
+        const saved_local_symbol_types = self.local_symbol_types.clone() catch |err| {
+            saved_local_symbols.deinit();
+            return err;
+        };
+        defer {
+            self.local_symbols.deinit();
+            self.local_symbol_types.deinit();
+            self.local_symbols = saved_local_symbols;
+            self.local_symbol_types = saved_local_symbol_types;
+        }
+
         var instantiator = try self.type_instantiator.fork();
         defer instantiator.deinit();
 
@@ -4539,6 +5659,8 @@ const BodyLowerer = struct {
         const previous_return_type = self.current_return_type;
         self.current_return_type = ret_ty;
         defer self.current_return_type = previous_return_type;
+        const params = try self.lowerParamBundleFromFunction(lambda.args, concrete_fn);
+        defer self.deinitParamBundle(params);
         return .{
             .site = self.nestedProcSite(decl.expr, lambda.kind),
             .source_fn_ty = source_fn_ty,
@@ -4548,8 +5670,8 @@ const BodyLowerer = struct {
                 .source_ty = source_fn_ty,
                 .symbol = instance_symbol,
             },
-            .args = try self.lowerParamSpanFromFunction(lambda.args, concrete_fn),
-            .body = try self.lowerExprConcreteExpected(lambda.body, ret_ty),
+            .args = params.args,
+            .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
         };
     }
 
@@ -4615,10 +5737,17 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         ty: Type.TypeId,
         const_use: checked_artifact.ConstUseTemplate,
-        checked_ty: checked_artifact.CheckedTypeId,
+        _: checked_artifact.CheckedTypeId,
     ) Allocator.Error!Ast.ExprId {
-        const concrete_ref = try self.type_instantiator.concreteRefForTemplateType(checked_ty);
+        const requested_payload = const_use.requested_source_ty_payload orelse {
+            debug.invariant(false, "mono body lowering invariant violated: constant use had no requested source type payload");
+            unreachable;
+        };
+        const concrete_ref = try self.type_instantiator.concreteRefForTemplateType(requested_payload);
         const requested_key = self.program.concrete_source_types.key(concrete_ref);
+        if (!std.mem.eql(u8, &requested_key.bytes, &const_use.requested_source_ty_template.bytes)) {
+            invariantViolation("mono body lowering constant use payload key disagrees with requested source type template");
+        }
         const key = checked_artifact.ConstInstantiationKey{
             .const_ref = const_use.const_ref,
             .requested_source_ty = requested_key,
@@ -4885,23 +6014,24 @@ const BodyLowerer = struct {
     fn lowerClosureExpr(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        source_fn_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         site_expr: checked_artifact.CheckedExprId,
         site_kind: checked_artifact.NestedProcKind,
         arg_patterns: []const checked_artifact.CheckedPatternId,
         body_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(self.checkedExpr(site_expr).ty);
-        const args = try self.lowerParamSpanFromFunction(arg_patterns, source_fn_ref);
+        const params = try self.lowerParamBundleFromFunction(arg_patterns, source_fn_ref);
+        defer self.deinitParamBundle(params);
         const ret_ty = try self.returnTypeFromConcreteFunction(source_fn_ref);
         const previous_return_type = self.current_return_type;
         self.current_return_type = ret_ty;
         defer self.current_return_type = previous_return_type;
-        const body = try self.lowerExprConcreteExpected(body_expr, ret_ty);
+        const body = try self.lowerBodyWithParamDestructures(body_expr, ret_ty, params.destructures);
         const source_fn_ty = self.program.concrete_source_types.key(source_fn_ref);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
             .site = self.nestedProcSite(site_expr, site_kind),
             .source_fn_ty = source_fn_ty,
-            .args = args,
+            .args = params.args,
             .body = body,
         } });
     }
@@ -4909,6 +6039,7 @@ const BodyLowerer = struct {
     fn lowerCheckedClosureExpr(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        source_fn_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         expr_id: checked_artifact.CheckedExprId,
         closure: anytype,
     ) Allocator.Error!Ast.ExprId {
@@ -4916,9 +6047,45 @@ const BodyLowerer = struct {
         _ = closure.tag_name;
         const lambda_expr = self.checkedExpr(closure.lambda);
         return switch (lambda_expr.data) {
-            .lambda => |lambda| try self.lowerClosureExpr(ty, expr_id, .closure, lambda.args, lambda.body),
+            .lambda => |lambda| try self.lowerClosureExpr(ty, source_fn_ref, expr_id, .closure, lambda.args, lambda.body),
             else => invariantViolation("mono body lowering expected closure expression to reference a checked lambda"),
         };
+    }
+
+    fn instantiateCallType(
+        self: *BodyLowerer,
+        source_fn_ty: checked_artifact.CheckedTypeId,
+        args: []const checked_artifact.CheckedExprId,
+        expected_ret: ?ConcreteTypeInfo,
+    ) Allocator.Error!CallInstantiationInfo {
+        try self.bindKnownCallArgumentTypes(source_fn_ty, args);
+        if (expected_ret) |ret| {
+            try self.unifyFunctionReturnWithConcrete(source_fn_ty, ret.source_ref);
+        }
+        const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(source_fn_ty);
+        const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+        return .{
+            .concrete_fn = concrete_fn,
+            .func_ty = func_ty,
+            .requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn),
+            .ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn),
+        };
+    }
+
+    fn callResultTypeInFreshInstantiation(
+        self: *BodyLowerer,
+        source_fn_ty: checked_artifact.CheckedTypeId,
+        args: []const checked_artifact.CheckedExprId,
+        expected_ret: ?ConcreteTypeInfo,
+    ) Allocator.Error!ConcreteTypeInfo {
+        var call_instantiator = try self.type_instantiator.fork();
+        defer call_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &call_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        return (try self.instantiateCallType(source_fn_ty, args, expected_ret)).ret_ty;
     }
 
     fn lowerCall(
@@ -4928,50 +6095,53 @@ const BodyLowerer = struct {
         call: anytype,
     ) Allocator.Error!Ast.ExprId {
         _ = call.called_via;
-        try self.bindKnownCallArgumentTypes(call.source_fn_ty_payload, call.args);
-        try self.unifyFunctionReturnWithConcrete(call.source_fn_ty_payload, expected.source_ref);
-        const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
-        const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
-        const requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn);
-        const ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn);
-        if (!self.program.types.equalIds(ret_ty.ty, expected.ty)) {
+
+        var call_instantiator = try self.type_instantiator.fork();
+        defer call_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &call_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        const instantiated = try self.instantiateCallType(call.source_fn_ty_payload, call.args, expected);
+        if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
             invariantViolation("mono body lowering call result type disagreed with concrete expected type");
         }
 
         if (self.procedureUseForExpr(call.func)) |proc_use| {
-            const args = try self.lowerCallArgs(call.args, concrete_fn);
-            const proc = try self.reserveProcedureUse(proc_use, call.source_fn_ty_payload, .{ .call_proc = call_expr });
+            const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
+            const proc = try self.reserveProcedureUseForConcrete(proc_use, instantiated.concrete_fn, .{ .call_proc = call_expr });
             return try self.program.ast.addExpr(expected.ty, .{ .call_proc = .{
                 .proc = proc,
                 .args = args,
-                .requested_fn_ty = func_ty,
-                .requested_source_fn_ty = requested_source_fn_ty,
+                .requested_fn_ty = instantiated.func_ty,
+                .requested_source_fn_ty = instantiated.requested_source_fn_ty,
             } });
         }
         if (try self.localProcUseForExpr(call.func)) |local_proc| {
-            const symbol = try self.ensureLocalProcInstanceForConcrete(local_proc.binder, concrete_fn);
-            const func = try self.program.ast.addExpr(func_ty, .{ .var_ = symbol });
-            const args = try self.lowerCallArgs(call.args, concrete_fn);
+            const symbol = try self.ensureLocalProcInstanceForConcrete(local_proc.binder, instantiated.concrete_fn);
+            const func = try self.program.ast.addExpr(instantiated.func_ty, .{ .var_ = symbol });
+            const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
             return try self.program.ast.addExpr(expected.ty, .{ .call_value = .{
                 .func = func,
                 .args = args,
-                .requested_fn_ty = func_ty,
-                .requested_source_fn_ty = requested_source_fn_ty,
+                .requested_fn_ty = instantiated.func_ty,
+                .requested_source_fn_ty = instantiated.requested_source_fn_ty,
             } });
         }
 
         const func_info = ConcreteTypeInfo{
-            .ty = func_ty,
-            .source_ty = requested_source_fn_ty,
-            .source_ref = concrete_fn,
+            .ty = instantiated.func_ty,
+            .source_ty = instantiated.requested_source_fn_ty,
+            .source_ref = instantiated.concrete_fn,
         };
         const func = try self.lowerExprConcreteExpected(call.func, func_info);
-        const args = try self.lowerCallArgs(call.args, concrete_fn);
+        const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
         return try self.program.ast.addExpr(expected.ty, .{ .call_value = .{
             .func = func,
             .args = args,
-            .requested_fn_ty = func_ty,
-            .requested_source_fn_ty = requested_source_fn_ty,
+            .requested_fn_ty = instantiated.func_ty,
+            .requested_source_fn_ty = instantiated.requested_source_fn_ty,
         } });
     }
 
@@ -5009,11 +6179,7 @@ const BodyLowerer = struct {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
         const expr = self.checkedExpr(expr_id);
         return switch (expr.data) {
-            .call => |call| blk: {
-                try self.bindKnownCallArgumentTypes(call.source_fn_ty_payload, call.args);
-                const concrete_fn = try self.type_instantiator.concreteRefForTemplateType(call.source_fn_ty_payload);
-                break :blk try self.returnTypeFromConcreteFunction(concrete_fn);
-            },
+            .call => |call| try self.callResultTypeInFreshInstantiation(call.source_fn_ty_payload, call.args, null),
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
@@ -5063,6 +6229,21 @@ const BodyLowerer = struct {
     }
 
     fn lowerStaticDispatch(
+        self: *BodyLowerer,
+        expected: ConcreteTypeInfo,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+    ) Allocator.Error!Ast.ExprId {
+        var dispatch_instantiator = try self.type_instantiator.fork();
+        defer dispatch_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &dispatch_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        return try self.lowerStaticDispatchInCurrentInstantiation(expected, plan_id);
+    }
+
+    fn lowerStaticDispatchInCurrentInstantiation(
         self: *BodyLowerer,
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
@@ -5283,17 +6464,15 @@ const BodyLowerer = struct {
         name: canonical.TagLabelId,
         args: []const checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.boolLiteralForTagName(ty, name)) |literal| {
-            if (args.len != 0) invariantViolation("mono body lowering Bool tag constructor cannot have a payload");
-            return try self.program.ast.addExpr(ty, .{ .bool_lit = literal });
-        }
-
         const tag_info = self.tagInfoForUnionType(ty, name);
         if (tag_info.payload_count != args.len) invariantViolation("mono body lowering tag constructor arity did not match its resolved type");
-        const payload_types = try self.concreteTagPayloadInfosForUnionType(
-            source_ref orelse invariantViolation("mono body lowering tag constructor had no concrete source type"),
-            name,
-        );
+        const payload_types = if (args.len == 0)
+            &[_]ConcreteTypeInfo{}
+        else
+            try self.concreteTagPayloadInfosForUnionType(
+                source_ref orelse invariantViolation("mono body lowering tag constructor had no concrete source type"),
+                name,
+            );
         defer if (payload_types.len != 0) self.allocator.free(payload_types);
         if (payload_types.len != args.len) invariantViolation("mono body lowering concrete tag payload arity did not match resolved type");
         return try self.program.ast.addExpr(ty, .{ .tag = .{
@@ -5428,7 +6607,8 @@ const BodyLowerer = struct {
                 break :blk try self.program.ast.addExpr(ty, .{ .bool_not = eq });
             },
             .@"and" => blk: {
-                const false_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = false });
+                const bool_info = try self.boolConcreteTypeInfo();
+                const false_expr = try self.lowerBoolLiteral(bool_info, false);
                 break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
                     .cond = try self.lowerBoolConditionExpr(binop.lhs),
                     .then_body = try self.lowerBoolConditionExpr(binop.rhs),
@@ -5436,7 +6616,8 @@ const BodyLowerer = struct {
                 } });
             },
             .@"or" => blk: {
-                const true_expr = try self.program.ast.addExpr(ty, .{ .bool_lit = true });
+                const bool_info = try self.boolConcreteTypeInfo();
+                const true_expr = try self.lowerBoolLiteral(bool_info, true);
                 break :blk try self.program.ast.addExpr(ty, .{ .if_ = .{
                     .cond = try self.lowerBoolConditionExpr(binop.lhs),
                     .then_body = true_expr,
@@ -5517,11 +6698,6 @@ const BodyLowerer = struct {
             },
             .applied_tag => |tag| blk: {
                 const tag_name = try self.tagLabel(tag.name);
-                if (self.boolLiteralForTagName(ty, tag_name)) |literal| {
-                    if (tag.args.len != 0) invariantViolation("mono body lowering Bool tag pattern cannot have a payload");
-                    break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{ .bool_lit = literal } });
-                }
-
                 const tag_info = self.tagInfoForUnionType(ty, tag_name);
                 if (tag_info.payload_count != tag.args.len) invariantViolation("mono body lowering tag pattern arity did not match its resolved type");
                 const payload_types = try self.concreteTagPayloadInfosForUnionType(expected.source_ref, tag_name);
@@ -5600,9 +6776,9 @@ const BodyLowerer = struct {
                     .rest = rest,
                 } } });
             },
-            .num_literal => |num| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .int_lit = num.value.toI128() } }),
-            .small_dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.toRocDec().num } }),
-            .dec_literal => |dec| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = dec.value.num } }),
+            .num_literal => |num| try self.lowerIntegerLiteralPattern(ty, num.value),
+            .small_dec_literal => |dec| try self.lowerScaledDecimalLiteralPattern(ty, dec.value.toRocDec().num),
+            .dec_literal => |dec| try self.lowerScaledDecimalLiteralPattern(ty, dec.value.num),
             .frac_f32_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = value } }),
             .frac_f64_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = value } }),
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
@@ -5612,6 +6788,49 @@ const BodyLowerer = struct {
         };
         self.program.ast.pats.items[@intFromEnum(lowered)].source_ty = expected.source_ty;
         return lowered;
+    }
+
+    fn lowerIntegerLiteralPattern(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: CIR.IntValue,
+    ) Allocator.Error!Ast.PatId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .u8,
+                .i8,
+                .u16,
+                .i16,
+                .u32,
+                .i32,
+                .u64,
+                .i64,
+                .u128,
+                .i128,
+                => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .int_lit = @as(i128, @bitCast(value.bytes)) } }),
+                .f32 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = @floatCast(intValueToF64(value)) } }),
+                .f64 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = intValueToF64(value) } }),
+                .dec => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = intValueToScaledDec(value) } }),
+                else => invariantViolation("mono body lowering reached integer literal pattern with non-numeric primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached integer literal pattern with non-primitive result type"),
+        };
+    }
+
+    fn lowerScaledDecimalLiteralPattern(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        scaled_value: i128,
+    ) Allocator.Error!Ast.PatId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = @floatCast(scaledDecToF64(scaled_value)) } }),
+                .f64 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = scaledDecToF64(scaled_value) } }),
+                .dec => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .dec_lit = scaled_value } }),
+                else => invariantViolation("mono body lowering reached decimal literal pattern with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached decimal literal pattern with non-primitive result type"),
+        };
     }
 
     fn representativeBinderForCandidate(
@@ -5678,23 +6897,6 @@ const BodyLowerer = struct {
         payload_types: []const Type.TypeId,
     };
 
-    fn boolLiteralForTagName(
-        self: *BodyLowerer,
-        ty: Type.TypeId,
-        name: canonical.TagLabelId,
-    ) ?bool {
-        switch (self.program.types.getType(ty)) {
-            .primitive => |prim| {
-                if (prim != .bool) return null;
-                const text = self.program.canonical_names.tagLabelText(name);
-                if (std.mem.eql(u8, text, "True")) return true;
-                if (std.mem.eql(u8, text, "False")) return false;
-                invariantViolation("mono body lowering Bool constructor was neither True nor False");
-            },
-            else => return null,
-        }
-    }
-
     fn tagInfoForUnionType(
         self: *BodyLowerer,
         union_ty: Type.TypeId,
@@ -5755,6 +6957,17 @@ const BodyLowerer = struct {
             };
         }
         return out;
+    }
+
+    fn concreteTypeInfoForRef(
+        self: *BodyLowerer,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteTypeInfo {
+        return .{
+            .ty = try self.type_instantiator.lowerConcreteRef(source_ref),
+            .source_ty = self.program.concrete_source_types.key(source_ref),
+            .source_ref = source_ref,
+        };
     }
 
     fn recordFieldIndex(
@@ -5844,7 +7057,7 @@ const BodyLowerer = struct {
                     .body = body,
                 } });
             },
-            .dbg => |expr| try self.program.ast.addStmt(.{ .debug = try self.lowerExpr(expr) }),
+            .dbg => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerDbgExpression(try self.ensureUnitType(), expr) }),
             .expr => |expr| try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(expr) }),
             .expect => |expr| try self.program.ast.addStmt(.{ .expect = try self.lowerBoolConditionExpr(expr) }),
             .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
@@ -5890,26 +7103,34 @@ const BodyLowerer = struct {
         return switch (expr.data) {
             .lambda => |lambda| blk: {
                 const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(expr.ty);
+                const params = try self.lowerParamBundleFromFunction(lambda.args, source_fn_ref);
+                defer self.deinitParamBundle(params);
+                const ret_ty = try self.returnTypeFromConcreteFunction(source_fn_ref);
                 break :blk .{
                     .site = self.nestedProcSite(expr_id, .local_function),
                     .source_fn_ty = self.program.concrete_source_types.key(source_fn_ref),
                     .recursive = false,
                     .bind = bind,
-                    .args = try self.lowerParamSpanFromFunction(lambda.args, source_fn_ref),
-                    .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(source_fn_ref)),
+                    .args = params.args,
+                    .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
                 };
             },
             .closure => |closure| blk: {
                 const source_fn_ref = try self.type_instantiator.concreteRefForTemplateType(expr.ty);
                 const lambda_expr = self.checkedExpr(closure.lambda);
                 switch (lambda_expr.data) {
-                    .lambda => |lambda| break :blk .{
-                        .site = self.nestedProcSite(expr_id, .closure),
-                        .source_fn_ty = self.program.concrete_source_types.key(source_fn_ref),
-                        .recursive = false,
-                        .bind = bind,
-                        .args = try self.lowerParamSpanFromFunction(lambda.args, source_fn_ref),
-                        .body = try self.lowerExprConcreteExpected(lambda.body, try self.returnTypeFromConcreteFunction(source_fn_ref)),
+                    .lambda => |lambda| {
+                        const params = try self.lowerParamBundleFromFunction(lambda.args, source_fn_ref);
+                        defer self.deinitParamBundle(params);
+                        const ret_ty = try self.returnTypeFromConcreteFunction(source_fn_ref);
+                        break :blk .{
+                            .site = self.nestedProcSite(expr_id, .closure),
+                            .source_fn_ty = self.program.concrete_source_types.key(source_fn_ref),
+                            .recursive = false,
+                            .bind = bind,
+                            .args = params.args,
+                            .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
+                        };
                     },
                     else => invariantViolation("mono body lowering expected local closure declaration to reference a checked lambda"),
                 }
@@ -6088,6 +7309,15 @@ const BodyLowerer = struct {
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(checked_fn_ty);
+        return try self.reserveProcedureUseForConcrete(use, requested_fn_ty, reason);
+    }
+
+    fn reserveProcedureUseForConcrete(
+        self: *BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+        reason: MonoSpecializationReason,
+    ) Allocator.Error!canonical.MirProcedureRef {
         const template = try self.name_resolver.procedureTemplateRef(try self.procedureTemplateForUse(use, requested_fn_ty));
         const imported_closure = self.importedClosureForProcedureUse(use, template);
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{

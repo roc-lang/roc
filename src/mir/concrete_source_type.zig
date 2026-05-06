@@ -38,6 +38,16 @@ const SourceKey = struct {
     ty: u32,
 };
 
+const RecordFieldForKey = struct {
+    name: canonical.RecordFieldLabelId,
+    ty: checked_artifact.CheckedTypeId,
+};
+
+const TagForKey = struct {
+    name: canonical.TagLabelId,
+    args: []const checked_artifact.CheckedTypeId,
+};
+
 /// Public `Store` declaration.
 pub const Store = struct {
     allocator: Allocator,
@@ -376,12 +386,11 @@ pub const PayloadKeyBuilder = struct {
             },
             .record_unbound => |fields| {
                 self.writeTag("record_unbound");
-                try self.writeRecordFields(fields);
+                try self.writeNormalizedRecordFields(fields, null);
             },
             .record => |record| {
                 self.writeTag("record");
-                try self.writeRecordFields(record.fields);
-                try self.writeType(record.ext);
+                try self.writeNormalizedRecordFields(record.fields, record.ext);
             },
             .tuple => |tuple| {
                 self.writeTag("tuple");
@@ -411,27 +420,151 @@ pub const PayloadKeyBuilder = struct {
             .empty_record => self.writeTag("empty_record"),
             .tag_union => |tag_union| {
                 self.writeTag("tag_union");
-                self.writeU32(@intCast(tag_union.tags.len));
-                for (tag_union.tags) |tag| {
-                    self.writeBytes(self.names.tagLabelText(tag.name));
-                    self.writeU32(@intCast(tag.args.len));
-                    for (tag.args) |arg| try self.writeType(arg);
-                }
-                try self.writeType(tag_union.ext);
+                try self.writeNormalizedTags(tag_union.tags, tag_union.ext);
             },
             .empty_tag_union => self.writeTag("empty_tag_union"),
         }
     }
 
-    fn writeRecordFields(
+    fn appendRecordFieldsForKey(
         self: *PayloadKeyBuilder,
-        fields: []const checked_artifact.CheckedRecordField,
+        fields: *std.ArrayList(RecordFieldForKey),
+        source: []const checked_artifact.CheckedRecordField,
     ) Allocator.Error!void {
-        self.writeU32(@intCast(fields.len));
-        for (fields) |field| {
+        for (source) |field| {
+            try fields.append(self.allocator, .{
+                .name = field.name,
+                .ty = field.ty,
+            });
+        }
+    }
+
+    fn writeNormalizedRecordFields(
+        self: *PayloadKeyBuilder,
+        head: []const checked_artifact.CheckedRecordField,
+        ext: ?checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        var fields = std.ArrayList(RecordFieldForKey).empty;
+        defer fields.deinit(self.allocator);
+        try self.appendRecordFieldsForKey(&fields, head);
+
+        var tail = ext;
+        var seen = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (self.active.contains(tail_id)) break;
+            if (seen.contains(tail_id)) {
+                invariantViolation("concrete source type key row normalization reached a cyclic record row");
+            }
+            try seen.put(tail_id, {});
+            const raw = @intFromEnum(tail_id);
+            if (raw >= self.payloads.len) {
+                invariantViolation("concrete source type key row normalization referenced missing record tail");
+            }
+            switch (self.payloads[raw]) {
+                .empty_record => {
+                    tail = null;
+                    break;
+                },
+                .record => |record| {
+                    try self.appendRecordFieldsForKey(&fields, record.fields);
+                    tail = record.ext;
+                },
+                .record_unbound => |record_fields| {
+                    try self.appendRecordFieldsForKey(&fields, record_fields);
+                    tail = null;
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        self.writeU32(@intCast(fields.items.len));
+        for (fields.items, 0..) |field, index| {
+            if (index > 0 and std.mem.eql(u8, self.names.recordFieldLabelText(fields.items[index - 1].name), self.names.recordFieldLabelText(field.name))) {
+                invariantViolation("concrete source type key row normalization found duplicate record fields");
+            }
             self.writeBytes(self.names.recordFieldLabelText(field.name));
             try self.writeType(field.ty);
         }
+        if (tail) |tail_id| {
+            try self.writeType(tail_id);
+        } else {
+            self.writeTag("empty_record");
+        }
+    }
+
+    fn appendTagsForKey(
+        self: *PayloadKeyBuilder,
+        tags: *std.ArrayList(TagForKey),
+        source: []const checked_artifact.CheckedTag,
+    ) Allocator.Error!void {
+        for (source) |tag| {
+            try tags.append(self.allocator, .{
+                .name = tag.name,
+                .args = tag.args,
+            });
+        }
+    }
+
+    fn writeNormalizedTags(
+        self: *PayloadKeyBuilder,
+        head: []const checked_artifact.CheckedTag,
+        ext: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        var tags = std.ArrayList(TagForKey).empty;
+        defer tags.deinit(self.allocator);
+        try self.appendTagsForKey(&tags, head);
+
+        var tail: ?checked_artifact.CheckedTypeId = ext;
+        var seen = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (self.active.contains(tail_id)) break;
+            if (seen.contains(tail_id)) {
+                invariantViolation("concrete source type key row normalization reached a cyclic tag row");
+            }
+            try seen.put(tail_id, {});
+            const raw = @intFromEnum(tail_id);
+            if (raw >= self.payloads.len) {
+                invariantViolation("concrete source type key row normalization referenced missing tag tail");
+            }
+            switch (self.payloads[raw]) {
+                .empty_tag_union => {
+                    tail = null;
+                    break;
+                },
+                .tag_union => |tag_union| {
+                    try self.appendTagsForKey(&tags, tag_union.tags);
+                    tail = tag_union.ext;
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        self.writeU32(@intCast(tags.items.len));
+        for (tags.items, 0..) |tag, index| {
+            if (index > 0 and std.mem.eql(u8, self.names.tagLabelText(tags.items[index - 1].name), self.names.tagLabelText(tag.name))) {
+                invariantViolation("concrete source type key row normalization found duplicate tags");
+            }
+            self.writeBytes(self.names.tagLabelText(tag.name));
+            self.writeU32(@intCast(tag.args.len));
+            for (tag.args) |arg| try self.writeType(arg);
+        }
+        if (tail) |tail_id| {
+            try self.writeType(tail_id);
+        } else {
+            self.writeTag("empty_tag_union");
+        }
+    }
+
+    fn recordFieldForKeyLessThan(self: *PayloadKeyBuilder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
+        return std.mem.lessThan(u8, self.names.recordFieldLabelText(lhs.name), self.names.recordFieldLabelText(rhs.name));
+    }
+
+    fn tagForKeyLessThan(self: *PayloadKeyBuilder, lhs: TagForKey, rhs: TagForKey) bool {
+        return std.mem.lessThan(u8, self.names.tagLabelText(lhs.name), self.names.tagLabelText(rhs.name));
     }
 
     fn writeConstraints(

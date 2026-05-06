@@ -224,7 +224,7 @@ pub const Lowerer = struct {
     ) Allocator.Error!Type.Content {
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
-                .bool => return .{ .primitive = .bool },
+                .bool => return .{ .link = try self.lowerChecked(nominal.backing) },
                 .str => return .{ .primitive = .str },
                 .u8 => return .{ .primitive = .u8 },
                 .i8 => return .{ .primitive = .i8 },

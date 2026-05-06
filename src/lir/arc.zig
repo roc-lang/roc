@@ -22,6 +22,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
 
     for (store.proc_specs.items) |*proc| {
         const body = proc.body orelse continue;
+        var join_bodies = JoinBodyMap.init(store.allocator);
+        defer join_bodies.deinit();
+        var join_visit = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
+        defer join_visit.deinit();
+        try inserter.collectJoinBodies(body, &join_bodies, &join_visit);
+        inserter.join_bodies = &join_bodies;
+        defer inserter.join_bodies = null;
+
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
         for (store.getLocalSpan(proc.args)) |param| {
@@ -41,6 +49,7 @@ const RewriteOptions = struct {
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    join_bodies: ?*const JoinBodyMap = null,
 
     const CallArgOwnership = struct {
         retain_mask: u64 = 0,
@@ -632,6 +641,61 @@ const Inserter = struct {
         }
     }
 
+    fn collectJoinBodies(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        join_bodies: *JoinBodyMap,
+        visited: *std.AutoHashMap(LIR.CFStmtId, void),
+    ) ResourceError!void {
+        if (visited.contains(start)) return;
+        try visited.put(start, {});
+
+        const stmt = self.store.getCFStmt(start);
+        switch (stmt) {
+            .assign_ref => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_literal => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_call => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_call_erased => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_low_level => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_list => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_struct => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_tag => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .set_local => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .debug => |debug_stmt| try self.collectJoinBodies(debug_stmt.next, join_bodies, visited),
+            .expect => |expect_stmt| try self.collectJoinBodies(expect_stmt.next, join_bodies, visited),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.collectJoinBodies(branch.body, join_bodies, visited);
+                }
+                try self.collectJoinBodies(switch_stmt.default_branch, join_bodies, visited);
+                if (switch_stmt.continuation) |continuation| {
+                    try self.collectJoinBodies(continuation, join_bodies, visited);
+                }
+            },
+            .for_list => |for_stmt| {
+                try self.collectJoinBodies(for_stmt.body, join_bodies, visited);
+                try self.collectJoinBodies(for_stmt.next, join_bodies, visited);
+            },
+            .join => |join_stmt| {
+                const previous = try join_bodies.getOrPut(join_stmt.id);
+                if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
+                    arcInvariant("ARC join-body collection saw one join id with multiple bodies");
+                }
+                previous.value_ptr.* = join_stmt.body;
+                try self.collectJoinBodies(join_stmt.body, join_bodies, visited);
+                try self.collectJoinBodies(join_stmt.remainder, join_bodies, visited);
+            },
+            .jump,
+            .ret,
+            .runtime_error,
+            .loop_continue,
+            .loop_break,
+            .crash,
+            => {},
+            .incref, .decref, .free => arcInvariant("ARC join-body collection received already-reference-counted LIR"),
+        }
+    }
+
     fn localUsedInPath(self: *Inserter, start: LIR.CFStmtId, needle: LIR.LocalId) ResourceError!bool {
         var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
@@ -687,7 +751,12 @@ const Inserter = struct {
                 try self.localUsedInPathInner(for_stmt.next, needle, visited)),
             .join => |join_stmt| (try self.localUsedInPathInner(join_stmt.body, needle, visited) or
                 try self.localUsedInPathInner(join_stmt.remainder, needle, visited)),
-            .jump => |jump_stmt| self.spanUsesLocal(jump_stmt.args, needle),
+            .jump => |jump_stmt| blk: {
+                if (self.spanUsesLocal(jump_stmt.args, needle)) break :blk true;
+                const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
+                const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC liveness reached jump to unknown join point");
+                break :blk try self.localUsedInPathInner(target_body, needle, visited);
+            },
             .ret => |ret_stmt| ret_stmt.value == needle,
             .runtime_error,
             .loop_continue,
@@ -769,6 +838,8 @@ const Inserter = struct {
         return self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx));
     }
 };
+
+const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
 
 const OwnedSet = struct {
     allocator: std.mem.Allocator,

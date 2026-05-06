@@ -428,6 +428,14 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn allocatesConsumingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = mask != 0,
+                .consume_args = mask,
+            };
+        }
+
         pub fn retainsOrReleases() RcEffect {
             return .{ .may_retain_or_release = true };
         }
@@ -531,7 +539,6 @@ pub const LowLevel = enum {
             .str_repeat,
             .str_from_utf8_lossy,
             .str_split_on,
-            .str_join_with,
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
@@ -550,6 +557,8 @@ pub const LowLevel = enum {
             .num_to_str,
             .list_with_capacity,
             => RcEffect.allocates(),
+
+            .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 

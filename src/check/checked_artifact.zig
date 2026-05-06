@@ -1010,6 +1010,14 @@ pub const CheckedTypeStore = struct {
                 }
             } else if (isPatternNodeTag(tag)) {
                 _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.patternType(@enumFromInt(node_idx)));
+            } else if (isStatementNodeTag(tag)) {
+                const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
+                switch (module.getStatement(statement_idx)) {
+                    .s_alias_decl,
+                    .s_nominal_decl,
+                    => _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
+                    else => {},
+                }
             }
         }
         try appendStaticDispatchTypeRoots(allocator, module, names, &roots, &payloads, &active);
@@ -1096,6 +1104,58 @@ pub const CheckedTypeStore = struct {
 
         try self.ensureSyntheticSchemeForRoot(allocator, id, key);
         return id;
+    }
+
+    /// Reserve a checked type root whose payload will be filled after recursive
+    /// cloning has finished.
+    pub fn reserveSyntheticTypeRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!CheckedTypeId {
+        if (self.rootForKey(key)) |existing| return existing;
+
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+
+        const old_roots = self.roots;
+        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
+        @memcpy(new_roots[0..old_roots.len], old_roots);
+        new_roots[old_roots.len] = .{ .id = id, .key = key };
+        errdefer allocator.free(new_roots);
+
+        const old_payloads = self.payloads;
+        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
+        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
+        new_payloads[old_payloads.len] = .pending;
+        errdefer allocator.free(new_payloads);
+
+        allocator.free(old_roots);
+        allocator.free(old_payloads);
+        self.roots = new_roots;
+        self.payloads = new_payloads;
+
+        return id;
+    }
+
+    /// Fill a previously reserved checked type root with its explicit payload.
+    pub fn fillSyntheticTypeRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        root: CheckedTypeId,
+        payload: CheckedTypePayload,
+    ) Allocator.Error!void {
+        const index: usize = @intFromEnum(root);
+        if (index >= self.payloads.len) {
+            checkedArtifactInvariant("synthetic checked type fill referenced a missing root", .{});
+        }
+        switch (self.payloads[index]) {
+            .pending => {},
+            else => checkedArtifactInvariant("synthetic checked type fill referenced an already-filled root", .{}),
+        }
+
+        self.payloads[index] = payload;
+        errdefer deinitCheckedTypePayload(allocator, &self.payloads[index]);
+        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots[index].key);
     }
 
     pub fn ensureSchemeForRoot(
@@ -4208,6 +4268,7 @@ pub const ResolvedValueRefTable = struct {
         allocator: Allocator,
         modules: *const TypedCIR.Modules,
         module_idx: u32,
+        artifact_key: CheckedModuleArtifactKey,
         imports: []const PublishImportArtifact,
         templates: *const CheckedProcedureTemplateTable,
         hosted_procs: *const HostedProcTable,
@@ -4270,7 +4331,7 @@ pub const ResolvedValueRefTable = struct {
                 }
                 unreachable;
             };
-            attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
+            try attachUseTypePayload(allocator, artifact_key, checked_types, &resolved_ref, checked_type_key, checked_ty);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -4365,22 +4426,28 @@ fn classifyValueRef(
 }
 
 fn attachUseTypePayload(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
     ref: *ResolvedValueRef,
     key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
-) void {
+) Allocator.Error!void {
     switch (ref.*) {
         .top_level_const => |*use| {
-            use.requested_source_ty_template = key;
-            use.requested_source_ty_payload = checked_ty;
+            const request = try constUseRequestPayload(allocator, artifact_key, checked_types, use.const_ref, key, checked_ty);
+            use.requested_source_ty_template = request.key;
+            use.requested_source_ty_payload = request.payload;
         },
         .imported_const => |*use| {
-            use.requested_source_ty_template = key;
-            use.requested_source_ty_payload = checked_ty;
+            const request = try constUseRequestPayload(allocator, artifact_key, checked_types, use.const_ref, key, checked_ty);
+            use.requested_source_ty_template = request.key;
+            use.requested_source_ty_payload = request.payload;
         },
         .platform_required_const => |*use| {
-            use.requested_source_ty_template = key;
-            use.requested_source_ty_payload = checked_ty;
+            const request = try constUseRequestPayload(allocator, artifact_key, checked_types, use.const_ref, key, checked_ty);
+            use.requested_source_ty_template = request.key;
+            use.requested_source_ty_payload = request.payload;
         },
         .top_level_proc => |*use| {
             use.source_fn_ty_template = key;
@@ -4410,6 +4477,120 @@ fn attachUseTypePayload(
         .platform_required_declaration,
         => {},
     }
+}
+
+const ConstUseRequestPayload = struct {
+    key: canonical.CanonicalTypeKey,
+    payload: CheckedTypeId,
+};
+
+fn constUseRequestPayload(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    const_ref: ConstRef,
+    use_key: canonical.CanonicalTypeKey,
+    use_payload: CheckedTypeId,
+) Allocator.Error!ConstUseRequestPayload {
+    if (!std.mem.eql(u8, &const_ref.artifact.bytes, &artifact_key.bytes)) {
+        return .{ .key = use_key, .payload = use_payload };
+    }
+
+    const scheme = checked_types.schemeForKey(const_ref.source_scheme) orelse {
+        checkedArtifactInvariant("local const use referenced a missing producer source scheme", .{});
+    };
+    const concrete_producer = try checkedTypeIsConcreteConstProducerScheme(allocator, checked_types, scheme.root);
+    if (!concrete_producer) {
+        return .{ .key = use_key, .payload = use_payload };
+    }
+
+    return .{
+        .key = checked_types.roots[@intFromEnum(scheme.root)].key,
+        .payload = scheme.root,
+    };
+}
+
+fn checkedTypeIsConcreteConstProducerScheme(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, root, &active);
+}
+
+fn checkedTypeIsConcreteConstProducerSchemeInner(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    if (active.contains(root)) return true;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    const index = @intFromEnum(root);
+    if (index >= checked_types.payloads.len) {
+        checkedArtifactInvariant("const producer checked type id is out of range", .{});
+    }
+    return switch (checked_types.payloads[index]) {
+        .pending => checkedArtifactInvariant("const producer checked type was pending", .{}),
+        .flex,
+        .rigid,
+        => false,
+        .empty_record,
+        .empty_tag_union,
+        => true,
+        .alias => |alias| (try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, alias.backing, active)) and
+            try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, alias.args, active),
+        .record => |record| (try checkedFieldTypesAreConcreteConstProducerScheme(checked_types, record.fields, active)) and
+            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, record.ext, active),
+        .record_unbound => |fields| checkedFieldTypesAreConcreteConstProducerScheme(checked_types, fields, active),
+        .tuple => |items| checkedTypeSpanIsConcreteConstProducerScheme(checked_types, items, active),
+        .nominal => |nominal| blk: {
+            if (!try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, nominal.args, active)) break :blk false;
+            if (nominal.builtin != null) break :blk true;
+            break :blk try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, nominal.backing, active);
+        },
+        .function => |function| !function.needs_instantiation and
+            (try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, function.args, active)) and
+            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, function.ret, active),
+        .tag_union => |tag_union| (try checkedTagsAreConcreteConstProducerScheme(checked_types, tag_union.tags, active)) and
+            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, tag_union.ext, active),
+    };
+}
+
+fn checkedTypeSpanIsConcreteConstProducerScheme(
+    checked_types: *const CheckedTypeStore,
+    items: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (!try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, item, active)) return false;
+    }
+    return true;
+}
+
+fn checkedFieldTypesAreConcreteConstProducerScheme(
+    checked_types: *const CheckedTypeStore,
+    fields: []const CheckedRecordField,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (!try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, field.ty, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTagsAreConcreteConstProducerScheme(
+    checked_types: *const CheckedTypeStore,
+    tags: []const CheckedTag,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (!try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, tag.args, active)) return false;
+    }
+    return true;
 }
 
 fn classifyLocalValueRef(
@@ -12431,6 +12612,418 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     };
 }
 
+const ProjectedCheckedTypeKey = struct {
+    artifact: [32]u8,
+    ty: u32,
+};
+
+/// Public `ArtifactNamePublisher` declaration.
+///
+/// Checking finalization uses this boundary when artifact-owned data must record
+/// canonical names that came from a MIR-family lowering run. The caller stores
+/// only ids owned by `target`; no lowering-run label id may cross this boundary
+/// into checked artifact data.
+pub const ArtifactNamePublisher = struct {
+    target: *CheckedModuleArtifact,
+
+    pub fn init(target: *CheckedModuleArtifact) ArtifactNamePublisher {
+        return .{ .target = target };
+    }
+
+    pub fn recordFieldFromLowering(
+        self: *ArtifactNamePublisher,
+        lowering_names: *const canonical.CanonicalNameStore,
+        id: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        return try self.target.canonical_names.internRecordFieldLabel(lowering_names.recordFieldLabelText(id));
+    }
+
+    pub fn tagFromLowering(
+        self: *ArtifactNamePublisher,
+        lowering_names: *const canonical.CanonicalNameStore,
+        id: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        return try self.target.canonical_names.internTagLabel(lowering_names.tagLabelText(id));
+    }
+
+    pub fn recordFieldMatchesLowering(
+        self: *const ArtifactNamePublisher,
+        artifact_label: canonical.RecordFieldLabelId,
+        lowering_names: *const canonical.CanonicalNameStore,
+        lowering_label: canonical.RecordFieldLabelId,
+    ) bool {
+        return std.mem.eql(
+            u8,
+            self.target.canonical_names.recordFieldLabelText(artifact_label),
+            lowering_names.recordFieldLabelText(lowering_label),
+        );
+    }
+
+    pub fn tagMatchesLowering(
+        self: *const ArtifactNamePublisher,
+        artifact_label: canonical.TagLabelId,
+        lowering_names: *const canonical.CanonicalNameStore,
+        lowering_label: canonical.TagLabelId,
+    ) bool {
+        return std.mem.eql(
+            u8,
+            self.target.canonical_names.tagLabelText(artifact_label),
+            lowering_names.tagLabelText(lowering_label),
+        );
+    }
+};
+
+/// Public `CheckedTypeProjector` declaration.
+///
+/// Projects checked type graphs from imported artifacts into the artifact that
+/// owns the current checked-finalization result. This is semantic publication
+/// work, not target/layout caching, and it is the only checked-artifact boundary
+/// that may clone imported checked type payloads for compile-time constant and
+/// capture reification plans.
+pub const CheckedTypeProjector = struct {
+    allocator: Allocator,
+    target: *CheckedModuleArtifact,
+    imports: []const ImportedModuleView,
+    active: std.AutoHashMap(ProjectedCheckedTypeKey, CheckedTypeId),
+
+    pub fn init(
+        allocator: Allocator,
+        target: *CheckedModuleArtifact,
+        imports: []const ImportedModuleView,
+    ) CheckedTypeProjector {
+        return .{
+            .allocator = allocator,
+            .target = target,
+            .imports = imports,
+            .active = std.AutoHashMap(ProjectedCheckedTypeKey, CheckedTypeId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *CheckedTypeProjector) void {
+        self.active.deinit();
+    }
+
+    pub fn publishedNominalBacking(
+        self: *CheckedTypeProjector,
+        nominal: CheckedNominalType,
+    ) Allocator.Error!?CheckedTypeId {
+        const nominal_key = canonical.NominalTypeKey{
+            .module_name = nominal.origin_module,
+            .type_name = nominal.name,
+        };
+
+        for (self.target.interface_capabilities.exported_nominal_representations) |representation| {
+            if (!canonicalNominalTypeKeyEql(representation.nominal, nominal_key)) continue;
+            const capability = self.target.interface_capabilities.boxPayloadCapability(representation.box_payload_capability);
+            if (!self.nominalArgsMatchTarget(capability.instantiated_args, nominal.args)) continue;
+            return capability.backing_ty;
+        }
+
+        for (self.imports) |imported| {
+            for (imported.interface_capabilities.exported_nominal_representations) |representation| {
+                if (!self.importedNominalMatches(imported, nominal_key, representation.nominal)) continue;
+                const capability = imported.interface_capabilities.boxPayloadCapability(representation.box_payload_capability);
+                if (!self.nominalArgsMatchTarget(capability.instantiated_args, nominal.args)) continue;
+                return try self.projectImportedCheckedType(imported, capability.backing_ty);
+            }
+        }
+
+        return null;
+    }
+
+    fn nominalArgsMatchTarget(
+        self: *const CheckedTypeProjector,
+        expected: []const canonical.CanonicalTypeKey,
+        args: []const CheckedTypeId,
+    ) bool {
+        if (expected.len != args.len) return false;
+        for (expected, args) |expected_key, arg| {
+            const index: usize = @intFromEnum(arg);
+            if (index >= self.target.checked_types.roots.len) {
+                checkedArtifactInvariant("nominal argument referenced a missing checked type root", .{});
+            }
+            if (!canonicalTypeKeyEql(expected_key, self.target.checked_types.roots[index].key)) return false;
+        }
+        return true;
+    }
+
+    fn importedNominalMatches(
+        self: *const CheckedTypeProjector,
+        imported: ImportedModuleView,
+        target_nominal: canonical.NominalTypeKey,
+        imported_nominal: canonical.NominalTypeKey,
+    ) bool {
+        return std.mem.eql(
+            u8,
+            self.target.canonical_names.moduleNameText(target_nominal.module_name),
+            imported.canonical_names.moduleNameText(imported_nominal.module_name),
+        ) and std.mem.eql(
+            u8,
+            self.target.canonical_names.typeNameText(target_nominal.type_name),
+            imported.canonical_names.typeNameText(imported_nominal.type_name),
+        );
+    }
+
+    fn projectImportedCheckedType(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        ty: CheckedTypeId,
+    ) Allocator.Error!CheckedTypeId {
+        const index: usize = @intFromEnum(ty);
+        if (index >= imported.checked_types.roots.len or index >= imported.checked_types.payloads.len) {
+            checkedArtifactInvariant("imported checked type projection referenced a missing imported type root", .{});
+        }
+
+        const key = ProjectedCheckedTypeKey{
+            .artifact = imported.key.bytes,
+            .ty = @intCast(index),
+        };
+        if (self.active.get(key)) |active| return active;
+
+        const imported_root = imported.checked_types.roots[index];
+        if (self.target.checked_types.rootForKey(imported_root.key)) |existing| return existing;
+
+        const reserved = try self.target.checked_types.reserveSyntheticTypeRoot(self.allocator, imported_root.key);
+        try self.active.put(key, reserved);
+        errdefer _ = self.active.remove(key);
+
+        const payload = try self.projectImportedCheckedTypePayload(imported, imported.checked_types.payloads[index]);
+        try self.target.checked_types.fillSyntheticTypeRoot(self.allocator, reserved, payload);
+        _ = self.active.remove(key);
+        return reserved;
+    }
+
+    fn projectImportedCheckedTypePayload(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        payload: CheckedTypePayload,
+    ) Allocator.Error!CheckedTypePayload {
+        return switch (payload) {
+            .pending => checkedArtifactInvariant("imported checked type projection reached pending payload", .{}),
+            .empty_record => .empty_record,
+            .empty_tag_union => .empty_tag_union,
+            .flex => |flex| .{ .flex = try self.projectImportedTypeVariable(imported, flex) },
+            .rigid => |rigid| .{ .rigid = try self.projectImportedTypeVariable(imported, rigid) },
+            .alias => |alias| try self.projectImportedAlias(imported, alias),
+            .record => |record| .{ .record = try self.projectImportedRecord(imported, record) },
+            .record_unbound => |fields| .{ .record_unbound = try self.projectImportedRecordFields(imported, fields) },
+            .tuple => |items| .{ .tuple = try self.projectImportedTypeIds(imported, items) },
+            .nominal => |nominal| try self.projectImportedNominal(imported, nominal),
+            .function => |function| .{ .function = try self.projectImportedFunction(imported, function) },
+            .tag_union => |tag_union| .{ .tag_union = try self.projectImportedTagUnion(imported, tag_union) },
+        };
+    }
+
+    fn projectImportedRecord(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        record: CheckedRecordType,
+    ) Allocator.Error!CheckedRecordType {
+        const fields = try self.projectImportedRecordFields(imported, record.fields);
+        errdefer self.allocator.free(fields);
+        return .{
+            .fields = fields,
+            .ext = try self.projectImportedCheckedType(imported, record.ext),
+        };
+    }
+
+    fn projectImportedFunction(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        function: CheckedFunctionType,
+    ) Allocator.Error!CheckedFunctionType {
+        const args = try self.projectImportedTypeIds(imported, function.args);
+        errdefer self.allocator.free(args);
+        return .{
+            .kind = function.kind,
+            .args = args,
+            .ret = try self.projectImportedCheckedType(imported, function.ret),
+            .needs_instantiation = function.needs_instantiation,
+        };
+    }
+
+    fn projectImportedTagUnion(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        tag_union: CheckedTagUnionType,
+    ) Allocator.Error!CheckedTagUnionType {
+        const tags = try self.projectImportedTags(imported, tag_union.tags);
+        errdefer {
+            for (tags) |tag| self.allocator.free(tag.args);
+            self.allocator.free(tags);
+        }
+        return .{
+            .tags = tags,
+            .ext = try self.projectImportedCheckedType(imported, tag_union.ext),
+        };
+    }
+
+    fn projectImportedTypeVariable(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        variable: CheckedTypeVariable,
+    ) Allocator.Error!CheckedTypeVariable {
+        const name = if (variable.name) |name_text|
+            try self.allocator.dupe(u8, name_text)
+        else
+            null;
+        errdefer if (name) |owned| self.allocator.free(owned);
+
+        const constraints = try self.projectImportedConstraints(imported, variable.constraints);
+        errdefer self.allocator.free(constraints);
+
+        return .{
+            .name = name,
+            .constraints = constraints,
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
+    fn projectImportedConstraints(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        constraints: []const CheckedStaticDispatchConstraint,
+    ) Allocator.Error![]const CheckedStaticDispatchConstraint {
+        if (constraints.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
+        errdefer self.allocator.free(out);
+        for (constraints, 0..) |constraint, i| {
+            out[i] = .{
+                .fn_name = try self.remapMethodName(imported, constraint.fn_name),
+                .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
+                .origin = constraint.origin,
+                .binop_negated = constraint.binop_negated,
+                .num_literal = constraint.num_literal,
+            };
+        }
+        return out;
+    }
+
+    fn projectImportedAlias(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        alias: CheckedAliasType,
+    ) Allocator.Error!CheckedTypePayload {
+        const args = try self.projectImportedTypeIds(imported, alias.args);
+        errdefer self.allocator.free(args);
+        return .{ .alias = .{
+            .name = try self.remapTypeName(imported, alias.name),
+            .origin_module = try self.remapModuleName(imported, alias.origin_module),
+            .backing = try self.projectImportedCheckedType(imported, alias.backing),
+            .args = args,
+        } };
+    }
+
+    fn projectImportedNominal(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        nominal: CheckedNominalType,
+    ) Allocator.Error!CheckedTypePayload {
+        const args = try self.projectImportedTypeIds(imported, nominal.args);
+        errdefer self.allocator.free(args);
+        return .{ .nominal = .{
+            .name = try self.remapTypeName(imported, nominal.name),
+            .origin_module = try self.remapModuleName(imported, nominal.origin_module),
+            .builtin = nominal.builtin,
+            .is_opaque = nominal.is_opaque,
+            .backing = try self.projectImportedCheckedType(imported, nominal.backing),
+            .args = args,
+        } };
+    }
+
+    fn projectImportedTypeIds(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        ids: []const CheckedTypeId,
+    ) Allocator.Error![]const CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.projectImportedCheckedType(imported, id);
+        }
+        return out;
+    }
+
+    fn projectImportedRecordFields(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        fields: []const CheckedRecordField,
+    ) Allocator.Error![]const CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.remapRecordField(imported, field.name),
+                .ty = try self.projectImportedCheckedType(imported, field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn projectImportedTags(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        tags: []const CheckedTag,
+    ) Allocator.Error![]const CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.remapTag(imported, tag.name),
+                .args = try self.projectImportedTypeIds(imported, tag.args),
+            };
+        }
+        return out;
+    }
+
+    fn remapModuleName(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        id: canonical.ModuleNameId,
+    ) Allocator.Error!canonical.ModuleNameId {
+        return try self.target.canonical_names.internModuleName(imported.canonical_names.moduleNameText(id));
+    }
+
+    fn remapTypeName(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        id: canonical.TypeNameId,
+    ) Allocator.Error!canonical.TypeNameId {
+        return try self.target.canonical_names.internTypeName(imported.canonical_names.typeNameText(id));
+    }
+
+    fn remapMethodName(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        id: canonical.MethodNameId,
+    ) Allocator.Error!canonical.MethodNameId {
+        return try self.target.canonical_names.internMethodName(imported.canonical_names.methodNameText(id));
+    }
+
+    fn remapRecordField(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        id: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        return try self.target.canonical_names.internRecordFieldLabel(imported.canonical_names.recordFieldLabelText(id));
+    }
+
+    fn remapTag(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        id: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        return try self.target.canonical_names.internTagLabel(imported.canonical_names.tagLabelText(id));
+    }
+};
+
 fn directImportArtifactKeysFromModule(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -12838,6 +13431,7 @@ pub fn publishFromTypedModule(
         allocator,
         modules,
         module_idx,
+        artifact_key,
         inputs.imports,
         &checked_procedure_templates,
         &hosted_procs,

@@ -12453,7 +12453,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .f64_literal => |lit| .{ .immediate_f64 = lit },
                         .f32_literal => |lit| .{ .immediate_f64 = @floatCast(lit) },
                         .dec_literal => |lit| try self.generateI128Literal(lit),
-                        .bool_literal => |lit| .{ .immediate_i64 = if (lit) 1 else 0 },
                         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
                         .null_ptr => .{ .immediate_i64 = 0 },
                         .proc_ref => |proc_id| blk: {

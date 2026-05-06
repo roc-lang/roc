@@ -56,7 +56,6 @@ pub const Lit = union(enum) {
     f64: f64,
     dec: i128,
     str: ProgramLiteralId,
-    bool: bool,
 };
 
 /// Explicit bridge operation chosen before IR is lowered into LIR.

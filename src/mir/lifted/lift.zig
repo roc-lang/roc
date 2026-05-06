@@ -54,6 +54,7 @@ pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     order_key: ProcOrderKey,
     body: Ast.DefId,
+    direct_calls: ids.Span(canonical.MirProcedureRef),
 };
 
 /// Public `Program` declaration.
@@ -67,6 +68,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    direct_call_targets: std.ArrayList(canonical.MirProcedureRef),
     executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(ids.RootMetadata),
@@ -82,6 +84,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .direct_call_targets = .empty,
             .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
@@ -92,6 +95,7 @@ pub const Program = struct {
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.executable_synthetic_procs.deinit(self.allocator);
+        self.direct_call_targets.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -138,11 +142,16 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
     try program.procs.ensureTotalCapacity(allocator, input.program.procs.items.len);
     for (input.program.procs.items) |proc| {
         const order_key = lifter.nextProcOrder();
+        const lowered = try lifter.lowerProcDef(proc.key, proc.body);
         try program.procs.append(allocator, .{
             .proc = proc.proc,
             .order_key = order_key,
-            .body = try lifter.lowerDef(proc.key, proc.body),
+            .body = lowered.body,
+            .direct_calls = lowered.direct_calls,
         });
+    }
+    if (@import("builtin").mode == .Debug) {
+        verifyDirectCallMetadata(&program);
     }
     try program.executable_synthetic_procs.appendSlice(allocator, input.program.executable_synthetic_procs.items);
     try program.root_procs.appendSlice(allocator, input.program.root_procs.items);
@@ -179,6 +188,11 @@ const BoundRestore = struct {
 const CaptureSlotRestore = struct {
     symbol: Symbol,
     slot: ?u32,
+};
+
+const LoweredProcBody = struct {
+    body: Ast.DefId,
+    direct_calls: ids.Span(canonical.MirProcedureRef),
 };
 
 const CaptureSet = struct {
@@ -228,6 +242,7 @@ const BodyLifter = struct {
     local_procs: std.AutoHashMap(Symbol, LocalProcInfo),
     capture_proc_symbols: std.AutoHashMap(Symbol, void),
     capture_slots: std.AutoHashMap(Symbol, u32),
+    current_direct_calls: ?*std.ArrayList(canonical.MirProcedureRef) = null,
     owner_key: canonical.MonoSpecializationKey = undefined,
     next_order: u32 = 0,
 
@@ -245,10 +260,8 @@ const BodyLifter = struct {
 
     fn lowerDef(
         self: *BodyLifter,
-        owner_key: canonical.MonoSpecializationKey,
         def_id: MonoRow.Ast.DefId,
     ) Allocator.Error!Ast.DefId {
-        self.owner_key = owner_key;
         const def = self.input.getDef(def_id);
         return try self.output.addDef(.{
             .proc = def.proc,
@@ -269,6 +282,48 @@ const BodyLifter = struct {
                 .run => |run_def| .{ .run = .{ .body = try self.lowerExpr(run_def.body) } },
             },
         });
+    }
+
+    fn lowerProcDef(
+        self: *BodyLifter,
+        owner_key: canonical.MonoSpecializationKey,
+        def_id: MonoRow.Ast.DefId,
+    ) Allocator.Error!LoweredProcBody {
+        self.owner_key = owner_key;
+        var direct_calls = std.ArrayList(canonical.MirProcedureRef).empty;
+        defer direct_calls.deinit(self.allocator);
+        const previous_direct_calls = self.current_direct_calls;
+        self.current_direct_calls = &direct_calls;
+        defer self.current_direct_calls = previous_direct_calls;
+
+        const body = try self.lowerDef(def_id);
+        return .{
+            .body = body,
+            .direct_calls = try self.appendDirectCallSpan(direct_calls.items),
+        };
+    }
+
+    fn appendDirectCallSpan(
+        self: *BodyLifter,
+        direct_calls: []const canonical.MirProcedureRef,
+    ) Allocator.Error!ids.Span(canonical.MirProcedureRef) {
+        if (direct_calls.len == 0) return ids.Span(canonical.MirProcedureRef).empty();
+        const start: u32 = @intCast(self.program.direct_call_targets.items.len);
+        try self.program.direct_call_targets.appendSlice(self.allocator, direct_calls);
+        return .{ .start = start, .len = @intCast(direct_calls.len) };
+    }
+
+    fn recordDirectCallTarget(
+        self: *BodyLifter,
+        target: canonical.MirProcedureRef,
+    ) Allocator.Error!void {
+        const direct_calls = self.current_direct_calls orelse {
+            liftInvariant("lifted MIR attempted to record a direct call outside procedure body lowering");
+        };
+        for (direct_calls.items) |existing| {
+            if (canonical.mirProcedureRefEql(existing, target)) return;
+        }
+        try direct_calls.append(self.allocator, target);
     }
 
     fn lowerExpr(self: *BodyLifter, expr_id: MonoRow.Ast.ExprId) Allocator.Error!Ast.ExprId {
@@ -312,18 +367,20 @@ const BodyLifter = struct {
                 .requested_fn_ty = call.requested_fn_ty,
                 .requested_source_fn_ty = call.requested_source_fn_ty,
             } },
-            .call_proc => |call| .{ .call_proc = .{
-                .proc = call.proc,
-                .args = try self.lowerExprSpan(call.args),
-                .requested_fn_ty = call.requested_fn_ty,
-                .requested_source_fn_ty = call.requested_source_fn_ty,
-            } },
+            .call_proc => |call| blk: {
+                try self.recordDirectCallTarget(call.proc);
+                break :blk .{ .call_proc = .{
+                    .proc = call.proc,
+                    .args = try self.lowerExprSpan(call.args),
+                    .requested_fn_ty = call.requested_fn_ty,
+                    .requested_source_fn_ty = call.requested_source_fn_ty,
+                } };
+            },
             .proc_value => |proc_value| .{ .proc_value = .{
                 .proc = proc_value.proc,
                 .captures = try self.lowerCaptureArgSpan(proc_value.captures),
                 .fn_ty = proc_value.fn_ty,
             } },
-            .inspect => |child| .{ .inspect = try self.lowerExpr(child) },
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,
                 .rc_effect = low_level.rc_effect,
@@ -591,6 +648,12 @@ const BodyLifter = struct {
     }
 
     fn lowerLiftedProcBody(self: *BodyLifter, info: LocalProcInfo, body: MonoRow.Ast.ExprId) Allocator.Error!void {
+        var direct_calls = std.ArrayList(canonical.MirProcedureRef).empty;
+        defer direct_calls.deinit(self.allocator);
+        const previous_direct_calls = self.current_direct_calls;
+        self.current_direct_calls = &direct_calls;
+        defer self.current_direct_calls = previous_direct_calls;
+
         var previous_slots = std.ArrayList(CaptureSlotRestore).empty;
         defer previous_slots.deinit(self.allocator);
         errdefer restoreCaptureSlotList(self, previous_slots.items);
@@ -618,6 +681,7 @@ const BodyLifter = struct {
             .proc = info.proc,
             .order_key = self.nextProcOrder(),
             .body = def,
+            .direct_calls = try self.appendDirectCallSpan(direct_calls.items),
         });
 
         restoreCaptureSlotList(self, previous_slots.items);
@@ -725,7 +789,6 @@ const BodyLifter = struct {
                     try self.collectExprCaptures(capture.expr, bound, captures);
                 }
             },
-            .inspect => |child| try self.collectExprCaptures(child, bound, captures),
             .low_level => |low_level| try self.collectExprSpanCaptures(low_level.args, bound, captures),
             .match_ => |match_| {
                 try self.collectExprCaptures(match_.cond, bound, captures);
@@ -1327,6 +1390,194 @@ fn restoreCaptureProcSymbolList(
             _ = lifter.capture_proc_symbols.remove(restore.symbol);
         }
     }
+}
+
+fn verifyDirectCallMetadata(program: *const Program) void {
+    if (@import("builtin").mode != .Debug) return;
+    for (program.procs.items) |proc| {
+        var actual = std.ArrayList(canonical.MirProcedureRef).empty;
+        defer actual.deinit(program.allocator);
+        collectDirectCallsFromDef(program, proc.body, &actual) catch |err| {
+            std.debug.panic("lifted direct-call metadata verifier failed: {s}", .{@errorName(err)});
+        };
+        const published = proc.direct_calls.get(program.direct_call_targets.items);
+        if (published.len != actual.items.len) {
+            std.debug.panic("lifted direct-call metadata mismatch: published {d} edges but body has {d}", .{
+                published.len,
+                actual.items.len,
+            });
+        }
+        for (actual.items) |target| {
+            if (!containsMirProcedureRef(published, target)) {
+                std.debug.panic("lifted direct-call metadata omitted a call_proc target", .{});
+            }
+        }
+        for (published) |target| {
+            if (!containsMirProcedureRef(actual.items, target)) {
+                std.debug.panic("lifted direct-call metadata published a non-body call_proc target", .{});
+            }
+        }
+    }
+}
+
+fn collectDirectCallsFromDef(
+    program: *const Program,
+    def_id: Ast.DefId,
+    direct_calls: *std.ArrayList(canonical.MirProcedureRef),
+) Allocator.Error!void {
+    const def = program.ast.getDef(def_id);
+    switch (def.value) {
+        .fn_ => |fn_def| try collectDirectCallsFromExpr(program, fn_def.body, direct_calls),
+        .hosted_fn => {},
+        .val => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
+        .run => |run_def| try collectDirectCallsFromExpr(program, run_def.body, direct_calls),
+    }
+}
+
+fn collectDirectCallsFromExpr(
+    program: *const Program,
+    expr_id: Ast.ExprId,
+    direct_calls: *std.ArrayList(canonical.MirProcedureRef),
+) Allocator.Error!void {
+    const expr = program.ast.getExpr(expr_id);
+    switch (expr.data) {
+        .var_,
+        .capture_ref,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .bool_lit,
+        .str_lit,
+        .const_instance,
+        .const_ref,
+        .unit,
+        .crash,
+        .runtime_error,
+        => {},
+        .tag => |tag| {
+            for (program.ast.sliceTagPayloadEvalSpan(tag.eval_order)) |payload| {
+                try collectDirectCallsFromExpr(program, payload.value, direct_calls);
+            }
+        },
+        .record => |record| {
+            for (program.ast.sliceRecordFieldEvalSpan(record.eval_order)) |field| {
+                try collectDirectCallsFromExpr(program, field.value, direct_calls);
+            }
+        },
+        .nominal_reinterpret => |child| try collectDirectCallsFromExpr(program, child, direct_calls),
+        .access => |access| try collectDirectCallsFromExpr(program, access.record, direct_calls),
+        .structural_eq => |eq| {
+            try collectDirectCallsFromExpr(program, eq.lhs, direct_calls);
+            try collectDirectCallsFromExpr(program, eq.rhs, direct_calls);
+        },
+        .bool_not => |child| try collectDirectCallsFromExpr(program, child, direct_calls),
+        .let_ => |let_| {
+            try collectDirectCallsFromExpr(program, let_.body, direct_calls);
+            try collectDirectCallsFromExpr(program, let_.rest, direct_calls);
+        },
+        .call_value => |call| {
+            try collectDirectCallsFromExpr(program, call.func, direct_calls);
+            try collectDirectCallsFromExprSpan(program, call.args, direct_calls);
+        },
+        .call_proc => |call| {
+            try appendUniqueDirectCall(program.allocator, direct_calls, call.proc);
+            try collectDirectCallsFromExprSpan(program, call.args, direct_calls);
+        },
+        .proc_value => |proc_value| {
+            for (program.ast.sliceCaptureArgSpan(proc_value.captures)) |capture| {
+                try collectDirectCallsFromExpr(program, capture.expr, direct_calls);
+            }
+        },
+        .low_level => |low_level| try collectDirectCallsFromExprSpan(program, low_level.args, direct_calls),
+        .match_ => |match_| {
+            try collectDirectCallsFromExpr(program, match_.cond, direct_calls);
+            for (program.ast.sliceBranchSpan(match_.branches)) |branch_id| {
+                const branch = program.ast.getBranch(branch_id);
+                if (branch.guard) |guard| {
+                    try collectDirectCallsFromExpr(program, guard, direct_calls);
+                }
+                try collectDirectCallsFromExpr(program, branch.body, direct_calls);
+            }
+        },
+        .if_ => |if_| {
+            try collectDirectCallsFromExpr(program, if_.cond, direct_calls);
+            try collectDirectCallsFromExpr(program, if_.then_body, direct_calls);
+            try collectDirectCallsFromExpr(program, if_.else_body, direct_calls);
+        },
+        .block => |block| {
+            for (program.ast.sliceStmtSpan(block.stmts)) |stmt| {
+                try collectDirectCallsFromStmt(program, stmt, direct_calls);
+            }
+            try collectDirectCallsFromExpr(program, block.final_expr, direct_calls);
+        },
+        .tuple => |items| try collectDirectCallsFromExprSpan(program, items, direct_calls),
+        .tag_payload => |payload| try collectDirectCallsFromExpr(program, payload.tag_union, direct_calls),
+        .tuple_access => |access| try collectDirectCallsFromExpr(program, access.tuple, direct_calls),
+        .list => |items| try collectDirectCallsFromExprSpan(program, items, direct_calls),
+        .return_ => |child| try collectDirectCallsFromExpr(program, child, direct_calls),
+        .for_ => |for_| {
+            try collectDirectCallsFromExpr(program, for_.iterable, direct_calls);
+            try collectDirectCallsFromExpr(program, for_.body, direct_calls);
+        },
+    }
+}
+
+fn collectDirectCallsFromExprSpan(
+    program: *const Program,
+    span: Ast.Span(Ast.ExprId),
+    direct_calls: *std.ArrayList(canonical.MirProcedureRef),
+) Allocator.Error!void {
+    for (program.ast.sliceExprSpan(span)) |expr| {
+        try collectDirectCallsFromExpr(program, expr, direct_calls);
+    }
+}
+
+fn collectDirectCallsFromStmt(
+    program: *const Program,
+    stmt_id: Ast.StmtId,
+    direct_calls: *std.ArrayList(canonical.MirProcedureRef),
+) Allocator.Error!void {
+    const stmt = program.ast.getStmt(stmt_id);
+    switch (stmt) {
+        .decl => |decl| try collectDirectCallsFromExpr(program, decl.body, direct_calls),
+        .var_decl => |decl| try collectDirectCallsFromExpr(program, decl.body, direct_calls),
+        .reassign => |reassign| try collectDirectCallsFromExpr(program, reassign.body, direct_calls),
+        .expr => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
+        .debug => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
+        .expect => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
+        .crash,
+        .break_,
+        => {},
+        .return_ => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
+        .for_ => |for_| {
+            try collectDirectCallsFromExpr(program, for_.iterable, direct_calls);
+            try collectDirectCallsFromExpr(program, for_.body, direct_calls);
+        },
+        .while_ => |while_| {
+            try collectDirectCallsFromExpr(program, while_.cond, direct_calls);
+            try collectDirectCallsFromExpr(program, while_.body, direct_calls);
+        },
+    }
+}
+
+fn appendUniqueDirectCall(
+    allocator: Allocator,
+    direct_calls: *std.ArrayList(canonical.MirProcedureRef),
+    target: canonical.MirProcedureRef,
+) Allocator.Error!void {
+    if (containsMirProcedureRef(direct_calls.items, target)) return;
+    try direct_calls.append(allocator, target);
+}
+
+fn containsMirProcedureRef(
+    haystack: []const canonical.MirProcedureRef,
+    needle: canonical.MirProcedureRef,
+) bool {
+    for (haystack) |item| {
+        if (canonical.mirProcedureRefEql(item, needle)) return true;
+    }
+    return false;
 }
 
 fn liftInvariant(comptime message: []const u8) noreturn {

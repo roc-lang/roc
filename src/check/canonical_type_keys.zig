@@ -239,12 +239,11 @@ const Builder = struct {
             .empty_tag_union => self.writeTag("empty_tag_union"),
             .record_unbound => |fields| {
                 self.writeTag("record_unbound");
-                try self.writeRecordFields(fields);
+                try self.writeNormalizedRecordFields(fields, null);
             },
             .record => |record| {
                 self.writeTag("record");
-                try self.writeRecordFields(record.fields);
-                try self.writeVar(record.ext);
+                try self.writeNormalizedRecordFields(record.fields, record.ext);
             },
             .tuple => |tuple| {
                 self.writeTag("tuple");
@@ -276,8 +275,7 @@ const Builder = struct {
             },
             .tag_union => |tag_union| {
                 self.writeTag("tag_union");
-                try self.writeTags(tag_union.tags);
-                try self.writeVar(tag_union.ext);
+                try self.writeNormalizedTags(tag_union.tags, tag_union.ext);
             },
         }
     }
@@ -296,26 +294,162 @@ const Builder = struct {
         }
     }
 
-    fn writeRecordFields(self: *Builder, range: types.RecordField.SafeMultiList.Range) Allocator.Error!void {
-        const fields = self.store.getRecordFieldsSlice(range);
-        const names = fields.items(.name);
-        const vars = fields.items(.var_);
-        self.writeU32(@intCast(names.len));
+    const RecordFieldForKey = struct {
+        name: Ident.Idx,
+        var_: Var,
+    };
+
+    const TagForKey = struct {
+        name: Ident.Idx,
+        args: Var.SafeList.Range,
+    };
+
+    fn appendRecordFieldsForKey(
+        self: *Builder,
+        fields: *std.ArrayList(RecordFieldForKey),
+        range: types.RecordField.SafeMultiList.Range,
+    ) Allocator.Error!void {
+        const slice = self.store.getRecordFieldsSlice(range);
+        const names = slice.items(.name);
+        const vars = slice.items(.var_);
         for (names, vars) |name, var_| {
-            self.writeIdent(name);
-            try self.writeVar(var_);
+            try fields.append(self.allocator, .{
+                .name = name,
+                .var_ = var_,
+            });
         }
     }
 
-    fn writeTags(self: *Builder, range: types.Tag.SafeMultiList.Range) Allocator.Error!void {
-        const tags = self.store.getTagsSlice(range);
-        const names = tags.items(.name);
-        const args = tags.items(.args);
-        self.writeU32(@intCast(names.len));
-        for (names, args) |name, arg_range| {
-            self.writeIdent(name);
-            try self.writeVarRange(arg_range);
+    fn writeNormalizedRecordFields(
+        self: *Builder,
+        head: types.RecordField.SafeMultiList.Range,
+        ext: ?Var,
+    ) Allocator.Error!void {
+        var fields = std.ArrayList(RecordFieldForKey).empty;
+        defer fields.deinit(self.allocator);
+        try self.appendRecordFieldsForKey(&fields, head);
+
+        var tail = ext;
+        var seen = std.AutoHashMap(Var, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_var| {
+            const resolved = self.store.resolveVar(tail_var);
+            const root = resolved.var_;
+            if (self.active.contains(root)) break;
+            if (seen.contains(root)) {
+                invariantViolation("canonical type key row normalization reached a cyclic record row");
+            }
+            try seen.put(root, {});
+            switch (resolved.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .empty_record => {
+                        tail = null;
+                        break;
+                    },
+                    .record => |record| {
+                        try self.appendRecordFieldsForKey(&fields, record.fields);
+                        tail = record.ext;
+                    },
+                    .record_unbound => |record_fields| {
+                        try self.appendRecordFieldsForKey(&fields, record_fields);
+                        tail = null;
+                    },
+                    else => break,
+                },
+                else => break,
+            }
         }
+
+        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        self.writeU32(@intCast(fields.items.len));
+        for (fields.items, 0..) |field, index| {
+            if (index > 0 and std.mem.eql(u8, self.idents.getText(fields.items[index - 1].name), self.idents.getText(field.name))) {
+                invariantViolation("canonical type key row normalization found duplicate record fields");
+            }
+            self.writeIdent(field.name);
+            try self.writeVar(field.var_);
+        }
+        if (tail) |tail_var| {
+            try self.writeVar(tail_var);
+        } else {
+            self.writeTag("empty_record");
+        }
+    }
+
+    fn appendTagsForKey(
+        self: *Builder,
+        tags: *std.ArrayList(TagForKey),
+        range: types.Tag.SafeMultiList.Range,
+    ) Allocator.Error!void {
+        const slice = self.store.getTagsSlice(range);
+        const names = slice.items(.name);
+        const args = slice.items(.args);
+        for (names, args) |name, arg_range| {
+            try tags.append(self.allocator, .{
+                .name = name,
+                .args = arg_range,
+            });
+        }
+    }
+
+    fn writeNormalizedTags(
+        self: *Builder,
+        head: types.Tag.SafeMultiList.Range,
+        ext: Var,
+    ) Allocator.Error!void {
+        var tags = std.ArrayList(TagForKey).empty;
+        defer tags.deinit(self.allocator);
+        try self.appendTagsForKey(&tags, head);
+
+        var tail: ?Var = ext;
+        var seen = std.AutoHashMap(Var, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_var| {
+            const resolved = self.store.resolveVar(tail_var);
+            const root = resolved.var_;
+            if (self.active.contains(root)) break;
+            if (seen.contains(root)) {
+                invariantViolation("canonical type key row normalization reached a cyclic tag row");
+            }
+            try seen.put(root, {});
+            switch (resolved.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .empty_tag_union => {
+                        tail = null;
+                        break;
+                    },
+                    .tag_union => |tag_union| {
+                        try self.appendTagsForKey(&tags, tag_union.tags);
+                        tail = tag_union.ext;
+                    },
+                    else => break,
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        self.writeU32(@intCast(tags.items.len));
+        for (tags.items, 0..) |tag, index| {
+            if (index > 0 and std.mem.eql(u8, self.idents.getText(tags.items[index - 1].name), self.idents.getText(tag.name))) {
+                invariantViolation("canonical type key row normalization found duplicate tags");
+            }
+            self.writeIdent(tag.name);
+            try self.writeVarRange(tag.args);
+        }
+        if (tail) |tail_var| {
+            try self.writeVar(tail_var);
+        } else {
+            self.writeTag("empty_tag_union");
+        }
+    }
+
+    fn recordFieldForKeyLessThan(self: *Builder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
+        return std.mem.lessThan(u8, self.idents.getText(lhs.name), self.idents.getText(rhs.name));
+    }
+
+    fn tagForKeyLessThan(self: *Builder, lhs: TagForKey, rhs: TagForKey) bool {
+        return std.mem.lessThan(u8, self.idents.getText(lhs.name), self.idents.getText(rhs.name));
     }
 
     fn writeConstraints(self: *Builder, range: types.StaticDispatchConstraint.SafeList.Range) Allocator.Error!void {

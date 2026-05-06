@@ -345,6 +345,7 @@ fn evaluateConstantRoot(
         .layouts = &lowered.lir_result.layouts,
         .lowered = lowered,
         .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+        .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(allocator),
         .promotion_context = .{
             .source_binding = pattern,
             .base = .{ .local_const_root = .{
@@ -353,6 +354,7 @@ fn evaluateConstantRoot(
             } },
         },
     };
+    defer reifier.deinit();
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
     const dependency_summary = try appendConcreteDependencySummaryForConstRoot(
         allocator,
@@ -737,11 +739,13 @@ fn ensureConstInstanceRequest(
                 .layouts = &lowered_request.lowered.lir_result.layouts,
                 .lowered = &lowered_request.lowered,
                 .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+                .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(allocator),
                 .promotion_context = .{
                     .source_binding = sourceBindingForConstInstanceRequest(artifact, request.key.const_ref),
                     .base = .{ .const_instance = request.key },
                 },
             };
+            defer reifier.deinit();
             const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
             artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
@@ -2684,6 +2688,9 @@ const PrivateCaptureBuilder = struct {
         };
         const source_scheme = try self.artifact.checked_types.ensureSchemeForRoot(self.allocator, checked_root);
         const owner = self.owner orelse compileTimeFinalizationInvariant("private capture ref construction requires a promoted procedure owner");
+        if (@import("builtin").mode == .Debug) {
+            self.verifyTopLevelCapturePlanSource(plan_id, source_ty);
+        }
         return .{
             .artifact = self.artifact.key,
             .owner = .{
@@ -2693,6 +2700,47 @@ const PrivateCaptureBuilder = struct {
             .node = try self.captureNode(plan_id, physical),
             .source_scheme = source_scheme,
         };
+    }
+
+    fn verifyTopLevelCapturePlanSource(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        source_ty: canonical.CanonicalTypeKey,
+    ) void {
+        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
+        switch (plan) {
+            .serializable_leaf => |leaf| {
+                if (!std.mem.eql(u8, &leaf.requested_source_ty.bytes, &source_ty.bytes)) {
+                    compileTimeFinalizationInvariant("private capture serializable leaf source type disagrees with descriptor capture slot");
+                }
+            },
+            .callable_leaf => |result_plan| switch (self.artifact.comptime_plans.callableResult(result_plan)) {
+                .finite => |finite| {
+                    if (!std.mem.eql(u8, &finite.source_fn_ty.bytes, &source_ty.bytes)) {
+                        compileTimeFinalizationInvariant("private capture callable leaf source type disagrees with descriptor capture slot");
+                    }
+                },
+                .erased => |erased| {
+                    if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &source_ty.bytes)) {
+                        compileTimeFinalizationInvariant("private capture erased callable leaf source type disagrees with descriptor capture slot");
+                    }
+                },
+            },
+            .callable_schema => |schema| {
+                if (!std.mem.eql(u8, &schema.bytes, &source_ty.bytes)) {
+                    compileTimeFinalizationInvariant("private capture callable schema source type disagrees with descriptor capture slot");
+                }
+            },
+            .pending,
+            .record,
+            .tuple,
+            .tag_union,
+            .list,
+            .box,
+            .nominal,
+            .recursive_ref,
+            => {},
+        }
     }
 
     fn captureNode(
@@ -2841,9 +2889,11 @@ const PrivateCaptureBuilder = struct {
             .layouts = self.layouts,
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
+            .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(self.allocator),
             .promotion_context = self.promotion_context,
             .dependencies = &leaf_dependencies,
         };
+        defer reifier.deinit();
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
 
         self.artifact.const_templates.fillValueGraph(const_ref, .{
@@ -2911,9 +2961,11 @@ const PrivateCaptureBuilder = struct {
             .layouts = self.layouts,
             .lowered = self.lowered,
             .callable_set_descriptors = self.callable_set_descriptors,
+            .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(self.allocator),
             .promotion_context = self.promotion_context,
             .dependencies = &leaf_dependencies,
         };
+        defer reifier.deinit();
         const reified = try reifier.reifyPlan(leaf.reification_plan, physical.layout_idx, physical.value);
         if (try constGraphContainsCallableSlots(self.allocator, &self.artifact.comptime_plans, leaf.reification_plan)) {
             const capture_index = self.next_private_const;
@@ -3453,8 +3505,13 @@ const ComptimeReifier = struct {
     layouts: *const layout_mod.Store,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
     callable_set_descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
+    active_schemas: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId),
     promotion_context: ?PromotedCallablePublicationContext = null,
     dependencies: ?*ConcreteDependencyCollector = null,
+
+    fn deinit(self: *ComptimeReifier) void {
+        self.active_schemas.deinit();
+    }
 
     fn reifyPlan(
         self: *ComptimeReifier,
@@ -3485,53 +3542,72 @@ const ComptimeReifier = struct {
         plan_id: checked_artifact.ConstGraphReificationPlanId,
     ) Allocator.Error!checked_artifact.ComptimeSchemaId {
         const plan = self.plans.constGraph(plan_id);
+        if (plan == .recursive_ref) {
+            return self.schemaForPlan(plan.recursive_ref);
+        }
+
+        if (self.active_schemas.get(plan_id)) |active| return active;
+        const schema_id = try self.values.addSchema(.pending);
+        try self.active_schemas.put(plan_id, schema_id);
+        errdefer _ = self.active_schemas.remove(plan_id);
+
+        const schema = try self.schemaForPlanPayload(plan);
+        self.values.overwriteSchema(schema_id, schema);
+        _ = self.active_schemas.remove(plan_id);
+        return schema_id;
+    }
+
+    fn schemaForPlanPayload(
+        self: *ComptimeReifier,
+        plan: checked_artifact.ConstGraphReificationPlan,
+    ) Allocator.Error!checked_artifact.ComptimeSchema {
         return switch (plan) {
             .pending => reifierInvariant("compile-time schema construction reached pending const graph plan"),
             .scalar => |checked_ty| self.schemaForScalarCheckedType(checked_ty),
-            .string => self.values.addSchema(.str),
-            .list => |list| self.values.addSchema(.{ .list = try self.schemaForPlan(list.elem) }),
-            .box => |box| self.values.addSchema(.{ .box = try self.schemaForPlan(box.payload) }),
-            .tuple => |items| self.schemaForTuplePlan(items),
-            .record => |fields| self.schemaForRecordPlan(fields),
-            .tag_union => |variants| self.schemaForTagUnionPlan(variants),
-            .transparent_alias => |alias| self.values.addSchema(.{ .alias = .{
+            .string => .str,
+            .list => |list| .{ .list = try self.schemaForPlan(list.elem) },
+            .box => |box| .{ .box = try self.schemaForPlan(box.payload) },
+            .tuple => |items| try self.schemaForTuplePlan(items),
+            .record => |fields| try self.schemaForRecordPlan(fields),
+            .tag_union => |variants| try self.schemaForTagUnionPlan(variants),
+            .transparent_alias => |alias| .{ .alias = .{
                 .type_name = alias.alias,
                 .backing = try self.schemaForPlan(alias.backing),
-            } }),
-            .nominal => |nominal| self.values.addSchema(.{ .nominal = .{
+            } },
+            .nominal => |nominal| .{ .nominal = .{
                 .type_name = nominal.nominal,
                 .backing = try self.schemaForPlan(nominal.backing),
                 .is_opaque = false,
-            } }),
+            } },
             .callable_leaf => |leaf| self.schemaForCallableLeaf(leaf),
-            .callable_schema => |source_fn_ty| self.values.addSchema(.{ .callable = source_fn_ty }),
-            .recursive_ref => |ref| self.schemaForPlan(ref),
+            .callable_schema => |source_fn_ty| .{ .callable = source_fn_ty },
+            .recursive_ref => reifierInvariant("compile-time schema payload construction reached recursive ref"),
         };
     }
 
     fn schemaForScalarCheckedType(
         self: *ComptimeReifier,
         checked_ty: checked_artifact.CheckedTypeId,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+    ) checked_artifact.ComptimeSchema {
         const nominal = switch (self.checkedPayload(checked_ty)) {
             .nominal => |nominal| nominal,
             else => reifierInvariant("scalar const graph plan did not reference a nominal scalar type"),
         };
         const builtin_nominal = nominal.builtin orelse reifierInvariant("scalar const graph plan referenced non-builtin nominal type");
         return switch (builtin_nominal) {
-            .u8 => self.values.addSchema(.{ .int = .u8 }),
-            .i8 => self.values.addSchema(.{ .int = .i8 }),
-            .u16 => self.values.addSchema(.{ .int = .u16 }),
-            .i16 => self.values.addSchema(.{ .int = .i16 }),
-            .u32 => self.values.addSchema(.{ .int = .u32 }),
-            .i32 => self.values.addSchema(.{ .int = .i32 }),
-            .u64 => self.values.addSchema(.{ .int = .u64 }),
-            .i64 => self.values.addSchema(.{ .int = .i64 }),
-            .u128 => self.values.addSchema(.{ .int = .u128 }),
-            .i128 => self.values.addSchema(.{ .int = .i128 }),
-            .f32 => self.values.addSchema(.{ .frac = .f32 }),
-            .f64 => self.values.addSchema(.{ .frac = .f64 }),
-            .dec => self.values.addSchema(.{ .frac = .dec }),
+            .u8 => .{ .int = .u8 },
+            .i8 => .{ .int = .i8 },
+            .u16 => .{ .int = .u16 },
+            .i16 => .{ .int = .i16 },
+            .u32 => .{ .int = .u32 },
+            .i32 => .{ .int = .i32 },
+            .u64 => .{ .int = .u64 },
+            .i64 => .{ .int = .i64 },
+            .u128 => .{ .int = .u128 },
+            .i128 => .{ .int = .i128 },
+            .f32 => .{ .frac = .f32 },
+            .f64 => .{ .frac = .f64 },
+            .dec => .{ .frac = .dec },
             .str,
             .list,
             .box,
@@ -3642,16 +3718,16 @@ const ComptimeReifier = struct {
     fn schemaForCallableLeaf(
         self: *ComptimeReifier,
         leaf: checked_artifact.CallableLeafReificationPlan,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+    ) checked_artifact.ComptimeSchema {
         return switch (leaf) {
-            .already_resolved => |resolved| self.values.addSchema(.{ .callable = callableLeafSourceFnTy(resolved) }),
+            .already_resolved => |resolved| .{ .callable = callableLeafSourceFnTy(resolved) },
             .finite => |result_plan| switch (self.plans.callableResult(result_plan)) {
-                .finite => |finite| self.values.addSchema(.{ .callable = finite.source_fn_ty }),
-                .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
+                .finite => |finite| .{ .callable = finite.source_fn_ty },
+                .erased => |erased| .{ .callable = erased.source_fn_ty },
             },
             .erased_boxed => |result_plan| switch (self.plans.callableResult(result_plan)) {
                 .finite => reifierInvariant("erased boxed callable leaf referenced a finite callable result plan"),
-                .erased => |erased| self.values.addSchema(.{ .callable = erased.source_fn_ty }),
+                .erased => |erased| .{ .callable = erased.source_fn_ty },
             },
         };
     }
@@ -3806,8 +3882,8 @@ const ComptimeReifier = struct {
     fn schemaForRecordPlan(
         self: *ComptimeReifier,
         fields: []const checked_artifact.ConstRecordFieldPlan,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        if (fields.len == 0) return self.values.addSchema(.zst);
+    ) Allocator.Error!checked_artifact.ComptimeSchema {
+        if (fields.len == 0) return .zst;
 
         const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
         errdefer self.allocator.free(schema_fields);
@@ -3817,7 +3893,7 @@ const ComptimeReifier = struct {
                 .schema = try self.schemaForPlan(field.value),
             };
         }
-        return self.values.addSchema(.{ .record = schema_fields });
+        return .{ .record = schema_fields };
     }
 
     fn reifyTuplePlan(
@@ -3855,15 +3931,15 @@ const ComptimeReifier = struct {
     fn schemaForTuplePlan(
         self: *ComptimeReifier,
         items: []const checked_artifact.ConstTupleElemPlan,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
-        if (items.len == 0) return self.values.addSchema(.zst);
+    ) Allocator.Error!checked_artifact.ComptimeSchema {
+        if (items.len == 0) return .zst;
 
         const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
         errdefer self.allocator.free(schemas);
         for (items, 0..) |item, i| {
             schemas[i] = try self.schemaForPlan(item.value);
         }
-        return self.values.addSchema(.{ .tuple = schemas });
+        return .{ .tuple = schemas };
     }
 
     fn reifyTagUnionPlan(
@@ -3918,7 +3994,7 @@ const ComptimeReifier = struct {
     fn schemaForTagUnionPlan(
         self: *ComptimeReifier,
         variants_plan: []const checked_artifact.ConstTagVariantPlan,
-    ) Allocator.Error!checked_artifact.ComptimeSchemaId {
+    ) Allocator.Error!checked_artifact.ComptimeSchema {
         const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, variants_plan.len);
         errdefer {
             for (variants) |variant| self.allocator.free(variant.payloads);
@@ -3934,7 +4010,7 @@ const ComptimeReifier = struct {
             variants[i] = .{ .name = variant_plan.tag, .payloads = payloads };
         }
 
-        return self.values.addSchema(.{ .tag_union = variants });
+        return .{ .tag_union = variants };
     }
 
     fn reifyScalar(

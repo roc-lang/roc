@@ -157,6 +157,7 @@ pub fn lowerArtifactsToLir(
     const compile_time_payloads = try publishCompileTimePayloads(
         allocator,
         artifacts.root.artifact,
+        artifacts.imports,
         &solved,
         selected_entrypoints,
         roots,
@@ -265,6 +266,7 @@ pub fn summarizeCompileTimeDependencies(
     const compile_time_payloads = try publishCompileTimePayloads(
         allocator,
         artifacts.root.artifact,
+        artifacts.imports,
         &solved,
         selected_entrypoints,
         roots,
@@ -295,18 +297,15 @@ fn lowerArtifactsToLambdaSolved(
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     mode: mir.Mono.Specialize.LoweringMode,
 ) Allocator.Error!mir.LambdaSolved.Solve.Program {
-    var mono = try mir.Mono.Specialize.run(allocator, .{
+    const mono = try mir.Mono.Specialize.run(allocator, .{
         .root = artifacts.root,
         .imports = artifacts.imports,
         .mode = mode,
     }, selected_entrypoints);
-    errdefer mono.deinit();
 
-    var row_finalized = try mir.MonoRow.run(allocator, mono);
-    errdefer row_finalized.deinit();
+    const row_finalized = try mir.MonoRow.run(allocator, mono);
 
-    var lifted = try mir.Lifted.Lift.run(allocator, row_finalized);
-    errdefer lifted.deinit();
+    const lifted = try mir.Lifted.Lift.run(allocator, row_finalized);
 
     return try mir.LambdaSolved.Solve.run(allocator, lifted, .{
         .root = artifacts.root,
@@ -544,11 +543,6 @@ fn publishErasedFnAbisForLowering(
             if (builtin.mode != .Debug) return;
             for (solved.solve_sessions.items) |*session| {
                 session.representation_store.erased_fn_abis.verifyPublished();
-                for (session.representation_store.erased_fn_abis.abis) |abi| {
-                    if (artifact.erased_fn_abis.abiFor(abi.key) == null) {
-                        checkedPipelineInvariant("published checked artifact is missing an erased ABI required by lowering");
-                    }
-                }
             }
         },
         .checking_finalization => {
@@ -557,10 +551,20 @@ fn publishErasedFnAbisForLowering(
                 checkedPipelineInvariant("checking-finalization erased ABI publication artifact sink does not match root artifact");
             }
 
+            var payload_builder = ExecutableTypePayloadBuilder.initForSolved(allocator, artifact_sink, solved);
+            defer payload_builder.deinit();
+
             for (solved.solve_sessions.items) |*session| {
                 if (builtin.mode == .Debug) session.representation_store.erased_fn_abis.verifyPublished();
+            }
+            for (solved.solve_sessions.items, 0..) |*session, raw_session| {
+                const solve_session: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(raw_session)));
                 for (session.representation_store.erased_fn_abis.abis) |abi| {
                     _ = try artifact_sink.erased_fn_abis.append(allocator, abi);
+                    _ = try payload_builder.payloadForSessionKey(solve_session, abi.ret_exec_key);
+                    for (abi.arg_exec_keys) |arg_key| {
+                        _ = try payload_builder.payloadForSessionKey(solve_session, arg_key);
+                    }
                 }
             }
         },
@@ -570,6 +574,7 @@ fn publishErasedFnAbisForLowering(
 fn publishCompileTimePayloads(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     solved: *const mir.LambdaSolved.Solve.Program,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     roots: RootRequestSet,
@@ -592,6 +597,7 @@ fn publishCompileTimePayloads(
         .allocator = allocator,
         .artifact = artifact,
         .artifact_sink = artifact_sink,
+        .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
         .plans = plan_sink,
         .values = &artifact_sink.comptime_values,
         .active = std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId).init(allocator),
@@ -599,15 +605,22 @@ fn publishCompileTimePayloads(
     defer const_builder.deinit();
 
     for (selected_entrypoints, solved.root_instances.items, 0..) |entrypoint, root_instance, i| {
+        const proc_instance = solved.proc_instances.items[@intFromEnum(root_instance)];
         const value_context = constValueContextForRootInstance(solved, root_instance);
         payloads[i] = switch (entrypoint) {
             .root => |root_request| root_payload: {
                 const root = compileTimeRootForRequest(artifact, root_request);
                 break :root_payload .{ .local_root = switch (root.kind) {
-                    .constant => .{ .const_graph = try const_builder.planFor(root.checked_type, value_context, value_context.ret) },
+                    .constant => .{ .const_graph = try const_builder.planForExpected(
+                        root.checked_type,
+                        value_context,
+                        value_context.ret,
+                        proc_instance.executable_specialization_key.exec_ret_ty,
+                    ) },
                     .callable_binding => .{ .callable_result = try callableResultPlanForRoot(
                         allocator,
                         artifact_sink,
+                        imports,
                         plan_sink,
                         solved,
                         root_instance,
@@ -615,14 +628,16 @@ fn publishCompileTimePayloads(
                     .expect => .expect,
                 } };
             },
-            .const_instance => |request| .{ .const_instance = try const_builder.planFor(
+            .const_instance => |request| .{ .const_instance = try const_builder.planForExpected(
                 request.requested_source_ty_payload,
                 value_context,
                 value_context.ret,
+                proc_instance.executable_specialization_key.exec_ret_ty,
             ) },
             .callable_binding_instance => .{ .callable_binding_instance = try callableResultPlanForRoot(
                 allocator,
                 artifact_sink,
+                imports,
                 plan_sink,
                 solved,
                 root_instance,
@@ -700,6 +715,8 @@ const CompileTimeDependencySummaryBuilder = struct {
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     proc_summary_ids: std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId),
     transitive_proc_visits: std.AutoHashMap(repr.ProcRepresentationInstanceId, void),
+    active_const_graphs: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void),
+    active_capture_slots: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void),
 
     fn init(
         allocator: Allocator,
@@ -716,10 +733,14 @@ const CompileTimeDependencySummaryBuilder = struct {
             .callable_set_descriptors = callable_set_descriptors,
             .proc_summary_ids = std.AutoHashMap(repr.ProcRepresentationInstanceId, checked_artifact.ComptimeProcDependencySummaryId).init(allocator),
             .transitive_proc_visits = std.AutoHashMap(repr.ProcRepresentationInstanceId, void).init(allocator),
+            .active_const_graphs = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void).init(allocator),
+            .active_capture_slots = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void).init(allocator),
         };
     }
 
     fn deinit(self: *CompileTimeDependencySummaryBuilder) void {
+        self.active_capture_slots.deinit();
+        self.active_const_graphs.deinit();
         self.transitive_proc_visits.deinit();
         self.proc_summary_ids.deinit();
     }
@@ -733,6 +754,8 @@ const CompileTimeDependencySummaryBuilder = struct {
         errdefer summary.deinit(self.allocator);
 
         self.transitive_proc_visits.clearRetainingCapacity();
+        self.active_const_graphs.clearRetainingCapacity();
+        self.active_capture_slots.clearRetainingCapacity();
         try self.collectTransitiveProc(root_instance, &summary.availability, &summary.concrete);
         try self.collectEntrypointPayload(payload, &summary.availability, &summary.concrete);
 
@@ -884,9 +907,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             .record => |record| {
                 for (self.sliceRecordFieldEval(record.eval_order)) |field| try self.collectExprImmediate(field.value, value_store, representation_store, availability, concrete, call_deps);
             },
-            .nominal_reinterpret,
-            .inspect,
-            => |child| try self.collectExprImmediate(child, value_store, representation_store, availability, concrete, call_deps),
+            .nominal_reinterpret => |child| try self.collectExprImmediate(child, value_store, representation_store, availability, concrete, call_deps),
             .access => |access| try self.collectExprImmediate(access.record, value_store, representation_store, availability, concrete, call_deps),
             .structural_eq => |eq| {
                 try self.collectExprImmediate(eq.lhs, value_store, representation_store, availability, concrete, call_deps);
@@ -1147,6 +1168,10 @@ const CompileTimeDependencySummaryBuilder = struct {
         availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
+        if (self.active_const_graphs.contains(plan_id)) return;
+        try self.active_const_graphs.put(plan_id, {});
+        defer _ = self.active_const_graphs.remove(plan_id);
+
         switch (self.artifact_sink.comptime_plans.constGraph(plan_id)) {
             .pending => checkedPipelineInvariant("compile-time dependency summary reached pending const graph plan"),
             .scalar,
@@ -1267,6 +1292,10 @@ const CompileTimeDependencySummaryBuilder = struct {
         availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
+        if (self.active_capture_slots.contains(plan_id)) return;
+        try self.active_capture_slots.put(plan_id, {});
+        defer _ = self.active_capture_slots.remove(plan_id);
+
         switch (self.artifact_sink.comptime_plans.captureSlot(plan_id)) {
             .pending => checkedPipelineInvariant("compile-time dependency summary reached pending capture slot plan"),
             .serializable_leaf => |leaf| try self.collectConstGraphPlan(leaf.reification_plan, availability, concrete),
@@ -1433,7 +1462,9 @@ const ExecutablePayloadSessionKey = struct {
 const ExecutableTypePayloadBuilder = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    context: ConstValueContext,
+    context: ?ConstValueContext,
+    solved: *const mir.LambdaSolved.Solve.Program,
+    row_shapes: *const mir.MonoRow.Store,
     active_session_payloads: std.AutoHashMap(ExecutablePayloadSessionKey, checked_artifact.ExecutableTypePayloadId),
 
     fn init(
@@ -1445,12 +1476,34 @@ const ExecutableTypePayloadBuilder = struct {
             .allocator = allocator,
             .artifact = artifact,
             .context = context,
+            .solved = context.solved,
+            .row_shapes = context.row_shapes,
+            .active_session_payloads = std.AutoHashMap(ExecutablePayloadSessionKey, checked_artifact.ExecutableTypePayloadId).init(allocator),
+        };
+    }
+
+    fn initForSolved(
+        allocator: Allocator,
+        artifact: *checked_artifact.CheckedModuleArtifact,
+        solved: *const mir.LambdaSolved.Solve.Program,
+    ) ExecutableTypePayloadBuilder {
+        return .{
+            .allocator = allocator,
+            .artifact = artifact,
+            .context = null,
+            .solved = solved,
+            .row_shapes = &solved.row_shapes,
             .active_session_payloads = std.AutoHashMap(ExecutablePayloadSessionKey, checked_artifact.ExecutableTypePayloadId).init(allocator),
         };
     }
 
     fn deinit(self: *ExecutableTypePayloadBuilder) void {
         self.active_session_payloads.deinit();
+    }
+
+    fn currentContext(self: *const ExecutableTypePayloadBuilder) *const ConstValueContext {
+        if (self.context) |*context| return context;
+        checkedPipelineInvariant("artifact executable payload builder reached value-specific operation without a value context");
     }
 
     fn artifactRef(self: *const ExecutableTypePayloadBuilder) canonical.ArtifactRef {
@@ -1477,10 +1530,11 @@ const ExecutableTypePayloadBuilder = struct {
         self: *ExecutableTypePayloadBuilder,
         value: repr.ValueInfoId,
     ) Allocator.Error!ExecutablePayloadWithKey {
+        const context = self.currentContext();
         return try self.payloadForValueInStore(
-            self.context.value_store_id,
-            self.context.value_store,
-            self.context.representation_store,
+            context.value_store_id,
+            context.value_store,
+            context.representation_store,
             value,
         );
     }
@@ -1520,9 +1574,22 @@ const ExecutableTypePayloadBuilder = struct {
         self: *ExecutableTypePayloadBuilder,
         key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        const solve_session = self.solveSessionIdForRepresentationStore(self.context.representation_store);
-        const ref = self.context.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+        const context = self.currentContext();
+        const solve_session = self.solveSessionIdForRepresentationStore(context.representation_store);
+        const ref = context.representation_store.session_executable_type_payloads.refForKey(key) orelse {
             checkedPipelineInvariant("artifact executable payload key has no current-session payload ref");
+        };
+        return try self.payloadForSessionPayload(solve_session, ref.payload, key);
+    }
+
+    fn payloadForSessionKey(
+        self: *ExecutableTypePayloadBuilder,
+        solve_session: repr.RepresentationSolveSessionId,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!ExecutablePayloadWithKey {
+        const store = self.sessionPayloadStore(solve_session);
+        const ref = store.refForKey(key) orelse {
+            checkedPipelineInvariant("artifact executable payload key has no session payload ref");
         };
         return try self.payloadForSessionPayload(solve_session, ref.payload, key);
     }
@@ -1621,7 +1688,7 @@ const ExecutableTypePayloadBuilder = struct {
         for (record.fields, 0..) |field, i| {
             const child = try self.payloadForSessionPayload(solve_session, field.ty.payload, field.key);
             out[i] = .{
-                .field = self.context.row_shapes.recordField(field.field).label,
+                .field = self.row_shapes.recordField(field.field).label,
                 .ty = child.ref,
                 .key = child.key,
             };
@@ -1662,7 +1729,7 @@ const ExecutableTypePayloadBuilder = struct {
         }
         for (tag_union.variants, 0..) |variant, i| {
             out[i] = .{
-                .tag = self.context.row_shapes.tag(variant.tag).label,
+                .tag = self.row_shapes.tag(variant.tag).label,
                 .payloads = try self.sessionTagPayloads(solve_session, variant.payloads),
             };
         }
@@ -1680,7 +1747,7 @@ const ExecutableTypePayloadBuilder = struct {
         for (payloads, 0..) |payload, i| {
             const child = try self.payloadForSessionPayload(solve_session, payload.ty.payload, payload.key);
             out[i] = .{
-                .index = self.context.row_shapes.tagPayload(payload.payload).logical_index,
+                .index = self.row_shapes.tagPayload(payload.payload).logical_index,
                 .ty = child.ref,
                 .key = child.key,
             };
@@ -1740,17 +1807,17 @@ const ExecutableTypePayloadBuilder = struct {
         solve_session: repr.RepresentationSolveSessionId,
     ) *const repr.SessionExecutableTypePayloadStore {
         const index = @intFromEnum(solve_session);
-        if (index >= self.context.solved.solve_sessions.items.len) {
+        if (index >= self.solved.solve_sessions.items.len) {
             checkedPipelineInvariant("artifact executable payload referenced out-of-range solve session");
         }
-        return &self.context.solved.solve_sessions.items[index].representation_store.session_executable_type_payloads;
+        return &self.solved.solve_sessions.items[index].representation_store.session_executable_type_payloads;
     }
 
     fn solveSessionIdForRepresentationStore(
         self: *ExecutableTypePayloadBuilder,
         representation_store: *const repr.RepresentationStore,
     ) repr.RepresentationSolveSessionId {
-        for (self.context.solved.solve_sessions.items, 0..) |*session, raw| {
+        for (self.solved.solve_sessions.items, 0..) |*session, raw| {
             if (&session.representation_store == representation_store) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
@@ -1801,9 +1868,9 @@ const ExecutableTypePayloadBuilder = struct {
             if (erase.capture_slots.len != 0) checkedPipelineInvariant("erased proc-value executable payload has captures but no hidden capture type");
             return null;
         }
-        const instance = &self.context.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
-        const value_store = &self.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
-        const representation_store = &self.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+        const instance = &self.solved.proc_instances.items[@intFromEnum(erase.target_instance)];
+        const value_store = &self.solved.value_stores.items[@intFromEnum(instance.value_store)];
+        const representation_store = &self.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
         const captures = value_store.sliceValueSpan(instance.public_roots.captures);
         return try self.tuplePayloadForTargetCaptureSlots(instance.value_store, value_store, representation_store, captures, erase.capture_slots, erase.erased_fn_sig_key.capture_ty.?);
     }
@@ -1813,10 +1880,11 @@ const ExecutableTypePayloadBuilder = struct {
         key: repr.CanonicalCallableSetKey,
         expected_key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        const ref = self.context.representation_store.session_executable_type_payloads.refForKey(expected_key) orelse {
+        const context = self.currentContext();
+        const ref = context.representation_store.session_executable_type_payloads.refForKey(expected_key) orelse {
             checkedPipelineInvariant("callable-set executable payload key had no session payload");
         };
-        const source_payload = self.context.representation_store.session_executable_type_payloads.get(ref.payload);
+        const source_payload = context.representation_store.session_executable_type_payloads.get(ref.payload);
         const callable_set = switch (source_payload) {
             .callable_set => |callable_set| callable_set,
             else => checkedPipelineInvariant("callable-set executable payload key did not name a callable set"),
@@ -1825,7 +1893,7 @@ const ExecutableTypePayloadBuilder = struct {
             checkedPipelineInvariant("callable-set executable payload key disagrees with requested callable-set key");
         }
         return try self.payloadForSessionPayload(
-            self.solveSessionIdForRepresentationStore(self.context.representation_store),
+            self.solveSessionIdForRepresentationStore(context.representation_store),
             ref.payload,
             expected_key,
         );
@@ -1878,7 +1946,7 @@ const ExecutableTypePayloadBuilder = struct {
         self: *ExecutableTypePayloadBuilder,
         proc: canonical.MirProcedureRef,
     ) *const repr.ProcRepresentationInstance {
-        for (self.context.solved.proc_instances.items) |*instance| {
+        for (self.solved.proc_instances.items) |*instance| {
             if (canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
         }
         checkedPipelineInvariant("executable payload could not find procedure instance for MIR procedure");
@@ -1911,6 +1979,7 @@ fn constValueContextForInstance(
 fn callableResultPlanForRoot(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     solved: *const mir.LambdaSolved.Solve.Program,
     root_instance: repr.ProcRepresentationInstanceId,
@@ -1933,16 +2002,17 @@ fn callableResultPlanForRoot(
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
         .pending_proc_value => checkedPipelineInvariant("callable result plan reached pending callable emission"),
-        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, plans, value_context, instance.public_roots.ret, callable, key),
-        .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, plans, value_context, erased),
-        .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, plans, value_context, callable, erase),
-        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, plans, value_context, instance.public_roots.ret, callable, erase),
+        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, imports, plans, value_context, instance.public_roots.ret, callable, key),
+        .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, imports, plans, value_context, erased),
+        .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, imports, plans, value_context, callable, erase),
+        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, imports, plans, value_context, instance.public_roots.ret, callable, erase),
     };
 }
 
 fn finiteCallableResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable_value: repr.ValueInfoId,
@@ -1952,6 +2022,8 @@ fn finiteCallableResultPlan(
     var capture_builder = CaptureSlotPlanBuilder{
         .allocator = allocator,
         .artifact = artifact_sink,
+        .imports = imports,
+        .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
         .plans = plans,
         .value_context = value_context,
         .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
@@ -2096,8 +2168,8 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
     capture_shape_key: canonical.CaptureShapeKey,
     hidden_capture: ?ExecutablePayloadWithKey,
 ) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
-    const value_store = &builder.context.solved.value_stores.items[@intFromEnum(instance.value_store)];
-    const representation_store = &builder.context.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+    const value_store = &builder.solved.value_stores.items[@intFromEnum(instance.value_store)];
+    const representation_store = &builder.solved.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
     const abi = representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
         checkedPipelineInvariant("erased promoted executable signature references missing erased ABI payload");
     };
@@ -2187,6 +2259,7 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
 fn erasedProcValueResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable: repr.CallableValueInfo,
@@ -2214,7 +2287,7 @@ fn erasedProcValueResultPlan(
             .proc_value = erase.proc_value,
             .capture_shape_key = erase.capture_shape_key,
         } } },
-        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, plans, value_context, erase),
+        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, imports, plans, value_context, erase),
         .result_ty = erase.executable_specialization_key.exec_ret_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForProcValue(
             allocator,
@@ -2228,6 +2301,7 @@ fn erasedProcValueResultPlan(
 fn erasedFiniteSetResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable_value: repr.ValueInfoId,
@@ -2246,6 +2320,7 @@ fn erasedFiniteSetResultPlan(
             .{ .finite_callable_set_value = try finiteCallableResultPlan(
                 allocator,
                 artifact_sink,
+                imports,
                 plans,
                 value_context,
                 callable_value,
@@ -2264,6 +2339,7 @@ fn erasedFiniteSetResultPlan(
 fn alreadyErasedResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erased: repr.AlreadyErasedCallablePlan,
@@ -2273,7 +2349,7 @@ fn alreadyErasedResultPlan(
         .sig_key = erased.sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
         .code_plan = .read_from_interpreted_erased_value,
-        .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, plans, value_context, erased),
+        .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, imports, plans, value_context, erased),
         .result_ty = erased.result_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForAlreadyErased(
             allocator,
@@ -2287,6 +2363,7 @@ fn alreadyErasedResultPlan(
 fn alreadyErasedCapturePlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erased: repr.AlreadyErasedCallablePlan,
@@ -2312,6 +2389,8 @@ fn alreadyErasedCapturePlan(
             var capture_builder = CaptureSlotPlanBuilder{
                 .allocator = allocator,
                 .artifact = artifact_sink,
+                .imports = imports,
+                .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
                 .plans = plans,
                 .value_context = value_context,
                 .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
@@ -2328,6 +2407,7 @@ fn alreadyErasedCapturePlan(
 fn erasedCapturePlanForProcValue(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erase: repr.ProcValueErasePlan,
@@ -2358,6 +2438,8 @@ fn erasedCapturePlanForProcValue(
     var capture_builder = CaptureSlotPlanBuilder{
         .allocator = allocator,
         .artifact = artifact_sink,
+        .imports = imports,
+        .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
         .plans = plans,
         .value_context = target_context,
         .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(allocator),
@@ -2440,15 +2522,165 @@ const CapturePlanKey = struct {
     }
 };
 
+fn normalizedCheckedRecordFields(
+    allocator: Allocator,
+    checked_types: *const checked_artifact.CheckedTypeStore,
+    head: []const checked_artifact.CheckedRecordField,
+    ext: checked_artifact.CheckedTypeId,
+) Allocator.Error![]const checked_artifact.CheckedRecordField {
+    var fields = std.ArrayList(checked_artifact.CheckedRecordField).empty;
+    errdefer fields.deinit(allocator);
+
+    try appendUniqueCheckedRecordFields(allocator, &fields, head);
+
+    var current = ext;
+    var remaining = checked_types.payloads.len + 1;
+    while (true) {
+        if (remaining == 0) checkedPipelineInvariant("checked record row extension chain is cyclic");
+        remaining -= 1;
+
+        switch (checkedTypePayload(checked_types, current)) {
+            .empty_record => return finishNormalizedCheckedRecordFields(allocator, &fields),
+            .record => |record| {
+                try appendUniqueCheckedRecordFields(allocator, &fields, record.fields);
+                current = record.ext;
+            },
+            .record_unbound => |unbound_fields| {
+                try appendUniqueCheckedRecordFields(allocator, &fields, unbound_fields);
+                return finishNormalizedCheckedRecordFields(allocator, &fields);
+            },
+            .pending => checkedPipelineInvariant("checked record row extension reached pending type"),
+            .flex, .rigid => checkedPipelineInvariant("checked record row extension reached unresolved type variable"),
+            else => checkedPipelineInvariant("checked record row extension referenced a non-record row"),
+        }
+    }
+}
+
+fn normalizedCheckedRecordFieldChunk(
+    allocator: Allocator,
+    fields: []const checked_artifact.CheckedRecordField,
+) Allocator.Error![]const checked_artifact.CheckedRecordField {
+    var out = std.ArrayList(checked_artifact.CheckedRecordField).empty;
+    errdefer out.deinit(allocator);
+    try appendUniqueCheckedRecordFields(allocator, &out, fields);
+    return finishNormalizedCheckedRecordFields(allocator, &out);
+}
+
+fn appendUniqueCheckedRecordFields(
+    allocator: Allocator,
+    out: *std.ArrayList(checked_artifact.CheckedRecordField),
+    fields: []const checked_artifact.CheckedRecordField,
+) Allocator.Error!void {
+    for (fields) |field| {
+        if (checkedRecordFieldLabelExists(out.items, field.name)) {
+            checkedPipelineInvariant("normalized checked record row contained duplicate field labels");
+        }
+        try out.append(allocator, field);
+    }
+}
+
+fn finishNormalizedCheckedRecordFields(
+    allocator: Allocator,
+    fields: *std.ArrayList(checked_artifact.CheckedRecordField),
+) Allocator.Error![]const checked_artifact.CheckedRecordField {
+    if (fields.items.len == 0) return &.{};
+    return try fields.toOwnedSlice(allocator);
+}
+
+fn checkedRecordFieldLabelExists(
+    fields: []const checked_artifact.CheckedRecordField,
+    label: canonical.RecordFieldLabelId,
+) bool {
+    for (fields) |field| {
+        if (field.name == label) return true;
+    }
+    return false;
+}
+
+fn normalizedCheckedTagUnionTags(
+    allocator: Allocator,
+    checked_types: *const checked_artifact.CheckedTypeStore,
+    head: []const checked_artifact.CheckedTag,
+    ext: checked_artifact.CheckedTypeId,
+) Allocator.Error![]const checked_artifact.CheckedTag {
+    var tags = std.ArrayList(checked_artifact.CheckedTag).empty;
+    errdefer tags.deinit(allocator);
+
+    try appendUniqueCheckedTags(allocator, &tags, head);
+
+    var current = ext;
+    var remaining = checked_types.payloads.len + 1;
+    while (true) {
+        if (remaining == 0) checkedPipelineInvariant("checked tag-union row extension chain is cyclic");
+        remaining -= 1;
+
+        switch (checkedTypePayload(checked_types, current)) {
+            .empty_tag_union => return finishNormalizedCheckedTags(allocator, &tags),
+            .tag_union => |tag_union| {
+                try appendUniqueCheckedTags(allocator, &tags, tag_union.tags);
+                current = tag_union.ext;
+            },
+            .pending => checkedPipelineInvariant("checked tag-union row extension reached pending type"),
+            .flex, .rigid => checkedPipelineInvariant("checked tag-union row extension reached unresolved type variable"),
+            else => checkedPipelineInvariant("checked tag-union row extension referenced a non-tag-union row"),
+        }
+    }
+}
+
+fn appendUniqueCheckedTags(
+    allocator: Allocator,
+    out: *std.ArrayList(checked_artifact.CheckedTag),
+    tags: []const checked_artifact.CheckedTag,
+) Allocator.Error!void {
+    for (tags) |tag| {
+        if (checkedTagLabelExists(out.items, tag.name)) {
+            checkedPipelineInvariant("normalized checked tag-union row contained duplicate tag labels");
+        }
+        try out.append(allocator, tag);
+    }
+}
+
+fn finishNormalizedCheckedTags(
+    allocator: Allocator,
+    tags: *std.ArrayList(checked_artifact.CheckedTag),
+) Allocator.Error![]const checked_artifact.CheckedTag {
+    if (tags.items.len == 0) return &.{};
+    return try tags.toOwnedSlice(allocator);
+}
+
+fn checkedTagLabelExists(
+    tags: []const checked_artifact.CheckedTag,
+    label: canonical.TagLabelId,
+) bool {
+    for (tags) |tag| {
+        if (tag.name == label) return true;
+    }
+    return false;
+}
+
+fn checkedTypePayload(
+    checked_types: *const checked_artifact.CheckedTypeStore,
+    ty: checked_artifact.CheckedTypeId,
+) checked_artifact.CheckedTypePayload {
+    const index = @intFromEnum(ty);
+    if (index >= checked_types.payloads.len) {
+        checkedPipelineInvariant("checked row extension referenced an out-of-range checked type id");
+    }
+    return checked_types.payloads[index];
+}
+
 const CaptureSlotPlanBuilder = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    imports: []const checked_artifact.ImportedModuleView,
+    type_projector: checked_artifact.CheckedTypeProjector,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     active: std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId),
 
     fn deinit(self: *CaptureSlotPlanBuilder) void {
         self.active.deinit();
+        self.type_projector.deinit();
     }
 
     fn planFor(
@@ -2532,10 +2764,22 @@ const CaptureSlotPlanBuilder = struct {
             else
                 .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .empty_record => .{ .record = &.{} },
-            .record => |record| .{ .record = try self.recordFields(record.fields, value_info_id, exec_ty) },
-            .record_unbound => |fields| .{ .record = try self.recordFields(fields, value_info_id, exec_ty) },
+            .record => |record| blk: {
+                const fields = try normalizedCheckedRecordFields(self.allocator, &self.artifact.checked_types, record.fields, record.ext);
+                defer if (fields.len != 0) self.allocator.free(fields);
+                break :blk .{ .record = try self.recordFields(fields, value_info_id, exec_ty) };
+            },
+            .record_unbound => |fields| blk: {
+                const normalized_fields = try normalizedCheckedRecordFieldChunk(self.allocator, fields);
+                defer if (normalized_fields.len != 0) self.allocator.free(normalized_fields);
+                break :blk .{ .record = try self.recordFields(normalized_fields, value_info_id, exec_ty) };
+            },
             .tuple => |items| .{ .tuple = try self.tupleItems(items, value_info_id, exec_ty) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags, value_info_id, exec_ty) },
+            .tag_union => |tag_union| blk: {
+                const tags = try normalizedCheckedTagUnionTags(self.allocator, &self.artifact.checked_types, tag_union.tags, tag_union.ext);
+                defer if (tags.len != 0) self.allocator.free(tags);
+                break :blk .{ .tag_union = try self.tagVariants(tags, value_info_id, exec_ty) };
+            },
             .empty_tag_union => checkedPipelineInvariant("capture slot planning reached empty tag union"),
             .alias => |alias| .{ .nominal = .{
                 .nominal = .{
@@ -2789,6 +3033,7 @@ const CaptureSlotPlanBuilder = struct {
             .already_erased => |erased| try alreadyErasedResultPlan(
                 self.allocator,
                 self.artifact,
+                self.imports,
                 self.plans,
                 self.value_context,
                 erased,
@@ -2796,6 +3041,7 @@ const CaptureSlotPlanBuilder = struct {
             .erase_proc_value => |erase| try erasedProcValueResultPlan(
                 self.allocator,
                 self.artifact,
+                self.imports,
                 self.plans,
                 self.value_context,
                 callable,
@@ -2804,6 +3050,7 @@ const CaptureSlotPlanBuilder = struct {
             .erase_finite_set => |erase| try erasedFiniteSetResultPlan(
                 self.allocator,
                 self.artifact,
+                self.imports,
                 self.plans,
                 self.value_context,
                 value_info_id,
@@ -2823,6 +3070,7 @@ const CaptureSlotPlanBuilder = struct {
             .allocator = self.allocator,
             .artifact = self.artifact,
             .artifact_sink = self.artifact,
+            .type_projector = checked_artifact.CheckedTypeProjector.init(self.allocator, self.artifact, self.imports),
             .plans = self.plans,
             .values = &self.artifact.comptime_values,
             .active = std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId).init(self.allocator),
@@ -2883,13 +3131,17 @@ const CaptureSlotPlanBuilder = struct {
             };
         }
 
+        const backing = try self.type_projector.publishedNominalBacking(nominal) orelse {
+            checkedPipelineInvariant("capture slot nominal plan has no published nominal backing");
+        };
+
         return .{ .nominal = .{
             .nominal = .{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
             },
             .backing = try self.planForOptionalExecutable(
-                self.artifact.checked_types.roots[@intFromEnum(nominal.backing)].key,
+                self.artifact.checked_types.roots[@intFromEnum(backing)].key,
                 value_info_id,
                 self.nominalBackingExecutableKey(exec_ty),
             ),
@@ -3139,7 +3391,7 @@ const CaptureSlotPlanBuilder = struct {
         if (list.elems.len == 0) {
             return null;
         }
-        return list.elems[0];
+        return list.elems[0].value;
     }
 
     fn executablePayloadForKey(
@@ -3371,12 +3623,14 @@ const ConstGraphPlanBuilder = struct {
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
+    type_projector: checked_artifact.CheckedTypeProjector,
     plans: *checked_artifact.CompileTimePlanStore,
     values: ?*checked_artifact.CompileTimeValueStore = null,
     active: std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId),
 
     fn deinit(self: *ConstGraphPlanBuilder) void {
         self.active.deinit();
+        self.type_projector.deinit();
     }
 
     fn planFor(
@@ -3385,7 +3639,17 @@ const ConstGraphPlanBuilder = struct {
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.ConstGraphReificationPlanId {
-        const key = ConstPlanKey.from(checked_ty, value_context, value_info);
+        return try self.planForExpected(checked_ty, value_context, value_info, null);
+    }
+
+    fn planForExpected(
+        self: *ConstGraphPlanBuilder,
+        checked_ty: checked_artifact.CheckedTypeId,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlanId {
+        const key = ConstPlanKey.from(checked_ty, value_context, value_info, expected_exec_key);
         if (self.active.get(key)) |active| {
             const recursive = try self.plans.reserveConstGraph(self.allocator);
             self.plans.fillConstGraph(recursive, .{ .recursive_ref = active });
@@ -3396,7 +3660,7 @@ const ConstGraphPlanBuilder = struct {
         try self.active.put(key, id);
         errdefer _ = self.active.remove(key);
 
-        const plan = try self.buildPlan(checked_ty, value_context, value_info);
+        const plan = try self.buildPlan(checked_ty, value_context, value_info, expected_exec_key);
         self.plans.fillConstGraph(id, plan);
         _ = self.active.remove(key);
         return id;
@@ -3539,22 +3803,35 @@ const ConstGraphPlanBuilder = struct {
         checked_ty: checked_artifact.CheckedTypeId,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
         return switch (self.checkedPayload(checked_ty)) {
             .empty_record => .{ .record = &.{} },
-            .record => |record| .{ .record = try self.recordFields(record.fields, value_context, value_info) },
-            .record_unbound => |fields| .{ .record = try self.recordFields(fields, value_context, value_info) },
-            .tuple => |items| .{ .tuple = try self.tupleItems(items, value_context, value_info) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagVariants(tag_union.tags, value_context, value_info) },
+            .record => |record| blk: {
+                const fields = try normalizedCheckedRecordFields(self.allocator, &self.artifact.checked_types, record.fields, record.ext);
+                defer if (fields.len != 0) self.allocator.free(fields);
+                break :blk .{ .record = try self.recordFields(fields, value_context, value_info, expected_exec_key) };
+            },
+            .record_unbound => |fields| blk: {
+                const normalized_fields = try normalizedCheckedRecordFieldChunk(self.allocator, fields);
+                defer if (normalized_fields.len != 0) self.allocator.free(normalized_fields);
+                break :blk .{ .record = try self.recordFields(normalized_fields, value_context, value_info, expected_exec_key) };
+            },
+            .tuple => |items| .{ .tuple = try self.tupleItems(items, value_context, value_info, expected_exec_key) },
+            .tag_union => |tag_union| blk: {
+                const tags = try normalizedCheckedTagUnionTags(self.allocator, &self.artifact.checked_types, tag_union.tags, tag_union.ext);
+                defer if (tags.len != 0) self.allocator.free(tags);
+                break :blk .{ .tag_union = try self.tagVariants(tags, value_context, value_info, expected_exec_key) };
+            },
             .empty_tag_union => checkedPipelineInvariant("attempted to plan empty tag union constant"),
             .alias => |alias| .{ .transparent_alias = .{
                 .alias = .{
                     .module_name = alias.origin_module,
                     .type_name = alias.name,
                 },
-                .backing = try self.planFor(alias.backing, value_context, value_info),
+                .backing = try self.planForExpected(alias.backing, value_context, value_info, expected_exec_key),
             } },
-            .nominal => |nominal| try self.nominalPlan(checked_ty, nominal, value_context, value_info),
+            .nominal => |nominal| try self.nominalPlan(checked_ty, nominal, value_context, value_info, expected_exec_key),
             .function => if (value_info == null)
                 .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key }
             else
@@ -3570,31 +3847,43 @@ const ConstGraphPlanBuilder = struct {
         nominal: checked_artifact.CheckedNominalType,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
         if (nominal.builtin) |builtin_nominal| {
             return switch (builtin_nominal) {
                 .str => .{ .string = checked_ty },
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .{ .scalar = checked_ty },
-                .list => .{ .list = .{ .elem = try self.planFor(
+                .list => .{ .list = .{ .elem = try self.planForExpected(
                     nominalArg(nominal, 0),
                     value_context,
                     try self.listElemValue(value_context, value_info),
+                    self.listElemExecutableKey(value_context, value_info, expected_exec_key),
                 ) } },
-                .box => .{ .box = .{ .payload = try self.planFor(
+                .box => .{ .box = .{ .payload = try self.planForExpected(
                     nominalArg(nominal, 0),
                     value_context,
                     self.boxPayloadValue(value_context, value_info),
+                    self.boxPayloadExecutableKey(value_context, value_info, expected_exec_key),
                 ) } },
-                .bool => self.buildPlan(nominal.backing, value_context, value_info),
+                .bool => self.buildPlan(nominal.backing, value_context, value_info, null),
             };
         }
+
+        const backing = try self.type_projector.publishedNominalBacking(nominal) orelse {
+            checkedPipelineInvariant("compile-time constant nominal plan has no published nominal backing");
+        };
 
         return .{ .nominal = .{
             .nominal = .{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
             },
-            .backing = try self.planFor(nominal.backing, value_context, value_info),
+            .backing = try self.planForExpected(
+                backing,
+                value_context,
+                value_info,
+                self.nominalBackingExecutableKey(value_context, value_info, expected_exec_key),
+            ),
         } };
     }
 
@@ -3603,21 +3892,56 @@ const ConstGraphPlanBuilder = struct {
         fields: []const checked_artifact.CheckedRecordField,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.ConstRecordFieldPlan {
-        if (fields.len == 0) return &.{};
-        const plans = try self.allocator.alloc(checked_artifact.ConstRecordFieldPlan, fields.len);
-        errdefer self.allocator.free(plans);
-        for (fields, 0..) |field, i| {
-            plans[i] = .{
+        var plans = std.ArrayList(checked_artifact.ConstRecordFieldPlan).empty;
+        errdefer plans.deinit(self.allocator);
+        const expected_record = self.recordExecutablePayload(value_context, value_info, expected_exec_key);
+
+        for (fields) |field| {
+            try plans.append(self.allocator, .{
                 .field = field.name,
-                .value = try self.planFor(
+                .value = try self.planForExpected(
                     field.ty,
                     value_context,
                     self.recordFieldValue(value_context, value_info, field.name),
+                    self.recordFieldExecutableKey(value_context, expected_record, field.name),
                 ),
-            };
+            });
         }
-        return plans;
+
+        if (value_context) |context| {
+            if (self.valueInfo(value_context, value_info)) |info| {
+                if (info.aggregate) |aggregate| {
+                    const record = switch (aggregate) {
+                        .record => |record| record,
+                        else => checkedPipelineInvariant("record constant value had non-record aggregate metadata"),
+                    };
+                    for (record.fields) |field| {
+                        const label = try self.artifactRecordFieldLabel(context, context.row_shapes.recordField(field.field).label);
+                        if (constRecordPlanContainsField(plans.items, label)) continue;
+                        const child_info = self.valueInfo(value_context, field.value) orelse {
+                            checkedPipelineInvariant("record constant aggregate extra field had no value metadata");
+                        };
+                        const child_ty = self.artifact.checked_types.rootForKey(child_info.source_ty) orelse {
+                            checkedPipelineInvariant("record constant aggregate extra field source type was not published");
+                        };
+                        try plans.append(self.allocator, .{
+                            .field = label,
+                            .value = try self.planForExpected(
+                                child_ty,
+                                value_context,
+                                field.value,
+                                self.recordFieldExecutableKey(value_context, expected_record, label),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        if (plans.items.len == 0) return &.{};
+        return try plans.toOwnedSlice(self.allocator);
     }
 
     fn tupleItems(
@@ -3625,14 +3949,21 @@ const ConstGraphPlanBuilder = struct {
         items: []const checked_artifact.CheckedTypeId,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.ConstTupleElemPlan {
         if (items.len == 0) return &.{};
+        const expected_tuple = self.tupleExecutablePayload(value_context, value_info, expected_exec_key);
         const plans = try self.allocator.alloc(checked_artifact.ConstTupleElemPlan, items.len);
         errdefer self.allocator.free(plans);
         for (items, 0..) |item, i| {
             plans[i] = .{
                 .index = @intCast(i),
-                .value = try self.planFor(item, value_context, self.tupleElemValue(value_context, value_info, @intCast(i))),
+                .value = try self.planForExpected(
+                    item,
+                    value_context,
+                    self.tupleElemValue(value_context, value_info, @intCast(i)),
+                    tupleElemExecutableKey(expected_tuple, @intCast(i)),
+                ),
             };
         }
         return plans;
@@ -3643,7 +3974,17 @@ const ConstGraphPlanBuilder = struct {
         tags: []const checked_artifact.CheckedTag,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.ConstTagVariantPlan {
+        if (value_context) |context| {
+            if (expected_exec_key != null or value_info != null) {
+                const tag_union = self.tagUnionExecutablePayloadForExpected(context, value_info, expected_exec_key) orelse {
+                    checkedPipelineInvariant("tag-union constant value has no executable tag-union payload");
+                };
+                return try self.tagVariantsForExecutablePayload(tags, context, tag_union, value_context, value_info);
+            }
+        }
+
         const variants = try self.allocator.alloc(checked_artifact.ConstTagVariantPlan, tags.len);
         errdefer {
             for (variants) |variant| self.allocator.free(variant.payloads);
@@ -3670,6 +4011,267 @@ const ConstGraphPlanBuilder = struct {
         return variants;
     }
 
+    fn tagVariantsForExecutablePayload(
+        self: *ConstGraphPlanBuilder,
+        tags: []const checked_artifact.CheckedTag,
+        context: ConstValueContext,
+        tag_union: repr.SessionExecutableTagUnionPayload,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+    ) Allocator.Error![]const checked_artifact.ConstTagVariantPlan {
+        if (tag_union.variants.len != tags.len) {
+            checkedPipelineInvariant("tag-union constant executable arity disagrees with checked type arity");
+        }
+
+        const variants = try self.allocator.alloc(checked_artifact.ConstTagVariantPlan, tag_union.variants.len);
+        for (variants) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        errdefer {
+            for (variants) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(variants);
+        }
+        var seen = try self.allocator.alloc(bool, tag_union.variants.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (tag_union.variants) |variant| {
+            const shape_tag_info = context.row_shapes.tag(variant.tag);
+            const tag_index: usize = @intCast(shape_tag_info.logical_index);
+            if (tag_index >= tag_union.variants.len) {
+                checkedPipelineInvariant("tag-union constant executable logical index exceeded arity");
+            }
+            if (seen[tag_index]) {
+                checkedPipelineInvariant("tag-union constant executable duplicated a logical index");
+            }
+            const checked_tag = self.checkedTagForSolvedLabel(tags, context, shape_tag_info.label) orelse {
+                checkedPipelineInvariant("tag-union constant executable referenced a tag missing from checked type");
+            };
+            variants[tag_index] = .{
+                .tag = checked_tag.name,
+                .payloads = try self.tagPayloadsForExecutableVariant(checked_tag, context, variant, value_context, value_info),
+            };
+            seen[tag_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) checkedPipelineInvariant("tag-union constant executable omitted a logical tag");
+        }
+        return variants;
+    }
+
+    fn tagPayloadsForExecutableVariant(
+        self: *ConstGraphPlanBuilder,
+        tag: checked_artifact.CheckedTag,
+        context: ConstValueContext,
+        variant: repr.SessionExecutableTagVariantPayload,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+    ) Allocator.Error![]const checked_artifact.ConstTagPayloadPlan {
+        if (variant.payloads.len != tag.args.len) {
+            checkedPipelineInvariant("tag-union constant tag payload executable arity disagrees with checked type arity");
+        }
+        const payloads = try self.allocator.alloc(checked_artifact.ConstTagPayloadPlan, variant.payloads.len);
+        for (payloads) |*payload| payload.* = .{ .index = 0, .value = @enumFromInt(0) };
+        errdefer self.allocator.free(payloads);
+        var seen = try self.allocator.alloc(bool, variant.payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (variant.payloads) |payload| {
+            const payload_info = context.row_shapes.tagPayload(payload.payload);
+            const payload_index: usize = @intCast(payload_info.logical_index);
+            if (payload_index >= tag.args.len) {
+                checkedPipelineInvariant("tag-union constant payload logical index exceeded arity");
+            }
+            if (seen[payload_index]) {
+                checkedPipelineInvariant("tag-union constant payload shape duplicated a logical index");
+            }
+            payloads[payload_index] = .{
+                .index = @intCast(payload_index),
+                .value = try self.planForExpected(
+                    tag.args[payload_index],
+                    value_context,
+                    self.tagPayloadValue(value_context, value_info, tag.name, @intCast(payload_index)),
+                    payload.key,
+                ),
+            };
+            seen[payload_index] = true;
+        }
+        for (seen) |was_seen| {
+            if (!was_seen) checkedPipelineInvariant("tag-union constant payload shape omitted a logical payload");
+        }
+        return payloads;
+    }
+
+    fn effectiveExecutableKey(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        if (expected_exec_key) |key| return key;
+        const info = self.valueInfo(value_context, value_info) orelse return null;
+        const endpoint = info.exec_ty orelse return null;
+        return endpoint.key;
+    }
+
+    fn executablePayloadForKey(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) repr.SessionExecutableTypePayload {
+        const ref = context.representation_store.session_executable_type_payloads.refForKey(key) orelse {
+            checkedPipelineInvariant("constant executable key has no published payload");
+        };
+        return self.executablePayloadFromPayload(context, context.representation_store.session_executable_type_payloads.get(ref.payload));
+    }
+
+    fn executablePayloadFromPayload(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        payload: repr.SessionExecutableTypePayload,
+    ) repr.SessionExecutableTypePayload {
+        return switch (payload) {
+            .recursive_ref => |ref| self.executablePayloadFromPayload(
+                context,
+                context.representation_store.session_executable_type_payloads.get(ref),
+            ),
+            else => payload,
+        };
+    }
+
+    fn listElemExecutableKey(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const context = value_context orelse return null;
+        const key = self.effectiveExecutableKey(value_context, value_info, expected_exec_key) orelse return null;
+        return switch (self.executablePayloadForKey(context, key)) {
+            .list => |list| list.key,
+            else => null,
+        };
+    }
+
+    fn boxPayloadExecutableKey(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const context = value_context orelse return null;
+        const key = self.effectiveExecutableKey(value_context, value_info, expected_exec_key) orelse return null;
+        return switch (self.executablePayloadForKey(context, key)) {
+            .box => |box| box.key,
+            else => null,
+        };
+    }
+
+    fn nominalBackingExecutableKey(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const context = value_context orelse return null;
+        const key = self.effectiveExecutableKey(value_context, value_info, expected_exec_key) orelse return null;
+        return switch (self.executablePayloadForKey(context, key)) {
+            .nominal => |nominal| nominal.backing_key,
+            else => null,
+        };
+    }
+
+    fn recordExecutablePayload(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?repr.SessionExecutableRecordPayload {
+        const context = value_context orelse return null;
+        const key = self.effectiveExecutableKey(value_context, value_info, expected_exec_key) orelse return null;
+        return switch (self.executablePayloadForKey(context, key)) {
+            .record => |record| record,
+            else => null,
+        };
+    }
+
+    fn recordFieldExecutableKey(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        record_payload: ?repr.SessionExecutableRecordPayload,
+        artifact_label: canonical.RecordFieldLabelId,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const context = value_context orelse return null;
+        const record = record_payload orelse return null;
+        const field_id = self.recordFieldIdForArtifactLabel(context, record.shape, artifact_label) orelse {
+            checkedPipelineInvariant("record constant executable payload omitted expected field label");
+        };
+        for (record.fields) |field| {
+            if (field.field == field_id) return field.key;
+        }
+        checkedPipelineInvariant("record constant executable payload omitted expected field");
+    }
+
+    fn tupleExecutablePayload(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?[]const repr.SessionExecutableTupleElemPayload {
+        const context = value_context orelse return null;
+        const key = self.effectiveExecutableKey(value_context, value_info, expected_exec_key) orelse return null;
+        return switch (self.executablePayloadForKey(context, key)) {
+            .tuple => |tuple| tuple,
+            else => null,
+        };
+    }
+
+    fn tupleElemExecutableKey(
+        tuple_payload: ?[]const repr.SessionExecutableTupleElemPayload,
+        index: u32,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        const tuple = tuple_payload orelse return null;
+        if (index >= tuple.len) {
+            checkedPipelineInvariant("tuple constant executable payload omitted expected element");
+        }
+        return tuple[index].key;
+    }
+
+    fn tagUnionExecutablePayloadForExpected(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
+    ) ?repr.SessionExecutableTagUnionPayload {
+        const key = self.effectiveExecutableKey(context, value_info, expected_exec_key) orelse {
+            checkedPipelineInvariant("tag-union constant value had no executable endpoint");
+        };
+        return self.tagUnionExecutablePayloadForKey(context, key);
+    }
+
+    fn tagUnionExecutablePayloadForKey(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) ?repr.SessionExecutableTagUnionPayload {
+        return self.tagUnionExecutablePayloadFromPayload(context, self.executablePayloadForKey(context, key));
+    }
+
+    fn tagUnionExecutablePayloadFromPayload(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        payload: repr.SessionExecutableTypePayload,
+    ) ?repr.SessionExecutableTagUnionPayload {
+        return switch (payload) {
+            .tag_union => |tag_union| tag_union,
+            .nominal => |nominal| self.tagUnionExecutablePayloadForKey(context, nominal.backing_key),
+            .recursive_ref => |ref| self.tagUnionExecutablePayloadFromPayload(
+                context,
+                context.representation_store.session_executable_type_payloads.get(ref),
+            ),
+            else => null,
+        };
+    }
+
     fn checkedPayload(
         self: *const ConstGraphPlanBuilder,
         ty: checked_artifact.CheckedTypeId,
@@ -3693,6 +4295,7 @@ const ConstGraphPlanBuilder = struct {
             .finite => |key| .{ .finite = try finiteCallableResultPlan(
                 self.allocator,
                 self.artifactSink(),
+                self.type_projector.imports,
                 self.plans,
                 context,
                 info_id,
@@ -3702,6 +4305,7 @@ const ConstGraphPlanBuilder = struct {
             .already_erased => |erased| .{ .erased_boxed = try alreadyErasedResultPlan(
                 self.allocator,
                 self.artifactSink(),
+                self.type_projector.imports,
                 self.plans,
                 context,
                 erased,
@@ -3709,6 +4313,7 @@ const ConstGraphPlanBuilder = struct {
             .erase_proc_value => |erase| .{ .erased_boxed = try erasedProcValueResultPlan(
                 self.allocator,
                 self.artifactSink(),
+                self.type_projector.imports,
                 self.plans,
                 context,
                 callable,
@@ -3717,6 +4322,7 @@ const ConstGraphPlanBuilder = struct {
             .erase_finite_set => |erase| .{ .erased_boxed = try erasedFiniteSetResultPlan(
                 self.allocator,
                 self.artifactSink(),
+                self.type_projector.imports,
                 self.plans,
                 context,
                 info_id,
@@ -3728,6 +4334,67 @@ const ConstGraphPlanBuilder = struct {
 
     fn artifactSink(self: *ConstGraphPlanBuilder) *checked_artifact.CheckedModuleArtifact {
         return self.artifact_sink orelse checkedPipelineInvariant("compile-time callable leaf planning requires mutable artifact sink");
+    }
+
+    fn artifactNamePublisher(self: *const ConstGraphPlanBuilder) checked_artifact.ArtifactNamePublisher {
+        const sink = self.artifact_sink orelse checkedPipelineInvariant("compile-time reification name publication requires mutable artifact sink");
+        return checked_artifact.ArtifactNamePublisher.init(sink);
+    }
+
+    fn artifactRecordFieldLabel(
+        self: *ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        solved_label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        var publisher = self.artifactNamePublisher();
+        return try publisher.recordFieldFromLowering(context.canonical_names, solved_label);
+    }
+
+    fn checkedTagForSolvedLabel(
+        self: *const ConstGraphPlanBuilder,
+        tags: []const checked_artifact.CheckedTag,
+        context: ConstValueContext,
+        solved_label: canonical.TagLabelId,
+    ) ?checked_artifact.CheckedTag {
+        const publisher = self.artifactNamePublisher();
+        for (tags) |tag| {
+            if (publisher.tagMatchesLowering(tag.name, context.canonical_names, solved_label)) return tag;
+        }
+        return null;
+    }
+
+    fn recordFieldIdForArtifactLabel(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        shape: mir.MonoRow.RecordShapeId,
+        artifact_label: canonical.RecordFieldLabelId,
+    ) ?mir.MonoRow.RecordFieldId {
+        const fields = context.row_shapes.recordShape(shape).fields.get(context.row_shapes.record_shape_fields.items);
+        for (fields) |field_id| {
+            const field = context.row_shapes.recordField(field_id);
+            if (self.recordFieldLabelsEql(context, artifact_label, field.label)) return field_id;
+        }
+        return null;
+    }
+
+    fn recordFieldLabelsEql(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        artifact_label: canonical.RecordFieldLabelId,
+        solved_label: canonical.RecordFieldLabelId,
+    ) bool {
+        const publisher = self.artifactNamePublisher();
+        return publisher.recordFieldMatchesLowering(artifact_label, context.canonical_names, solved_label);
+    }
+
+    fn tagLabelsEql(
+        self: *const ConstGraphPlanBuilder,
+        context: ConstValueContext,
+        artifact_label: canonical.TagLabelId,
+        solved_label: canonical.TagLabelId,
+    ) bool {
+        const publisher = self.artifactNamePublisher();
+        return publisher.tagMatchesLowering(artifact_label, context.canonical_names, solved_label);
     }
 
     fn valueInfo(
@@ -3768,13 +4435,23 @@ const ConstGraphPlanBuilder = struct {
             .record => |record| record,
             else => checkedPipelineInvariant("record constant value had non-record aggregate metadata"),
         };
-        const field_id = recordFieldIdForLabel(context.row_shapes, record.shape, label) orelse {
+        const field_id = self.recordFieldIdForArtifactLabel(context, record.shape, label) orelse {
             checkedPipelineInvariant("record constant plan referenced missing finalized field label");
         };
         for (record.fields) |field| {
             if (field.field == field_id) return field.value;
         }
         checkedPipelineInvariant("record constant aggregate metadata omitted a finalized field");
+    }
+
+    fn constRecordPlanContainsField(
+        fields: []const checked_artifact.ConstRecordFieldPlan,
+        label: canonical.RecordFieldLabelId,
+    ) bool {
+        for (fields) |field| {
+            if (field.field == label) return true;
+        }
+        return false;
     }
 
     fn tupleElemValue(
@@ -3810,7 +4487,7 @@ const ConstGraphPlanBuilder = struct {
             else => checkedPipelineInvariant("tag-union constant value had non-tag aggregate metadata"),
         };
         const active_tag = context.row_shapes.tag(tag.tag);
-        if (active_tag.label != tag_label) return null;
+        if (!self.tagLabelsEql(context, tag_label, active_tag.label)) return null;
         const payloads = context.row_shapes.tagPayloads(tag.tag);
         if (payload_index >= payloads.len) {
             checkedPipelineInvariant("tag-union constant plan referenced missing finalized payload index");
@@ -3835,12 +4512,12 @@ const ConstGraphPlanBuilder = struct {
             else => checkedPipelineInvariant("List(T) constant value had non-list aggregate metadata"),
         };
         if (list.elems.len == 0) return null;
-        const first_info = context.value_store.values.items[@intFromEnum(list.elems[0])];
+        const first_info = context.value_store.values.items[@intFromEnum(list.elems[0].value)];
         const first_endpoint = first_info.exec_ty orelse {
             checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
         };
         for (list.elems[1..]) |elem| {
-            const elem_info = context.value_store.values.items[@intFromEnum(elem)];
+            const elem_info = context.value_store.values.items[@intFromEnum(elem.value)];
             const elem_endpoint = elem_info.exec_ty orelse {
                 checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
             };
@@ -3848,7 +4525,7 @@ const ConstGraphPlanBuilder = struct {
                 checkedPipelineInvariant("List(T) constant elements have different executable representations");
             }
         }
-        return list.elems[0];
+        return list.elems[0].value;
     }
 
     fn valueForRoot(
@@ -3882,6 +4559,8 @@ const ConstPlanKey = struct {
     checked_ty: checked_artifact.CheckedTypeId,
     value_store: u32,
     value_info: u32,
+    expected_exec_key: canonical.CanonicalExecValueTypeKey,
+    has_expected_exec_key: bool,
 
     const none = std.math.maxInt(u32);
 
@@ -3889,11 +4568,14 @@ const ConstPlanKey = struct {
         checked_ty: checked_artifact.CheckedTypeId,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
+        expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) ConstPlanKey {
         return .{
             .checked_ty = checked_ty,
             .value_store = if (value_context) |context| @intFromEnum(context.value_store_id) else none,
             .value_info = if (value_info) |info| @intFromEnum(info) else none,
+            .expected_exec_key = expected_exec_key orelse .{},
+            .has_expected_exec_key = expected_exec_key != null,
         };
     }
 };

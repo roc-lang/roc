@@ -80,7 +80,6 @@ pub const Pat = struct {
     data: Data,
 
     pub const Data = union(enum) {
-        bool_lit: bool,
         int_lit: i128,
         frac_f32_lit: f32,
         frac_f64_lit: f64,
@@ -346,7 +345,6 @@ pub const DecisionEdge = struct {
 /// Public `PatternTest` declaration.
 pub const PatternTest = union(enum) {
     tag: row.TagId,
-    bool_literal: bool,
     int_literal: i128,
     float_f32_literal: f32,
     float_f64_literal: f64,
@@ -396,7 +394,6 @@ pub const Expr = struct {
         frac_f64_lit: f64,
         dec_lit: i128,
         str_lit: ProgramLiteralId,
-        bool_lit: bool,
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
         const_ref: check.CheckedArtifact.ConstInstantiationKey,
@@ -453,6 +450,7 @@ pub const Expr = struct {
         value_transform_list: ValueTransformList,
         if_: struct {
             cond: ExprId,
+            true_discriminant: u16,
             then_body: ExprId,
             else_body: ExprId,
         },
@@ -470,7 +468,6 @@ pub const Expr = struct {
             elem_index: u32,
         },
         list: Span(ExprId),
-        bool_not: ExprId,
         return_: ExprId,
         crash: ProgramLiteralId,
         runtime_error,

@@ -42,6 +42,8 @@ pub const CallableSetConstructionPlanId = enum(u32) { _ };
 pub const CanonicalCallableSetDescriptorId = enum(u32) { _ };
 /// Public `ValueTransformBoundaryId` declaration.
 pub const ValueTransformBoundaryId = enum(u32) { _ };
+/// Public `ConsumerUsePlanId` declaration.
+pub const ConsumerUsePlanId = enum(u32) { _ };
 pub const SessionExecutableValueTransformId = checked_artifact.SessionExecutableValueTransformId;
 /// Public `RepresentationEdgeId` declaration.
 pub const RepresentationEdgeId = enum(u32) { _ };
@@ -277,9 +279,18 @@ pub const CanonicalCallableSetDescriptor = struct {
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
 const RootTypeKey = struct {
-    root: RepRootId,
-    ty: type_mod.TypeVarId,
+    tag: enum { type_var, nominal_source },
+    ty: type_mod.TypeVarId = @enumFromInt(0),
+    source_ty: canonical.CanonicalTypeKey = .{},
 };
+
+fn rootTypeKeyFor(types: *const type_mod.Store, ty: type_mod.TypeVarId) RootTypeKey {
+    const root = types.unlinkConst(ty);
+    return switch (types.getNode(root)) {
+        .nominal => |nominal| .{ .tag = .nominal_source, .source_ty = nominal.source_ty },
+        else => .{ .tag = .type_var, .ty = root },
+    };
+}
 
 /// Public `SessionExecutableTypePayloadRef` declaration.
 pub const SessionExecutableTypePayloadRef = struct {
@@ -867,18 +878,18 @@ pub const BoxedValueInfo = struct {
 pub const AggregateValueInfo = union(enum) {
     record: struct {
         shape: row.RecordShapeId,
-        fields: []const FieldValueInfo,
+        fields: []FieldValueInfo,
     },
-    tuple: []const ElemValueInfo,
+    tuple: []ElemValueInfo,
     tag: struct {
         union_shape: row.TagUnionShapeId,
         tag: row.TagId,
-        payloads: []const TagPayloadValueInfo,
+        payloads: []TagPayloadValueInfo,
         payload_roots: []const TagPayloadRootInfo = &.{},
     },
     list: struct {
         elem_root: RepRootId,
-        elems: []const ValueInfoId,
+        elems: []ElemValueInfo,
     },
 };
 
@@ -903,6 +914,46 @@ pub const TransformChildEndpoint = struct {
     path: TransformEndpointPathId,
 };
 
+/// Public `ConsumerUseOwner` declaration.
+pub const ConsumerUseOwner = union(enum) {
+    record_field: struct {
+        parent: ValueInfoId,
+        field: row.RecordFieldId,
+    },
+    tuple_elem: struct {
+        parent: ValueInfoId,
+        index: u32,
+    },
+    tag_payload: struct {
+        parent: ValueInfoId,
+        tag: row.TagId,
+        payload: row.TagPayloadId,
+    },
+    list_elem: struct {
+        parent: ValueInfoId,
+        index: u32,
+    },
+    nominal_backing: struct {
+        parent: ValueInfoId,
+        nominal: canonical.NominalTypeKey,
+    },
+};
+
+/// Public `ConsumerUseLowering` declaration.
+pub const ConsumerUseLowering = union(enum) {
+    construct_directly,
+    lower_control_flow_contextually,
+    existing_value: ValueTransformBoundaryId,
+};
+
+/// Public `ConsumerUsePlan` declaration.
+pub const ConsumerUsePlan = struct {
+    owner: ConsumerUseOwner,
+    child_value: ValueInfoId,
+    expected_endpoint: SessionExecutableValueEndpoint,
+    lowering: ConsumerUseLowering,
+};
+
 /// Public `SessionExecutableValueEndpointOwner` declaration.
 pub const SessionExecutableValueEndpointOwner = union(enum) {
     local_value: ValueInfoId,
@@ -924,6 +975,7 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
         call: CallSiteInfoId,
         member: CallableSetMemberRef,
     },
+    consumer_use: ConsumerUseOwner,
     transform_child: TransformChildEndpoint,
 };
 
@@ -1260,18 +1312,21 @@ fn deinitSessionCallableToErasedTransformPlan(
 pub const FieldValueInfo = struct {
     field: row.RecordFieldId,
     value: ValueInfoId,
+    consumer_use: ?ConsumerUsePlanId = null,
 };
 
 /// Public `ElemValueInfo` declaration.
 pub const ElemValueInfo = struct {
     index: u32,
     value: ValueInfoId,
+    consumer_use: ?ConsumerUsePlanId = null,
 };
 
 /// Public `TagPayloadValueInfo` declaration.
 pub const TagPayloadValueInfo = struct {
     payload: row.TagPayloadId,
     value: ValueInfoId,
+    consumer_use: ?ConsumerUsePlanId = null,
 };
 
 /// Public `TagPayloadRootInfo` declaration.
@@ -1294,6 +1349,7 @@ pub const ValueInfo = struct {
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
     aggregate: ?AggregateValueInfo = null,
+    nominal_backing_consumer_use: ?ConsumerUsePlanId = null,
 };
 
 /// Public `BindingInfo` declaration.
@@ -1433,6 +1489,7 @@ pub const ValueTransformBoundaryKind = union(enum) {
     mutable_join: MutableJoinId,
     loop_phi: LoopPhiId,
     aggregate_existing_value: AggregateBoundaryId,
+    consumer_use: ConsumerUsePlanId,
 };
 
 /// Public `ValueTransformBoundary` declaration.
@@ -1472,6 +1529,7 @@ pub const RepresentationStore = struct {
     box_boundaries: []BoxBoundary = &.{},
     capture_boundaries: []CaptureBoundaryInfo = &.{},
     value_transform_boundaries: []const ValueTransformBoundary = &.{},
+    consumer_use_plans: std.ArrayList(ConsumerUsePlan) = .empty,
     transform_endpoint_scopes: std.ArrayList(TransformEndpointScope) = .empty,
     transform_endpoint_paths: std.ArrayList(Span(TransformEndpointPathStep)) = .empty,
     transform_endpoint_path_steps: std.ArrayList(TransformEndpointPathStep) = .empty,
@@ -1490,6 +1548,7 @@ pub const RepresentationStore = struct {
         self.transform_endpoint_path_steps.deinit(self.allocator);
         self.transform_endpoint_paths.deinit(self.allocator);
         self.transform_endpoint_scopes.deinit(self.allocator);
+        self.consumer_use_plans.deinit(self.allocator);
         self.session_executable_type_payloads.deinit(self.allocator);
         self.erased_fn_abis.deinit(self.allocator);
         for (self.callable_emission_plans) |plan| {
@@ -1937,6 +1996,30 @@ pub const RepresentationStore = struct {
         id: ValueTransformBoundaryId,
     ) ValueTransformBoundary {
         return self.value_transform_boundaries[@intFromEnum(id)];
+    }
+
+    pub fn appendConsumerUsePlan(
+        self: *RepresentationStore,
+        plan: ConsumerUsePlan,
+    ) std.mem.Allocator.Error!ConsumerUsePlanId {
+        const id: ConsumerUsePlanId = @enumFromInt(@as(u32, @intCast(self.consumer_use_plans.items.len)));
+        try self.consumer_use_plans.append(self.allocator, plan);
+        return id;
+    }
+
+    pub fn setConsumerUsePlanLowering(
+        self: *RepresentationStore,
+        id: ConsumerUsePlanId,
+        lowering: ConsumerUseLowering,
+    ) void {
+        self.consumer_use_plans.items[@intFromEnum(id)].lowering = lowering;
+    }
+
+    pub fn consumerUsePlan(
+        self: *const RepresentationStore,
+        id: ConsumerUsePlanId,
+    ) ConsumerUsePlan {
+        return self.consumer_use_plans.items[@intFromEnum(id)];
     }
 
     pub fn verifySealed(self: *const RepresentationStore) void {
@@ -2944,6 +3027,9 @@ const SessionExecutableTypePayloadBuilder = struct {
         }
 
         const info = values.values.items[@intFromEnum(value)];
+        if ((info.boxed != null or info.aggregate != null) and !(try self.valueRequiresSpecificEndpoint(value))) {
+            return try self.endpointForRootType(info.root, info.logical_ty);
+        }
         if (info.callable == null and info.boxed == null and info.aggregate == null) {
             if (info.value_alias_source) |source| {
                 const source_endpoint = try self.endpointForValue(source);
@@ -3073,7 +3159,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         }
 
         const root_ty = self.types.unlinkConst(ty);
-        const active_key = RootTypeKey{ .root = root, .ty = root_ty };
+        const active_key = rootTypeKeyFor(self.types, root_ty);
         if (self.active_root_types.get(active_key)) |active| {
             return .{ .ty = refFor(active), .key = key };
         }
@@ -3118,7 +3204,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         );
 
         const root_ty = self.types.unlinkConst(logical_ty);
-        const active_key = RootTypeKey{ .root = rep_root, .ty = root_ty };
+        const active_key = rootTypeKeyFor(self.types, root_ty);
         if (self.active_root_types.get(active_key)) |active| {
             return .{ .ty = refFor(active), .key = key };
         }
@@ -3762,8 +3848,8 @@ const SessionExecutableTypePayloadBuilder = struct {
                 } };
             },
             .content => switch (aggregate) {
-                .record => |record| .{ .record = try self.recordPayloadForValue(record) },
-                .tuple => |tuple| .{ .tuple = try self.tuplePayloadForValue(tuple) },
+                .record => |record| .{ .record = try self.recordPayloadForValue(value_root, logical_ty, record) },
+                .tuple => |tuple| .{ .tuple = try self.tuplePayloadForValue(value_root, logical_ty, tuple) },
                 .tag => |tag| .{ .tag_union = try self.tagUnionPayloadForValue(logical_ty, tag) },
                 .list => |list| .{ .list = try self.listPayloadForValue(logical_ty, list) },
             },
@@ -3772,13 +3858,21 @@ const SessionExecutableTypePayloadBuilder = struct {
 
     fn recordPayloadForValue(
         self: *SessionExecutableTypePayloadBuilder,
+        value_root: RepRootId,
+        logical_ty: type_mod.TypeVarId,
         record: anytype,
     ) std.mem.Allocator.Error!SessionExecutableRecordPayload {
+        const source_fields = try self.logicalRecordFields(logical_ty);
         if (record.fields.len == 0) return .{ .shape = record.shape, .fields = &.{} };
         const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, record.fields.len);
         errdefer self.allocator.free(out);
         for (record.fields, 0..) |field, i| {
-            const child = try self.childForValue(field.value);
+            const field_ty = try self.logicalRecordFieldType(source_fields, field.field);
+            const child_root = self.structuralChildRoot(value_root, .{ .record_field = field.field });
+            const child = if (try self.valueRequiresSpecificEndpoint(field.value))
+                try self.childForValue(field.value)
+            else
+                try self.childForRootType(child_root, field_ty);
             out[i] = .{
                 .field = field.field,
                 .ty = child.ty,
@@ -3790,8 +3884,11 @@ const SessionExecutableTypePayloadBuilder = struct {
 
     fn tuplePayloadForValue(
         self: *SessionExecutableTypePayloadBuilder,
+        value_root: RepRootId,
+        logical_ty: type_mod.TypeVarId,
         tuple: []const ElemValueInfo,
     ) std.mem.Allocator.Error![]const SessionExecutableTupleElemPayload {
+        const source_items = try self.logicalTupleItems(logical_ty);
         if (tuple.len == 0) return &.{};
         const out = try self.allocator.alloc(SessionExecutableTupleElemPayload, tuple.len);
         errdefer self.allocator.free(out);
@@ -3802,7 +3899,12 @@ const SessionExecutableTypePayloadBuilder = struct {
             const index: usize = @intCast(elem.index);
             if (index >= tuple.len) representationInvariant("session executable tuple payload index exceeded arity");
             if (seen[index]) representationInvariant("session executable tuple payload had duplicate index");
-            const child = try self.childForValue(elem.value);
+            if (index >= source_items.len) representationInvariant("session executable tuple payload index exceeded logical type arity");
+            const child_root = self.structuralChildRoot(value_root, .{ .tuple_elem = elem.index });
+            const child = if (try self.valueRequiresSpecificEndpoint(elem.value))
+                try self.childForValue(elem.value)
+            else
+                try self.childForRootType(child_root, source_items[index]);
             out[index] = .{
                 .index = elem.index,
                 .ty = child.ty,
@@ -3873,7 +3975,10 @@ const SessionExecutableTypePayloadBuilder = struct {
                 const selected_value = self.selectedTagPayloadValue(tag_value, shape_payload) orelse {
                     representationInvariant("session executable selected tag omitted a payload");
                 };
-                break :blk try self.childForValue(selected_value);
+                if (try self.valueRequiresSpecificEndpoint(selected_value)) {
+                    break :blk try self.childForValue(selected_value);
+                }
+                break :blk try self.childForRootType(self.tagPayloadRoot(tag_value, shape_payload), arg);
             } else try self.childForRootType(self.tagPayloadRoot(tag_value, shape_payload), arg);
             out[i] = .{
                 .payload = shape_payload,
@@ -3908,6 +4013,53 @@ const SessionExecutableTypePayloadBuilder = struct {
         return null;
     }
 
+    fn valueRequiresSpecificEndpoint(
+        self: *SessionExecutableTypePayloadBuilder,
+        value: ValueInfoId,
+    ) std.mem.Allocator.Error!bool {
+        var visited = std.AutoHashMap(ValueInfoId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.valueRequiresSpecificEndpointInner(value, &visited);
+    }
+
+    fn valueRequiresSpecificEndpointInner(
+        self: *SessionExecutableTypePayloadBuilder,
+        value: ValueInfoId,
+        visited: *std.AutoHashMap(ValueInfoId, void),
+    ) std.mem.Allocator.Error!bool {
+        if (visited.contains(value)) return false;
+        try visited.put(value, {});
+
+        const values = self.value_store orelse representationInvariant("session executable value-specific predicate has no value store");
+        const info = values.values.items[@intFromEnum(value)];
+        if (info.callable != null) return true;
+        if (self.valueHasFunctionType(info.logical_ty)) return true;
+        if (info.value_alias_source) |source| return try self.valueRequiresSpecificEndpointInner(source, visited);
+        if (info.join_info != null) return true;
+        if (info.boxed) |boxed| {
+            if (boxed.boundary != null) return true;
+            if (boxed.payload_value) |payload| return try self.valueRequiresSpecificEndpointInner(payload, visited);
+            return false;
+        }
+        if (info.aggregate) |aggregate| {
+            return switch (aggregate) {
+                .record => |record| for (record.fields) |field| {
+                    if (try self.valueRequiresSpecificEndpointInner(field.value, visited)) break true;
+                } else false,
+                .tuple => |tuple| for (tuple) |elem| {
+                    if (try self.valueRequiresSpecificEndpointInner(elem.value, visited)) break true;
+                } else false,
+                .tag => |tag| for (tag.payloads) |payload| {
+                    if (try self.valueRequiresSpecificEndpointInner(payload.value, visited)) break true;
+                } else false,
+                .list => |list| for (list.elems) |elem| {
+                    if (try self.valueRequiresSpecificEndpointInner(elem.value, visited)) break true;
+                } else false,
+            };
+        }
+        return false;
+    }
+
     fn listPayloadForValue(
         self: *SessionExecutableTypePayloadBuilder,
         logical_ty: type_mod.TypeVarId,
@@ -3927,6 +4079,48 @@ const SessionExecutableTypePayloadBuilder = struct {
             },
             else => representationInvariant("session executable list payload attached to unresolved type"),
         };
+    }
+
+    fn logicalTupleItems(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error![]const type_mod.TypeVarId {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalTupleItems(nominal.backing),
+            .content => |content| switch (content) {
+                .tuple => |items| self.types.sliceTypeVarSpan(items),
+                else => representationInvariant("session executable tuple payload attached to non-tuple type"),
+            },
+            else => representationInvariant("session executable tuple payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalRecordFields(
+        self: *SessionExecutableTypePayloadBuilder,
+        logical_ty: type_mod.TypeVarId,
+    ) std.mem.Allocator.Error![]const type_mod.Field {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalRecordFields(nominal.backing),
+            .content => |content| switch (content) {
+                .record => |record| self.types.sliceFields(record.fields),
+                else => representationInvariant("session executable record payload attached to non-record type"),
+            },
+            else => representationInvariant("session executable record payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalRecordFieldType(
+        self: *SessionExecutableTypePayloadBuilder,
+        fields: []const type_mod.Field,
+        field_id: row.RecordFieldId,
+    ) std.mem.Allocator.Error!type_mod.TypeVarId {
+        const expected_label = self.row_shapes.recordField(field_id).label;
+        for (fields) |field| {
+            if (field.name == expected_label) return field.ty;
+        }
+        representationInvariant("session executable record value field was absent from logical type");
     }
 
     fn logicalTagUnionTags(
@@ -4107,6 +4301,17 @@ const ExecValueTypeKeyBuilder = struct {
     fn redirectedValueKey(self: *ExecValueTypeKeyBuilder, value: ValueInfoId) std.mem.Allocator.Error!?CanonicalExecValueTypeKey {
         const values = self.value_store orelse return null;
         const info = values.values.items[@intFromEnum(value)];
+        if ((info.boxed != null or info.aggregate != null) and !(try self.valueRequiresSpecificKey(value))) {
+            return try execValueTypeKeyForRootType(
+                self.allocator,
+                self.names,
+                self.rowShapes(),
+                self.types,
+                self.representationStore(),
+                info.root,
+                info.logical_ty,
+            );
+        }
         if (info.callable != null or info.boxed != null or info.aggregate != null) return null;
         if (info.value_alias_source) |source| return try self.valueKeySnapshot(source);
         if (info.join_info) |join_id| return try self.joinValueKey(value, join_id);
@@ -4197,7 +4402,7 @@ const ExecValueTypeKeyBuilder = struct {
         aggregate: AggregateValueInfo,
     ) std.mem.Allocator.Error!void {
         const root = self.types.unlinkConst(logical_ty);
-        const active_key = RootTypeKey{ .root = value_root, .ty = root };
+        const active_key = rootTypeKeyFor(self.types, root);
         if (self.active_root_types.get(active_key)) |slot| {
             self.writeTag("aggregate_root_cycle");
             self.writeU32(slot);
@@ -4228,16 +4433,29 @@ const ExecValueTypeKeyBuilder = struct {
             },
             .content => switch (aggregate) {
                 .record => |record| {
+                    const source_fields = try self.logicalRecordFields(logical_ty);
                     self.writeTag("record_value");
                     self.writeU32(@intFromEnum(record.shape));
                     self.writeU32(@intCast(record.fields.len));
                     for (record.fields) |field| {
                         self.writeU32(@intFromEnum(field.field));
-                        const field_key = try self.valueKeySnapshot(field.value);
+                        const field_key = if (try self.valueRequiresSpecificKey(field.value))
+                            try self.valueKeySnapshot(field.value)
+                        else
+                            try execValueTypeKeyForRootType(
+                                self.allocator,
+                                self.names,
+                                self.rowShapes(),
+                                self.types,
+                                self.representationStore(),
+                                self.structuralChildRoot(value_root, .{ .record_field = field.field }),
+                                try self.logicalRecordFieldType(source_fields, field.field),
+                            );
                         self.writeCanonicalExecValueTypeKey(field_key);
                     }
                 },
                 .tuple => |tuple| {
+                    const source_items = try self.logicalTupleItems(logical_ty);
                     self.writeTag("tuple_value");
                     self.writeU32(@intCast(tuple.len));
                     const seen = try self.allocator.alloc(bool, tuple.len);
@@ -4255,8 +4473,20 @@ const ExecValueTypeKeyBuilder = struct {
                     for (seen) |was_seen| {
                         if (!was_seen) representationInvariant("executable value type key tuple did not provide every element");
                     }
-                    for (ordered) |elem| {
-                        const elem_key = try self.valueKeySnapshot(elem);
+                    for (ordered, 0..) |elem, index| {
+                        if (index >= source_items.len) representationInvariant("executable value type key tuple value index exceeded logical type arity");
+                        const elem_key = if (try self.valueRequiresSpecificKey(elem))
+                            try self.valueKeySnapshot(elem)
+                        else
+                            try execValueTypeKeyForRootType(
+                                self.allocator,
+                                self.names,
+                                self.rowShapes(),
+                                self.types,
+                                self.representationStore(),
+                                self.structuralChildRoot(value_root, .{ .tuple_elem = @intCast(index) }),
+                                source_items[index],
+                            );
                         self.writeCanonicalExecValueTypeKey(elem_key);
                     }
                 },
@@ -4287,7 +4517,7 @@ const ExecValueTypeKeyBuilder = struct {
         id: type_mod.TypeVarId,
     ) std.mem.Allocator.Error!void {
         const root = self.types.unlinkConst(id);
-        const active_key = RootTypeKey{ .root = rep_root, .ty = root };
+        const active_key = rootTypeKeyFor(self.types, root);
         if (self.active_root_types.get(active_key)) |slot| {
             self.writeTag("root_cycle");
             self.writeU32(slot);
@@ -4449,13 +4679,71 @@ const ExecValueTypeKeyBuilder = struct {
                     const selected_value = self.selectedTagPayloadValue(tag_value, payload_id) orelse {
                         representationInvariant("executable value type key selected tag omitted a payload");
                     };
-                    const selected_key = try self.valueKeySnapshot(selected_value);
+                    const selected_key = if (try self.valueRequiresSpecificKey(selected_value))
+                        try self.valueKeySnapshot(selected_value)
+                    else
+                        try execValueTypeKeyForRootType(
+                            self.allocator,
+                            self.names,
+                            self.rowShapes(),
+                            self.types,
+                            self.representationStore(),
+                            self.tagPayloadRoot(tag_value, payload_id),
+                            arg,
+                        );
                     self.writeCanonicalExecValueTypeKey(selected_key);
                 } else {
                     try self.writeRootType(self.tagPayloadRoot(tag_value, payload_id), arg);
                 }
             }
         }
+    }
+
+    fn valueRequiresSpecificKey(
+        self: *ExecValueTypeKeyBuilder,
+        value: ValueInfoId,
+    ) std.mem.Allocator.Error!bool {
+        var visited = std.AutoHashMap(ValueInfoId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.valueRequiresSpecificKeyInner(value, &visited);
+    }
+
+    fn valueRequiresSpecificKeyInner(
+        self: *ExecValueTypeKeyBuilder,
+        value: ValueInfoId,
+        visited: *std.AutoHashMap(ValueInfoId, void),
+    ) std.mem.Allocator.Error!bool {
+        if (visited.contains(value)) return false;
+        try visited.put(value, {});
+
+        const values = self.value_store orelse representationInvariant("executable value type key specific predicate has no value store");
+        const info = values.values.items[@intFromEnum(value)];
+        if (info.callable != null) return true;
+        if (self.valueHasFunctionType(info.logical_ty)) return true;
+        if (info.value_alias_source) |source| return try self.valueRequiresSpecificKeyInner(source, visited);
+        if (info.join_info != null) return true;
+        if (info.boxed) |boxed| {
+            if (boxed.boundary != null) return true;
+            if (boxed.payload_value) |payload| return try self.valueRequiresSpecificKeyInner(payload, visited);
+            return false;
+        }
+        if (info.aggregate) |aggregate| {
+            return switch (aggregate) {
+                .record => |record| for (record.fields) |field| {
+                    if (try self.valueRequiresSpecificKeyInner(field.value, visited)) break true;
+                } else false,
+                .tuple => |tuple| for (tuple) |elem| {
+                    if (try self.valueRequiresSpecificKeyInner(elem.value, visited)) break true;
+                } else false,
+                .tag => |tag| for (tag.payloads) |payload| {
+                    if (try self.valueRequiresSpecificKeyInner(payload.value, visited)) break true;
+                } else false,
+                .list => |list| for (list.elems) |elem| {
+                    if (try self.valueRequiresSpecificKeyInner(elem.value, visited)) break true;
+                } else false,
+            };
+        }
+        return false;
     }
 
     fn logicalListElemType(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
@@ -4480,6 +4768,42 @@ const ExecValueTypeKeyBuilder = struct {
             },
             else => representationInvariant("executable value type key boxed payload attached to unresolved type"),
         };
+    }
+
+    fn logicalTupleItems(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error![]const type_mod.TypeVarId {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalTupleItems(nominal.backing),
+            .content => |content| switch (content) {
+                .tuple => |items| self.types.sliceTypeVarSpan(items),
+                else => representationInvariant("executable value type key tuple payload attached to non-tuple type"),
+            },
+            else => representationInvariant("executable value type key tuple payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalRecordFields(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error![]const type_mod.Field {
+        const root = self.types.unlinkConst(logical_ty);
+        return switch (self.types.getNode(root)) {
+            .nominal => |nominal| try self.logicalRecordFields(nominal.backing),
+            .content => |content| switch (content) {
+                .record => |record| self.types.sliceFields(record.fields),
+                else => representationInvariant("executable value type key record payload attached to non-record type"),
+            },
+            else => representationInvariant("executable value type key record payload attached to unresolved type"),
+        };
+    }
+
+    fn logicalRecordFieldType(
+        self: *ExecValueTypeKeyBuilder,
+        fields: []const type_mod.Field,
+        field_id: row.RecordFieldId,
+    ) std.mem.Allocator.Error!TypeVarId {
+        const expected_label = self.rowShapes().recordField(field_id).label;
+        for (fields) |field| {
+            if (field.name == expected_label) return field.ty;
+        }
+        representationInvariant("executable value type key record field was absent from logical type");
     }
 
     fn logicalTagUnionTags(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error![]const type_mod.Tag {

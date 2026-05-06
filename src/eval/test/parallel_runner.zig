@@ -270,7 +270,6 @@ fn forkAndEval(
             posix.close(pipe_write);
             std.c._exit(2);
         };
-
         // Write the result string to the pipe.
         var written: usize = 0;
         while (written < result_str.len) {

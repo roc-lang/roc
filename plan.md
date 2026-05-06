@@ -278,6 +278,30 @@ all run.
 
 ## Final Stage Contracts
 
+### MIR Stage Ownership
+
+Each MIR stage runner that accepts the previous stage program by value takes
+exclusive ownership of that input at function entry. This includes:
+
+- mono MIR -> row-finalized mono MIR
+- row-finalized mono MIR -> lifted MIR
+- lifted MIR -> lambda-solved MIR
+- lambda-solved MIR -> executable MIR
+
+The caller must not keep `defer` or `errdefer` cleanup for an input after passing
+it to an owning stage runner. The callee is responsible for:
+
+- deinitializing the input on every error path
+- moving any reused stores into the output by assigning an empty replacement into
+  the input before cleanup
+- deinitializing input-only stores on success after output construction
+- returning an output that has one clear owner
+
+There must never be two cleanup owners for the same MIR program, type store,
+canonical-name store, row-shape store, literal pool, symbol store, AST store, or
+source-type payload store. Double ownership in the post-check pipeline is a
+compiler bug, even if it only appears on an error path.
+
 ### Checked CIR
 
 Checked CIR is the last source-level representation.
@@ -341,6 +365,142 @@ Mono MIR may still contain:
 - source record field names on row operations
 - fixed-arity function types and calls
 
+Checked `dbg` is eliminated in mono MIR. Mono MIR must lower every checked
+`dbg expr` expression or statement into explicit ordinary MIR:
+
+1. Evaluate `expr` exactly once into a synthetic local.
+2. Build a real `Str.inspect` result for that local by calling the same typed
+   inspect helper procedure used for source `Str.inspect(value)`.
+3. Emit a `debug` statement whose message operand is that `Str`.
+4. For expression-form `dbg expr`, return `{}` as required by checking.
+
+Typed inspect helper procedures are the concrete specializations of the
+published `Builtin.Str.inspect` intrinsic wrapper. Checked artifact publication
+must expose the intrinsic wrapper template as explicit semantic data; mono
+lowering must not rediscover it from source syntax, imported names, environment
+lookup, or string matching after checking. If a checked artifact that can lower
+`dbg` or source `Str.inspect` has no published `Builtin.Str.inspect` intrinsic
+wrapper template available through its explicit artifact/import views, that is a
+compiler bug.
+
+`Str.inspect(T)` lowering must be graph-shaped, not tree-shaped. This is the
+compiled-program analogue of Cor/LSS readback: LSS recursively reads the runtime
+value and only descends into the active payloads it sees; it does not expand the
+entire recursive type graph while lowering. Roc must preserve that property in
+compiled MIR:
+
+1. A source call to `Str.inspect(value)` or a lowered `dbg` message emits a
+   `call_proc` to the specialized `Builtin.Str.inspect` wrapper for the exact
+   monomorphic function type `T -> Str`.
+2. The `Builtin.Str.inspect` wrapper body for `T` lowers one outer structural
+   layer of `T`.
+3. When that body needs to inspect a nested payload of type `U`, it emits a
+   `call_proc` to the specialized `Builtin.Str.inspect` wrapper for `U -> Str`;
+   it does not recursively inline the implementation for `U`.
+4. `MonoSpecializationQueue` reserves the wrapper specialization before lowering
+   its body. If `U` is the same recursive type as `T`, or is in the same recursive
+   source-type graph, the nested call refers to the already-reserved procedure
+   instead of allocating or lowering another copy.
+5. The wrapper body may lower primitive leaf operations directly only inside the
+   owning wrapper body. It must not use that shortcut to expand recursive
+   aggregate payloads.
+
+Inside a typed inspect helper, aggregate projection must keep mono layout
+identity and source-specialization identity separate:
+
+- The projected value's `MonoTypeId` comes from the already-lowered aggregate
+  type. For a tag payload, that means the `TypeId` stored in the matched
+  tag-union shape; for a record field, the field `TypeId` stored in the record
+  shape; for a tuple element, the tuple element `TypeId`; for a list element,
+  the list element `TypeId`.
+- The projected value's source type key/ref comes from the corresponding
+  concrete source child, and is used to reserve or look up the nested
+  `Builtin.Str.inspect` specialization for `U -> Str`.
+- The helper must not call source-type lowering again to decide the projected
+  value's mono layout type once the owning aggregate has already been lowered.
+  Re-lowering a recursive source child can allocate a distinct recursive mono
+  graph with the same source key, which makes later call boundaries compare two
+  different aggregate layout ids for the same runtime value.
+
+For recursive data, this rule is mandatory for correctness. In
+`IntList : [Nil, Cons(I64, IntList)]`, the `rest` payload of `Cons` is typed by
+the `IntList` payload type already stored in the `Cons` variant of the current
+helper's tag-union layout. The nested call still reserves the
+`Builtin.Str.inspect` specialization using the source key `IntList -> Str`, but
+the value passed at that call site keeps the payload `MonoTypeId` from the
+current tag-union layout.
+
+The same aggregate-projection identity rule applies after executable MIR has
+been lowered to IR. A tag payload-record projection such as the payload struct
+for `Cons` must use the payload layout reference stored in the already-lowered
+owning tag-union layout. IR lowering must not reconstruct an equivalent payload
+record layout from the payload field types at the projection site. Reconstructing
+that record is not a semantic error in the source program, but it creates a
+second recursive layout graph node for the same branch payload; later LIR and
+backend stages then see two different physical layout ids for one runtime value.
+The correct construction is:
+
+1. lower or look up the owning tag-union value layout
+2. read the variant payload layout reference for the row-finalized `TagId`
+3. give the projected payload-record value that exact layout reference
+4. project individual payload fields from that record
+
+This is still explicit-data lowering, not layout recovery. The `TagId` and
+payload order come from row-finalized MIR, and the owning union layout was
+already produced from the executable type payload. No IR or LIR stage may rebuild
+tag payload-record layouts from source syntax, source type keys, or a fresh
+payload-type list once the owning aggregate layout exists.
+
+This projection rule is not specific to `Str.inspect`. Every executable
+`tag_payload`, `record_field`, tuple-field, list-element, and pattern-path
+projection must type the projected value from the already-lowered owning
+aggregate type. The projected expression must not call executable type lowering
+on its own result annotation if the owning aggregate already contains the exact
+child `TypeId`. The annotation and value-flow metadata can still be used to
+verify that the projected value is the expected semantic child, but they are not
+allowed to allocate a second executable type graph for that child.
+
+Executable type lowering must memoize every completed source type root it lowers,
+not only roots that are currently active for recursion. The active-recursion map
+prevents infinite descent while a recursive graph is being built; the completed
+root map prevents later uses of the same explicit type root from allocating a
+second executable `TypeId`. Re-lowering the same lambda-solved or session type
+root into two executable type graphs is a compiler bug, because transparent
+nominal reinterpret, pattern payloads, and recursive physical slots would then
+see different physical layout ids for one logical value.
+
+For example, for Roc source shaped like this:
+
+```roc
+IntList : [Nil, Cons(I64, IntList)]
+
+main = Str.inspect(Cons(1, Nil))
+```
+
+mono lowering must be equivalent to reserving a concrete helper like:
+
+```roc
+inspect_int_list : IntList -> Str
+inspect_int_list = |value|
+    match value
+        Nil => "Nil"
+        Cons(n, rest) =>
+            "Cons(" ++ Str.inspect(n) ++ ", " ++ inspect_int_list(rest) ++ ")"
+```
+
+The actual MIR procedure identity is the specialized `Builtin.Str.inspect`
+intrinsic wrapper for `IntList -> Str`; `inspect_int_list` is only explanatory
+pseudocode. This rule is not a Bool special case. `Bool` is an ordinary
+zero-payload tag union in the final runtime representation and must be inspected
+through the same tag-union machinery as every other tag union.
+
+No later stage may receive an "inspect this arbitrary value for debug" pseudo
+operation. Row-finalized mono MIR, lifted MIR, lambda-solved MIR, executable MIR,
+IR, LIR, and backends consume only the explicit `Str` message operand. If a
+post-mono `debug` statement does not carry a `Str`-typed message, that is a
+compiler bug: debug builds assert immediately and release builds use
+`unreachable`.
+
 Mono MIR must not contain:
 
 - `dispatch_call`
@@ -356,6 +516,7 @@ Mono MIR must not contain:
 - captured procedure values
 - automatically curried calls
 - compiler-synthesized partial application
+- `inspect` pseudo-nodes for `dbg`
 
 Every expression in mono MIR has a mandatory `MonoTypeId`.
 
@@ -460,6 +621,11 @@ const MonoSpecializationKey = struct {
 // `CanonicalTypeKey` and `CanonicalTypeSchemeKey` are identity keys, not type
 // payloads. Every key consumed after publication must resolve through the owning
 // artifact's checked type store to a real checked type root or scheme.
+// Key construction is responsible for canonical row normalization. Record field
+// rows and tag-union rows must be flattened through explicit same-kind
+// row-extension chains, sorted by canonical label identity, and verified for
+// duplicate labels before hashing. The key must not preserve source order,
+// checker storage order, or row-extension chunking.
 
 const ConcreteSourceTypeRef = enum(u32) { _ };
 
@@ -1085,7 +1251,10 @@ lowering the explicit executable type payloads in
 applying the argument value transforms, issuing `call_erased`, and applying
 the result value transform. No runtime thunk, runtime initializer procedure,
 runtime top-level erased callable object, runtime closure object,
-source-shape recovery, or canonical-key-to-TypeId cache is allowed.
+source-shape recovery, or bare canonical-key-to-TypeId recovery is allowed.
+The ordinary executable type lowering intern table may be used only when the
+lowering request also carries the explicit executable type payload ref whose
+stored key matches the requested key.
 
 `MonoSpecializationKey` is keyed by a checked `ProcedureTemplateRef` and the
 requested monomorphic source function type. `MonoSpecializedProcRef` is the
@@ -1152,6 +1321,57 @@ the equivalent compiler-invariant path. This is the explicit checked-artifact
 version of Cor/LSS's `specialize_let_fn` flow: Cor clones the function type,
 unifies it with `t_new`, and only then lowers the parameter symbol type from the
 same clone cache.
+
+Procedure entry parameters and source parameter patterns are distinct MIR
+concepts. The procedure entry parameter list contains only raw fixed-arity
+`TypedSymbol`s whose types come from the instantiated requested function type.
+If the corresponding source parameter pattern is a simple variable assignment,
+that raw entry parameter may use the resolved pattern-binder symbol directly.
+If the source parameter pattern is `_`, the raw entry parameter is a synthetic
+symbol with no local binder. If the source parameter pattern is anything else,
+including nominal unwraps, tag patterns, record patterns, tuple patterns, list
+patterns, or `as` patterns, mono must:
+
+1. create a synthetic raw entry parameter for that argument position, typed from
+   the instantiated requested function type;
+2. lower the original source parameter pattern with that same concrete
+   parameter type;
+3. wrap the procedure body in an explicit source-`match` over the synthetic raw
+   parameter, with the original body in the successful branch; and
+4. let the normal pattern-lowering path publish all binders introduced by that
+   pattern before the body is lowered by later stages.
+
+This is not a runtime thunk, fallback branch, or recovery path. It is the
+canonical representation of parameter destructuring after type checking. The
+type checker has already accepted the parameter pattern; if a parameter pattern
+that can fail at runtime reaches mono as though it were exhaustive, that is a
+compiler bug. Debug builds assert the invariant at the earliest available
+verification point, and release builds use `unreachable` for the impossible
+path. Downstream stages must not invent parameter-binder metadata by scanning
+the body. They consume the explicit `match` and the binders published by its
+pattern.
+
+For example, this Roc method:
+
+```roc
+Counter := [Counter(U64)].{
+    get : Counter -> U64
+    get = |Counter(n)| n
+}
+```
+
+lowers in mono as a procedure with one raw entry parameter of type `Counter`,
+followed by a body shaped like:
+
+```roc
+match raw_counter {
+    Counter(n) => n
+}
+```
+
+The binder `n` is introduced by the explicit match pattern. It is not a
+procedure entry parameter, not recovered from the body, and not reconstructed by
+lambda-solved MIR.
 
 Checked call expressions must publish the fully checked fixed-arity function
 type at that exact call site. In plan pseudocode this is:
@@ -1611,6 +1831,20 @@ so that callable leaves are transformed by explicit callable operations.
 identical; if a list element transform changes callable representation, the plan
 must be a recursive list transform that rebuilds or maps the list explicitly.
 
+`nominal_reinterpret` is also the required bridge for an existing value whose
+source endpoint is a user-defined nominal and whose target endpoint is exactly
+that nominal's published backing executable representation, or the reverse
+direction from the exact backing endpoint to the nominal endpoint. For example,
+`List(MyTag)` flowing into a callee slot whose element endpoint was solved from
+the published `MyTag` backing must use a recursive list transform whose element
+child is `nominal_reinterpret`; it must not compare compatible tag shapes, strip
+the nominal in mono, or rebuild the list. The bridge is valid only when the
+nominal endpoint's published `backing_key` exactly equals the non-nominal
+endpoint's executable value key. If callable representation inside the backing
+differs, the value-transform planner must use a recursive transform that reaches
+those callable leaves explicitly; it must not hide callable conversion inside
+`nominal_reinterpret`.
+
 List construction and list executable type publication are keyed by the solved
 list-element endpoint, not by any representative element value. Lambda-solved
 MIR publishes a `list_elem` representation root for every list aggregate and
@@ -1646,17 +1880,137 @@ mandatory:
   results, imported constants, private promoted captures, branch joins that have
   already produced a value, and explicit `Box(T)` boundary crossings.
 
-Executable expression lowering must accept an expected executable endpoint
-whenever the consumer already knows the required representation. Under an
-expected endpoint, constructors build directly into that endpoint:
+Executable expression lowering must have two public internal entrypoints:
+
+```zig
+lowerExprProducer(expr)
+lowerExprAtEndpoint(expr, expected_endpoint, consumer_use_plan)
+```
+
+`lowerExprProducer(expr)` lowers an expression as a standalone producer. It is
+valid only when no consumer endpoint is known, or when the caller is deliberately
+creating an already-existing value whose producer endpoint will be transformed
+later by an explicit published transform.
+
+`lowerExprAtEndpoint(expr, expected_endpoint, consumer_use_plan)` lowers an
+expression under the executable endpoint selected by its consumer. The
+`expected_endpoint` is the authority for construction. The child expression's
+own producer endpoint is not the authority in this mode; it is used only when
+the child must first be evaluated as an existing value. Under an expected
+endpoint:
 
 - record, tuple, tag, list, `Box(T)`, nominal, and finite callable-set
-  construction lower children into the target child endpoints selected by
-  lambda-solved MIR
+  construction lower children into the target child endpoints selected by the
+  expected endpoint's published executable payload
 - branch bodies lower under the join result endpoint
 - call arguments lower under the target parameter endpoint
 - return expressions lower under the procedure return endpoint
 - capture values lower under the capture-slot endpoint
+
+Lambda-solved MIR must publish a consumer-use plan for every edge where a parent
+consumes a child at a known executable endpoint. The exact Zig names may differ,
+but the shape is:
+
+```zig
+const ConsumerUsePlanId = enum(u32) { _ };
+
+const ConsumerUsePlan = struct {
+    owner: ConsumerUseOwner,
+    child_value: ValueInfoId,
+    expected_endpoint: SessionExecutableValueEndpoint,
+    lowering: ConsumerUseLowering,
+};
+
+const ConsumerUseLowering = union(enum) {
+    construct_directly,
+    lower_control_flow_contextually,
+    existing_value: ValueTransformBoundaryId,
+};
+```
+
+Consumer-use plans are contextual, not producer-global. The expected endpoint
+for a construction child is selected from the parent construction endpoint for
+that exact occurrence. If the same syntactic constructor is lowered under a
+different consumer endpoint, its children must receive plans derived from that
+different endpoint. The compiler must therefore publish plans while propagating
+the selected endpoint top-down through direct construction and control-flow
+results:
+
+1. A root consumer such as a procedure return, call argument, capture slot,
+   join result, aggregate field, tag payload, tuple element, list element, box
+   payload, or nominal backing selects an executable endpoint.
+2. If the consumed expression is a direct constructor, lambda-solved records a
+   `ConsumerUsePlan` for that edge with `construct_directly`, then derives each
+   nested child endpoint from the selected parent endpoint and records nested
+   `ConsumerUsePlan`s for those child edges.
+3. If the consumed expression is control flow, lambda-solved records
+   `lower_control_flow_contextually`, then propagates the same expected endpoint
+   into the expression or branch that produces the value for that control-flow
+   path. Non-value-producing paths do not receive value consumer-use plans.
+4. If the consumed expression is an existing runtime value, imported constant,
+   variable reference, projection, call result, or any other already-produced
+   value, lambda-solved records `existing_value` and publishes the exact
+   `ValueTransformBoundaryId` from the existing producer endpoint to the
+   selected consumer endpoint.
+
+This is required because the producer endpoint of a nested constructor is not
+the authority when the constructor is being emitted directly into a parent slot.
+For example, in `IntList.Cons(1, IntList.Nil)`, the endpoint that matters for
+`IntList.Nil` is the `rest` payload endpoint selected by the enclosing
+`IntList.Cons` construction. It is not enough for lambda-solved to attach a
+single producer-shape plan to the `Nil` expression and ask executable MIR to
+reinterpret it later. The top-down consumer endpoint selects the construction
+representation, and lambda-solved must write that selection down explicitly.
+
+`construct_directly` means the child is a constructor form and executable MIR
+must lower it directly into `expected_endpoint`. `lower_control_flow_contextually`
+means the child is a control-flow form such as `let` or `match`; executable MIR
+pushes the same expected endpoint into the relevant body, rest expression, or
+branch result. `existing_value` means the child value already exists at runtime,
+or has already been materialized from compile-time storage, so executable MIR
+evaluates or reads it exactly once and applies the published transform. This is
+not optional metadata and it is not debug-only metadata; it is the explicit
+semantic handoff from lambda-solved MIR to executable MIR.
+
+The compiler must not decide this by inspecting syntax in executable MIR. The
+classification belongs to lambda-solved MIR, where value-flow, constructor
+identity, joins, existing values, and representation endpoints are still all
+available. Executable MIR may assert that the expression shape agrees with the
+published `ConsumerUseLowering`, but it must not recover a missing plan by
+guessing from syntax, row labels, constructor names, layout ids, or compatible
+shapes.
+
+Nominal construction has an additional mandatory shape because source syntax
+constructs a nominal through its backing value. Lambda-solved MIR must publish a
+construction-time backing boundary for every `nominal_reinterpret` whose result
+is a real user-defined nominal endpoint:
+
+1. The source backing expression has its own producer endpoint.
+2. The target nominal endpoint has a published `backing_key`.
+3. If those endpoints differ, executable MIR must transform the backing value
+   into the target nominal's exact backing endpoint before emitting the nominal
+   wrapper.
+4. This is construction lowering, not an existing-value repair. The transform is
+   selected from the consumer/target endpoint and the child endpoint published by
+   lambda-solved MIR; executable MIR must not compare tag shapes, layout ids, or
+   constructor names to discover it.
+
+This rule is required for recursive nominals. For example:
+
+```roc
+IntList := [Nil, Cons(I64, IntList)]
+
+main = IntList.Cons(1, IntList.Nil)
+```
+
+The `IntList.Nil` backing expression is a value of the full `IntList` backing
+type. The `rest` payload of `Cons` is the recursive payload slot selected by the
+owning `IntList.Cons` endpoint. Those two endpoints may have different physical
+positions in the same recursive layout graph. The compiler must therefore lower
+the `Nil` backing under the `rest` slot's expected endpoint, or apply the
+explicit construction-time backing transform before the nominal wrapper. It must
+not first build a constructor-local tag-union layout and then rely on LIR
+`nominal_reinterpret` or compatible-layout comparison to make it fit.
 
 If the expression is an existing value whose producer representation is already
 sealed, executable MIR evaluates or reads that value once and applies the
@@ -1784,6 +2138,26 @@ Executable MIR may maintain a local mechanical memo from payload ids to lowered
 not be queried by key alone. If executable MIR observes a key without a payload
 ref at a boundary that requires a type, the compiler is malformed: debug builds
 assert immediately and release builds use `unreachable`.
+
+The final executable program must also intern lowered executable `TypeId`s by
+canonical executable type key, but only as a checked lowering result of an
+explicit payload-ref request. This is not semantic recovery from a key: the
+caller supplies `(payload_ref, key)`, the payload store proves that
+`payload_ref` is the structural payload for `key`, and only then may executable
+lowering reuse an existing `TypeId` for that key. This interning is required so
+that identity representation transforms across procedure and solve-session
+boundaries produce the same executable type and the same committed LIR layout.
+Returning two different executable `TypeId`s for the same verified
+`CanonicalExecValueTypeKey` is a compiler bug, because a later direct call would
+pass a value whose physical layout id differs from the callee parameter layout
+even though lambda-solved MIR correctly proved the representation keys equal.
+
+The intern table must never answer a request that has only a
+`CanonicalExecValueTypeKey`. It must never synthesize a payload from the key,
+source syntax, checked type store, row names, layouts, or ABI shape. Debug builds
+must verify that every intern-table hit was requested with an explicit payload
+ref whose store key equals the requested key; release builds use `unreachable`
+for violations.
 
 Artifact payload entries are keyed for the same reason session payload entries
 are keyed. An `ExecutableTypePayloadRef` must point at an artifact entry whose
@@ -2541,6 +2915,35 @@ tag_pattern: struct {
 The exact Zig field names may differ. The type-state boundary must not differ:
 after row finalization, later MIR stages cannot represent name-only row lookup.
 
+Finalized row IDs are valid only with the exact row shape that owns them. If a
+later boundary imports, projects, or re-homes a source type graph so that a value
+or pattern receives a different concrete record or tag-union shape, that same
+boundary must re-key every row operation attached to that value or pattern to
+the new owning shape before publishing the next type-state. It must not publish
+an expression whose `ty` says one tag-union shape while its tag-construction data
+uses a `TagId` from another shape.
+
+This matters for imported nominals and compile-time constants. A local
+constructor occurrence can be created from a syntactic tag whose original
+row-finalized shape has `Foo` at logical index `0`, while the public imported
+nominal backing for the same source type is ordered `[Bar, Baz(Str), Foo(...)]`
+and therefore has `Foo` at logical index `2`. Once the expression type is
+re-homed to the public imported endpoint, the tag construction must also be
+re-keyed to the public endpoint's `TagId` and payload ids. Otherwise IR lowering
+will allocate the public layout but write the constructor-local discriminant,
+which stores `Bar` when the source value was `Foo`.
+
+The same rule applies to tag patterns and tag-payload projections. Pattern
+tests compare runtime discriminants in the scrutinee's executable layout, so a
+tag pattern must carry the `TagId` from the scrutinee type's shape. Payload
+patterns and payload projections must carry `TagPayloadId`s owned by that same
+remapped tag. Re-keying is deterministic: match by canonical tag label and
+payload logical index between two explicit row shapes, assert exact payload
+arity, and panic in debug builds if the label or payload slot is missing.
+Release builds use `unreachable`. This is not recovery, source reconstruction,
+or compatibility repair; it is part of the type-state boundary that changes the
+owning row shape.
+
 ### Lifted MIR
 
 Lifted MIR owns lambda lifting and capture discovery.
@@ -3297,6 +3700,123 @@ however the implementation prefers, but the semantic model is one shared
 representation graph per executable use-context component, not one isolated
 graph per procedure body and not one global graph per source procedure.
 
+Direct-call recursive groups require an explicit identity split.
+
+For a non-recursive direct call, the callee representation instance is owned by
+the concrete call site. This is required for higher-order procedures whose
+function-valued parameters receive different callable values at different call
+sites:
+
+```roc
+{
+    pipe = |x, f| f(x)
+
+    a = pipe(5, |x| x + 1)
+    b = pipe(5, |x| x + 2)
+
+    a + b
+}
+```
+
+The two `pipe` calls above may have the same source function type, but the
+`f` parameter receives different finite callable sets. They must not be merged
+merely because the target procedure and source function type match.
+
+For a recursive direct-call SCC, the identity is different. Once a direct call
+enters a recursive SCC in a particular executable use context, that use context
+owns exactly one representation member for each procedure in the SCC. Every
+direct call from one SCC member to another SCC member must reuse the already
+reserved member for the target procedure in that SCC instance. The call site
+still owns its own `CallSiteInfo`, argument edges, result edges, and requested
+function root, but it does not own a distinct callee body instance.
+
+For example:
+
+```roc
+is_even = |n|
+    if n == 0 then
+        True
+    else
+        is_odd(n - 1)
+
+is_odd = |n|
+    if n == 0 then
+        False
+    else
+        is_even(n - 1)
+```
+
+If a root use context reserves `is_even#root`, then the call to `is_odd`
+reserves `is_odd` as the `is_even#root` recursive-group member for `is_odd`.
+When `is_odd` calls `is_even`, lambda-solved MIR must return the existing
+`is_even#root` member. It is a compiler bug to allocate `is_even#2`,
+`is_odd#2`, and so on. The same rule applies if `is_even` calls `is_odd` from
+multiple call sites in its body: all those call sites connect to the same
+`is_odd` member for this recursive SCC instance, and their argument/value-flow
+edges merge at that member's public parameter roots.
+
+This is not a deduplication optimization. It is the representation identity
+contract for recursive direct calls. Lambda-solved MIR must know, before
+lowering bodies, which source/MIR procedures belong to each direct-call SCC, but
+it must not rediscover that by walking lifted bodies after the fact.
+
+Lifted MIR is the first stage with final procedure body ownership, because local
+function and closure bodies have been split into separate lifted procedures. For
+that reason, lifted MIR owns the direct-call edge metadata. While lifted lowering
+copies or creates each `call_proc`, it appends the target `MirProcedureRef` to
+the current output procedure's deduplicated `direct_calls` span. A call inside a
+lifted local function or closure is recorded on that lifted procedure, not on
+the enclosing procedure. Mono MIR must not be the final owner of this metadata,
+because mono bodies may still contain local function or closure bodies that
+lifting will move to different procedure owners.
+
+Lambda-solved MIR consumes only those published lifted `direct_calls` spans to
+build its procedure graph and compute direct-call SCCs. Walking lifted
+expressions, statements, patterns, source syntax, or debug ASTs to recover
+direct-call edges in lambda-solved MIR is forbidden in release code. A debug-only
+verifier may walk lifted bodies to assert that published `direct_calls` exactly
+match the `call_proc` nodes, but that verifier is not part of release
+correctness and must not run or allocate in release builds.
+
+A direct-call target in the same recursive SCC as the caller is reserved by
+`(recursive_group_anchor, target_proc)`. A direct-call target outside the caller
+SCC is reserved by the ordinary call-site owner. A target that is itself the
+first entry into a recursive SCC becomes the anchor for a new recursive group
+instance in the current use context.
+
+This rule also prevents a subtle performance and correctness failure in
+generated recursive helpers such as `Str.inspect(Tree)`. Inspecting a recursive
+nominal type can create a direct-call cycle among specialized inspect helpers.
+Those helpers must form one recursive representation graph for the current use
+context, not an infinite chain of call-site-owned clones.
+
+Lifted local procedures need one extra reservation rule. A `proc_value`
+occurrence for a lifted local procedure must not use the individual proc-value
+expression occurrence as the recursive member identity. Within one
+`RepresentationSolveSession`, a lifted local procedure template member is
+reserved once for the current executable use context, and later `proc_value`
+occurrences for that same lifted template reuse the reserved member instance.
+Those later occurrences still publish their own capture-value edges into the
+member's public capture roots; they do not allocate another member instance.
+
+This matters for mutually recursive local functions:
+
+```roc
+{
+    is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
+    is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
+    is_even(6.I64)
+}
+```
+
+After lifting, `is_even` and `is_odd` are separate lifted procedure templates,
+but they form one recursive local-function group in the root use context. When
+lambda-solved MIR builds `is_even`, the reference to `is_odd` reserves the
+`is_odd` member. When it later builds `is_odd`, the reference back to `is_even`
+must find the already-reserved `is_even` member in the same solve session. It is
+a compiler bug to allocate `is_even#2`, then `is_odd#2`, and so on from the
+individual proc-value occurrence ids.
+
 `ProvisionalProcRepresentationInstanceKey` is intentionally owner-scoped. It
 prevents premature merging of two uses that have the same source procedure
 template and source function type but different callable arguments, capture
@@ -3381,6 +3901,23 @@ The lambda-solved construction algorithm is:
    binder, pattern binder, projection, call site, procedure value, capture,
    erased-adapter, boxed-boundary, mutable-version, join, loop-phi, and return
    record into the current session.
+   Return publication has two separate pieces:
+
+   - during body construction, every implicit or explicit `return` child value
+     must publish a representation edge from the child value root to the current
+     procedure's reserved public return root, using the procedure-return
+     representation edge kind. This happens before representation and callable
+     solving, so a procedure that returns a closure contributes that closure's
+     finite callable members to callers through the target public return root.
+   - after solving, value-transform finalization attaches the mandatory
+     `return_value` executable transform to that already-published return
+     relation. Finalization must not be the first place where the return
+     value-flow relation is created.
+
+   For example, `make_adder = |n| |x| x + n` constructs a finite callable value
+   as the body result of `make_adder`. The inner closure's value root must be
+   connected to `make_adder`'s public return root before solving, otherwise
+   `add5 = make_adder(5)` has a function type but no callable-set members.
 4. When the body reaches `call_proc`, reserve the target procedure template in
    the same session with owner `direct_call`. Connect caller argument roots to
    target public parameter roots, target public return root to call result root,
@@ -4466,13 +5003,33 @@ indexes, source patterns, or layout compatibility to create missing transforms.
 
 Procedure `return` expressions and statement returns use the same explicit
 boundary model. Lambda-solved MIR records a `ReturnInfo` for every source
-`return` child expression that produces the procedure's return value. Boundary
-finalization publishes a `return_value` boundary from that child value's local
-endpoint to the sealed `procedure_return` endpoint for the current
-`ProcRepresentationInstance`. Executable MIR must apply that transform before
-emitting the executable return expression or return statement. IR lowering then
-receives an ordinary executable expression for the return value; it must not
-look at procedure result layouts or reconstruct a missing return conversion.
+`return` child expression that produces the procedure's return value. Body
+construction must also publish a representation edge from that child value root
+to the current procedure's reserved public return root before representation
+solving runs. Boundary finalization later publishes a `return_value` boundary
+from that child value's local endpoint to the sealed `procedure_return` endpoint
+for the current `ProcRepresentationInstance`. Executable MIR must apply that
+transform before emitting the executable return expression or return statement.
+IR lowering then receives an ordinary executable expression for the return
+value; it must not look at procedure result layouts or reconstruct a missing
+return conversion.
+
+This ordering is required for higher-order returns. In:
+
+```roc
+{
+    make_adder = |n| |x| x + n
+    add5 = make_adder(5)
+    add5(10)
+}
+```
+
+the returned `|x| x + n` closure is the concrete finite callable member flowing
+through `make_adder`'s return. Lambda-solved MIR must connect the closure value
+to the procedure return root while building `make_adder`; then the later
+cross-procedure call edge connects that public return root to `add5`. It is a
+compiler bug if `add5` reaches callable emission with only a function type and
+no finite callable members.
 
 The expected type of a `return` child is the enclosing procedure's return type,
 not the contextual type of the `return` expression itself. This matters for
@@ -5229,6 +5786,81 @@ members, after which the class is retried. Delayed classes must not publish
 partial descriptors, vacant callable slots, empty callable sets, raw source-type
 keys, or temporary procedure-symbol keys.
 
+Emission assignment is iterative, but its already-assigned erased plans are
+still explicit inputs to the next iteration. A later pass must not forget the
+finite callable membership that produced an erased plan in an earlier pass. In
+particular:
+
+- a value whose current emission plan is `finite_callable_set(key)` contributes
+  every member of the descriptor named by `key` to its solved representation
+  class
+- a value whose current emission plan is
+  `finite_set_to_erased_adapter(adapter)` contributes every member of
+  `adapter.callable_set_key` to its solved representation class
+- a value whose current emission plan is `proc_value_to_erased(plan)`
+  contributes the exact procedure-value member named by the occurrence's
+  explicit `proc_value` source and selected `target_instance`; the pass must
+  read the source capture values from that stored occurrence, not from syntax
+  and not from the erased hidden-capture ABI
+- a value whose current emission plan is `already_erased(plan)` contributes no
+  finite members; it is already an erased callable value and remains valid only
+  if `plan.provenance` is non-empty `BoxBoundaryId` provenance
+
+This rule is required because the first emission pass may observe a
+`Box(T)` boundary before all cross-procedure call edges are final. For example:
+
+```roc
+{
+    f = Box.unbox(Box.box(|x| x + 1))
+    f(1) + f(2) + f(3)
+}
+```
+
+The first pass may assign the lambda's procedure value a
+`proc_value_to_erased` emission because it flows through the explicit
+`Box(I64 -> I64)` boundary. The strict pass still has to know that the solved
+class contains that lambda as its finite callable member so the unboxed value
+can be represented as the same Box-provenance erased callable. Requiring the
+strict pass to rediscover the lambda from the `Box.box(...)` syntax, from the
+erased ABI, or from physical layout would reintroduce competing semantic
+sources and is forbidden.
+
+The membership contribution always comes from stored lambda-solved records:
+`CallableSetDescriptor`, pending `proc_value` construction, or the explicit
+procedure-value source attached to an existing erased emission plan. It never
+comes from scanning source expressions, comparing source and executable shapes,
+or interpreting erased hidden-capture layout.
+
+A solved callable representation class has one canonical executable
+representation. Lambda-solved MIR must not assign one occurrence in the class a
+direct erased procedure ABI and another occurrence in the same class a
+finite-set-adapter ABI. Those are different executable values: the direct erased
+ABI carries the procedure's ordinary erased capture shape, while the
+finite-set-adapter ABI carries a hidden finite-callable-set value. There is no
+valid later transform that recovers a finite callable-set value from an already
+direct-erased callable. Therefore finite callable values that cross an explicit
+`Box(T)` boundary must use the finite-set adapter representation consistently,
+including singleton callable sets.
+
+This is required even for syntactically direct cases:
+
+```roc
+{
+    f = Box.unbox(Box.box(|x| x + 1))
+    f(1) + f(2) + f(3)
+}
+```
+
+The lambda `|x| x + 1` is a singleton finite callable set, but the
+`Box(I64 -> I64)` payload stores an erased representation of that finite value.
+The source payload, the stored box payload, and the later unboxed value must all
+agree on the same erased callable signature. The correct representation is a
+finite-set erased adapter whose hidden capture is the finite callable-set value;
+the adapter still dispatches through `callable_match`, even though the set has
+one member. Assigning the original lambda occurrence a direct erased procedure
+signature and the boxed/unboxed occurrence an adapter signature is a compiler
+bug, not an optimization opportunity.
+
 The final strict emission-assignment pass is different. By then all
 cross-procedure call edges and `proc_value` edges for the use-context component
 must have been connected. If a function-valued capture still depends on a class
@@ -5844,6 +6476,17 @@ read-only access to their published ABI stores. A later stage that has an
 by the owning artifact or solve session. It must not ask a global cache, rebuild
 the payload from the source function type, inspect layouts, inspect the callee
 body, or derive ABI behavior from backend lowering.
+
+Published-artifact lowering must not require every session-local erased ABI to
+already exist in the immutable checked artifact. Runtime lowering can create
+new finite callable-set adapter ABIs while solving the selected root use
+context, and those ABI payloads are owned by that lambda-solved solve session.
+Executable MIR and later lowering consume them through the session store. The
+checked artifact is mutated only during checking finalization, when the root
+artifact is still being published and the mutable artifact sink is explicitly
+provided. In normal published-artifact lowering, attempting to write those ABIs
+back into the checked artifact, or asserting that the checked artifact already
+contains them, is a compiler architecture bug.
 
 Every `arg_exec_keys` entry and the `ret_exec_key` in an `ErasedFnAbi` payload
 must resolve through the executable type payload store owned by the same
@@ -6527,7 +7170,6 @@ const PatternPathStep = union(enum) {
 
 const PatternTest = union(enum) {
     tag: TagId,
-    bool_literal: bool,
     byte_union_tag: TagId,
     int_literal: IntPatternLiteralId,
     float_literal: FloatPatternLiteralId,
@@ -6551,7 +7193,7 @@ const DecisionLeaf = struct {
 The exact Zig names may differ, but the contract must not. The plan supports
 all checked source-pattern forms: identifiers, `_`, `as`, records, tuples,
 single-field newtypes, ordinary tag unions, opaque unwraps, list patterns with
-head/tail/rest probes, bool/byte union tests, numeric literals, string
+head/tail/rest probes, Bool tags, byte-union tests, numeric literals, string
 literals, and guards. Pattern tests are keyed by finalized row and literal ids,
 not by names, source text, physical layout indexes, or syntax-derived singleton
 tag shapes.
@@ -6761,9 +7403,11 @@ its named `PatternPathValuePlan` in the current control-flow block if that path
 value has not already been materialized on that path. It then emits the concrete
 test named by each `DecisionEdge.test`:
 
-- tag and byte-union tests read the finalized union id for the already
-  materialized path value
-- bool and integer tests switch on the already materialized scalar value
+- tag, Bool, and byte-union tests read the finalized union id for the already
+  materialized path value. A Bool test is exactly a tag test for the resolved
+  `True` or `False` `TagId`; the decision plan must not contain a separate
+  Bool-literal test form after row finalization.
+- integer tests switch on the already materialized scalar value
 - decimal and float literal tests call the checked, explicit equality operation
   selected for that literal kind before the branch test
 - string literal tests compare the already interned `ProgramLiteralId` payload
@@ -7199,6 +7843,12 @@ The uniform Roc call boundary for this plan is:
 - Procedure parameters are ordinary live value references available during the
   call.
 - Procedure results are ordinary live value references returned to the caller.
+- A non-hosted callee's LIR frame must materialize each parameter local from
+  the explicit call argument value and the explicit call argument layout before
+  executing the callee body. The callee parameter local must be ordinary callee
+  storage; it must not be an alias to the caller's local slot or caller frame
+  storage. Materialization copies the value bytes for the callee parameter
+  layout and performs no reference-counting policy decisions.
 - The callee must not release the caller's argument references merely because
   they were passed as arguments.
 - If a callee returns a parameter value or stores a parameter into a returned
@@ -7223,6 +7873,25 @@ This is a fixed ARC convention, not a heuristic and not a semantic
 parameter-mode system. It may retain more than a future alias-permission system
 would retain, but it preserves Roc value semantics without static uniqueness
 reasoning.
+
+The LIR interpreter must model this call boundary exactly. When executing
+`assign_call` or an erased call, it passes the explicit argument values and
+argument layouts into the target procedure. At target procedure entry, it
+coerces each argument only through explicit bridge/layout information and then
+materializes the coerced value into the callee parameter local. It must not keep
+the callee parameter as a pointer into the caller's local storage, because that
+would make later payload projections, branch bindings, or callee-local writes
+depend on caller frame lifetime and allocator placement. The interpreter still
+does not decide ownership: it only copies bytes into the destination local, and
+all retains/releases still come from explicit post-ARC LIR statements.
+
+Join-point parameters use the same value-materialization rule. A `jump` carries
+explicit source locals to explicit join parameters. The interpreter coerces each
+source value through the source and parameter layouts, then materializes the
+result into the join parameter local. This is not borrow inference and not an
+extra ownership system; it is the operational meaning of LIR value transfer.
+ARC insertion remains solely responsible for placing any `incref` or `decref`
+needed by that transfer.
 
 Mutation is represented explicitly:
 
@@ -7350,6 +8019,26 @@ internally through explicit low-level operations, such as
 arguments after the callee has consumed them. This is still simple automatic
 reference counting, not borrow inference: the decision is based only on explicit
 LIR local ownership and explicit LIR local uses after the call.
+
+The phrase "uses after the call" means reachability in the explicit LIR
+control-flow graph, not textual next-statement scanning. The reachability walk
+must follow `switch` branches, `for_list` bodies, `join` bodies/remainders, and
+`jump` edges back to the target join body. This is required for lowered loops
+whose loop-carried locals are ordinary locals rather than explicit jump
+arguments. For example:
+
+```roc
+[1, 2, 3] == [1, 2, 3]
+```
+
+The structural list-equality helper loops over the two list arguments and calls
+element-access helper procedures inside the loop. Passing the left list to an
+element-access helper must retain before the call if the loop can jump back to a
+join body that reads the same list in the next iteration. Treating a `jump` as a
+terminal with no future local uses is a compiler bug: it lets the helper consume
+and free a list that the next loop iteration still needs. This remains
+mechanical ARC. The join map comes from LIR itself; ARC must not infer ownership
+from source syntax, backend behavior, or builtin names.
 
 `Box.box` and `Box.unbox` are ordinary value operations for ARC purposes.
 `Box.unbox` does not mean a consuming move-out and does not have a special
@@ -9092,6 +9781,101 @@ refcount headers must not survive reification. Lists, strings, boxes, records,
 tuples, tags, transparent aliases, nominals, and callable leaves become logical
 constant nodes addressed by `(schema_id, value_id)`.
 
+Executable materialization of those logical constant nodes must not give `Bool`
+any runtime representation special case. `Bool` is a normal zero-payload tag
+union with variants `False` and `True`; it follows the same row-finalized
+tag-union rules as every other tag union. A compile-time `Bool` value stored in
+`CompileTimeValueStore` materializes as a tag value in the expected executable
+tag-union endpoint, with the discriminant selected from that endpoint's
+row-finalized `TagId`. It must not materialize as a primitive scalar, a
+truthiness byte, a payload extraction, or a builtin Bool-only bridge.
+
+Mono type lowering maps builtin source nominals to their executable
+representations without inventing Bool-specific behavior. Numeric types and
+`Str` lower to primitives, `List(T)` lowers to an executable list type, and
+`Box(T)` lowers to an executable box type. `Bool` lowers as the ordinary
+zero-payload tag union `[False, True]`. A mono `nominal_reinterpret` whose
+result type has already lowered to an explicit builtin executable form is a
+builtin source-to-executable bridge, not a user-defined nominal wrap, but `Bool`
+is not one of the primitive cases. Lambda-solved MIR must therefore publish a
+`nominal_backing` representation edge only when the result executable type is
+actually a user-defined nominal endpoint. If the result executable type is a
+primitive, tag union, list, or box produced by builtin nominal lowering,
+lambda-solved consumes the node directly and publishes no nominal backing edge.
+Any other non-nominal result for `nominal_reinterpret` is a compiler bug: debug
+assertion in debug builds and `unreachable` in release builds.
+
+This is especially important for zero-payload source singletons such as
+`Bool.True`:
+
+```roc
+{
+    choose_boxed = |pick|
+        if pick {
+            Box.box(|x| x + 1)
+        } else {
+            Box.box(|x| x + 10)
+        }
+
+    add = Box.unbox(choose_boxed(Bool.True))
+    add(41)
+}
+```
+
+The call argument `Bool.True` may be represented before the call boundary as the
+singleton tag `[True]`, whose local discriminant is `0` because it has only one
+variant. When that value flows into a full `Bool` endpoint, the required
+operation is the ordinary `singleton_to_tag_union` row transform from `[True]`
+to `[False, True]`, selecting the `True` tag by canonical tag label and writing
+the full endpoint's row-finalized `True` discriminant. It must not use
+`tag_union_to_singleton`, because `tag_union_to_singleton` means "extract this
+singleton payload"; a zero-payload singleton has no payload. It must not lower
+to primitive `Bool`, because there is no primitive `Bool` runtime
+representation in the MIR-family pipeline.
+
+`if`, `and`, `or`, `!`, and any other Bool-consuming operation branch on or
+construct the ordinary `Bool` tag union. An `if` condition is executable as the
+same kind of discriminant test that a source `match` on `[False, True]` would
+perform; `!` constructs the opposite zero-payload Bool tag; equality and static
+dispatch results return ordinary Bool tag values. Later stages must not infer
+truthiness from payload bytes, source tag order, zero-sized payloads, or a
+primitive scalar representation.
+
+This is not only a logical source-language rule; it is a runtime representation
+rule. The final MIR-family, IR, LIR, ARC, interpreter, and backend pipeline must
+not contain a first-class primitive Bool representation. In particular:
+
+- IR and LIR must not have a `bool_literal`, `canonical bool`, `primitive Bool`,
+  `truthiness byte`, or equivalent first-class value form for Roc `Bool`.
+- `Bool.True` and `Bool.False` materialize as ordinary zero-payload tag-union
+  constructions using the resolved Bool endpoint's row-finalized `TagId`s.
+- A Bool pattern test is an ordinary tag-discriminant test on the resolved Bool
+  endpoint. A frontend or checked-artifact name like `bool_literal` is allowed
+  only before row-finalized ids exist; after row finalization it must be
+  represented exactly as a `TagId` test, not as a primitive bool comparison.
+- Numeric, string, byte, structural-equality, and static-dispatch operations
+  that logically return `Bool` produce an ordinary Bool tag-union value. They
+  may use a machine predicate or integer comparison internally while lowering a
+  branch, but if the result is a first-class Roc value, the result is the Bool
+  tag union.
+- `!` may be represented as a high-level semantic `bool_not` node only until the
+  stage that owns the resolved Bool row shape. At or before IR lowering it must
+  become an ordinary discriminant switch/test plus ordinary tag construction.
+  It must not lower to a `base.LowLevel.bool_not` operation that returns a
+  primitive Bool scalar.
+- Backends and the LIR interpreter must not special-case Bool. They see the same
+  union layout, discriminant reads, switch branches, tag construction, and tag
+  payload behavior they see for any other zero-payload tag union.
+
+Executable MIR owns the resolved Bool branch discriminant for `if`. When
+lambda-solved MIR lowers to executable MIR, the `if_` node must carry the
+row-finalized discriminant for the zero-payload `True` tag in that condition's
+ordinary Bool tag-union endpoint. IR lowering consumes that numeric
+discriminant directly. IR must not look up tag labels, compare canonical-name
+ids, assume that `True` is discriminant `1`, or rediscover Bool semantics from
+type shape. This keeps row-label ownership in the MIR-family boundary that still
+owns the executable row-shape and canonical-name stores.
+
 The reification plan is built from the resolved source type, the selected
 layout, and sealed callable representation data. All are required:
 
@@ -9105,6 +9889,60 @@ Reification-plan construction must not infer logical row structure or callable
 identity from runtime bytes or physical layout order. Physical layout order may
 be used only to read bytes after the logical plan has identified the value being
 read.
+
+Checked source row payloads are allowed to be represented as explicit
+row-extension chains. Constant and capture reification must normalize those
+chains before building schemas, comparing executable arity, or selecting child
+payload plans:
+
+- Record reification walks the checked `.record.fields` head and then follows
+  the `.record.ext` chain, appending every explicit `.record` or
+  `.record_unbound` field chunk until it reaches `.empty_record`.
+- Tag-union reification walks the checked `.tag_union.tags` head and then
+  follows the `.tag_union.ext` chain, appending every explicit `.tag_union`
+  variant chunk until it reaches `.empty_tag_union`.
+- A concrete compile-time constant or promoted capture plan must not reach an
+  unresolved row variable, pending type, wrong row kind, or cyclic row chain.
+  Those are compiler bugs: debug assertion in debug builds and `unreachable` in
+  release builds.
+- Duplicate record labels, duplicate tag labels, or duplicate tag payload
+  indices in a normalized concrete row are compiler bugs. The checker owns
+  duplicate reporting; reification only verifies that the checked artifact it
+  received is internally consistent.
+- The normalized checked row supplies logical labels, variant names, wrapper
+  boundaries, and source payload arities. It does not select executable child
+  endpoints. Child executable endpoints still come only from the parent
+  executable payload key: `List(T)` element, `Box(T)` payload, record field,
+  tuple element, tag payload, or nominal backing.
+- Parent executable payload keys remain authoritative even when the constant
+  graph has no representative child value metadata. For example, an empty list
+  or a list whose representative element was not published still has an element
+  executable endpoint in the selected `List(T)` executable key. Reification must
+  use that key to order tag variants and record fields for the child schema; it
+  must not fall back to checked row source order merely because no child
+  `ValueInfo` exists.
+
+This row normalization is not source reconstruction and not a heuristic. It is
+just consuming the explicit checked type graph that earlier stages published.
+For example, a checked type for `List(MyTag)` may contain `MyTag` as a nominal
+whose backing row is physically split into a head `[Foo(...)]` and an extension
+`[Bar, Baz(Str)]`:
+
+```roc
+MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+
+items : List(MyTag)
+items = [MyTag.Foo({ x: 42, y: 7 })]
+```
+
+The reification plan for `items` must normalize that backing to the full
+logical row `[Foo({ x: U64, y: U64 }), Bar, Baz(Str)]` before comparing it with
+the executable tag-union payload. If the `Foo` payload record is itself stored
+as `{ x: U64 }` extended by `{ y: U64 }`, record reification must normalize it
+to both fields before building the stored schema. Otherwise a later executable
+materialization that correctly expects the full `MyTag` endpoint could observe a
+schema missing `y`, even though the checked artifact had already published the
+complete source type.
 
 Compile-time evaluation uses the same LIR interpreter reference-counting path as
 ordinary interpreter execution. The interpreter executes explicit LIR `incref`,
@@ -9818,6 +10656,266 @@ or imported module view may refer to a `ConstUseTemplate`; it may not require a
 `ConstInstantiationRequest` until the use has been clone-instantiated in a
 concrete lowering context.
 
+The requested source type for a concrete constant instance is the producer
+template's source scheme instantiated at the current use, not an arbitrary
+narrowed consumer endpoint. Consumer endpoints are still important, but they are
+materialization endpoints and value-transform targets; they do not decide which
+fields, tags, nominal backing payloads, or callable leaves are present in the
+stored constant instance.
+
+For example:
+
+```roc
+module []
+
+import A exposing [MyTag]
+
+lookup = |items, idx| {
+    match List.get(items, idx) {
+        Ok(val) =>
+            match val {
+                Foo(rec) => rec.x
+                Baz(_) => 99
+                _ => 0
+            }
+
+        Err(_) => 0
+    }
+}
+
+items = [MyTag.Foo({ x: 42, y: 7 })]
+
+main = lookup(items, 0)
+```
+
+If `A.MyTag` is:
+
+```roc
+module [MyTag]
+
+MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+```
+
+then the `items` constant is instantiated and stored at the producer type
+`List(MyTag)`, whose published backing contains `Foo({ x: U64, y: U64 })`,
+`Bar`, and `Baz(Str)`. The body of `lookup` may constrain the element through
+pattern demands that mention only `Foo(rec).x` and `Baz(_)`, but those demands
+are constraints on the instantiated backing graph. They must not replace the
+producer type of `items` with a narrower anonymous list element such as
+`[Foo({ x: U64 }), Baz(Str), ..]`, and they must not cause the stored
+compile-time value for `items` to drop the `y` field. Later materialization may
+construct a narrower endpoint such as `{ x: U64 }` from the stored wider record
+by label, but a request whose expected endpoint is the full nominal backing must
+find both `x` and `y` in the stored graph. A missing expected field is a compiler
+bug, not permission to fabricate the field or silently continue.
+
+The same rule applies to records without nominals. A constant producer like
+`point = { x: 1, y: 2 }` has a producer schema containing both fields. A use that
+projects only `point.x` may materialize the one-field endpoint `{ x: I64 }`, but
+that endpoint is not the canonical stored shape of `point`. For generic
+constants, the producer scheme is first instantiated at the concrete type
+arguments required by the use, and only then may the use endpoint project or
+bridge from that instantiated producer shape. The compiler must never use a
+consumer-only projection, branch result, pattern binder, or row-polymorphic
+field access as the construction schema for a concrete `ConstInstance`.
+
+The genericness check for this decision is source-visible genericness, not
+"does the fully expanded runtime backing graph contain any internal identity
+variable." Builtin nominals such as `List(T)` and `Box(T)` may have compiler
+internal backing structure, but a producer type like `List(MyTag)` is concrete
+when its source-visible argument `MyTag` is concrete. The check must inspect
+record fields, tuple elements, tag payloads, function arguments and returns,
+alias arguments/backings, user-defined nominal arguments/backings, and builtin
+nominal arguments. It must not classify a concrete `List(MyTag)` producer as
+generic merely because the builtin `List` implementation has internal backing
+metadata. Doing so would force the compiler back to the consumer endpoint and
+can reproduce the bug where `[MyTag.Foo({ x: 42, y: 7 })]` is stored as though
+the payload were only `{ x: U64 }`.
+
+This is the same source-of-truth rule as Cor/LSS uses for top-level values:
+uses constrain the already-known producer type; they do not become a second
+producer type. Roc differs from Cor by storing compile-time constants as
+`ConstRef`/`ConstInstanceRef` data instead of runtime top-level thunks, but the
+type-flow invariant is the same.
+
+Compile-time constant reification must follow the same published nominal-backing
+edge as mono MIR. `ConstGraphReificationPlan` construction must never read a
+user-defined nominal occurrence's local `backing` field unless that field is the
+checked-artifact-published instantiated declaration representation for that
+exact nominal occurrence. Imported nominals are especially important: a consumer
+artifact may contain an occurrence-local backing that was affected by consumer
+pattern demands, but the constant graph for a producer value must use the
+defining artifact's exported nominal representation.
+
+For the cross-module example above, the importing module's checked type store
+may contain an occurrence of `A.MyTag` whose local backing was constrained while
+lowering `lookup`. The constant graph for `items` must still plan `A.MyTag`
+through the imported artifact's exported nominal representation:
+
+```roc
+MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+```
+
+The reification plan for `items` therefore stores the `Foo` payload schema as
+`{ x: U64, y: U64 }`. If executable materialization later asks for the full
+nominal endpoint, it finds both fields. If a narrower consumer endpoint such as
+`{ x: U64 }` is needed, materialization projects from the stored wider graph by
+field label. The stored graph is not rebuilt from the consumer endpoint.
+
+Because checked type ids are artifact-local, a consuming artifact must not store
+an imported `CheckedTypeId` directly in its `ConstGraphReificationPlan` or
+capture-slot reification plan. During checking finalization, if a const graph,
+capture reification plan, or callable promotion needs an imported nominal's
+published backing, the importer asks the central `CheckedTypeProjector` to
+publish that checked type graph into the consuming artifact's
+`CheckedTypeStore`. The projector remaps canonical name ids by canonical bytes,
+preserves canonical type keys, reserves roots before recursively filling
+payloads, and records no target/layout ABI data. Recursive imported checked
+types are handled by the projector's reserve/fill lifecycle, not by a side table
+in LIR, executable MIR, or any other later lowering stage.
+
+This imported checked-type clone is semantic data, not a target cache. It is
+created only while publishing the consuming checked artifact or while finalizing
+compile-time constants for that artifact. Later MIR, IR, LIR, ARC, backend, and
+interpreter stages consume the local cloned root id directly; they must not
+inspect imports, source declarations, layouts, bytes, record-field spellings, or
+pattern syntax to rediscover the backing.
+
+For parametric imported nominals, exact concrete representations are selected by
+the explicit published wrapper formal roots and the consuming occurrence's
+explicit argument roots. If the imported artifact only has a declaration
+template, checking finalization instantiates that template into the consuming
+artifact before any const graph or capture plan is sealed. It must not scan the
+backing for identity variables, and it must not accept a demand-mutated
+occurrence backing as a substitute for template instantiation.
+
+`ConstGraphReificationPlanBuilder` consumes a projected input; it does not own
+artifact import lookup or checked type graph cloning. The exact Zig shape may
+differ, but the data boundary should look like:
+
+```zig
+const ProjectedConstReificationInput = struct {
+    /// Checked source type in the artifact namespace that will own the published
+    /// reification plan.
+    artifact_source_ty: ArtifactCheckedTypeId,
+
+    /// Same semantic type after projection into the lowering-run namespace.
+    /// This is the type that can be compared to MIR-family payload metadata.
+    producer_source_ty: ProjectedCheckedTypeId,
+
+    /// Sealed executable endpoint whose layout was used by the LIR interpreter.
+    executable_endpoint: CanonicalExecValueTypeKey,
+
+    /// Published executable payload for `executable_endpoint`, already in the
+    /// lowering-run namespace.
+    executable_payload: ProjectedExecutablePayloadRef,
+
+    /// Value-flow root for selecting active child values. This is not an order
+    /// authority.
+    value_root: ValueInfoId,
+};
+```
+
+The source of truth split is strict:
+
+- checked/published source types define the semantic schema
+- executable endpoint payloads define byte, layout, tag-discriminant, field, and
+  payload order
+- value-flow aggregate metadata selects active child values only
+
+No compile-time reification code may rebuild imported source types, compare
+labels across stores, or infer layout order from aggregate metadata.
+
+Compile-time const graph planning is top-down with respect to executable
+endpoints. For a compile-time root or `ConstInstanceRef`, the root executable
+endpoint is the explicit return endpoint from the selected lowering
+specialization, not the returned expression value's own `ValueInfo.exec_ty`.
+Once a root `ProjectedConstReificationInput.executable_endpoint` is known,
+every recursive descent must use the child endpoint key published by the parent
+executable payload:
+
+- `List(T)` uses the list executable payload's element key
+- `Box(T)` uses the box executable payload's payload key
+- records use the executable record field key for the matching logical field
+- tuples use the executable tuple element key at the matching logical index
+- tag unions use the executable tag payload key at the matching logical payload
+  index
+- user-defined nominals use the executable nominal payload's `backing_key`
+
+The returned expression value's own `ValueInfo.exec_ty`, and every child
+value's own `ValueInfo.exec_ty`, is not the layout authority when the
+specialization or parent has supplied an expected endpoint. It may be consulted
+only for schema-only planning where no interpreted bytes will be read, or for a
+debug assertion that the already-published endpoint graph is internally
+consistent. This is mandatory because an expression may temporarily carry a
+narrower constructor endpoint while the requested compile-time root has the full
+producer endpoint.
+
+For example:
+
+```roc
+MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+
+items : List(MyTag)
+items = [MyTag.Foo({ x: 42, y: 7 })]
+```
+
+When planning the element inside `items`, the `List(MyTag)` executable payload's
+element key is the authority. The `Foo(...)` child value may have constructor
+metadata that mentions only the active `Foo` case, but the element const graph
+must still be planned as the full `MyTag` nominal backing. Otherwise the stored
+list element can be interpreted as a singleton tag union and later fail when the
+same constant is requested at the full `List(MyTag)` endpoint.
+
+`ConstGraphReificationPlan` tag-union variants and payloads must be ordered by
+row-finalized logical indexes, not by checked-type source order. The LIR
+interpreter returns bytes whose tag discriminant is the finalized tag logical
+index for the executable layout. If the const graph stores variants in source
+order while the executable layout stores them in row-shape order, reification can
+read the `Foo` discriminant and accidentally select the schema for `Bar` or
+`Baz`. That is the same kind of competing-source bug as using a consumer-narrowed
+nominal backing.
+
+When a compile-time value has a lambda-solved executable endpoint for a tag
+union, const-graph planning must consume the explicit executable payload for that
+endpoint. For a nominal tag union, this means following the executable nominal's
+published `backing_key` to the executable tag-union payload. It builds the
+variant array by placing each checked tag at
+`row_shapes.tag(executable_variant.tag).logical_index`, and it builds each
+payload array by placing each checked payload at
+`row_shapes.tagPayload(executable_payload.payload).logical_index`.
+Reification may then interpret the LIR discriminant as a direct index into the
+plan. It must not search tag names at reification time, and it must not assume
+source declaration order is layout order.
+
+Checked artifacts and MIR-family programs have separate canonical-name stores.
+Their ids are local to the store that owns them. Any checked-artifact
+reification plan that consumes MIR row-shape ids must remap labels across that
+boundary by canonical text while the plan is being built, then store only labels
+owned by the checked artifact's canonical-name store. Direct enum-id comparison
+between `CheckedModuleArtifact.canonical_names` labels and
+`LambdaSolved.Program.canonical_names` labels is a compiler bug. This applies to
+record fields, tag labels, method names, type names, module names, and any other
+canonical-name id that crosses from MIR metadata into checked-artifact
+publication data.
+
+Aggregate metadata for the active value is useful for value-flow dependency
+tracking and for selecting active child values, but it is not the authority for
+the result layout's discriminant order. A compile-time expression can carry an
+aggregate shape produced by a constructor or a local demand path while its sealed
+executable endpoint is the full nominal producer type. The const reification
+plan must be ordered by the sealed executable endpoint, because that is the
+layout used by the LIR interpreter result. Using the aggregate shape to index the
+plan can make discriminant `0` select `Bar` while the executable endpoint uses
+discriminant `0` for `Foo`.
+
+Schema-only planning that has no interpreted value may preserve checked-type
+source order because no LIR discriminant will be read through that schema. The
+moment the schema is paired with an interpreter result, executable-endpoint order
+is mandatory. If a compile-time tag value reaches reification without an
+executable tag-union endpoint, that is a compiler bug surfaced by a debug
+assertion and release `unreachable`.
+
 `ConstInstanceRef` identifies a concrete instantiated logical node owned by a
 `ConstInstantiationStore`. The store owner is the checked artifact that requested
 the concrete instance, not necessarily the artifact that owns the `ConstRef`.
@@ -10395,6 +11493,66 @@ the exporting artifact. Executable MIR must not copy the imported artifact into 
 private runtime payload, deserialize a second constant representation, or ask the
 exporting module to run again.
 
+That materialization context must also carry the owning artifact key and the
+owning artifact's published canonical-name view:
+
+```zig
+const ConstMaterializationContext = struct {
+    owner: CheckedModuleArtifactKey,
+    canonical_names: *const CanonicalNameView,
+    values: *const CompileTimeValueStore,
+    plans: *const CompileTimePlanStore,
+};
+```
+
+`CompileTimeValueStore` schemas store canonical ids that are local to the checked
+artifact that produced the store. In particular, `ComptimeFieldSchema.name`,
+`ComptimeVariantSchema.name`, `ComptimeWrappedSchema.type_name`, and any future
+schema field containing a canonical name id are artifact-local ids. Executable
+MIR must therefore remap each of those ids through
+`ConstMaterializationContext.canonical_names` into the executable program's
+lowering-run canonical-name store before comparing it with row-shape labels,
+expected executable types, constructor labels, nominal keys, bridge endpoints,
+or any other executable payload.
+
+The remap is part of materialization, not a verifier-only check and not a
+fallback. A record field from a constant schema is matched to an expected record
+field by:
+
+1. reading the field-label bytes from the owning artifact's canonical-name view
+2. interning those bytes into the executable program's canonical-name store
+3. comparing the remapped label id with the row-finalized executable record
+   field label
+
+Compile-time record materialization is expected-endpoint construction, not a
+requirement that the stored logical record schema have exactly the same width as
+the target executable record. If the stored compile-time value is
+`{ x: 42, y: 7 }` and the expected executable endpoint is the row-polymorphic
+projection `{ x: U64 }`, materialization constructs the expected one-field
+record by label and ignores `y`. Missing expected fields, duplicate stored field
+labels, or mismatched schema/value arity are compiler bugs. Extra stored fields
+are valid because they are the compile-time equivalent of applying an explicit
+record value transform to an existing wider value.
+
+Tag materialization follows the same rule for constructor labels. `Bool` has no
+special materialization path: logical `[False, True]` materializes as the
+ordinary executable tag union `[False, True]`, and singleton/full reshaping uses
+the same row-finalized tag transforms used for every other zero-payload tag
+union. Materialization must not interpret artifact-local tag ids directly
+through the executable program's name store. Nominal and transparent-alias
+materialization remaps both the module name and type name in
+`ComptimeWrappedSchema.type_name` before comparing the key with the expected
+executable nominal type.
+
+No executable materialization function may compare, index, print, or debug-name a
+`ComptimeSchema` canonical-name id against the executable program's
+`CanonicalNameStore` before remapping. Such code is the same class of compiler
+bug as comparing two imported artifacts' dense row-label ids directly. Debug
+builds must assert immediately if a schema id is outside the owning artifact's
+published name table; release builds use `unreachable`. Release builds still
+perform the real remap work needed to construct correct executable MIR, but they
+must not retain verifier-only foreign-origin metadata or deletion-scan metadata.
+
 Materialization has two modes. Pure materialization is used for serializable
 constant leaves and must reject callable schemas. General constant materialization
 is used only for concrete `ConstInstanceRef` occurrences and recursively permits
@@ -10773,6 +11931,37 @@ type," but it cannot by itself provide the argument list, return type, row
 labels, static-dispatch constraints, nominal backing type, recursive edges, or
 generalized variable structure needed to clone-instantiate and lower a generic
 body. The payload lives in `CheckedTypeStore`.
+
+`CanonicalTypeKey` and `CanonicalTypeSchemeKey` construction must normalize
+checked rows before hashing:
+
+- Record rows are flattened by walking explicit `.record` chunks and terminal
+  `.record_unbound` chunks through their extension chain until a non-record row
+  tail is reached. The explicit fields are sorted by canonical record-field
+  label identity before hashing. The remaining tail is then hashed exactly once.
+- Tag-union rows are flattened by walking explicit `.tag_union` chunks through
+  their extension chain until a non-tag row tail is reached. The explicit
+  variants are sorted by canonical tag label identity before hashing. Payload
+  order inside one tag is preserved because payload position is semantic for
+  that tag constructor. The remaining tail is then hashed exactly once.
+- Closed rows have the empty-row tail as their remaining tail, so two checked
+  graphs for the same closed row must produce the same key even if one graph was
+  stored as one chunk and another graph was stored as an extension chain.
+- Open rows keep their non-row tail identity after the normalized explicit
+  labels. Normalization never drops an open tail, generalized variable,
+  constraint, alias, nominal wrapper, function effect, or recursive edge.
+- Duplicate labels in the normalized explicit label set are compiler bugs after
+  type checking. Debug builds assert immediately and release builds use
+  `unreachable`.
+
+This is not compatible-shape repair and not source reconstruction. It is part
+of identity construction for the checked type graph. It is required so a
+function type like `(item, item -> [LT, EQ, GT])` has one canonical key no
+matter whether type checking stored the return row as `[LT, EQ, GT]`,
+`[LT, GT, EQ]`, `[LT] + [EQ, GT]`, or another equivalent explicit row
+extension. Without this, finite callable-set dispatch can falsely conclude that
+the call site and selected callable member have different `source_fn_ty` keys
+even though the checked type graph says they are the same type.
 
 Conceptual checked type payload:
 
@@ -11204,6 +12393,53 @@ until the static-dispatch graph edges for that call are connected:
    the target `MonoSpecializationKey`, and emit `call_proc`,
    `structural_eq`, or `bool_not`.
 
+The method target's checked callable type is polymorphic source data. Each
+static-dispatch expression owns a fresh dispatch-site instantiation of that
+target callable graph. Target callable variables must not be stored in the
+enclosing procedure instantiation and must not be shared between sibling
+dispatch expressions. For example:
+
+```roc
+main = {
+    dedup = |list| {
+        var $out = []
+        for item in list {
+            if !$out.contains(item) {
+                $out = $out.append(item)
+            }
+        }
+        $out
+    }
+
+    nums : List(I64)
+    nums = [1, 2, 3, 2, 1]
+    u1 = dedup(nums)
+
+    strs : List(Str)
+    strs = ["a", "b", "a"]
+    u2 = dedup(strs)
+
+    u1.len() + u2.len()
+}
+```
+
+The two `len` dispatches both target the checked `List.len` method, but the
+first dispatch instantiates the target's element variable as `I64` and the
+second as `Str`. Reusing the target callable graph across those two dispatch
+sites would incorrectly force `List(Str)` to unify with the prior `List(I64)`
+target instantiation. The same rule applies inside the generic `dedup` local
+procedure: `contains` and `append` target instantiations are per concrete local
+procedure instance and per dispatch expression.
+
+When one checked template slot is connected to two concrete source-type
+payloads, mono must unify those concrete graphs structurally. It must not merely
+compare their `CanonicalTypeKey`s. A key mismatch can still be a valid graph
+connection when one concrete payload contains target-callable variables and the
+other contains the already-known caller type. For example, connecting
+`List(I64)` to the target callable payload `List(a)` binds the target's `a` to
+`I64`. It is a compiler bug only if structural graph unification reaches two
+incompatible closed payloads, such as `Str` and `I64`.
+
 This ordering is required for calls such as:
 
 ```roc
@@ -11251,32 +12487,73 @@ operations:
 - connecting call arguments and return slots
 - connecting branch and `match` result slots
 - connecting record, tuple, list, tag, nominal, alias, and `Box(T)` child slots
-- specializing parametric alias and nominal backings by substituting their
-  published actual arguments into their published backing graphs
+- consuming checked-artifact-published instantiated alias and nominal backings
+  without trying to rediscover wrapper formal parameters
 - resolving mono static dispatch targets and unifying target function types
 - resolving numeric defaults for `mono_specialization` numeric variables
 - closing truly-unobserved row and tag-union tails to explicit zero-field
   payloads
 - computing canonical keys for sealed mono specialization requests
 
-Parametric wrapper stripping is part of graph finalization, not value emission.
-For a transparent alias or nominal type, the published backing root may already
-be instantiated by checking, or it may still be the declaration backing in terms
-of that wrapper's formal parameters. Mono must handle those two explicit states
-only:
+Parametric wrapper application is part of checked artifact publication and graph
+finalization before mono value emission. This must match Cor/LSS: Cor
+instantiates alias backings before monotype, and monotype follows the
+already-instantiated `real` type. Our checked artifact must likewise publish an
+alias or nominal occurrence with its backing graph already instantiated under the
+same occurrence-specific type graph as the wrapper's applied arguments.
 
-1. If the published backing root contains no remaining formal wrapper
-   parameters, it is already specialized. Mono uses that backing slot as-is.
-2. If the published backing root contains exactly the wrapper's formal
-   parameters, mono creates the specialization-local backing graph where each
-   formal parameter has been replaced by the corresponding published actual
-   argument from the concrete wrapper occurrence.
+Checked artifact publication must publish nominal declaration representations
+even when the defining module contains no value expression that mentions the
+nominal type. This is the module-boundary version of Cor/LSS's alias `real`
+graph: the representation belongs to the type declaration, not to whichever
+consumer first happens to pattern-match or construct a value. For example:
 
-A concrete occurrence such as `Try(I64, {})` is never allowed to expose a raw
-`Try(a, err)` declaration backing to mono value lowering. Either checking has
-already published the backing as `[Ok(I64), Err({})]`, or mono graph
-finalization substitutes `I64` and `{}` into the declaration backing before any
-consumer can observe it.
+```roc
+module [MyTag]
+
+MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+```
+
+The artifact for this module must publish an exported nominal representation for
+`MyTag` whose backing is exactly `[Foo({ x: U64, y: U64 }), Bar, Baz(Str)]`,
+even if the module exports no functions or constants. An importing module that
+only observes `rec.x` in a `Foo(rec)` pattern must not become the first producer
+of `MyTag`'s backing. If the imported artifact does not contain the declaration
+representation, that is a checked-artifact publication bug.
+
+For parametric nominals, the exported declaration representation is a template
+whose wrapper arguments are explicit checked-artifact roots. A concrete consumer
+such as `Boxed(I64)` or `Tree(Str)` must instantiate that published backing by
+substituting the concrete argument roots into the declaration backing. It must
+not use a demand-mutated occurrence backing copied into the consumer module, and
+it must not scan the backing for identity variables and guess which ones are
+wrapper formals. The formal roots are the declaration header arguments published
+by the checked artifact; the consumer arguments are the nominal occurrence's
+explicit `args` roots. The substitution is by those published roots only.
+
+Mono must not collect flex, rigid, row-tail, tag-union-tail, lambda-set,
+callable-representation, or any other identity variables from a backing graph and
+zip them with wrapper arguments. That is a forbidden reconstruction heuristic.
+Not every identity variable inside a backing is a wrapper formal. For example,
+the source type `Result(MyTag, [OutOfBounds, ..others])` has a fully instantiated
+`Result` backing:
+
+```roc
+[Ok(MyTag), Err([OutOfBounds, ..others])]
+```
+
+The `others` variable is the open tag-union tail inside the error type. It is not
+the `Result` wrapper's `ok` or `err` formal. A mono helper that scans the backing,
+finds `others`, and reports "one backing parameter for two wrapper arguments" is
+wrong by construction: it has mistaken an ordinary row variable for wrapper
+metadata.
+
+A concrete occurrence such as `Result(I64, {})` is never allowed to expose a raw
+`Result(ok, err)` declaration backing to mono value lowering. Checking and
+checked-artifact publication must publish the backing as
+`[Ok(I64), Err({})]` before mono sees the occurrence. If artifact publication
+cannot build that instantiated backing from explicit type-checking data, that is
+a checked-artifact bug, not work for mono to repair.
 
 For example:
 
@@ -11287,7 +12564,7 @@ main = {
 }
 ```
 
-The `?` desugaring matches a `Try(I64, {})`. The branch patterns are nominal
+The `?` desugaring matches a `Result(I64, {})`. The branch patterns are nominal
 patterns whose backing tags are `Ok` and `Err`. Mono must lower those patterns
 against the specialized backing `[Ok(I64), Err({})]`, never against the raw
 declaration backing `[Ok(a), Err(err)]` and never against a singleton tag source
@@ -11296,20 +12573,155 @@ parametric record nominal, tuple nominal, `Box(T)`, `List(T)`, and transparent
 aliases.
 
 This rule is exactly why alias/nominal backing lookup is forbidden in
-`MonoBodyEmitter`. Following `nominal.backing` or `alias.backing` as a plain
-child loses the actual argument context and can map the same formal backing
-variable to incompatible concrete types across two different instantiations.
-The finalized graph must own a distinct specialized backing slot keyed by the
-wrapper occurrence plus its actual argument slots. Pattern lowering, tag payload
-lookup, record-field lookup, tuple/list/box child lookup, source type keys, and
-later layout construction all consume that specialized backing slot.
+`MonoBodyEmitter` as a source of semantic recovery. Following `nominal.backing`
+or `alias.backing` is permitted only because that backing is already the
+checked-artifact-published instantiated backing for this exact wrapper
+occurrence. The backing is explicit data, not a declaration template to repair.
+Pattern lowering, tag payload lookup, record-field lookup, tuple/list/box child
+lookup, source type keys, and later layout construction all consume that
+published backing slot directly.
 
-If the published backing graph contains some formal variables but they cannot be
-paired one-for-one with the wrapper occurrence's published actual arguments,
-that is a checked-artifact invariant violation. Debug builds assert immediately
-and release builds use `unreachable`. A post-check stage must not recover by
-guessing parameter order, using source names, defaulting the variables, or
-falling back to the raw backing graph.
+Mono graph unification may reconcile a nominal wrapper and its backing only by
+following this explicit checked-artifact backing edge. For example, one path may
+bind a generic variable from a nominal tag pattern and therefore see the
+published backing tag union for `MyTag`, while another path may bind the same
+generic variable from a direct value argument and therefore see the nominal
+wrapper `MyTag`. The correct unification step is:
+
+1. confirm the nominal identity from the published nominal payload when both
+   sides are nominal;
+2. when exactly one side is the nominal and the other side is a record, tuple,
+   tag union, or empty row of the appropriate kind, follow the nominal payload's
+   published `backing` edge; and
+3. unify against that backing graph.
+
+This is not compatible-shape repair. It never compares tag names to guess a
+nominal, never searches source declarations, and never strips a nominal because
+the shapes happen to look similar. It follows only the explicit backing edge in
+the checked artifact.
+
+When a specialization variable is constrained by both a nominal wrapper and that
+nominal's backing, the specialization-local source type binding remains the
+nominal wrapper. The backing constraint is evidence that a pattern, constructor,
+or field operation is valid for that nominal; it must not replace the value's
+source type with an anonymous backing shape. For the `lookup` example:
+
+```roc
+lookup = |items, idx| {
+    match List.get(items, idx) {
+        Ok(val) =>
+            match val {
+                Foo(rec) => rec.x
+                Baz(_) => 99
+                _ => 0
+            }
+        Err(_) => 0
+    }
+}
+```
+
+If `lookup` is later called with `List(MyTag)`, the element specialization is
+`MyTag`. The inner `match` may require the published backing tags `Foo` and
+`Baz`, but it must not turn the element specialization into the anonymous row
+`[Foo(...), Baz(...), ..]`. This is the same Cor/LSS principle: pattern
+requirements constrain the instantiated type graph; they do not become a second
+source of truth for the value's type.
+
+Open tag-union unification must preserve row-tail meaning. Unifying a required
+pattern row such as `[Foo(...), Baz(...), ..others]` with the published backing
+for `MyTag` binds `others` to the concrete tags in `MyTag` that were not listed
+by the pattern row, plus the backing's own tail. It does not close `others` to
+empty merely because the explicitly mentioned tags were present. Row-finalized
+mono later consumes the completed row graph; it must not rediscover missing tags
+from source pattern syntax.
+
+When two open tag rows are unified and each side has explicit tags the other
+side does not mention, mono graph finalization must perform real row unification
+with a fresh shared residual tail. For example:
+
+```roc
+lookup = |items, idx| {
+    match List.get(items, idx) {
+        Ok(val) =>
+            match val {
+                Foo(rec) => rec.x
+                Baz(_) => 99
+                _ => 0
+            }
+        Err(_) => 0
+    }
+}
+```
+
+The `Foo` branch can constrain the scrutinee row as `[Foo({ x: U64, y: U64 }),
+..foo_tail]`. The `Baz` branch can later constrain the same scrutinee row as
+`[Baz(Str), ..baz_tail]`. Those rows are not incompatible. They unify by
+creating a residual tail `shared_tail` and solving:
+
+```roc
+foo_tail = [Baz(Str), ..shared_tail]
+baz_tail = [Foo({ x: U64, y: U64 }), ..shared_tail]
+```
+
+If the final concrete call site supplies `MyTag := [Foo({ x: U64, y: U64 }),
+Bar, Baz(Str)]`, later unification with the published `MyTag` backing binds
+`shared_tail` to `[Bar]` or to the published backing tail containing `Bar`.
+The specialization-local value type remains `MyTag`; the row equations are
+only constraints on the published backing graph.
+
+The same rule applies to record rows:
+
+```roc
+combine = |rec| rec.x + rec.y
+```
+
+The `rec.x` demand and `rec.y` demand must unify as row equations with a shared
+residual record tail, not as two incompatible closed records. Mono graph
+finalization may close the shared residual tail only after all demands on the
+specialization are connected and only when the tail is truly unobserved.
+
+The required algorithm is:
+
+1. Match explicit labels/tags present on both sides and unify their payloads.
+2. Put labels/tags present only on the left into the right extension row.
+3. Put labels/tags present only on the right into the left extension row.
+4. If both extension rows are open, allocate one fresh specialization-local
+   residual row-tail node and extend both sides with that same residual tail.
+5. If an extension row is closed, any labels/tags that would need to flow into
+   that closed extension are a compiler invariant violation after type checking.
+6. Never satisfy a missing explicit tag by looking at source pattern syntax,
+   scanning nominal declarations, comparing compatible shapes, or closing an
+   unrelated tail to empty.
+
+Row-equation residual nodes are not a second copy of the static-dispatch
+constraint graph. By the time mono graph finalization solves row equations,
+static-dispatch calls have explicit `StaticDispatchCallPlan`s and method-registry
+edges. If a row-equation helper needs to clone a source type variable into a
+specialization-local residual row, that clone preserves the variable identity,
+its optional debug name, and any numeric-default phase metadata required by mono
+numeric defaulting. The numeric-default phase marker is the only numeric
+defaulting metadata the residual clone needs; the original constraint graph is
+not the authority for mono dispatch or row solving. It must not clone ordinary
+static-dispatch constraint function graphs into the residual row node. Copying
+those graphs would create a second dispatch source of truth and can introduce
+artificial cycles while building canonical row keys. A later stage that needs
+static dispatch consumes the explicit static-dispatch plan, never a constraint
+copied into a row-tail clone.
+
+The checked artifact verifier must reject any alias or nominal occurrence whose
+published backing still contains an unsubstituted wrapper formal from the type
+declaration. That verifier must be based on explicit publication metadata, not
+by scanning arbitrary flex/rigid variables in the backing. Ordinary identity
+variables that remain because they are real row tails, tag-union tails, numeric
+variables, lambda-set variables, or callable-representation variables are valid
+when their normal stage invariants allow them. They are not wrapper formals and
+must not be paired with wrapper arguments.
+
+Any helper with a name or behavior like `collectWrapperBackingParams`,
+`collectTemplateWrapperBackingParams`, or "zip backing variables with wrapper
+arguments" is obsolete and must not exist in mono, row-finalized mono, lifted,
+lambda-solved, executable MIR, IR, or LIR. Reintroducing that helper family is
+the same class of bug as reintroducing source-type reconstruction.
 
 After graph finalization, every source-type payload consumed by mono MIR output
 is sealed. Before graph finalization, payload handles are graph nodes, not
@@ -11802,6 +13214,41 @@ This view is artifact data. It is not source lookup, not an `Ident.Store`, and
 not a fallback. It is the published canonical byte table that justifies the
 artifact-local ids already stored in checked payloads.
 
+The final architecture must make the namespace boundary explicit before any MIR
+type-state is built. Conceptually, every post-check lowering request first
+creates one `LoweringRunContext`:
+
+```zig
+const LoweringRunContext = struct {
+    canonical_names: LoweringCanonicalNameStore,
+    artifact_resolver: ArtifactNameResolver,
+    artifact_publisher: ArtifactNamePublisher,
+    checked_type_projector: CheckedTypeProjector,
+};
+```
+
+This context is not a cache, not a fallback layer, and not a recovery path. It
+is the mandatory projection boundary between immutable checked artifacts and the
+single identity space used by the MIR-family program being constructed.
+Checked-artifact ids and lowering-run ids are different namespaces. The final
+Zig implementation should make this distinction explicit with wrapper types or
+equally strong API boundaries, for example:
+
+```zig
+const ArtifactRecordFieldLabelId = distinct(canonical.RecordFieldLabelId);
+const LoweringRecordFieldLabelId = distinct(canonical.RecordFieldLabelId);
+const ArtifactTagLabelId = distinct(canonical.TagLabelId);
+const LoweringTagLabelId = distinct(canonical.TagLabelId);
+```
+
+The exact spelling can differ, but the invariant cannot: direct assignment or
+comparison between an artifact-local label id and a lowering-run label id must
+be impossible outside the resolver/publisher boundary. Comparing enum integer
+values from different canonical-name stores is a compiler bug. Comparing their
+canonical bytes is allowed only while constructing a real projection/remap entry
+inside `ArtifactNameResolver`, `ArtifactNamePublisher`, or
+`CheckedTypeProjector`.
+
 Every MIR-family lowering run must own one lowering-run canonical-name store.
 The artifact resolver must remap all imported artifact-local canonical name ids
 into that lowering-run store before any imported checked payload reaches mono
@@ -11832,6 +13279,26 @@ The resolver implementation reads canonical bytes from the source artifact's
 tables are ordinary construction work, not heuristic lookup. A requested source
 name id outside the artifact's published name table is a compiler invariant
 violation: debug assertion immediately, release `unreachable`.
+
+The reverse direction is equally explicit. When checking finalization publishes
+compile-time constant schemas, promoted procedure metadata, private capture
+metadata, or any other artifact-owned data derived from a MIR-family lowering
+run, it must use `ArtifactNamePublisher`:
+
+```zig
+const ArtifactNamePublisher = struct {
+    artifact_names: *CanonicalNameStore,
+
+    fn recordFieldFromLowering(lowering: *const CanonicalNameStore, id: LoweringRecordFieldLabelId) ArtifactRecordFieldLabelId;
+    fn tagFromLowering(lowering: *const CanonicalNameStore, id: LoweringTagLabelId) ArtifactTagLabelId;
+    fn methodFromLowering(lowering: *const CanonicalNameStore, id: LoweringMethodNameId) ArtifactMethodNameId;
+};
+```
+
+Publishing remaps by canonical bytes at the boundary, then stores only
+artifact-owned ids. Later artifact-local data structures must not retain
+lowering-run ids, and later MIR/LIR data structures must not retain
+artifact-local ids.
 
 The artifact resolver must return remapped clones for imported checked payloads.
 It must not hand out borrowed imported payloads that still contain
@@ -11884,6 +13351,15 @@ Debug-only verifiers must assert:
 
 This remapping is not optional and not an optimization. It is required for
 correctness whenever a lowering run consumes more than one checked artifact.
+
+Ad hoc remapping inside an individual lowering stage is forbidden. LIR
+compile-time reification, capture-slot planning, mono specialization,
+lambda-solved representation solving, and executable MIR construction must not
+own private helpers that clone imported checked type graphs or compare
+artifact-local labels with lowering-run labels by text. They must consume the
+already-projected payloads or call the central projection boundary. This keeps
+the source of truth single and makes reintroducing cross-namespace comparisons a
+deletion-audit failure rather than a subtle runtime bug.
 
 Mono specialization uses an `ArtifactTemplateResolver`-style service:
 
@@ -12722,6 +14198,37 @@ same view-oriented contract: the embedded payload is made viewable as the LIR
 runtime image before interpretation, and the child/interpreter side still does
 not run semantic compiler stages, root discovery, or reconstruction from CIR.
 The embedded path must not dictate or slow down the shared-memory IPC path.
+
+The LIR interpreter owns its runtime temporary allocation domain. Once an
+interpreter is initialized, proc frames, frame-local slots, join-point maps,
+temporary argument arrays, materialized scalar/aggregate values, and failed-call
+stack snapshots must all be allocated from interpreter-owned runtime storage,
+not directly from the caller allocator while interpreter value storage is active.
+This is required even when the caller allocator is itself an arena. Mixing
+caller-allocator frame metadata with interpreter-arena value storage can let
+later value allocations overlap frame-local slots, which would corrupt execution
+without indicating any MIR, IR, or LIR semantic problem.
+
+The runtime allocation rule is:
+
+```text
+caller allocator
+  -> constructs the interpreter object and long-lived host environment
+interpreter-owned runtime arena
+  -> owns all per-evaluation frames, frame locals, temporary values, temporary
+     argument/layout arrays, join metadata, and interpreter call-stack snapshots
+shared-memory runtime image
+  -> owns read-only LIR/runtime-layout arrays for IPC interpreter execution
+```
+
+The child/interpreter side may keep zero-copy views into the shared-memory
+runtime image, but it must never store interpreter arena pointers in that image,
+copy those pointers into checked artifacts, or treat frame-local storage as part
+of the runtime image. Interpreter result reification must copy result bytes into
+compiler-owned compile-time value structures before the interpreter arena can be
+discarded. Runtime interpreter execution may return a value pointer only inside
+the interpreter result object and only for immediate host-side consumption by the
+same interpreter owner.
 
 Conceptual shape:
 
@@ -14094,6 +15601,8 @@ const RecursiveSlotCommit = struct {
     owner_layout: LogicalLayoutId,
     logical_slot: LogicalSlotId,
     physical_indirection: RecursiveIndirectionId,
+    raw_payload_layout: PhysicalLayoutId,
+    logical_value_layout: PhysicalLayoutId,
 };
 ```
 
@@ -14103,6 +15612,46 @@ payload access, erased capture access, and RC plans must consume the same
 committed recursive-slot mapping. A later stage must not independently decide
 that a recursive field is direct or indirect by inspecting type syntax, layout
 names, or physical offsets.
+
+The mapping must distinguish raw recursive placeholder layouts from finalized
+logical value layouts. A physical recursive slot stores a box whose payload
+layout is the raw placeholder for the recursive child. A consumer of that slot
+usually expects the finalized logical child layout. Those two layout ids are not
+required to be equal, even after the raw placeholder has been filled with the
+same physical shape. LIR lowering must therefore consume the explicit
+raw-to-logical mapping from layout commit when deciding that a physical box slot
+can be unboxed into a logical child value, or that a logical child value can be
+boxed for storage in that slot. It must not compare the two layout structures for
+compatibility.
+
+The IR-to-LIR layout commit cache must be graph-node complete. When committing a
+logical layout graph reference to physical `LayoutId`s, the commit result maps
+every local graph node in that graph to its committed physical layout, not only
+the requested root. LIR lowering must cache all of those node mappings
+immediately. Otherwise a later use of a child graph reference, such as a tag
+payload-record projection, can commit the child subgraph a second time and
+produce a different physical layout id for the same runtime value. That is a
+compiler bug even if the two layouts are structurally equivalent. Equality of
+layout ids at backend boundaries depends on graph-node identity being committed
+once and reused everywhere.
+
+LIR storage lowering owns the physical adapters introduced by recursive layout
+commit. If a logical slot edge was committed as a physical box, LIR must insert
+the corresponding explicit operation at the use site:
+
+- struct and tag construction box a logical child before storing it in the
+  physical recursive slot
+- struct-field access and tag-payload access extract the physical slot first and
+  unbox it when the consumer expects the logical child value
+- direct bridge plans remain semantically direct, but LIR may still emit this
+  physical box or unbox when the committed slot layout differs from the logical
+  endpoint layout
+
+This is not source-level `Box(T)` erasure and not backend policy. It is the
+mechanical storage consequence of the shared recursive layout commit. Backends
+and interpreters still only see explicit LIR operations such as `box_box` and
+`box_unbox`; they must not rediscover recursive-slot rules from type syntax or
+layout names.
 
 Debug verification after layout commit must assert that every recursive
 by-value SCC edge has exactly one committed physical indirection and that no
@@ -15167,6 +16716,17 @@ The exact Zig names may differ, but the lifecycle must not:
    numeric low-level operations, or parameter lookup to reconcile them
    indirectly.
 
+   Each concrete local-procedure instance also owns its own specialization-local
+   binder slots and emitted local symbols for parameters, declaration binders,
+   mutable versions, generated destructuring binders, loop binders, and nested
+   local temporaries inside that instance. The checked binder id identifies the
+   source binding, not a reusable mono symbol across all concrete instances.
+   Reusing a binder's mono type or symbol from one local-procedure instance in a
+   sibling instance is a compiler bug. For example, after `dedup(List(I64))`
+   lowers `$out : List(I64)`, `dedup(List(Str))` must create a separate `$out :
+   List(Str)` binder slot and separate mono symbols inside that local procedure
+   instance.
+
    For example:
 
    ```roc
@@ -15695,6 +17255,25 @@ or `unreachable`, and source-match decision leaves that lower to `return` must
 emit the return terminal instead of setting the match result temp. Treating a
 returning leaf as a completing value is a compiler bug, even if some backend
 happens to ignore the impossible continuation.
+
+This terminator rule is recursive through block final expressions. A branch or
+loop body whose outer expression is a block and whose final expression is
+`return value`, `crash`, `runtime_error`, or `unreachable` lowers to that
+terminal. IR lowering must not lower the final `return value` as an ordinary
+value merely because it is nested under a block node. For example, the builtin
+list equality implementation contains:
+
+```roc
+if list_get_unsafe(self, index) != list_get_unsafe(other, index) {
+    return False
+}
+```
+
+The `then` branch is a block whose final expression is `return False`; that
+branch must lower to an IR/LIR `return` terminal. Lowering it as the value
+`False` and then continuing the loop is a compiler bug. The same rule applies to
+nested blocks inside `match` branches, `if` branches, loop bodies,
+callable-match branches, and any future expression-to-block boundary.
 
 Enforce single-evaluation boundary discipline: source operands lower once to
 `ExecutableValueRef` handles in source order, and bridges, calls, aggregate

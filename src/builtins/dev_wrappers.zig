@@ -693,13 +693,15 @@ pub fn roc_builtins_box_decref_with(
     payload_decref: ?RcDropFn,
     roc_ops: *RocOps,
 ) callconv(.c) void {
+    const payload_has_refcounted_children = payload_decref != null;
+
     if (payload_decref) |callback| {
         if (utils.isUnique(payload_ptr, roc_ops)) {
             callback(payload_ptr, roc_ops);
         }
     }
 
-    decrefDataPtrC(payload_ptr, payload_alignment, false, roc_ops);
+    decrefDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
 }
 
 /// Free a boxed payload and optionally run payload teardown first.
@@ -709,11 +711,13 @@ pub fn roc_builtins_box_free_with(
     payload_decref: ?RcDropFn,
     roc_ops: *RocOps,
 ) callconv(.c) void {
+    const payload_has_refcounted_children = payload_decref != null;
+
     if (payload_decref) |callback| {
         callback(payload_ptr, roc_ops);
     }
 
-    freeDataPtrC(payload_ptr, payload_alignment, false, roc_ops);
+    freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

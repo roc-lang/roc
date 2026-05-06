@@ -359,11 +359,15 @@ pub const Interpreter = struct {
     }
 
     pub fn deinit(self: *LirInterpreter) void {
-        self.failed_call_stack.deinit(self.allocator);
-        self.call_stack.deinit(self.allocator);
+        self.failed_call_stack.deinit(self.evalAllocator());
+        self.call_stack.deinit(self.evalAllocator());
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.arena.deinit();
+    }
+
+    fn evalAllocator(self: *LirInterpreter) Allocator {
+        return self.arena.allocator();
     }
 
     /// Get the crash message from the last evaluation (if any).
@@ -386,7 +390,7 @@ pub const Interpreter = struct {
 
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
-        try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
+        try self.failed_call_stack.appendSlice(self.evalAllocator(), self.call_stack.items);
     }
 
     /// Release ownership of an evaluated result value.
@@ -569,7 +573,7 @@ pub const Interpreter = struct {
         if (builtin.mode == .Debug) {
             const layout_idx = self.store.getLocal(local_id).layout_idx;
             var visited = std.ArrayList(DebugVisitedValue).empty;
-            defer visited.deinit(self.allocator);
+            defer visited.deinit(self.evalAllocator());
             self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, value, layout_idx, &visited);
         }
 
@@ -632,7 +636,7 @@ pub const Interpreter = struct {
                 for (visited.items) |entry| {
                     if (entry.ptr == key.ptr and entry.layout_idx == key.layout_idx) return;
                 }
-                visited.append(self.allocator, key) catch {
+                visited.append(self.evalAllocator(), key) catch {
                     self.invariantFailed("LIR/interpreter invariant violated: out of memory while validating value shape", .{});
                 };
                 self.debugAssertValueMatchesLayout(
@@ -960,7 +964,7 @@ pub const Interpreter = struct {
             }
         }
 
-        visited.append(self.allocator, @intFromEnum(layout_idx)) catch return;
+        visited.append(self.evalAllocator(), @intFromEnum(layout_idx)) catch return;
         defer _ = visited.pop();
 
         const layout_val = self.layout_store.getLayout(layout_idx);
@@ -1001,7 +1005,7 @@ pub const Interpreter = struct {
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
     ) Error!Value {
-        try self.call_stack.append(self.allocator, proc_id);
+        try self.call_stack.append(self.evalAllocator(), proc_id);
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
 
@@ -1043,7 +1047,7 @@ pub const Interpreter = struct {
         defer self.call_depth -= 1;
 
         var frame = try self.initFrame(proc_id, proc_spec);
-        defer frame.deinit(self.allocator);
+        defer frame.deinit(self.evalAllocator());
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -1060,15 +1064,17 @@ pub const Interpreter = struct {
         }
 
         for (params, args, arg_layouts) |param, arg, arg_layout| {
+            const param_layout = self.store.getLocal(param).layout_idx;
+            const coerced = try self.coerceExplicitRefValueToLayout(
+                arg,
+                arg_layout,
+                param_layout,
+            );
             self.setLocalChecked(
                 &frame,
                 null,
                 param,
-                try self.coerceExplicitRefValueToLayout(
-                    arg,
-                    arg_layout,
-                    self.store.getLocal(param).layout_idx,
-                ),
+                try self.materializeLocalValue(coerced, param_layout),
             );
         }
         const outcome = try self.execStmtChain(&frame, self.requireProcBody(proc_id, proc_spec));
@@ -1082,7 +1088,7 @@ pub const Interpreter = struct {
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
-                    defer visited.deinit(self.allocator);
+                    defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
                 }
                 const coerced_result = try self.coerceExplicitRefValueToLayout(
@@ -1092,7 +1098,7 @@ pub const Interpreter = struct {
                 );
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
-                    defer visited.deinit(self.allocator);
+                    defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
                 }
                 break :blk try self.materializeLocalValue(coerced_result, proc_spec.ret_layout);
@@ -1109,7 +1115,7 @@ pub const Interpreter = struct {
     }
 
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
-        const locals = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
+        const locals = try self.evalAllocator().alloc(LocalSlot, self.store.locals.items.len);
         @memset(locals, .{ .assigned = false, .val = Value.zst });
         for (locals, 0..) |*slot, idx| {
             const local_id: LocalId = @enumFromInt(@as(u32, @intCast(idx)));
@@ -1163,7 +1169,7 @@ pub const Interpreter = struct {
                 try self.collectJoinPoints(join_points, for_stmt.next);
             },
             .join => |join_stmt| {
-                try join_points.put(self.allocator, @intFromEnum(join_stmt.id), .{
+                try join_points.put(self.evalAllocator(), @intFromEnum(join_stmt.id), .{
                     .params = join_stmt.params,
                     .body = join_stmt.body,
                 });
@@ -1202,7 +1208,8 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
+                    const arg_layouts = try self.localLayouts(arg_locals);
+                    const result = try self.evalProcById(assign.proc, arg_values, arg_layouts);
                     self.setLocalChecked(
                         frame,
                         current,
@@ -1454,15 +1461,17 @@ pub const Interpreter = struct {
                                 self.debugPrintStmtChain(current, 24);
                             }
                         }
+                        const param_layout = self.store.getLocal(param).layout_idx;
+                        const coerced = try self.coerceExplicitRefValueToLayout(
+                            arg,
+                            self.store.getLocal(arg_local).layout_idx,
+                            param_layout,
+                        );
                         self.setLocalChecked(
                             frame,
                             current,
                             param,
-                            try self.coerceExplicitRefValueToLayout(
-                                arg,
-                                self.store.getLocal(arg_local).layout_idx,
-                                self.store.getLocal(param).layout_idx,
-                            ),
+                            try self.materializeLocalValue(coerced, param_layout),
                         );
                     }
                     current = join_info.body;
@@ -1519,11 +1528,11 @@ pub const Interpreter = struct {
             }
         }
 
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.allocator);
+        var visited = std.AutoHashMap(CFStmtId, void).init(self.evalAllocator());
         defer visited.deinit();
         var stack = std.ArrayListUnmanaged(CFStmtId){};
-        defer stack.deinit(self.allocator);
-        stack.append(self.allocator, body) catch return;
+        defer stack.deinit(self.evalAllocator());
+        stack.append(self.evalAllocator(), body) catch return;
 
         while (stack.items.len > 0) {
             const stmt_id = stack.pop().?;
@@ -1538,7 +1547,7 @@ pub const Interpreter = struct {
                         assign.op,
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_literal => |assign| {
                     debugPrint("    {d}: assign_literal target={d} next={d}\n", .{
@@ -1546,7 +1555,7 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_call => |assign| {
                     debugPrint("    {d}: assign_call proc={d} target={d} args=", .{
@@ -1558,7 +1567,7 @@ pub const Interpreter = struct {
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
                     debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_call_erased => |assign| {
                     debugPrint("    {d}: assign_call_erased target={d} next={d}\n", .{
@@ -1566,7 +1575,7 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_low_level => |assign| {
                     debugPrint("    {d}: assign_low_level target={d} op={s} args=", .{
@@ -1578,7 +1587,7 @@ pub const Interpreter = struct {
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
                     debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_list => |assign| {
                     debugPrint("    {d}: assign_list target={d} next={d}\n", .{
@@ -1586,7 +1595,7 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_struct => |assign| {
                     debugPrint("    {d}: assign_struct target={d} fields=", .{
@@ -1599,7 +1608,7 @@ pub const Interpreter = struct {
                     debugPrint("next={d}\n", .{
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_tag => |assign| {
                     debugPrint("    {d}: assign_tag target={d} discrim={d} next={d}\n", .{
@@ -1608,7 +1617,7 @@ pub const Interpreter = struct {
                         assign.discriminant,
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .set_local => |assign| {
                     debugPrint("    {d}: set_local target={d} value={d} next={d}\n", .{
@@ -1617,14 +1626,14 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.value),
                         @intFromEnum(assign.next),
                     });
-                    stack.append(self.allocator, assign.next) catch return;
+                    stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .debug => |debug_stmt| {
                     debugPrint("    {d}: debug next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(debug_stmt.next),
                     });
-                    stack.append(self.allocator, debug_stmt.next) catch return;
+                    stack.append(self.evalAllocator(), debug_stmt.next) catch return;
                 },
                 .expect => |expect_stmt| {
                     debugPrint("    {d}: expect cond={d} next={d}\n", .{
@@ -1632,7 +1641,7 @@ pub const Interpreter = struct {
                         @intFromEnum(expect_stmt.condition),
                         @intFromEnum(expect_stmt.next),
                     });
-                    stack.append(self.allocator, expect_stmt.next) catch return;
+                    stack.append(self.evalAllocator(), expect_stmt.next) catch return;
                 },
                 .runtime_error => {
                     debugPrint("    {d}: runtime_error\n", .{@intFromEnum(stmt_id)});
@@ -1643,7 +1652,7 @@ pub const Interpreter = struct {
                         @intFromEnum(inc.value),
                         @intFromEnum(inc.next),
                     });
-                    stack.append(self.allocator, inc.next) catch return;
+                    stack.append(self.evalAllocator(), inc.next) catch return;
                 },
                 .decref => |dec| {
                     debugPrint("    {d}: decref value={d} next={d}\n", .{
@@ -1651,7 +1660,7 @@ pub const Interpreter = struct {
                         @intFromEnum(dec.value),
                         @intFromEnum(dec.next),
                     });
-                    stack.append(self.allocator, dec.next) catch return;
+                    stack.append(self.evalAllocator(), dec.next) catch return;
                 },
                 .free => |dec| {
                     debugPrint("    {d}: free value={d} next={d}\n", .{
@@ -1659,7 +1668,7 @@ pub const Interpreter = struct {
                         @intFromEnum(dec.value),
                         @intFromEnum(dec.next),
                     });
-                    stack.append(self.allocator, dec.next) catch return;
+                    stack.append(self.evalAllocator(), dec.next) catch return;
                 },
                 .switch_stmt => |switch_stmt| {
                     debugPrint("    {d}: switch cond={d} default={d}\n", .{
@@ -1667,14 +1676,14 @@ pub const Interpreter = struct {
                         @intFromEnum(switch_stmt.cond),
                         @intFromEnum(switch_stmt.default_branch),
                     });
-                    stack.append(self.allocator, switch_stmt.default_branch) catch return;
+                    stack.append(self.evalAllocator(), switch_stmt.default_branch) catch return;
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     for (branches) |branch| {
                         debugPrint("        branch {d} -> {d}\n", .{
                             branch.value,
                             @intFromEnum(branch.body),
                         });
-                        stack.append(self.allocator, branch.body) catch return;
+                        stack.append(self.evalAllocator(), branch.body) catch return;
                     }
                 },
                 .for_list => |for_list| {
@@ -1685,8 +1694,8 @@ pub const Interpreter = struct {
                         @intFromEnum(for_list.body),
                         @intFromEnum(for_list.next),
                     });
-                    stack.append(self.allocator, for_list.body) catch return;
-                    stack.append(self.allocator, for_list.next) catch return;
+                    stack.append(self.evalAllocator(), for_list.body) catch return;
+                    stack.append(self.evalAllocator(), for_list.next) catch return;
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
@@ -1706,8 +1715,8 @@ pub const Interpreter = struct {
                         @intFromEnum(join.body),
                         @intFromEnum(join.remainder),
                     });
-                    stack.append(self.allocator, join.body) catch return;
-                    stack.append(self.allocator, join.remainder) catch return;
+                    stack.append(self.evalAllocator(), join.body) catch return;
+                    stack.append(self.evalAllocator(), join.remainder) catch return;
                 },
                 .jump => |jump| {
                     debugPrint("    {d}: jump target={d} args=", .{
@@ -1964,7 +1973,6 @@ pub const Interpreter = struct {
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
-            .bool_literal => |value| self.evalBoolLiteral(value),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };
@@ -2424,12 +2432,6 @@ pub const Interpreter = struct {
     fn evalStrLiteral(self: *LirInterpreter, idx: base.StringLiteral.Idx) Error!Value {
         const str_bytes = self.store.getString(idx);
         return self.makeStaticRocStrLiteral(str_bytes);
-    }
-
-    fn evalBoolLiteral(self: *LirInterpreter, b: bool) Error!Value {
-        const val = try self.alloc(.bool);
-        val.write(u8, if (b) 1 else 0);
-        return val;
     }
 
     // String helpers (RocStr construction)

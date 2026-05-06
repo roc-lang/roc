@@ -73,6 +73,7 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
         .value_env = std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var).init(allocator),
         .expr_map = std.AutoHashMap(Exec.Ast.ExprId, Ast.Var).init(allocator),
         .proc_def_index = std.AutoHashMap(Exec.Ast.ExecutableProcId, usize).init(allocator),
+        .layout_cache = std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef).init(allocator),
         .next_internal_value_ref = input.ast.next_value_ref,
     };
     defer lowerer.deinit();
@@ -92,9 +93,11 @@ const IrBuilder = struct {
     value_env: std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var),
     expr_map: std.AutoHashMap(Exec.Ast.ExprId, Ast.Var),
     proc_def_index: std.AutoHashMap(Exec.Ast.ExecutableProcId, usize),
+    layout_cache: std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef),
     next_internal_value_ref: u32,
 
     fn deinit(self: *IrBuilder) void {
+        self.layout_cache.deinit();
         self.proc_def_index.deinit();
         self.expr_map.deinit();
         self.value_env.deinit();
@@ -162,24 +165,36 @@ const IrBuilder = struct {
         var stmts = std.ArrayList(Ast.StmtId).empty;
         defer stmts.deinit(self.allocator);
 
-        const expr = self.input.ast.getExpr(expr_id);
-        const term: Ast.Term = switch (expr.data) {
-            .crash => |literal| .{ .crash = literal },
-            .runtime_error => .runtime_error,
-            .return_ => |child| blk: {
-                const value = try self.lowerExpr(child, &stmts);
-                break :blk .{ .return_ = value };
-            },
-            else => blk: {
-                const value = try self.lowerExpr(expr_id, &stmts);
-                break :blk .{ .value = value };
-            },
-        };
+        const term = try self.lowerExprToTerm(expr_id, &stmts);
 
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(stmts.items),
             .term = term,
         });
+    }
+
+    fn lowerExprToTerm(
+        self: *IrBuilder,
+        expr_id: Exec.Ast.ExprId,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Term {
+        const expr = self.input.ast.getExpr(expr_id);
+        return switch (expr.data) {
+            .crash => |literal| .{ .crash = literal },
+            .runtime_error => .runtime_error,
+            .return_ => |child| blk: {
+                const value = try self.lowerExpr(child, stmts);
+                break :blk .{ .return_ = value };
+            },
+            .block => |block| blk: {
+                try self.lowerStmtSpan(block.stmts, stmts);
+                break :blk try self.lowerExprToTerm(block.final_expr, stmts);
+            },
+            else => blk: {
+                const value = try self.lowerExpr(expr_id, stmts);
+                break :blk .{ .value = value };
+            },
+        };
     }
 
     fn lowerExpr(
@@ -197,7 +212,6 @@ const IrBuilder = struct {
             .frac_f64_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .f64 = literal } }, stmts),
             .dec_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .dec = literal } }, stmts),
             .str_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .str = literal } }, stmts),
-            .bool_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .bool = literal } }, stmts),
             .unit => try self.bindExpr(expr.value, .{ .canonical = .zst }, .{ .make_struct = Ast.Span(Ast.Var).empty() }, stmts),
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.fields, stmts);
@@ -272,15 +286,6 @@ const IrBuilder = struct {
                     .args = try self.output.store.addVarSpan(args),
                 } }, stmts);
             },
-            .bool_not => |child| blk: {
-                const arg = try self.lowerExpr(child, stmts);
-                const args = [_]Ast.Var{arg};
-                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
-                    .op = .bool_not,
-                    .rc_effect = base.LowLevel.bool_not.rcEffect(),
-                    .args = try self.output.store.addVarSpan(&args),
-                } }, stmts);
-            },
             .return_ => |child| try self.lowerExpr(child, stmts),
             .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
             .call_direct => |call| try self.lowerCallDirect(expr, call, stmts),
@@ -329,7 +334,7 @@ const IrBuilder = struct {
         const else_block = try self.lowerExprToBlock(if_.else_body);
         const result = try self.freshVar(try self.layoutForType(expr.ty));
         const branches = [_]Ast.Branch{.{
-            .value = 1,
+            .value = if_.true_discriminant,
             .block = then_block,
         }};
         try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
@@ -822,7 +827,7 @@ const IrBuilder = struct {
                 try self.appendDecisionNode(node, scrutinee_values, result, path_values, stmts);
             } else {
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
-                    .cond = try self.trueValue(stmts),
+                    .cond = try self.u64Literal(0, stmts),
                     .branches = Ast.Span(Ast.BranchId).empty(),
                     .default_block = try self.unreachableBlock(),
                     .join = result,
@@ -998,10 +1003,6 @@ const IrBuilder = struct {
         });
     }
 
-    fn trueValue(self: *IrBuilder, stmts: *std.ArrayList(Ast.StmtId)) LowerResourceError!Ast.Var {
-        return try self.bindAnonymous(.{ .canonical = .bool }, .{ .lit = .{ .bool = true } }, stmts);
-    }
-
     fn materializePatternPathValue(
         self: *IrBuilder,
         plan_id: Exec.Ast.PatternPathValuePlanId,
@@ -1022,7 +1023,7 @@ const IrBuilder = struct {
             },
             .tag_payload_record => |payload| blk: {
                 const parent = try self.materializePatternPathValue(payload.parent, scrutinee_values, path_values, stmts);
-                break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_union_struct = .{
+                break :blk try self.bindAnonymous(try self.payloadStructLayoutFromUnionLayout(parent.layout, payload.tag), .{ .get_union_struct = .{
                     .value = parent,
                     .tag_discriminant = @intCast(self.input.row_shapes.tag(payload.tag).logical_index),
                 } }, stmts);
@@ -1204,10 +1205,6 @@ const IrBuilder = struct {
                 const literal = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{ .int = @intCast(self.input.row_shapes.tag(tag).logical_index) } }, stmts);
                 break :blk try self.boolLowLevel(.num_is_eq, discriminant, literal, stmts);
             },
-            .bool_literal => |literal| blk: {
-                const expected = try self.bindAnonymous(.{ .canonical = .bool }, .{ .lit = .{ .bool = literal } }, stmts);
-                break :blk try self.boolStructuralEq(path_value, expected, stmts);
-            },
             .int_literal => |literal| blk: {
                 const expected = try self.bindAnonymous(path_value.layout, .{ .lit = .{ .int = literal } }, stmts);
                 break :blk try self.boolStructuralEq(path_value, expected, stmts);
@@ -1277,7 +1274,6 @@ const IrBuilder = struct {
     ) LowerResourceError!void {
         switch (pat.data) {
             .wildcard,
-            .bool_lit,
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
@@ -1339,7 +1335,7 @@ const IrBuilder = struct {
 
                 const payload_record = try self.bindExpr(
                     self.freshInternalValueRef(),
-                    try self.payloadStructLayoutForTag(pat.ty, tag.tag),
+                    try self.payloadStructLayoutFromUnionLayout(value.layout, tag.tag),
                     .{ .get_union_struct = .{
                         .value = value,
                         .tag_discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
@@ -1515,15 +1511,14 @@ const IrBuilder = struct {
         const tag_payloads = self.input.row_shapes.tagPayloads(payload_info.tag);
         if (tag_payloads.len == 0) irInvariant("IR lowering tag payload projection targeted a nullary tag");
 
+        const payload_struct_layout = try self.payloadStructLayoutFromUnionLayout(tag_union.layout, payload_info.tag);
         if (tag_payloads.len == 1) {
-            return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_union_struct = .{
+            return try self.bindExpr(expr.value, payload_struct_layout, .{ .get_union_struct = .{
                 .value = tag_union,
                 .tag_discriminant = @intCast(tag_info.logical_index),
             } }, stmts);
         }
 
-        const tag_union_expr = self.input.ast.getExpr(payload.tag_union);
-        const payload_struct_layout = try self.payloadStructLayoutForTag(tag_union_expr.ty, payload_info.tag);
         const payload_struct = try self.bindAnonymous(payload_struct_layout, .{ .get_union_struct = .{
             .value = tag_union,
             .tag_discriminant = @intCast(tag_info.logical_index),
@@ -1686,6 +1681,17 @@ const IrBuilder = struct {
 
     fn structLayoutFromTypes(self: *IrBuilder, types: []const Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
         if (types.len == 0) return .{ .canonical = .zst };
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        try self.fillStructLayoutNodeFromTypes(node, types);
+        return .{ .local = node };
+    }
+
+    fn fillStructLayoutNodeFromTypes(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        types: []const Exec.Type.TypeId,
+    ) LowerResourceError!void {
+        if (types.len == 0) irInvariant("IR lowering tried to fill empty struct layout node");
         const vars = try self.allocator.alloc(Ast.Var, types.len);
         defer self.allocator.free(vars);
         for (types, 0..) |ty, i| {
@@ -1694,7 +1700,24 @@ const IrBuilder = struct {
                 .symbol = symbol_mod.Symbol.none,
             };
         }
-        return try self.structLayout(vars);
+        try self.fillStructLayoutNode(node, vars);
+    }
+
+    fn fillStructLayoutNode(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        fields: []const Ast.Var,
+    ) LowerResourceError!void {
+        if (fields.len == 0) irInvariant("IR lowering tried to fill empty struct layout node");
+        const graph_fields = try self.allocator.alloc(Layout.Field, fields.len);
+        defer self.allocator.free(graph_fields);
+        for (fields, 0..) |field, i| {
+            graph_fields[i] = .{
+                .index = @intCast(i),
+                .child = field.layout,
+            };
+        }
+        self.output.layouts.setNode(node, .{ .struct_ = try self.output.layouts.appendFields(self.allocator, graph_fields) });
     }
 
     fn payloadLayout(self: *IrBuilder, payloads: []const Exec.Type.TagPayloadType) LowerResourceError!Ast.LayoutRef {
@@ -1719,25 +1742,35 @@ const IrBuilder = struct {
         return try self.structLayoutFromTypes(payload_types);
     }
 
-    fn payloadStructLayoutForTag(
+    fn payloadStructLayoutFromUnionLayout(
         self: *IrBuilder,
-        tag_union_ty: Exec.Type.TypeId,
+        union_layout: Ast.LayoutRef,
         tag_id: mir.MonoRow.TagId,
     ) LowerResourceError!Ast.LayoutRef {
-        return switch (self.input.types.getType(tag_union_ty)) {
-            .link => |next| try self.payloadStructLayoutForTag(next, tag_id),
-            .tag_union => |tag_union| blk: {
-                for (tag_union.tags) |tag| {
-                    if (tag.tag == tag_id) break :blk try self.payloadLayout(tag.payloads);
-                }
-                irInvariant("IR lowering tag payload projection did not find payload tag in union type");
+        return switch (union_layout) {
+            .canonical => irInvariant("IR lowering tag payload projection expected a local tag-union layout"),
+            .local => |node| switch (self.output.layouts.getNode(node)) {
+                .tag_union => |span| blk: {
+                    const tag_info = self.input.row_shapes.tag(tag_id);
+                    const variants = self.output.layouts.getRefs(span);
+                    if (tag_info.logical_index >= variants.len) {
+                        irInvariant("IR lowering tag payload projection tag index exceeded union layout arity");
+                    }
+                    break :blk variants[@intCast(tag_info.logical_index)];
+                },
+                .nominal => |backing| try self.payloadStructLayoutFromUnionLayout(backing, tag_id),
+                .pending => irInvariant("IR lowering tag payload projection reached pending union layout"),
+                else => irInvariant("IR lowering tag payload projection expected tag-union source layout"),
             },
-            else => irInvariant("IR lowering tag payload projection expected tag-union source type"),
         };
     }
 
-    fn recordLayout(self: *IrBuilder, record: Exec.Type.RecordType) LowerResourceError!Ast.LayoutRef {
-        if (record.fields.len == 0) return .{ .canonical = .zst };
+    fn recordLayout(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        record: Exec.Type.RecordType,
+    ) LowerResourceError!void {
+        if (record.fields.len == 0) irInvariant("IR lowering tried to fill empty record layout node");
         const graph_fields = try self.allocator.alloc(Layout.Field, record.fields.len);
         defer self.allocator.free(graph_fields);
         var seen = try self.allocator.alloc(bool, record.fields.len);
@@ -1756,13 +1789,15 @@ const IrBuilder = struct {
         for (seen) |was_seen| {
             if (!was_seen) irInvariant("IR lowering record type did not provide every field");
         }
-        const node = try self.output.layouts.reserveNode(self.allocator);
         self.output.layouts.setNode(node, .{ .struct_ = try self.output.layouts.appendFields(self.allocator, graph_fields) });
-        return .{ .local = node };
     }
 
-    fn tagUnionLayout(self: *IrBuilder, tag_union: Exec.Type.TagUnionType) LowerResourceError!Ast.LayoutRef {
-        if (tag_union.tags.len == 0) return .{ .canonical = .zst };
+    fn tagUnionLayout(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        tag_union: Exec.Type.TagUnionType,
+    ) LowerResourceError!void {
+        if (tag_union.tags.len == 0) irInvariant("IR lowering tried to fill empty tag-union layout node");
         const variants = try self.allocator.alloc(Ast.LayoutRef, tag_union.tags.len);
         defer self.allocator.free(variants);
         var seen = try self.allocator.alloc(bool, tag_union.tags.len);
@@ -1780,12 +1815,14 @@ const IrBuilder = struct {
             if (!was_seen) irInvariant("IR lowering tag-union type did not provide every tag variant");
         }
 
-        const node = try self.output.layouts.reserveNode(self.allocator);
         self.output.layouts.setNode(node, .{ .tag_union = try self.output.layouts.appendRefs(self.allocator, variants) });
-        return .{ .local = node };
     }
 
-    fn callableSetLayout(self: *IrBuilder, callable_set: Exec.Type.CallableSetType) LowerResourceError!Ast.LayoutRef {
+    fn callableSetLayout(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        callable_set: Exec.Type.CallableSetType,
+    ) LowerResourceError!void {
         if (callable_set.members.len == 0) irInvariant("IR lowering callable-set type had no members");
         const variants = try self.allocator.alloc(Ast.LayoutRef, callable_set.members.len);
         defer self.allocator.free(variants);
@@ -1804,47 +1841,86 @@ const IrBuilder = struct {
             if (!was_seen) irInvariant("IR lowering callable-set type did not provide every member payload layout");
         }
 
-        const node = try self.output.layouts.reserveNode(self.allocator);
         self.output.layouts.setNode(node, .{ .tag_union = try self.output.layouts.appendRefs(self.allocator, variants) });
-        return .{ .local = node };
     }
 
     fn layoutForType(self: *IrBuilder, ty: Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {
-        return switch (self.input.types.getType(ty)) {
+        const resolved = self.resolveLayoutType(ty);
+        if (self.layout_cache.get(resolved)) |existing| return existing;
+
+        return switch (self.input.types.getType(resolved)) {
             .placeholder => irInvariant("IR lowering received executable placeholder type"),
-            .link => |next| try self.layoutForType(next),
+            .link => irInvariant("IR lowering type resolver returned a link"),
             .primitive => |prim| .{ .canonical = primitiveLayout(prim) },
             .nominal => |nominal| try self.layoutForType(nominal.backing),
             .list => |elem| blk: {
+                const node = try self.reserveCachedLayoutNode(resolved);
                 const child = try self.layoutForType(elem);
-                const node = try self.output.layouts.reserveNode(self.allocator);
                 self.output.layouts.setNode(node, .{ .list = child });
                 break :blk .{ .local = node };
             },
             .box => |elem| blk: {
+                const node = try self.reserveCachedLayoutNode(resolved);
                 const child = try self.layoutForType(elem);
-                break :blk try self.boxLayout(child);
+                self.output.layouts.setNode(node, .{ .box = child });
+                break :blk .{ .local = node };
             },
             .tuple => |items| blk: {
-                const vars = try self.allocator.alloc(Ast.Var, items.len);
-                defer self.allocator.free(vars);
-                for (items, 0..) |item, i| {
-                    vars[i] = .{
-                        .layout = try self.layoutForType(item),
-                        .symbol = symbol_mod.Symbol.none,
-                    };
-                }
-                break :blk try self.structLayout(vars);
+                if (items.len == 0) break :blk .{ .canonical = .zst };
+                const node = try self.reserveCachedLayoutNode(resolved);
+                try self.fillStructLayoutNodeFromTypes(node, items);
+                break :blk .{ .local = node };
             },
-            .record => |record| try self.recordLayout(record),
-            .tag_union => |tag_union| try self.tagUnionLayout(tag_union),
-            .callable_set => |callable_set| try self.callableSetLayout(callable_set),
-            .erased_fn => |erased| try self.erasedFnLayout(erased),
+            .record => |record| blk: {
+                if (record.fields.len == 0) break :blk .{ .canonical = .zst };
+                const node = try self.reserveCachedLayoutNode(resolved);
+                try self.recordLayout(node, record);
+                break :blk .{ .local = node };
+            },
+            .tag_union => |tag_union| blk: {
+                if (tag_union.tags.len == 0) break :blk .{ .canonical = .zst };
+                const node = try self.reserveCachedLayoutNode(resolved);
+                try self.tagUnionLayout(node, tag_union);
+                break :blk .{ .local = node };
+            },
+            .callable_set => |callable_set| blk: {
+                const node = try self.reserveCachedLayoutNode(resolved);
+                try self.callableSetLayout(node, callable_set);
+                break :blk .{ .local = node };
+            },
+            .erased_fn => |erased| blk: {
+                const node = try self.reserveCachedLayoutNode(resolved);
+                try self.erasedFnLayout(node, erased);
+                break :blk .{ .local = node };
+            },
             .vacant_callable_slot => .{ .canonical = .zst },
         };
     }
 
-    fn erasedFnLayout(self: *IrBuilder, erased: Exec.Type.ErasedFnType) LowerResourceError!Ast.LayoutRef {
+    fn reserveCachedLayoutNode(
+        self: *IrBuilder,
+        ty: Exec.Type.TypeId,
+    ) LowerResourceError!Layout.NodeId {
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        try self.layout_cache.put(ty, .{ .local = node });
+        return node;
+    }
+
+    fn resolveLayoutType(self: *const IrBuilder, ty: Exec.Type.TypeId) Exec.Type.TypeId {
+        var current = ty;
+        while (true) {
+            switch (self.input.types.getType(current)) {
+                .link => |next| current = next,
+                else => return current,
+            }
+        }
+    }
+
+    fn erasedFnLayout(
+        self: *IrBuilder,
+        node: Layout.NodeId,
+        erased: Exec.Type.ErasedFnType,
+    ) LowerResourceError!void {
         const field_count: usize = if (erased.capture_ty == null) 1 else 2;
         const fields = try self.allocator.alloc(Ast.Var, field_count);
         defer self.allocator.free(fields);
@@ -1859,7 +1935,7 @@ const IrBuilder = struct {
                 .symbol = symbol_mod.Symbol.none,
             };
         }
-        return try self.structLayout(fields);
+        try self.fillStructLayoutNode(node, fields);
     }
 
     fn listElementType(self: *IrBuilder, ty: Exec.Type.TypeId) Exec.Type.TypeId {

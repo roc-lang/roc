@@ -3298,19 +3298,19 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: direct proc-value capture transform",
         .source_kind = .module,
         .source =
-        \\make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
-        \\make_boxed_runner = |f|
-        \\    Box.box(|x|
+        \\make_boxed_runner : (I64 -> I64) -> Box((I64 -> I64))
+        \\make_boxed_runner = |f| Box.box(|x| {
         \\        boxed = Box.box(f)
         \\        run = Box.unbox(boxed)
         \\        run(x)
-        \\    )
+        \\})
         \\
         \\main : I64
-        \\main =
+        \\main = {
         \\    boxed = make_boxed_runner(|n| n + 1)
         \\    run = Box.unbox(boxed)
         \\    run(41)
+        \\}
         ,
         .expected = .{ .inspect_str = "42" },
     },
@@ -3319,16 +3319,17 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\make_runner : (I64 -> I64) -> (I64 -> I64)
-        \\make_runner = |f|
-        \\    |x|
+        \\make_runner = |f| |x| {
         \\        boxed = Box.box(f)
         \\        run = Box.unbox(boxed)
         \\        run(x)
+        \\}
         \\
         \\main : I64
-        \\main =
+        \\main = {
         \\    runner = make_runner(|n| n + 1)
         \\    runner(41)
+        \\}
         ,
         .expected = .{ .inspect_str = "42" },
     },
@@ -3336,17 +3337,18 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: branch join packs finite closure into erased result",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box(I64 -> I64)
+        \\make_boxed : {} -> Box((I64 -> I64))
         \\make_boxed = |_| Box.box(|x| x + 1)
         \\
         \\choose : Bool -> (I64 -> I64)
-        \\choose = |use_box|
+        \\choose = |use_box| {
         \\    boxed = make_boxed({})
         \\    if use_box {
         \\        Box.unbox(boxed)
         \\    } else {
         \\        |n| n + 10
         \\    }
+        \\}
         \\
         \\main : I64
         \\main = choose(Bool.True)(41) + choose(Bool.False)(41)
@@ -3357,7 +3359,7 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: erased function argument transform",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box((I64 -> I64) -> I64)
+        \\make_boxed : {} -> Box(((I64 -> I64) -> I64))
         \\make_boxed = |_| Box.box(|f| f(41))
         \\
         \\apply_boxed : (I64 -> I64) -> I64
@@ -3372,7 +3374,7 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: erased function result transform",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box(I64 -> (I64 -> I64))
+        \\make_boxed : {} -> Box((I64 -> (I64 -> I64)))
         \\make_boxed = |_| Box.box(|n| |x| x + n)
         \\
         \\make_adder : I64 -> (I64 -> I64)
@@ -3387,10 +3389,10 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: erased record callable field transform",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box({ f : I64 -> I64 } -> I64)
+        \\make_boxed : {} -> Box(({ f : (I64 -> I64) } -> I64))
         \\make_boxed = |_| Box.box(|r| r.f(1))
         \\
-        \\apply_record : { f : I64 -> I64 } -> I64
+        \\apply_record : { f : (I64 -> I64) } -> I64
         \\apply_record = Box.unbox(make_boxed({}))
         \\
         \\main : I64
@@ -3402,10 +3404,10 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: erased list callable element transform",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box(List(I64 -> I64) -> U64)
+        \\make_boxed : {} -> Box((List((I64 -> I64)) -> U64))
         \\make_boxed = |_| Box.box(|fs| List.len(fs))
         \\
-        \\apply_list : List(I64 -> I64) -> U64
+        \\apply_list : List((I64 -> I64)) -> U64
         \\apply_list = Box.unbox(make_boxed({}))
         \\
         \\main : U64
@@ -3417,15 +3419,15 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: erased tag payload callable transform",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box([Apply(I64 -> I64), Keep(I64)] -> I64)
-        \\make_boxed = |_| Box.box(|value|
+        \\make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+        \\make_boxed = |_| Box.box(|value| {
         \\    match value {
         \\        Apply(f) => f(1)
         \\        Keep(n) => n
         \\    }
-        \\)
+        \\})
         \\
-        \\apply_tag : [Apply(I64 -> I64), Keep(I64)] -> I64
+        \\apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
         \\apply_tag = Box.unbox(make_boxed({}))
         \\
         \\main : I64
@@ -3437,10 +3439,10 @@ pub const tests = [_]TestCase{
         .name = "boxed lambda round trip: nested box does not authorize unrelated erasure",
         .source_kind = .module,
         .source =
-        \\make_boxed : {} -> Box({ inner : Box(I64 -> I64) } -> I64)
+        \\make_boxed : {} -> Box(({ inner : Box((I64 -> I64)) } -> I64))
         \\make_boxed = |_| Box.box(|record| Box.unbox(record.inner)(1))
         \\
-        \\apply_record : { inner : Box(I64 -> I64) } -> I64
+        \\apply_record : { inner : Box((I64 -> I64)) } -> I64
         \\apply_record = Box.unbox(make_boxed({}))
         \\
         \\main : I64
