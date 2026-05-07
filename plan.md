@@ -8085,6 +8085,14 @@ aligned offset above. There are no flags. There is no separate descriptor
 allocation. There is no second pointer chase from the boxed erased callable to a
 capture allocation created only for erased dispatch.
 
+Backends whose function references are not native linear-memory addresses still
+use this same two-word payload shape. For example, the Wasm backend stores
+funcref table indices in the pointer-sized `callable_fn_ptr` and `on_drop`
+slots. `callable_fn_ptr` is never null. The nullable `on_drop` slot uses `0` for
+no callback and a nonzero table index for the compiled capture-final-drop
+helper. That is a backend representation of the same runtime fields, not a
+descriptor, not a discriminant, and not a layout lookup path.
+
 The erased function pointer uses the call site's statically known erased-call
 ABI. The ordinary fixed-arity Roc arguments come first. The hidden capture
 pointer is last, so the capture is naturally ignorable by no-capture procedures.

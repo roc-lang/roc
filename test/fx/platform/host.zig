@@ -944,7 +944,7 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: 
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
 }
 
-/// Hosted function: Host.get_greeting! (index 1 - sorted alphabetically)
+/// Hosted function: Host.get_greeting! (index 5 - sorted alphabetically)
 /// This tests hosted effects on opaque types with data (not just []).
 /// Takes Host { name: Str } as first argument, returns Str
 fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *const extern struct { name: RocStr }) callconv(.c) void {
