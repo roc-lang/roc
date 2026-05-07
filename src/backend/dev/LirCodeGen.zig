@@ -183,6 +183,9 @@ pub const BuiltinFn = enum {
     list_free_flat_list,
     box_decref_with,
     box_free_with,
+    erased_callable_incref,
+    erased_callable_decref,
+    erased_callable_free,
 
     // Numeric operations
     dec_to_str,
@@ -274,6 +277,9 @@ pub const BuiltinFn = enum {
             .list_free_flat_list => "roc_builtins_list_free_flat_list",
             .box_decref_with => "roc_builtins_box_decref_with",
             .box_free_with => "roc_builtins_box_free_with",
+            .erased_callable_incref => "roc_builtins_erased_callable_incref",
+            .erased_callable_decref => "roc_builtins_erased_callable_decref",
+            .erased_callable_free => "roc_builtins_erased_callable_free",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -4504,6 +4510,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(assign.next, locals, visited);
                 },
+                .assign_packed_erased_fn => |assign| {
+                    if (assign.capture) |capture| {
+                        try locals.put(localKey(capture), capture);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
                 .assign_low_level => |assign| {
                     for (self.store.getLocalSpan(assign.args)) |arg| {
                         try locals.put(localKey(arg), arg);
@@ -8102,6 +8114,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
+        fn emitBuiltinInternalRcHelperErasedCallableIncref(
+            self: *Self,
+            ptr_slot: i32,
+            count_slot: i32,
+            roc_ops_slot: i32,
+        ) Allocator.Error!void {
+            const value_ptr_reg = try self.allocTempGeneral();
+            const payload_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(payload_reg);
+            defer self.codegen.freeGeneral(value_ptr_reg);
+
+            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(payload_reg);
+            try builder.addMemArg(frame_ptr, count_slot);
+            try builder.addMemArg(frame_ptr, roc_ops_slot);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_incref), .erased_callable_incref);
+        }
+
+        fn emitBuiltinInternalRcHelperErasedCallableDrop(
+            self: *Self,
+            builtin_fn: BuiltinFn,
+            fn_addr: usize,
+            ptr_slot: i32,
+            roc_ops_slot: i32,
+        ) Allocator.Error!void {
+            const value_ptr_reg = try self.allocTempGeneral();
+            const payload_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(payload_reg);
+            defer self.codegen.freeGeneral(value_ptr_reg);
+
+            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(payload_reg);
+            try builder.addMemArg(frame_ptr, roc_ops_slot);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+        }
+
         fn generateBuiltinInternalRcHelperBody(
             self: *Self,
             helper_key: RcHelperKey,
@@ -8141,6 +8195,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .box_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_free_with),
                     box_plan,
+                    ptr_slot,
+                    roc_ops_slot,
+                ),
+                .erased_callable_incref => try self.emitBuiltinInternalRcHelperErasedCallableIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .erased_callable_decref => try self.emitBuiltinInternalRcHelperErasedCallableDrop(
+                    .erased_callable_decref,
+                    @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref),
+                    ptr_slot,
+                    roc_ops_slot,
+                ),
+                .erased_callable_free => try self.emitBuiltinInternalRcHelperErasedCallableDrop(
+                    .erased_callable_free,
+                    @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_free),
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -9093,28 +9160,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const closure_layout = self.localLayout(closure_local);
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
-            if (builtin.mode == .Debug and closure_layout_val.tag != .struct_) {
+            if (builtin.mode == .Debug and closure_layout_val.tag != .erased_callable) {
                 std.debug.panic(
-                    "Dev/codegen invariant violated: erased call closure local {d} must have struct layout, got {s}",
+                    "Dev/codegen invariant violated: erased call closure local {d} must have erased_callable layout, got {s}",
                     .{ @intFromEnum(closure_local), @tagName(closure_layout_val.tag) },
                 );
             }
 
-            const closure_size = self.layout_store.layoutSizeAlign(closure_layout_val).size;
             const closure_loc = try self.emitValueLocal(closure_local);
-            const closure_offset = try self.ensureOnStack(closure_loc, closure_size);
-            const closure_idx = closure_layout_val.data.struct_.idx;
-
-            const fn_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(closure_idx, 0));
-            const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_idx, 0);
-            if (builtin.mode == .Debug and fn_layout != .opaque_ptr) {
-                std.debug.panic(
-                    "Dev/codegen invariant violated: erased call closure field 0 must be opaque_ptr, got {d}",
-                    .{@intFromEnum(fn_layout)},
-                );
+            const closure_ptr_slot = self.codegen.allocStackSlot(8);
+            {
+                const closure_ptr_reg = try self.ensureInGeneralReg(closure_loc);
+                try self.emitStore(.w64, frame_ptr, closure_ptr_slot, closure_ptr_reg);
+                self.codegen.freeGeneral(closure_ptr_reg);
             }
-
-            const capture_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(closure_idx, 1));
             const has_capture_arg = capture_layout != null;
 
             const arg_refs = self.store.getLocalSpan(call_args);
@@ -9137,7 +9196,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const capture_layout_idx = capture_layout.?;
                 const capture_size = self.getLayoutSize(capture_layout_idx);
                 if (capture_layout_idx == .opaque_ptr or capture_size == 0) {
-                    const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, 0, capture_layout_idx);
+                    const capture_ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
+                    try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
+                    const capture_stack_offset = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, capture_stack_offset, capture_ptr_reg);
+                    self.codegen.freeGeneral(capture_ptr_reg);
+                    const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, 0, capture_layout_idx);
                     const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
                     arg_infos[arg_refs.len] = .{
                         .loc = capture_arg,
@@ -9146,7 +9211,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 } else {
                     const capture_ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_offset + capture_offset);
+                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
+                    try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
 
                     const capture_stack_offset = self.codegen.allocStackSlot(capture_size);
                     const temp_reg = try self.allocTempGeneral();
@@ -9180,7 +9246,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .emit_roc_ops = true,
             });
 
-            try self.emitLoad(.w64, scratch_reg, frame_ptr, closure_offset + fn_offset);
+            const closure_ptr_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, closure_ptr_reg, frame_ptr, closure_ptr_slot);
+            try self.emitLoad(.w64, scratch_reg, closure_ptr_reg, 0);
+            self.codegen.freeGeneral(closure_ptr_reg);
             try self.emitCallToReg(scratch_reg);
 
             if (stack_spill_size > 0) {
@@ -9188,6 +9257,91 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+        }
+
+        fn generatePackedErasedFn(
+            self: *Self,
+            proc_id: lir.LIR.LirProcSpecId,
+            capture: ?LocalId,
+            target_layout: layout.Idx,
+            capture_layout: ?layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const target_layout_val = self.layout_store.getLayout(target_layout);
+            if (builtin.mode == .Debug and target_layout_val.tag != .erased_callable) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: packed erased fn target layout must be erased_callable, got {s}",
+                    .{@tagName(target_layout_val.tag)},
+                );
+            }
+            if ((capture != null) != (capture_layout != null)) {
+                std.debug.panic("Dev/codegen invariant violated: packed erased fn capture/layout presence differed", .{});
+            }
+
+            const capture_size: u32 = if (capture_layout) |layout_idx| self.getLayoutSize(layout_idx) else 0;
+            const payload_size = builtins.erased_callable.payloadSize(capture_size);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(payload_size));
+                try builder.addImmArg(builtins.erased_callable.payload_alignment);
+                try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+            }
+            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+            const heap_ptr = try self.allocTempGeneral();
+            try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+            const proc_addr = try self.allocTempGeneral();
+            const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+            if (proc.code_start == unresolved_proc_code_start)
+                try self.emitPendingProcAddress(proc_id, proc_addr)
+            else
+                try self.emitInternalCodeAddress(proc.code_start, proc_addr);
+            try self.emitStore(.w64, heap_ptr, 0, proc_addr);
+            self.codegen.freeGeneral(proc_addr);
+
+            const on_drop_reg = try self.allocTempGeneral();
+            if (capture_layout) |layout_idx| {
+                if (try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, layout_idx)) |callback_reg| {
+                    try self.emitMovRegReg(on_drop_reg, callback_reg);
+                    self.codegen.freeGeneral(callback_reg);
+                } else {
+                    try self.codegen.emitLoadImm(on_drop_reg, 0);
+                }
+            } else {
+                try self.codegen.emitLoadImm(on_drop_reg, 0);
+            }
+            try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
+            self.codegen.freeGeneral(on_drop_reg);
+
+            if (capture) |capture_local| {
+                const layout_idx = capture_layout orelse unreachable;
+                const capture_loc = self.requireExactValueLocationToLayout(
+                    try self.emitValueLocal(capture_local),
+                    self.localLayout(capture_local),
+                    layout_idx,
+                    "packed_erased_fn.capture",
+                );
+                if (capture_size > 0) {
+                    const capture_stack = try self.ensureOnStack(capture_loc, capture_size);
+                    const temp = try self.allocTempGeneral();
+                    try self.copyChunked(
+                        temp,
+                        frame_ptr,
+                        capture_stack,
+                        heap_ptr,
+                        @intCast(builtins.erased_callable.capture_offset),
+                        capture_size,
+                    );
+                    self.codegen.freeGeneral(temp);
+                }
+            }
+
+            return .{ .general_reg = heap_ptr };
         }
 
         fn generateHostedCall(
@@ -12488,6 +12642,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const value_loc = try self.generateErasedCall(
                         assign.closure,
                         assign.args,
+                        self.localLayout(assign.target),
+                        assign.capture_layout,
+                    );
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .assign_packed_erased_fn => |assign| {
+                    const value_loc = try self.generatePackedErasedFn(
+                        assign.proc,
+                        assign.capture,
                         self.localLayout(assign.target),
                         assign.capture_layout,
                     );

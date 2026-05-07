@@ -11,6 +11,7 @@ const str = @import("str.zig");
 const list = @import("list.zig");
 const num = @import("num.zig");
 const utils = @import("utils.zig");
+const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
 const i128h = @import("compiler_rt_128.zig");
 
@@ -28,6 +29,9 @@ pub const allocateWithRefcountC = utils.allocateWithRefcountC;
 pub const increfDataPtrC = utils.increfDataPtrC;
 pub const decrefDataPtrC = utils.decrefDataPtrC;
 pub const freeDataPtrC = utils.freeDataPtrC;
+pub const erasedCallableIncref = erased_callable.incref;
+pub const erasedCallableDecref = erased_callable.decref;
+pub const erasedCallableFree = erased_callable.free;
 
 // Import builtin functions we wrap (using actual function names from str.zig and list.zig)
 const strToUtf8C = str.strToUtf8C;
@@ -718,6 +722,23 @@ pub fn roc_builtins_box_free_with(
     }
 
     freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+}
+
+/// Incref a boxed erased callable payload pointer.
+pub fn roc_builtins_erased_callable_incref(payload_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    erased_callable.incref(payload_ptr, amount, roc_ops);
+}
+
+/// Decref a boxed erased callable payload pointer, running the payload's
+/// `on_drop` callback if the outer refcount reaches zero.
+pub fn roc_builtins_erased_callable_decref(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    erased_callable.decref(payload_ptr, roc_ops);
+}
+
+/// Free a boxed erased callable payload pointer, running the payload's
+/// `on_drop` callback unconditionally first.
+pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    erased_callable.free(payload_ptr, roc_ops);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

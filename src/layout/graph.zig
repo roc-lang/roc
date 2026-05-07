@@ -61,6 +61,7 @@ pub const Node = union(enum) {
     box: Ref,
     list: Ref,
     closure: Ref,
+    erased_callable: void,
     struct_: FieldSpan,
     tag_union: RefSpan,
 };

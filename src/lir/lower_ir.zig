@@ -814,53 +814,16 @@ const Lowerer = struct {
         packed_fn: anytype,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
-        const target_layout = self.store.getLocal(target).layout_idx;
         const has_capture = packed_fn.capture != null;
         if (has_capture != (packed_fn.capture_layout != null)) {
             lirInvariant("lir.lower_ir packed erased fn capture value disagrees with capture layout");
         }
-        const fields = try self.allocator.alloc(LIR.LocalId, 2);
-        defer self.allocator.free(fields);
-        for (fields, 0..) |*field, i| {
-            field.* = try self.store.addLocal(.{
-                .layout_idx = self.structFieldLayout(target_layout, i),
-            });
-        }
-
-        var current = try self.store.addCFStmt(.{ .assign_struct = .{
+        return try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .fields = try self.store.addLocalSpan(fields),
+            .proc = self.lirProcForExecutable(packed_fn.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder"),
+            .capture = if (packed_fn.capture) |capture| try self.lowerVar(capture) else null,
+            .capture_layout = if (packed_fn.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
             .next = next,
-        } });
-
-        if (packed_fn.capture) |capture| {
-            const capture_layout_ref = packed_fn.capture_layout orelse
-                lirInvariant("lir.lower_ir packed erased fn capture value has no capture layout");
-            const capture_layout = try self.lowerLayoutRef(capture_layout_ref);
-            const capture_box = try self.store.addLocal(.{
-                .layout_idx = try self.layouts.insertBox(capture_layout),
-            });
-            current = try self.lowerPhysicalSlotInto(fields[1], capture_box, current);
-            const args = [_]LIR.LocalId{try self.lowerVar(capture)};
-            current = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = capture_box,
-                .op = .box_box,
-                .rc_effect = LIR.LowLevel.box_box.rcEffect(),
-                .args = try self.store.addLocalSpan(&args),
-                .next = current,
-            } });
-        } else {
-            current = try self.store.addCFStmt(.{ .assign_literal = .{
-                .target = fields[1],
-                .value = .null_ptr,
-                .next = current,
-            } });
-        }
-
-        return try self.store.addCFStmt(.{ .assign_literal = .{
-            .target = fields[0],
-            .value = .{ .proc_ref = self.lirProcForExecutable(packed_fn.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder") },
-            .next = current,
         } });
     }
 

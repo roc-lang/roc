@@ -130,6 +130,23 @@ const Inserter = struct {
                 current_start = try self.retainSpan(assign.args, current_start);
                 return current_start;
             },
+            .assign_packed_erased_fn => |assign| {
+                var current_start = start;
+                current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                self.addOwnedIfRc(owned, assign.target);
+                var next = try self.rewritePath(assign.next, owned, options);
+                if (assign.capture) |capture| {
+                    next = try self.retainLocalIfRc(capture, next);
+                }
+                self.store.getCFStmtPtr(start).* = .{ .assign_packed_erased_fn = .{
+                    .target = assign.target,
+                    .proc = assign.proc,
+                    .capture = assign.capture,
+                    .capture_layout = assign.capture_layout,
+                    .next = next,
+                } };
+                return current_start;
+            },
             .assign_low_level => |assign| {
                 var current_start = start;
                 if ((assign.rc_effect.result_aliases_consumed_args & ~assign.rc_effect.consume_args) != 0) {
@@ -498,6 +515,10 @@ const Inserter = struct {
                 self.addOwnedIfRc(owned, assign.target);
                 try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
+            .assign_packed_erased_fn => |assign| {
+                self.addOwnedIfRc(owned, assign.target);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
+            },
             .assign_low_level => |assign| {
                 const preserve_consumed_args = try self.preserveConsumedArgMask(
                     assign.args,
@@ -712,6 +733,7 @@ const Inserter = struct {
             .assign_literal => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
             .assign_call => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
             .assign_call_erased => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
+            .assign_packed_erased_fn => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
             .assign_low_level => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
             .assign_list => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
             .assign_struct => |assign| try self.collectJoinBodies(assign.next, join_bodies, visited),
@@ -782,6 +804,8 @@ const Inserter = struct {
                 try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_call_erased => |assign| (assign.closure == needle or
                 self.spanUsesLocal(assign.args, needle) or
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
+            .assign_packed_erased_fn => |assign| ((assign.capture != null and assign.capture.? == needle) or
                 try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_low_level => |assign| (self.spanUsesLocal(assign.args, needle) or
                 try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),

@@ -58,7 +58,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                     break :blk .{ .stack_memory = tu_layout.size };
                 },
                 .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
-                .box, .box_of_zst => .{ .primitive = .i32 }, // pointer
+                .box, .box_of_zst, .erased_callable => .{ .primitive = .i32 }, // pointer
                 .list, .list_of_zst => .{ .stack_memory = 12 }, // RocList
                 .closure => blk: {
                     // For unwrapped_capture closures, the runtime value IS the capture
@@ -143,7 +143,7 @@ fn layoutStorageByteSizeWasm(layout_idx: layout.Idx, ls: *const layout.Store) u3
             },
         },
         .list, .list_of_zst => 12,
-        .box, .box_of_zst => 4,
+        .box, .box_of_zst, .erased_callable => 4,
         .struct_ => structSizeWasm(ls, l.data.struct_.idx),
         .tag_union => tagUnionLayoutWithStore(l.data.tag_union.idx, ls).size,
         .closure => ls.layoutSize(l),
@@ -160,7 +160,7 @@ fn layoutByteAlignWasm(layout_idx: layout.Idx, ls: *const layout.Store) u32 {
             .int => @intCast(l.data.scalar.data.int.alignment().toByteUnits()),
             .frac => @intCast(l.data.scalar.data.frac.alignment().toByteUnits()),
         },
-        .list, .list_of_zst, .box, .box_of_zst => 4,
+        .list, .list_of_zst, .box, .box_of_zst, .erased_callable => 4,
         .struct_ => structAlignWasm(ls, l.data.struct_.idx),
         .tag_union => tagUnionLayoutWithStore(l.data.tag_union.idx, ls).alignment,
         .closure => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),

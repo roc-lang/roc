@@ -257,6 +257,9 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
+    exportUtilsFn(@import("erased_callable.zig").incref, "erased_callable.incref");
+    exportUtilsFn(@import("erased_callable.zig").decref, "erased_callable.decref");
+    exportUtilsFn(@import("erased_callable.zig").free, "erased_callable.free");
 }
 
 // Export helpers - Must be run inside a comptime

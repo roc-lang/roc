@@ -892,6 +892,14 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
+                .assign_packed_erased_fn => |assign| debugPrint(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
                 .assign_low_level => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
@@ -940,6 +948,7 @@ pub const Interpreter = struct {
                 .assign_literal => |assign| assign.next,
                 .assign_call => |assign| assign.next,
                 .assign_call_erased => |assign| assign.next,
+                .assign_packed_erased_fn => |assign| assign.next,
                 .assign_low_level => |assign| assign.next,
                 .assign_list => |assign| assign.next,
                 .assign_struct => |assign| assign.next,
@@ -1161,6 +1170,7 @@ pub const Interpreter = struct {
             .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_call_erased => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_packed_erased_fn => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_low_level => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_list => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_struct => |assign| try self.collectJoinPoints(join_points, assign.next),
@@ -1254,6 +1264,15 @@ pub const Interpreter = struct {
                             result.layout,
                             self.store.getLocal(assign.target).layout_idx,
                         ),
+                    );
+                    current = assign.next;
+                },
+                .assign_packed_erased_fn => |assign| {
+                    self.setLocalChecked(
+                        frame,
+                        current,
+                        assign.target,
+                        try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign.target).layout_idx),
                     );
                     current = assign.next;
                 },
@@ -1606,6 +1625,14 @@ pub const Interpreter = struct {
                 },
                 .assign_call_erased => |assign| {
                     debugPrint("    {d}: assign_call_erased target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                .assign_packed_erased_fn => |assign| {
+                    debugPrint("    {d}: assign_packed_erased_fn target={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
                         @intFromEnum(assign.next),
@@ -2059,25 +2086,22 @@ pub const Interpreter = struct {
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
-        const closure_base = self.resolveStructBaseValue(closure_value, closure_layout);
-        const closure_layout_val = self.layout_store.getLayout(closure_base.layout);
-        if (closure_layout_val.tag != .struct_) {
+        const closure_layout_val = self.layout_store.getLayout(closure_layout);
+        if (closure_layout_val.tag != .erased_callable) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased call closure local {d} does not have struct layout",
+                "LIR/interpreter invariant violated: erased call closure local {d} does not have erased_callable layout",
                 .{@intFromEnum(closure_local)},
             );
         }
 
-        const fn_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
-        const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
-        if (fn_layout != .opaque_ptr) {
+        const closure_ptr = self.readBoxedDataPointer(closure_value) orelse {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased call closure field 0 layout {d} is not opaque_ptr",
-                .{@intFromEnum(fn_layout)},
+                "LIR/interpreter invariant violated: erased call closure local {d} has null payload",
+                .{@intFromEnum(closure_local)},
             );
-        }
+        };
 
-        const proc_id = self.decodeProcRef(closure_base.value.offset(fn_offset));
+        const proc_id = self.decodeProcRef(.{ .ptr = closure_ptr });
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_args = self.store.getLocalSpan(proc_spec.args);
         const has_capture_arg = capture_layout != null;
@@ -2098,22 +2122,10 @@ pub const Interpreter = struct {
 
         const capture_layout_idx = capture_layout.?;
         const capture_value = blk: {
-            const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-            const stored_capture_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-            const stored_capture_value = self.normalizeValueToLayout(
-                closure_base.value.offset(capture_offset),
-                stored_capture_layout,
-                stored_capture_layout,
-            );
-            if (capture_layout_idx == .opaque_ptr) break :blk stored_capture_value;
+            const capture_ptr = builtins.erased_callable.capturePtr(closure_ptr);
+            if (capture_layout_idx == .opaque_ptr) break :blk Value{ .ptr = capture_ptr };
             if (capture_layout_idx == .zst) break :blk Value.zst;
 
-            const capture_ptr = self.readBoxedDataPointer(stored_capture_value) orelse {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased call capture pointer is null for non-opaque capture layout {d}",
-                    .{@intFromEnum(capture_layout_idx)},
-                );
-            };
             const materialized = try self.alloc(capture_layout_idx);
             const size = self.helper.sizeOf(capture_layout_idx);
             if (size > 0) materialized.copyFrom(.{ .ptr = capture_ptr }, size);
@@ -2130,6 +2142,64 @@ pub const Interpreter = struct {
             .value = try self.evalProcById(proc_id, all_args, all_arg_layouts),
             .layout = proc_spec.ret_layout,
         };
+    }
+
+    fn evalPackedErasedFn(
+        self: *LirInterpreter,
+        frame: *Frame,
+        assign: anytype,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
+        const has_capture = assign.capture != null;
+        if (has_capture != (assign.capture_layout != null)) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: packed erased fn capture/layout presence differed",
+                .{},
+            );
+        }
+
+        const capture_size: usize = if (assign.capture_layout) |capture_layout|
+            self.helper.sizeOf(capture_layout)
+        else
+            0;
+        const data_ptr = try self.allocRocDataWithRc(
+            builtins.erased_callable.payloadSize(capture_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+        );
+
+        const proc_encoded: usize = @intFromEnum(assign.proc) + 1;
+        switch (self.layout_store.targetUsize().size()) {
+            4 => {
+                @as(*u32, @ptrCast(@alignCast(data_ptr))).* = @intCast(proc_encoded);
+                @as(*u32, @ptrCast(@alignCast(data_ptr + @sizeOf(u32)))).* = if (assign.capture_layout) |layout_idx|
+                    @intCast(@intFromEnum(layout_idx) + 1)
+                else
+                    0;
+            },
+            8 => {
+                @as(*usize, @ptrCast(@alignCast(data_ptr))).* = proc_encoded;
+                @as(*usize, @ptrCast(@alignCast(data_ptr + @sizeOf(usize)))).* = if (assign.capture_layout) |layout_idx|
+                    @intFromEnum(layout_idx) + 1
+                else
+                    0;
+            },
+            else => unreachable,
+        }
+
+        if (assign.capture) |capture_local| {
+            const capture_layout = assign.capture_layout orelse unreachable;
+            const capture_value = try self.getLocalChecked(frame, capture_local);
+            const capture_ptr = builtins.erased_callable.capturePtr(data_ptr);
+            const size = self.helper.sizeOf(capture_layout);
+            if (size > 0) {
+                @memcpy(capture_ptr[0..size], capture_value.ptr[0..size]);
+            }
+        }
+
+        const result = try self.alloc(target_layout);
+        self.writeBoxedDataPointer(result, data_ptr);
+        return result;
     }
 
     const AllocatedStruct = struct {
@@ -2679,6 +2749,30 @@ pub const Interpreter = struct {
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
             },
+            .erased_callable_incref => {
+                const alloc_ptr = val.read(?[*]u8);
+                builtins.utils.increfDataPtrC(alloc_ptr, @intCast(count), &self.roc_ops);
+            },
+            .erased_callable_decref => {
+                const alloc_ptr = val.read(?[*]u8);
+                self.performErasedCallableFinalDropIfUnique(alloc_ptr, .decref, count);
+                builtins.utils.decrefDataPtrC(
+                    alloc_ptr,
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
+                    &self.roc_ops,
+                );
+            },
+            .erased_callable_free => {
+                const alloc_ptr = val.read(?[*]u8);
+                self.performErasedCallableFinalDrop(alloc_ptr, .free, count);
+                builtins.utils.freeDataPtrC(
+                    alloc_ptr,
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
+                    &self.roc_ops,
+                );
+            },
             .struct_ => |struct_plan| {
                 const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                 var i: u32 = 0;
@@ -2735,6 +2829,43 @@ pub const Interpreter = struct {
                 self.performRawRcPlan(child_plan, element_val, count);
             }
         }
+    }
+
+    fn performErasedCallableFinalDropIfUnique(
+        self: *LirInterpreter,
+        data_ptr: ?[*]u8,
+        op: layout_mod.RcOp,
+        count: u16,
+    ) void {
+        if (data_ptr == null) return;
+        if (!builtins.utils.isUnique(data_ptr, &self.roc_ops)) return;
+        self.performErasedCallableFinalDrop(data_ptr, op, count);
+    }
+
+    fn performErasedCallableFinalDrop(
+        self: *LirInterpreter,
+        data_ptr: ?[*]u8,
+        op: layout_mod.RcOp,
+        count: u16,
+    ) void {
+        const ptr = data_ptr orelse return;
+        const capture_layout = self.readInterpreterErasedCallableCaptureLayout(ptr) orelse return;
+        if (capture_layout == .zst) return;
+        self.performRawRcPlan(
+            self.layout_store.rcHelperPlan(.{ .op = op, .layout_idx = capture_layout }),
+            .{ .ptr = builtins.erased_callable.capturePtr(ptr) },
+            count,
+        );
+    }
+
+    fn readInterpreterErasedCallableCaptureLayout(self: *const LirInterpreter, data_ptr: [*]u8) ?layout_mod.Idx {
+        const raw: usize = switch (self.layout_store.targetUsize().size()) {
+            4 => @as(*const u32, @ptrCast(@alignCast(data_ptr + @sizeOf(u32)))).*,
+            8 => @as(*const usize, @ptrCast(@alignCast(data_ptr + @sizeOf(usize)))).*,
+            else => unreachable,
+        };
+        if (raw == 0) return null;
+        return @enumFromInt(@as(u32, @intCast(raw - 1)));
     }
 
     // ── Value ↔ RocStr/RocList marshaling ──
@@ -4878,6 +5009,15 @@ pub const Interpreter = struct {
 
         if (raw_ptr == 0) return null;
         return @ptrFromInt(raw_ptr);
+    }
+
+    fn writeBoxedDataPointer(self: *const LirInterpreter, boxed: Value, data_ptr: ?[*]u8) void {
+        const raw_ptr: usize = if (data_ptr) |ptr| @intFromPtr(ptr) else 0;
+        switch (self.layout_store.targetUsize().size()) {
+            4 => boxed.write(u32, @intCast(raw_ptr)),
+            8 => boxed.write(usize, raw_ptr),
+            else => unreachable,
+        }
     }
 
     fn allocBoxOfZstValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {

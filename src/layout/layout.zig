@@ -23,6 +23,7 @@ pub const LayoutTag = enum(u4) {
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
     struct_, // Unified struct layout for both records and tuples (fields stable-sorted by alignment)
     closure,
+    erased_callable, // Refcounted boxed erased function payload: header + inline capture bytes
     zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
     tag_union, // Tag union with variant-specific layouts for proper refcounting
 };
@@ -159,6 +160,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     struct_: StructLayout,
     closure: ClosureLayout,
+    erased_callable: void,
     zst: void,
     tag_union: TagUnionLayout,
 };
@@ -575,6 +577,7 @@ pub const Layout = packed struct {
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
+            .erased_callable => target_usize.alignment(),
             .struct_ => self.data.struct_.alignment,
             .tag_union => self.data.tag_union.alignment,
             .closure => target_usize.alignment(),
@@ -654,6 +657,14 @@ pub const Layout = packed struct {
         };
     }
 
+    /// Runtime layout for an erased callable stored behind a `Box(T)` boundary.
+    /// The value itself is one ordinary Roc refcounted payload pointer.
+    /// The heap payload starts with `builtins.erased_callable.Payload` and then
+    /// stores the erased callable's hidden capture bytes inline.
+    pub fn erasedCallable() Layout {
+        return Layout{ .data = .{ .erased_callable = {} }, .tag = .erased_callable };
+    }
+
     /// Zero-sized type layout (empty records, empty tuples, phantom types, etc.)
     pub fn zst() Layout {
         return Layout{ .data = .{ .zst = {} }, .tag = .zst };
@@ -673,6 +684,7 @@ pub const Layout = packed struct {
             },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
+            .erased_callable => true, // Boxed erased functions need refcounting
             else => false,
         };
     }
@@ -696,6 +708,7 @@ pub const Layout = packed struct {
             .struct_ => self.data.struct_.alignment == other.data.struct_.alignment and
                 self.data.struct_.idx.int_idx == other.data.struct_.idx.int_idx,
             .closure => self.data.closure.captures_layout_idx == other.data.closure.captures_layout_idx,
+            .erased_callable => true,
             .zst => true, // No additional data
             .tag_union => self.data.tag_union.alignment == other.data.tag_union.alignment and
                 self.data.tag_union.idx.int_idx == other.data.tag_union.idx.int_idx,

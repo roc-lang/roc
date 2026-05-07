@@ -344,6 +344,7 @@ pub const Store = struct {
                 try self.appendInternKeyIdx(layout.data.box);
             },
             .box_of_zst => try self.startInternKey(.box_of_zst),
+            .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
                 try self.startInternKey(.list);
                 try self.appendInternKeyIdx(layout.data.list);
@@ -474,6 +475,14 @@ pub const Store = struct {
     pub fn insertBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
         const layout = Layout.box(elem_idx);
         return try self.insertLayout(layout);
+    }
+
+    /// Insert the canonical runtime layout for an erased callable behind a
+    /// `Box(function)` boundary. The value is one pointer to a Roc refcounted
+    /// allocation whose payload stores the callable header followed by inline
+    /// capture bytes.
+    pub fn insertErasedCallable(self: *Self) std.mem.Allocator.Error!Idx {
+        return try self.insertLayout(Layout.erasedCallable());
     }
 
     /// Insert a List layout with the given element layout.
@@ -808,7 +817,7 @@ pub const Store = struct {
                                         if (self_finder.component_ids[@intFromEnum(child_id)] != component_id) continue;
                                         switch (self_finder.graph.getNode(child_id)) {
                                             .struct_ => {},
-                                            .pending, .nominal, .box, .list, .closure, .tag_union => {
+                                            .pending, .nominal, .box, .list, .closure, .erased_callable, .tag_union => {
                                                 has_boxable_slot_edge = true;
                                                 break;
                                             },
@@ -817,7 +826,7 @@ pub const Store = struct {
                                 }
                             }
                         },
-                        .pending, .nominal, .box, .list, .closure => {},
+                        .pending, .nominal, .box, .list, .closure, .erased_callable => {},
                     }
                 }
 
@@ -863,7 +872,7 @@ pub const Store = struct {
                         }
                         break :blk false;
                     },
-                    .pending, .box, .list, .closure => false,
+                    .pending, .box, .list, .closure, .erased_callable => false,
                 };
             }
 
@@ -896,7 +905,7 @@ pub const Store = struct {
                             }
                         }
                     },
-                    .pending, .box, .list, .closure => {},
+                    .pending, .box, .list, .closure, .erased_callable => {},
                 }
 
                 if (self_finder.lowlink[index] != self_finder.visit_index[index]) return;
@@ -942,6 +951,7 @@ pub const Store = struct {
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
                 .closure => Layout.closure(.zst),
+                .erased_callable => Layout.erasedCallable(),
                 .struct_, .tag_union => Layout.zst(),
             });
         }
@@ -949,7 +959,7 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             value_layouts[i] = switch (node) {
                 .pending => unreachable,
-                .nominal, .box, .list, .closure, .struct_, .tag_union => raw_layouts[i],
+                .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => raw_layouts[i],
             };
         }
 
@@ -983,7 +993,7 @@ pub const Store = struct {
                         const index = @intFromEnum(node_id);
                         if (self_resolver.resolved[index]) break :blk true;
                         break :blk switch (self_resolver.graph.getNode(node_id)) {
-                            .box, .list, .closure => true,
+                            .box, .list, .closure, .erased_callable => true,
                             .pending, .nominal, .struct_, .tag_union => false,
                         };
                     },
@@ -1024,9 +1034,9 @@ pub const Store = struct {
                     .struct_ => true,
                     .tag_union => switch (self_resolver.graph.getNode(child_id)) {
                         .struct_ => false,
-                        .pending, .nominal, .box, .list, .closure, .tag_union => true,
+                        .pending, .nominal, .box, .list, .closure, .erased_callable, .tag_union => true,
                     },
-                    .pending, .nominal, .box, .list, .closure => false,
+                    .pending, .nominal, .box, .list, .closure, .erased_callable => false,
                 };
             }
 
@@ -1074,6 +1084,12 @@ pub const Store = struct {
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
                             Layout.closure(self_resolver.valueIdx(child)),
+                        );
+                    },
+                    .erased_callable => {
+                        self_resolver.store.updateLayout(
+                            self_resolver.raw_layouts[index],
+                            Layout.erasedCallable(),
                         );
                     },
                     .struct_ => |span| {
@@ -1229,9 +1245,9 @@ pub const Store = struct {
                     .struct_ => true,
                     .tag_union => switch (self_finalizer.graph.getNode(child_id)) {
                         .struct_ => false,
-                        .pending, .nominal, .box, .list, .closure, .tag_union => true,
+                        .pending, .nominal, .box, .list, .closure, .erased_callable, .tag_union => true,
                     },
-                    .pending, .nominal, .box, .list, .closure => false,
+                    .pending, .nominal, .box, .list, .closure, .erased_callable => false,
                 };
             }
 
@@ -1276,6 +1292,7 @@ pub const Store = struct {
                             .closure => |child| try self_finalizer.store.insertLayout(
                                 Layout.closure(try self_finalizer.pointerChildLayout(child)),
                             ),
+                            .erased_callable => try self_finalizer.store.insertErasedCallable(),
                             .struct_ => |span| blk_struct: {
                                 const graph_fields = self_finalizer.graph.getFields(span);
                                 if (graph_fields.len == 0) break :blk_struct .zst;
@@ -1766,7 +1783,7 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },
-            .box, .box_of_zst => .{
+            .box, .box_of_zst, .erased_callable => .{
                 .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
@@ -1884,6 +1901,7 @@ pub const Store = struct {
             .list_of_zst => return false,
             .box => return true,
             .box_of_zst => return false,
+            .erased_callable => return true,
             .zst => return false,
             .struct_, .tag_union, .closure => {},
         }
@@ -1917,7 +1935,7 @@ pub const Store = struct {
                 const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
                 break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
             },
-            .scalar, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
         };
 
         try visit_states.put(key, if (contains_refcounted) .yes else .no);

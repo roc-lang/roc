@@ -81,6 +81,9 @@ pub const Plan = union(enum) {
     box_incref,
     box_decref: BoxPlan,
     box_free: BoxPlan,
+    erased_callable_incref,
+    erased_callable_decref,
+    erased_callable_free,
     struct_: StructPlan,
     tag_union: TagUnionPlan,
     closure: HelperKey,
@@ -124,6 +127,11 @@ pub const Resolver = struct {
                 .incref => .box_incref,
                 .decref => .{ .box_decref = self.boxPlan(helper_key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(helper_key.layout_idx) },
+            },
+            .erased_callable => switch (helper_key.op) {
+                .incref => .erased_callable_incref,
+                .decref => .erased_callable_decref,
+                .free => .erased_callable_free,
             },
             .struct_ => .{ .struct_ = .{
                 .struct_idx = l.data.struct_.idx,

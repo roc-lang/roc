@@ -69,6 +69,9 @@ comptime {
     @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
     @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
     @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
+    @export(&dw.roc_builtins_erased_callable_incref, .{ .name = "roc_builtins_erased_callable_incref" });
+    @export(&dw.roc_builtins_erased_callable_decref, .{ .name = "roc_builtins_erased_callable_decref" });
+    @export(&dw.roc_builtins_erased_callable_free, .{ .name = "roc_builtins_erased_callable_free" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });

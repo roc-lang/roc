@@ -195,6 +195,13 @@ pub const CFStmt = union(enum) {
         capture_layout: ?layout.Idx,
         next: CFStmtId,
     },
+    assign_packed_erased_fn: struct {
+        target: LocalId,
+        proc: LirProcSpecId,
+        capture: ?LocalId,
+        capture_layout: ?layout.Idx,
+        next: CFStmtId,
+    },
     assign_low_level: struct {
         target: LocalId,
         op: LowLevel,
