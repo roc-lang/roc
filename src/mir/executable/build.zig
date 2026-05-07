@@ -282,12 +282,26 @@ pub const ErasedAdapterProcReservation = struct {
     executable_proc: Ast.ExecutableProcId,
 };
 
+/// Public `ErasedDirectProcAdapterReservation` declaration.
+pub const ErasedDirectProcAdapterReservation = struct {
+    code: canonical.ErasedDirectProcCodeRef,
+    sig_key: repr.ErasedFnSigKey,
+    target_specialization: repr.ExecutableSpecializationKey,
+    executable_proc: Ast.ExecutableProcId,
+};
+
 const ErasedAdapterRequirement = struct {
     key: repr.ErasedAdapterKey,
     payload_solve_session: ?repr.RepresentationSolveSessionId = null,
     payload_artifact_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     member_targets: []const repr.ExecutableSpecializationKey = &.{},
+};
+
+const ErasedDirectProcAdapterRequirement = struct {
+    code: canonical.ErasedDirectProcCodeRef,
+    sig_key: repr.ErasedFnSigKey,
+    target_specialization: repr.ExecutableSpecializationKey,
 };
 
 const ConstInstanceAdapterVisitKey = struct {
@@ -306,6 +320,7 @@ pub const Program = struct {
     types: Type.Store,
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
+    erased_direct_proc_adapters: std.ArrayList(ErasedDirectProcAdapterReservation),
     erased_adapter_procs: std.ArrayList(ErasedAdapterProcReservation),
     root_procs: std.ArrayList(Ast.ExecutableProcId),
     root_metadata: std.ArrayList(ids.RootMetadata),
@@ -325,6 +340,7 @@ pub const Program = struct {
             .types = Type.Store.init(allocator),
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
+            .erased_direct_proc_adapters = .empty,
             .erased_adapter_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
@@ -339,6 +355,8 @@ pub const Program = struct {
         self.root_procs.deinit(self.allocator);
         for (self.erased_adapter_procs.items) |*proc| deinitErasedAdapterProcReservation(self.allocator, proc);
         self.erased_adapter_procs.deinit(self.allocator);
+        for (self.erased_direct_proc_adapters.items) |*proc| deinitErasedDirectProcAdapterReservation(self.allocator, proc);
+        self.erased_direct_proc_adapters.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
         self.types.deinit();
@@ -380,13 +398,20 @@ pub fn run(
     defer proc_exec_map.deinit();
     const normal_proc_count = input.procs.items.len;
     const executable_synthetic_proc_count = input.executable_synthetic_procs.items.len;
+    var erased_direct_adapter_requirements = try collectErasedDirectProcAdapterRequirements(allocator, &input);
+    defer {
+        for (erased_direct_adapter_requirements.items) |*requirement| deinitErasedDirectProcAdapterRequirement(allocator, requirement);
+        erased_direct_adapter_requirements.deinit(allocator);
+    }
+
     var erased_adapter_requirements = try collectErasedAdapterRequirements(allocator, &input, program.artifact_views);
     defer {
         for (erased_adapter_requirements.items) |*requirement| deinitErasedAdapterRequirement(allocator, requirement);
         erased_adapter_requirements.deinit(allocator);
     }
+    const erased_direct_adapter_proc_count = erased_direct_adapter_requirements.items.len;
     const erased_adapter_proc_count = erased_adapter_requirements.items.len;
-    const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_adapter_proc_count;
+    const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_direct_adapter_proc_count + erased_adapter_proc_count;
 
     try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len + input.executable_synthetic_proc_instances.items.len));
     for (input.procs.items, 0..) |proc, i| {
@@ -397,9 +422,23 @@ pub fn run(
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + synthetic_instance.synthetic_index)));
         proc_exec_map.putAssumeCapacity(synthetic_instance.representation_instance, executable_proc);
     }
+    try program.erased_direct_proc_adapters.ensureTotalCapacity(allocator, erased_direct_adapter_proc_count);
+    for (erased_direct_adapter_requirements.items, 0..) |requirement, i| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + executable_synthetic_proc_count + i)));
+        var target_specialization = try repr.cloneExecutableSpecializationKey(allocator, requirement.target_specialization);
+        errdefer repr.deinitExecutableSpecializationKey(allocator, &target_specialization);
+        program.erased_direct_proc_adapters.appendAssumeCapacity(.{
+            .code = requirement.code,
+            .sig_key = requirement.sig_key,
+            .target_specialization = target_specialization,
+            .executable_proc = executable_proc,
+        });
+    }
+
     try program.erased_adapter_procs.ensureTotalCapacity(allocator, erased_adapter_proc_count);
     for (erased_adapter_requirements.items, 0..) |requirement, i| {
-        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + executable_synthetic_proc_count + i)));
+        const proc_offset = normal_proc_count + executable_synthetic_proc_count + erased_direct_adapter_proc_count + i;
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(proc_offset)));
         const member_targets = try cloneExecutableSpecializationKeySlice(allocator, requirement.member_targets);
         errdefer deinitExecutableSpecializationKeySlice(allocator, member_targets);
         program.erased_adapter_procs.appendAssumeCapacity(.{
@@ -458,6 +497,13 @@ pub fn run(
             .executable_proc = executable_proc,
             .origin = .{ .source = synthetic.source_proc },
             .body = try lowerExecutableSyntheticProc(allocator, &program, synthetic, executable_proc),
+        });
+    }
+    for (program.erased_direct_proc_adapters.items) |adapter| {
+        program.procs.appendAssumeCapacity(.{
+            .executable_proc = adapter.executable_proc,
+            .origin = .{ .erased_direct_proc_adapter = adapter.code },
+            .body = try lowerErasedDirectProcAdapterProc(allocator, &program, &type_lowerer, adapter, adapter.executable_proc),
         });
     }
     for (program.erased_adapter_procs.items) |adapter| {
@@ -598,6 +644,32 @@ fn programCallableSetMember(
         if (member.member == member_id) return member;
     }
     return null;
+}
+
+fn collectErasedDirectProcAdapterRequirements(
+    allocator: Allocator,
+    input: *const LambdaSolved.Solve.Program,
+) Allocator.Error!std.ArrayList(ErasedDirectProcAdapterRequirement) {
+    var adapters = std.ArrayList(ErasedDirectProcAdapterRequirement).empty;
+    errdefer {
+        for (adapters.items) |*adapter| deinitErasedDirectProcAdapterRequirement(allocator, adapter);
+        adapters.deinit(allocator);
+    }
+
+    for (input.solve_sessions.items) |*session| {
+        for (session.representation_store.callable_emission_plans) |plan| {
+            switch (plan) {
+                .erase_proc_value => |erase| try appendErasedDirectProcAdapterRequirement(allocator, &adapters, erase),
+                .already_erased,
+                .finite,
+                .erase_finite_set,
+                .pending_proc_value,
+                => {},
+            }
+        }
+    }
+
+    return adapters;
 }
 
 fn collectErasedAdapterRequirements(
@@ -1161,6 +1233,49 @@ fn collectComptimeCallableLeafAdapters(
     }
 }
 
+fn appendErasedDirectProcAdapterRequirement(
+    allocator: Allocator,
+    adapters: *std.ArrayList(ErasedDirectProcAdapterRequirement),
+    erase: repr.ProcValueErasePlan,
+) Allocator.Error!void {
+    const code = canonical.ErasedDirectProcCodeRef{
+        .proc_value = erase.proc_value,
+        .capture_shape_key = erase.capture_shape_key,
+    };
+    for (adapters.items) |*existing| {
+        if (!erasedDirectProcCodeRefEql(existing.code, code)) continue;
+        if (!repr.erasedFnSigKeyEql(existing.sig_key, erase.erased_fn_sig_key)) {
+            executableInvariant("direct erased proc adapter requirement had conflicting erased signatures");
+        }
+        if (!repr.executableSpecializationKeyEql(existing.target_specialization, erase.executable_specialization_key)) {
+            executableInvariant("direct erased proc adapter requirement had conflicting target specializations");
+        }
+        return;
+    }
+
+    var target_specialization = try repr.cloneExecutableSpecializationKey(allocator, erase.executable_specialization_key);
+    errdefer repr.deinitExecutableSpecializationKey(allocator, &target_specialization);
+    try adapters.append(allocator, .{
+        .code = code,
+        .sig_key = erase.erased_fn_sig_key,
+        .target_specialization = target_specialization,
+    });
+}
+
+fn deinitErasedDirectProcAdapterRequirement(
+    allocator: Allocator,
+    requirement: *ErasedDirectProcAdapterRequirement,
+) void {
+    repr.deinitExecutableSpecializationKey(allocator, &requirement.target_specialization);
+}
+
+fn deinitErasedDirectProcAdapterReservation(
+    allocator: Allocator,
+    reservation: *ErasedDirectProcAdapterReservation,
+) void {
+    repr.deinitExecutableSpecializationKey(allocator, &reservation.target_specialization);
+}
+
 fn appendErasedAdapterRequirement(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedAdapterRequirement),
@@ -1259,6 +1374,11 @@ fn erasedAdapterKeyEql(a: repr.ErasedAdapterKey, b: repr.ErasedAdapterKey) bool 
     return repr.canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and
         repr.callableSetKeyEql(a.callable_set_key, b.callable_set_key) and
         repr.erasedFnSigKeyEql(a.erased_fn_sig_key, b.erased_fn_sig_key) and
+        repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+}
+
+fn erasedDirectProcCodeRefEql(a: canonical.ErasedDirectProcCodeRef, b: canonical.ErasedDirectProcCodeRef) bool {
+    return canonical.procedureCallableRefEql(a.proc_value, b.proc_value) and
         repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
 }
 
@@ -1370,6 +1490,137 @@ fn lowerExecutableSyntheticProc(
             erased,
         ),
     }
+}
+
+fn lowerErasedDirectProcAdapterProc(
+    allocator: Allocator,
+    program: *Program,
+    type_lowerer: *TypeLowerer,
+    reservation: ErasedDirectProcAdapterReservation,
+    executable_proc: Ast.ExecutableProcId,
+) Allocator.Error!Ast.DefId {
+    _ = type_lowerer;
+    const target_proc = executableProcForCallable(program, reservation.code.proc_value);
+    const target_record = executableProcRecord(program, target_proc);
+    const target_def = program.ast.defs.items[@intFromEnum(target_record.body)];
+    const target_source = switch (target_record.origin) {
+        .source => |source| source,
+        .erased_direct_proc_adapter,
+        .erased_adapter,
+        => executableInvariant("direct erased proc adapter target was not an ordinary source procedure"),
+    };
+    const target_fn = switch (target_def.value) {
+        .fn_ => |fn_| fn_,
+        .hosted_fn => executableInvariant("direct erased proc adapter target cannot be a hosted function"),
+    };
+    const target_args = program.ast.typed_values.items[target_fn.args.start..][0..target_fn.args.len];
+    const has_capture_payload = reservation.sig_key.capture_ty != null;
+    if (has_capture_payload and target_args.len == 0) {
+        executableInvariant("direct erased proc adapter target has capture payload but no target capture argument");
+    }
+    const explicit_arg_count = if (has_capture_payload) target_args.len - 1 else target_args.len;
+
+    const hidden_capture_arg_ty = try program.types.addType(.{ .primitive = .erased });
+    const wrapper_arg_count = explicit_arg_count + 1;
+    const wrapper_args = try allocator.alloc(Ast.TypedValue, wrapper_arg_count);
+    defer allocator.free(wrapper_args);
+    for (target_args[0..explicit_arg_count], 0..) |target_arg, i| {
+        wrapper_args[i] = .{
+            .ty = target_arg.ty,
+            .value = program.ast.freshValueRef(),
+        };
+    }
+    const hidden_capture_value = program.ast.freshValueRef();
+    wrapper_args[explicit_arg_count] = .{
+        .ty = hidden_capture_arg_ty,
+        .value = hidden_capture_value,
+    };
+    const args = try program.ast.addTypedValueSpan(wrapper_args);
+
+    const result_ty = program.ast.exprs.items[@intFromEnum(target_fn.body)].ty;
+    const body = try lowerErasedDirectProcAdapterBody(
+        allocator,
+        program,
+        target_source,
+        target_def.specialization_key,
+        target_proc,
+        wrapper_args[0..explicit_arg_count],
+        hidden_capture_value,
+        if (has_capture_payload) target_args[explicit_arg_count].ty else null,
+        result_ty,
+    );
+
+    var specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_def.specialization_key);
+    specialization_key.callable_repr_mode = .erased_callable;
+    specialization_key.capture_shape_key = reservation.code.capture_shape_key;
+    return try program.ast.addDef(.{
+        .proc = executable_proc,
+        .origin = .{ .erased_direct_proc_adapter = reservation.code },
+        .specialization_key = specialization_key,
+        .value = .{ .fn_ = .{
+            .args = args,
+            .body = body,
+        } },
+    });
+}
+
+fn lowerErasedDirectProcAdapterBody(
+    allocator: Allocator,
+    program: *Program,
+    source_proc: canonical.MirProcedureRef,
+    target_specialization: repr.ExecutableSpecializationKey,
+    target_proc: Ast.ExecutableProcId,
+    explicit_args: []const Ast.TypedValue,
+    hidden_capture_handle: Ast.ExecutableValueRef,
+    hidden_capture_payload_ty: ?Type.TypeId,
+    result_ty: Type.TypeId,
+) Allocator.Error!Ast.ExprId {
+    var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+    defer stmt_ids.deinit(allocator);
+
+    const capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_payload_ty) |payload_ty| blk: {
+        const handle_ty = try program.types.addType(.{ .primitive = .erased });
+        const handle_expr = try program.ast.addValueRefExpr(handle_ty, hidden_capture_handle);
+        const value = program.ast.freshValueRef();
+        const payload_expr = try program.ast.addExpr(payload_ty, value, .{ .low_level = .{
+            .op = .erased_capture_load,
+            .rc_effect = base.LowLevel.erased_capture_load.rcEffect(),
+            .args = try program.ast.addExprSpan(&.{handle_expr}),
+        } });
+        try stmt_ids.append(allocator, try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = payload_expr,
+        } }));
+        break :blk value;
+    } else null;
+
+    const direct_arg_count = explicit_args.len + if (capture_value == null) @as(usize, 0) else 1;
+    const direct_args = try allocator.alloc(Ast.DirectCallArg, direct_arg_count);
+    defer allocator.free(direct_args);
+    for (explicit_args, 0..) |arg, i| {
+        direct_args[i] = .{ .value = arg.value };
+    }
+    if (capture_value) |payload| {
+        direct_args[explicit_args.len] = .{ .value = payload };
+    }
+
+    const raw_result_value = program.ast.freshValueRef();
+    const direct_call = try program.ast.addExpr(result_ty, raw_result_value, .{ .call_direct = .{
+        .source = source_proc.proc,
+        .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_specialization),
+        .executable_proc = target_proc,
+        .direct_args = try program.ast.addDirectCallArgSpan(direct_args),
+    } });
+    try stmt_ids.append(allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = raw_result_value,
+        .body = direct_call,
+    } }));
+
+    const final_expr = try program.ast.addValueRefExpr(result_ty, raw_result_value);
+    return try program.ast.addExpr(result_ty, raw_result_value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmt_ids.items),
+        .final_expr = final_expr,
+    } });
 }
 
 fn lowerErasedFiniteSetAdapterProc(
@@ -1537,8 +1788,8 @@ fn lowerErasedFiniteSetAdapterBody(
         const handle_expr = try program.ast.addValueRefExpr(handle_ty, hidden_capture_handle);
         const value = program.ast.freshValueRef();
         const payload_expr = try program.ast.addExpr(payload_ty, value, .{ .low_level = .{
-            .op = .box_unbox,
-            .rc_effect = base.LowLevel.box_unbox.rcEffect(),
+            .op = .erased_capture_load,
+            .rc_effect = base.LowLevel.erased_capture_load.rcEffect(),
             .args = try program.ast.addExprSpan(&.{handle_expr}),
         } });
         const stmt = try program.ast.addStmt(.{ .decl = .{
@@ -4334,7 +4585,7 @@ fn executableProcForErasedCode(
     code: canonical.ErasedCallableCodeRef,
 ) Ast.ExecutableProcId {
     return switch (code) {
-        .direct_proc_value => |direct| executableProcForCallable(program, direct.proc_value),
+        .direct_proc_value => |direct| executableProcForErasedDirectProcAdapter(program, direct),
         .finite_set_adapter => |adapter| executableProcForErasedAdapter(program, adapter),
     };
 }
@@ -4346,11 +4597,22 @@ fn executableProcForCallable(
     for (program.procs.items) |proc| {
         const source = switch (proc.origin) {
             .source => |source| source,
+            .erased_direct_proc_adapter,
             .erased_adapter => continue,
         };
         if (canonical.procedureCallableRefEql(source.callable, callable)) return proc.executable_proc;
     }
     executableInvariant("executable erased promoted wrapper referenced an unreserved callable procedure");
+}
+
+fn executableProcRecord(
+    program: *const Program,
+    executable_proc: Ast.ExecutableProcId,
+) Proc {
+    for (program.procs.items) |proc| {
+        if (proc.executable_proc == executable_proc) return proc;
+    }
+    executableInvariant("executable proc record lookup reached an unreserved proc");
 }
 
 fn executableProcForSpecializationKey(
@@ -4372,6 +4634,16 @@ fn executableProcForErasedAdapter(
         if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
     }
     executableInvariant("executable erased callable referenced an unreserved finite-set adapter");
+}
+
+fn executableProcForErasedDirectProcAdapter(
+    program: *const Program,
+    code: canonical.ErasedDirectProcCodeRef,
+) Ast.ExecutableProcId {
+    for (program.erased_direct_proc_adapters.items) |proc| {
+        if (erasedDirectProcCodeRefEql(proc.code, code)) return proc.executable_proc;
+    }
+    executableInvariant("executable erased callable referenced an unreserved direct erased entry adapter");
 }
 
 const PublishedTypeLowerer = struct {
@@ -5123,6 +5395,16 @@ const BodyBuilder = struct {
             if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
         }
         executableInvariant("executable finite-set erase plan referenced an unreserved erased adapter");
+    }
+
+    fn executableProcForErasedDirectProcAdapter(
+        self: *const BodyBuilder,
+        code: canonical.ErasedDirectProcCodeRef,
+    ) Ast.ExecutableProcId {
+        for (self.program.erased_direct_proc_adapters.items) |proc| {
+            if (erasedDirectProcCodeRefEql(proc.code, code)) return proc.executable_proc;
+        }
+        executableInvariant("executable proc-value erase plan referenced an unreserved direct erased entry adapter");
     }
 
     fn lowerExecutableValueType(
@@ -8540,7 +8822,10 @@ const BodyBuilder = struct {
             executableInvariant("executable proc-value erase has captures but no hidden capture type");
         }
 
-        const selected_executable_proc = self.executableProcForSpecializationKey(erase.executable_specialization_key);
+        const selected_executable_proc = self.executableProcForErasedDirectProcAdapter(.{
+            .proc_value = erase.proc_value,
+            .capture_shape_key = erase.capture_shape_key,
+        });
 
         const lowered_captures: []Ast.ExprId = if (capture_items.len == 0)
             &.{}

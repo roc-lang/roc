@@ -550,6 +550,7 @@ pub const DefVal = union(enum) {
 /// Public `ProcOrigin` declaration.
 pub const ProcOrigin = union(enum) {
     source: canonical.MirProcedureRef,
+    erased_direct_proc_adapter: canonical.ErasedDirectProcCodeRef,
     erased_adapter: repr.ErasedAdapterKey,
 };
 

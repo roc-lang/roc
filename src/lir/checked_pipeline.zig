@@ -367,6 +367,15 @@ fn collectExecutableErasedCallableCodeOrigins(
                 .exec_ret_ty = def.specialization_key.exec_ret_ty,
                 .capture_shape_key = def.specialization_key.capture_shape_key,
             },
+            .erased_direct_proc_adapter => |direct| .{
+                .executable_proc = proc.executable_proc,
+                .code = .{ .direct_proc_value = direct },
+                .finite_adapter_member_targets = &.{},
+                .source_fn_ty = direct.proc_value.source_fn_ty,
+                .exec_arg_tys = exec_arg_tys,
+                .exec_ret_ty = def.specialization_key.exec_ret_ty,
+                .capture_shape_key = direct.capture_shape_key,
+            },
             .erased_adapter => |adapter| blk: {
                 if (!repr.canonicalTypeKeyEql(def.specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
                     checkedPipelineInvariant("erased adapter executable code origin source function type differs from specialization key");

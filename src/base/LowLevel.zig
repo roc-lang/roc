@@ -394,6 +394,7 @@ pub const LowLevel = enum {
     // Box operations
     box_box,
     box_unbox,
+    erased_capture_load,
 
     // Comparison
     compare,
@@ -562,7 +563,9 @@ pub const LowLevel = enum {
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
-            .box_unbox => RcEffect.retainsResult(),
+            .box_unbox,
+            .erased_capture_load,
+            => RcEffect.retainsResult(),
 
             .str_is_eq,
             .str_contains,
