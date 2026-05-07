@@ -62,6 +62,7 @@ pub const LoweringMode = enum {
 /// Public `MonoSpecializationRequest` declaration.
 pub const MonoSpecializationRequest = struct {
     template: canonical.ProcedureTemplateRef,
+    callable_template: ?canonical.CallableProcedureTemplateRef = null,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
@@ -77,11 +78,22 @@ pub const ReservedState = enum {
 /// Public `ReservedMonoProc` declaration.
 pub const ReservedMonoProc = struct {
     proc: canonical.MonoSpecializedProcRef,
+    callable_template: canonical.CallableProcedureTemplateRef,
     local_handle: MonoProcHandle,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView,
     state: ReservedState,
 };
+
+fn mirProcedureRefFromReserved(reserved: ReservedMonoProc) canonical.MirProcedureRef {
+    return .{
+        .proc = reserved.proc.proc,
+        .callable = .{
+            .template = reserved.callable_template,
+            .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
+        },
+    };
+}
 
 /// Public `Proc` declaration.
 pub const Proc = struct {
@@ -149,7 +161,7 @@ pub const Program = struct {
     ) Allocator.Error!void {
         try self.procs.append(self.allocator, .{
             .key = key,
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .local_handle = reserved.local_handle,
             .fn_ty = fn_ty,
             .body = body,
@@ -285,7 +297,7 @@ pub fn run(
             .reason = seed.reason,
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
-        try program.root_procs.append(allocator, canonical.mirProcedureRefFromMono(reserved.proc));
+        try program.root_procs.append(allocator, mirProcedureRefFromReserved(reserved));
         try program.root_metadata.append(allocator, seed.metadata);
     }
 
@@ -757,7 +769,7 @@ fn executableSyntheticProcForReserved(
                     }
                     break :erased_blk mir_ids.ExecutableSyntheticProc{
                         .artifact = template_lookup.artifact,
-                        .source_proc = canonical.mirProcedureRefFromMono(reserved.proc),
+                        .source_proc = mirProcedureRefFromReserved(reserved),
                         .template = key.template,
                         .signature = executableSyntheticSignatureForErased(template_lookup.checked_types, erased),
                         .executable_type_payloads = template_lookup.executable_type_payloads,
@@ -1331,6 +1343,7 @@ fn reserveProcedureCallableDependency(
     }
     const reserved = try queue.reserve(&program.concrete_source_types, .{
         .template = template,
+        .callable_template = callable.template,
         .requested_fn_ty = requested_fn_ty,
         .reason = reason,
     });
@@ -3841,7 +3854,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .source_fn_ty = source_ty,
@@ -3964,7 +3977,7 @@ const BodyLowerer = struct {
             .imported_closure = inspect.imported_closure,
         });
         return .{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .fn_ty = try self.monoFunctionTypeForStrInspectCall(arg_info.ty, ret_ty),
             .source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
         };
@@ -4450,7 +4463,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -4887,6 +4900,7 @@ const BodyLowerer = struct {
                 const template = checkedTemplateFromCallableTemplate(remapped_callable.template);
                 const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
                     .template = template,
+                    .callable_template = remapped_callable.template,
                     .requested_fn_ty = requested_fn_ty,
                     .reason = reason,
                 });
@@ -4968,7 +4982,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -5013,7 +5027,7 @@ const BodyLowerer = struct {
         const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
         const hosted = try self.hostedProcForReserved(reserved.proc.proc, symbol_name);
         return try self.program.ast.addDef(.{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .debug_name = null,
             .value = .{ .hosted_fn = .{
                 .proc = reserved.proc.proc,
@@ -5073,7 +5087,7 @@ const BodyLowerer = struct {
             .symbol = try self.program.addProcSymbol(reserved.local_handle),
         };
         return try self.program.ast.addDef(.{
-            .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+            .proc = mirProcedureRefFromReserved(reserved),
             .debug_name = null,
             .value = .{ .fn_ = .{
                 .source_fn_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -6691,7 +6705,7 @@ const BodyLowerer = struct {
                     null,
             });
             const call_expr = try self.program.ast.addExpr(ret_info.ty, .{ .call_proc = .{
-                .proc = canonical.mirProcedureRefFromMono(reserved.proc),
+                .proc = mirProcedureRefFromReserved(reserved),
                 .args = lowered_args,
                 .requested_fn_ty = callable_ty,
                 .requested_source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
@@ -7782,7 +7796,7 @@ const BodyLowerer = struct {
             .reason = reason,
             .imported_closure = imported_closure,
         });
-        return canonical.mirProcedureRefFromMono(reserved.proc);
+        return mirProcedureRefFromReserved(reserved);
     }
 
     fn importedClosureForProcedureUse(
@@ -8879,9 +8893,14 @@ pub const Queue = struct {
             .template = request.template,
             .requested_mono_fn_ty = requested_mono_fn_ty,
         };
+        const callable_template = request.callable_template orelse canonical.CallableProcedureTemplateRef{ .checked = request.template };
         if (self.requested.getPtr(key)) |existing| {
             if (existing.requested_fn_ty != request.requested_fn_ty) {
                 debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different concrete payload ref");
+                unreachable;
+            }
+            if (!canonical.callableProcedureTemplateRefEql(existing.callable_template, callable_template)) {
+                debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different callable template identity");
                 unreachable;
             }
             if (existing.imported_closure == null and request.imported_closure != null) {
@@ -8895,6 +8914,7 @@ pub const Queue = struct {
                 .proc = .{ .artifact = request.template.artifact, .proc_base = request.template.proc_base },
                 .specialization = key,
             },
+            .callable_template = callable_template,
             .local_handle = @enumFromInt(@as(u32, @intCast(self.requested.count()))),
             .requested_fn_ty = request.requested_fn_ty,
             .imported_closure = request.imported_closure,

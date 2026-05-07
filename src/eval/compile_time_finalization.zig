@@ -1978,7 +1978,7 @@ fn publishCallableResult(
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!PublishedCallableResult {
-    if (selected.planned_member.capture_slots.len != 0) {
+    if (selectedFiniteCallableRequiresPromotion(selected)) {
         return try promoteFiniteCallableResult(allocator, artifact, lowered, context, checked_fn_root, result_plan_id, selected);
     }
     if (selected.descriptor_member.capture_slots.len != 0) {
@@ -1990,6 +1990,19 @@ fn publishCallableResult(
         .output = .{ .existing_procedure = proc_value },
         .promotion_plan = null,
         .generated_procedure = null,
+    };
+}
+
+fn selectedFiniteCallableRequiresPromotion(
+    selected: SelectedFiniteCallableResult,
+) bool {
+    if (selected.planned_member.capture_slots.len != 0) return true;
+    if (selected.descriptor_member.capture_slots.len != 0) return true;
+    return switch (selected.descriptor_member.proc_value.template) {
+        .lifted => true,
+        .checked,
+        .synthetic,
+        => false,
     };
 }
 
@@ -2137,26 +2150,24 @@ fn publishErasedCallableResult(
         ret_layout,
         ret_value,
     );
-    const finite_adapter_member_targets = try finiteAdapterMemberTargetsForResolvedErasedCode(
-        allocator,
-        lowered,
-        code,
-    );
-    var finite_adapter_member_targets_owned = true;
-    errdefer if (finite_adapter_member_targets_owned) deinitExecutableSpecializationKeySlice(allocator, finite_adapter_member_targets);
-    const capture = try materializeErasedPromotedCapture(
+    const publication = try persistedErasedCallablePublication(
         allocator,
         artifact,
         lowered,
         &capture_builder,
+        reserved,
+        context,
+        code,
         erased,
         ret_layout,
         ret_value,
     );
+    var publication_owned = true;
+    errdefer if (publication_owned) deinitPersistedErasedCallablePublication(allocator, publication);
     const executable_signature = try buildErasedPromotedProcedureExecutableSignature(
         allocator,
         reserved,
-        erased,
+        publication.erased,
         params,
     );
     const transforms = try publishErasedPromotedWrapperValueTransforms(
@@ -2165,28 +2176,28 @@ fn publishErasedCallableResult(
         executable_signature,
     );
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
-        .source_fn_ty = erased.source_fn_ty,
+        .source_fn_ty = publication.erased.source_fn_ty,
         .params = params,
         .executable_signature = executable_signature,
-        .sig_key = erased.sig_key,
-        .code = code,
-        .finite_adapter_member_targets = finite_adapter_member_targets,
-        .capture = capture,
+        .sig_key = publication.erased.sig_key,
+        .code = publication.code,
+        .finite_adapter_member_targets = publication.finite_adapter_member_targets,
+        .capture = publication.capture,
         .arg_transforms = transforms.args,
-        .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
+        .hidden_capture_arg = if (publication.erased.sig_key.capture_ty == null)
             .none
         else
-            .{ .materialized_capture = capture },
+            .{ .materialized_capture = publication.capture },
         .result_transform = transforms.result,
-        .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
+        .provenance = try cloneBoxBoundarySpan(allocator, publication.erased.provenance),
     } });
-    finite_adapter_member_targets_owned = false;
+    publication_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
     const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
         allocator,
         artifact,
         reserved,
-        erased.source_fn_ty,
+        publication.erased.source_fn_ty,
     );
 
     const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .erased = .{
@@ -2195,13 +2206,330 @@ fn publishErasedCallableResult(
     } });
     const proc_value = canonical.ProcedureCallableRef{
         .template = .{ .synthetic = .{ .template = reserved.template } },
-        .source_fn_ty = erased.source_fn_ty,
+        .source_fn_ty = publication.erased.source_fn_ty,
     };
     return .{
         .proc_value = proc_value,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
         .generated_procedure = generated_procedure,
+    };
+}
+
+const PersistedErasedCallablePublication = struct {
+    erased: checked_artifact.ErasedCallableResultPlan,
+    code: canonical.ErasedCallableCodeRef,
+    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
+    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+};
+
+fn persistedErasedCallablePublication(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    capture_builder: *PrivateCaptureBuilder,
+    owner: checked_artifact.ReservedPromotedCallableWrapper,
+    context: PromotedCallablePublicationContext,
+    code: canonical.ErasedCallableCodeRef,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    ret_layout: layout_mod.Idx,
+    ret_value: Value,
+) Allocator.Error!PersistedErasedCallablePublication {
+    switch (code) {
+        .direct_proc_value => return .{
+            .erased = erased,
+            .code = code,
+            .finite_adapter_member_targets = &.{},
+            .capture = try materializeErasedPromotedCapture(
+                allocator,
+                artifact,
+                lowered,
+                capture_builder,
+                erased,
+                ret_layout,
+                ret_value,
+            ),
+        },
+        .finite_set_adapter => {},
+    }
+
+    return try persistConcreteFiniteAdapterAsSingleton(
+        allocator,
+        artifact,
+        lowered,
+        owner,
+        context,
+        code.finite_set_adapter,
+        erased,
+        ret_layout,
+        ret_value,
+    );
+}
+
+fn deinitPersistedErasedCallablePublication(
+    allocator: Allocator,
+    publication: PersistedErasedCallablePublication,
+) void {
+    deinitExecutableSpecializationKeySlice(allocator, publication.finite_adapter_member_targets);
+}
+
+fn persistConcreteFiniteAdapterAsSingleton(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    owner: checked_artifact.ReservedPromotedCallableWrapper,
+    context: PromotedCallablePublicationContext,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    ret_layout: layout_mod.Idx,
+    ret_value: Value,
+) Allocator.Error!PersistedErasedCallablePublication {
+    const result_plan = switch (erased.capture) {
+        .finite_callable_set_value => |plan| plan,
+        else => compileTimeFinalizationInvariant("persisted finite-set erased adapter did not carry a finite callable-set capture"),
+    };
+    const original_targets = try finiteAdapterMemberTargetsForResolvedErasedCode(
+        allocator,
+        lowered,
+        .{ .finite_set_adapter = adapter },
+    );
+    defer deinitExecutableSpecializationKeySlice(allocator, original_targets);
+
+    const hidden_physical = erasedClosureHiddenCapturePhysical(
+        &lowered.lir_result.layouts,
+        erasedHiddenCaptureLayout(lowered, erased),
+        ret_layout,
+        ret_value,
+    ) orelse {
+        compileTimeFinalizationInvariant("persisted finite-set erased adapter had no hidden capture payload");
+    };
+    const selected = selectFiniteCallableResult(
+        &artifact.comptime_plans,
+        artifact.callable_set_descriptors.descriptors,
+        &lowered.lir_result.layouts,
+        result_plan,
+        hidden_physical.layout_idx,
+        hidden_physical.value,
+    );
+    const member_index = @intFromEnum(selected.planned_member.member);
+    if (member_index >= original_targets.len) {
+        compileTimeFinalizationInvariant("persisted finite-set erased adapter selected member exceeded target count");
+    }
+
+    const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
+        compileTimeFinalizationInvariant("persisted finite-set erased adapter selected member source function type was not published");
+    };
+    const private_context = PromotedCallablePublicationContext{
+        .source_binding = context.source_binding,
+        .base = .{ .private_capture = owner.promoted_ref },
+    };
+    const published_member = try publishCallableResult(
+        allocator,
+        artifact,
+        lowered,
+        private_context,
+        checked_fn_root,
+        result_plan,
+        selected,
+    );
+    const source_proc = mirProcedureRefForPublishedCallable(published_member.proc_value);
+    const target_key = try persistedSingletonAdapterMemberTarget(
+        allocator,
+        published_member.proc_value,
+        source_proc,
+        original_targets[member_index],
+    );
+    errdefer {
+        var owned = target_key;
+        repr.deinitExecutableSpecializationKey(allocator, &owned);
+    }
+    const callable_set_key = persistedSingletonCallableSetKey(published_member.proc_value, source_proc, target_key);
+    try publishPersistedSingletonCallableSetDescriptor(
+        allocator,
+        artifact,
+        callable_set_key,
+        published_member.proc_value,
+        source_proc,
+    );
+    const hidden_capture = try publishPersistedSingletonCallableSetPayload(
+        allocator,
+        artifact,
+        callable_set_key,
+    );
+    const hidden_capture_key = hidden_capture.exec_ty_key;
+    const sig_key = canonical.ErasedFnSigKey{
+        .source_fn_ty = erased.source_fn_ty,
+        .abi = erased.sig_key.abi,
+        .capture_ty = hidden_capture_key,
+    };
+    const hidden_capture_keys = [_]canonical.CanonicalExecValueTypeKey{hidden_capture_key};
+    const capture_shape_key = repr.captureShapeKeyForExecKeys(&hidden_capture_keys);
+    const singleton_adapter = canonical.ErasedAdapterKey{
+        .source_fn_ty = erased.source_fn_ty,
+        .callable_set_key = callable_set_key,
+        .erased_fn_sig_key = sig_key,
+        .capture_shape_key = capture_shape_key,
+    };
+
+    const targets = try allocator.alloc(canonical.ExecutableSpecializationKey, 1);
+    targets[0] = target_key;
+    return .{
+        .erased = .{
+            .source_fn_ty = erased.source_fn_ty,
+            .sig_key = sig_key,
+            .provenance = erased.provenance,
+            .code_plan = erased.code_plan,
+            .capture = erased.capture,
+            .result_ty = erased.result_ty,
+            .executable_signature_payloads = erasedSignaturePayloadsWithHiddenCapture(
+                erased.executable_signature_payloads,
+                hidden_capture,
+                capture_shape_key,
+            ),
+        },
+        .code = .{ .finite_set_adapter = singleton_adapter },
+        .finite_adapter_member_targets = targets,
+        .capture = .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
+            allocator,
+            .{ .finite_callable_set = .{
+                .source_fn_ty = selected.result_plan.source_fn_ty,
+                .callable_set_key = callable_set_key,
+                .selected_member = @enumFromInt(0),
+                .captures = &.{},
+            } },
+        ) },
+    };
+}
+
+fn erasedSignaturePayloadsWithHiddenCapture(
+    payloads: checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads,
+    hidden_capture: checked_artifact.ExecutableHiddenCapturePayload,
+    capture_shape_key: canonical.CaptureShapeKey,
+) checked_artifact.ErasedPromotedProcedureExecutableSignaturePayloads {
+    return .{
+        .source_fn_ty = payloads.source_fn_ty,
+        .param_exec_tys = payloads.param_exec_tys,
+        .param_exec_ty_keys = payloads.param_exec_ty_keys,
+        .wrapper_ret = payloads.wrapper_ret,
+        .wrapper_ret_key = payloads.wrapper_ret_key,
+        .erased_call_args = payloads.erased_call_args,
+        .erased_call_arg_keys = payloads.erased_call_arg_keys,
+        .erased_call_ret = payloads.erased_call_ret,
+        .erased_call_ret_key = payloads.erased_call_ret_key,
+        .hidden_capture = hidden_capture,
+        .capture_shape_key = capture_shape_key,
+    };
+}
+
+fn mirProcedureRefForPublishedCallable(
+    proc_value: canonical.ProcedureCallableRef,
+) canonical.MirProcedureRef {
+    const template = switch (proc_value.template) {
+        .checked => |checked| checked,
+        .synthetic => |synthetic| synthetic.template,
+        .lifted => compileTimeFinalizationInvariant("persisted callable adapter member promotion leaked a lifted procedure"),
+    };
+    return .{
+        .proc = .{
+            .artifact = template.artifact,
+            .proc_base = template.proc_base,
+        },
+        .callable = proc_value,
+    };
+}
+
+fn persistedSingletonAdapterMemberTarget(
+    allocator: Allocator,
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+    original_target: canonical.ExecutableSpecializationKey,
+) Allocator.Error!canonical.ExecutableSpecializationKey {
+    if (!std.mem.eql(u8, &proc_value.source_fn_ty.bytes, &original_target.requested_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("persisted singleton adapter member source function type differs from original target");
+    }
+    return .{
+        .base = source_proc.proc.proc_base,
+        .requested_fn_ty = proc_value.source_fn_ty,
+        .exec_arg_tys = try cloneExecValueTypeKeySlice(allocator, original_target.exec_arg_tys),
+        .exec_ret_ty = original_target.exec_ret_ty,
+        .callable_repr_mode = .direct,
+        .capture_shape_key = repr.captureShapeKeyForExecKeys(&.{}),
+    };
+}
+
+fn persistedSingletonCallableSetKey(
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+    target_key: canonical.ExecutableSpecializationKey,
+) canonical.CanonicalCallableSetKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashPathTag(&hasher, "persisted-singleton-callable-set");
+    hasher.update(&source_proc.proc.artifact.bytes);
+    hashPathU32(&hasher, @intFromEnum(source_proc.proc.proc_base));
+    hasher.update(&proc_value.source_fn_ty.bytes);
+    hasher.update(&target_key.requested_fn_ty.bytes);
+    hashPathU32(&hasher, @intCast(target_key.exec_arg_tys.len));
+    for (target_key.exec_arg_tys) |arg| hasher.update(&arg.bytes);
+    hasher.update(&target_key.exec_ret_ty.bytes);
+    hashPathU32(&hasher, @intFromEnum(target_key.callable_repr_mode));
+    hasher.update(&target_key.capture_shape_key.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn publishPersistedSingletonCallableSetDescriptor(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    key: canonical.CanonicalCallableSetKey,
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+) Allocator.Error!void {
+    const members = [_]canonical.CanonicalCallableSetMember{.{
+        .member = @enumFromInt(0),
+        .proc_value = proc_value,
+        .source_proc = source_proc,
+        .capture_slots = &.{},
+        .capture_shape_key = repr.captureShapeKeyForExecKeys(&.{}),
+    }};
+    const descriptors = [_]canonical.CanonicalCallableSetDescriptor{.{
+        .key = key,
+        .members = members[0..],
+    }};
+    try artifact.callable_set_descriptors.publishFromDescriptors(allocator, descriptors[0..]);
+}
+
+fn publishPersistedSingletonCallableSetPayload(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    key: canonical.CanonicalCallableSetKey,
+) Allocator.Error!checked_artifact.ExecutableHiddenCapturePayload {
+    const payload_key = repr.finiteCallableSetExecValueTypeKey(key);
+    const artifact_ref = canonical.ArtifactRef{ .bytes = artifact.key.bytes };
+    if (artifact.executable_type_payloads.refForKey(artifact_ref, payload_key)) |existing| {
+        return .{
+            .exec_ty = existing,
+            .exec_ty_key = payload_key,
+        };
+    }
+
+    const members = try allocator.alloc(checked_artifact.ExecutableCallableSetMemberPayload, 1);
+    var members_owned = true;
+    errdefer if (members_owned) allocator.free(members);
+    members[0] = .{
+        .member = @enumFromInt(0),
+        .payload_ty = null,
+        .payload_ty_key = null,
+    };
+    _ = try artifact.executable_type_payloads.append(allocator, payload_key, .{ .callable_set = .{
+        .key = key,
+        .members = members,
+    } });
+    members_owned = false;
+    const ref = artifact.executable_type_payloads.refForKey(artifact_ref, payload_key) orelse {
+        compileTimeFinalizationInvariant("persisted singleton callable-set payload was not published");
+    };
+    return .{
+        .exec_ty = ref,
+        .exec_ty_key = payload_key,
     };
 }
 
@@ -2453,6 +2781,14 @@ fn cloneExecutableSpecializationKeySlice(
         initialized += 1;
     }
     return out;
+}
+
+fn cloneExecValueTypeKeySlice(
+    allocator: Allocator,
+    keys: []const canonical.CanonicalExecValueTypeKey,
+) Allocator.Error![]const canonical.CanonicalExecValueTypeKey {
+    if (keys.len == 0) return &.{};
+    return try allocator.dupe(canonical.CanonicalExecValueTypeKey, keys);
 }
 
 fn deinitExecutableSpecializationKeySlice(
