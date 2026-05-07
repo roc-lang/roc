@@ -523,6 +523,7 @@ const BodyFinalizer = struct {
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_local_root => |root| .{ .pending_local_root = root },
             .structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = try self.lowerExpr(eq.lhs),
                 .rhs = try self.lowerExpr(eq.rhs),
@@ -651,7 +652,7 @@ const BodyFinalizer = struct {
         for (shape_fields, 0..) |field_id, i| {
             assemblies[i] = .{
                 .field = field_id,
-                .value = self.recordEvalValue(evals, field_id),
+                .eval_index = self.recordEvalIndex(evals, field_id),
             };
         }
 
@@ -685,7 +686,7 @@ const BodyFinalizer = struct {
         for (mono_args, 0..) |arg, i| {
             const value = try self.lowerExpr(arg);
             evals[i] = .{ .payload = payload_ids[i], .value = value };
-            assemblies[i] = .{ .payload = payload_ids[i], .value = value };
+            assemblies[i] = .{ .payload = payload_ids[i], .eval_index = @intCast(i) };
         }
         return .{ .tag = .{
             .union_shape = shape,
@@ -925,14 +926,14 @@ const BodyFinalizer = struct {
         rowInvariant("row finalization could not find record field label in finalized shape");
     }
 
-    fn recordEvalValue(
+    fn recordEvalIndex(
         self: *const BodyFinalizer,
         evals: []const Ast.RecordFieldEval,
         field_id: RecordFieldId,
-    ) Ast.ExprId {
+    ) u32 {
         _ = self;
-        for (evals) |eval| {
-            if (eval.field == field_id) return eval.value;
+        for (evals, 0..) |eval, i| {
+            if (eval.field == field_id) return @intCast(i);
         }
         rowInvariant("row finalization record assembly field was missing from eval order");
     }

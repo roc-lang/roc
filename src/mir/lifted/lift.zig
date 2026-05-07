@@ -338,6 +338,7 @@ const BodyLifter = struct {
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_local_root => |root| .{ .pending_local_root = root },
             .tag => |tag| .{ .tag = .{
                 .union_shape = tag.union_shape,
                 .tag = tag.tag,
@@ -831,6 +832,7 @@ const BodyLifter = struct {
             .str_lit,
             .const_instance,
             .const_ref,
+            .pending_local_root,
             .unit,
             .crash,
             .runtime_error,
@@ -1278,7 +1280,7 @@ const BodyLifter = struct {
         for (input_items, 0..) |field, i| {
             output_items[i] = .{
                 .field = field.field,
-                .value = try self.lowerExpr(field.value),
+                .eval_index = field.eval_index,
             };
         }
         return try self.output.addRecordFieldAssemblySpan(output_items);
@@ -1306,7 +1308,7 @@ const BodyLifter = struct {
         for (input_items, 0..) |payload, i| {
             output_items[i] = .{
                 .payload = payload.payload,
-                .value = try self.lowerExpr(payload.value),
+                .eval_index = payload.eval_index,
             };
         }
         return try self.output.addTagPayloadAssemblySpan(output_items);
@@ -1451,6 +1453,7 @@ fn collectDirectCallsFromExpr(
         .str_lit,
         .const_instance,
         .const_ref,
+        .pending_local_root,
         .unit,
         .crash,
         .runtime_error,

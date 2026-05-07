@@ -89,13 +89,17 @@ pub const Expr = union(enum) {
     make_union: struct {
         discriminant: u16,
         payload: ?Var,
+        payload_bridge_plan: ?BridgePlanId,
     },
     get_union_id: Var,
     get_union_struct: struct {
         value: Var,
         tag_discriminant: u16,
     },
-    make_struct: Span(Var),
+    make_struct: struct {
+        fields: Span(Var),
+        field_bridge_plans: Span(BridgePlanId),
+    },
     make_list: struct {
         elems: Span(Var),
         elem_bridge_plans: Span(BridgePlanId),

@@ -3225,10 +3225,18 @@ pub const AlreadyErasedCallableTransformPlan = struct {
     sig_key: canonical.ErasedFnSigKey,
 };
 
+/// Public `BoxErasureProvenance` declaration.
+pub const BoxErasureProvenance = union(enum) {
+    /// Local Box(T) boundary from the representation solve session that created the erased value.
+    local_box_boundary: canonical.BoxBoundaryId,
+    /// Promoted executable wrapper whose sealed plan already carries Box(T) erasure authorization.
+    promoted_wrapper: canonical.MirProcedureRef,
+};
+
 /// Public `ValueTransformProvenance` declaration.
 pub const ValueTransformProvenance = union(enum) {
     none,
-    box_erasure: []const canonical.BoxBoundaryId,
+    box_erasure: []const BoxErasureProvenance,
 };
 
 /// Public `ExecutableValueTransformPlan` declaration.
@@ -3563,48 +3571,49 @@ pub const CallableSetDescriptorStore = struct {
         allocator: Allocator,
         source_descriptors: []const canonical.CanonicalCallableSetDescriptor,
     ) Allocator.Error!void {
-        if (self.descriptors.len != 0) {
-            for (source_descriptors) |source| {
-                const existing = self.descriptorFor(source.key) orelse {
-                    checkedArtifactInvariant("callable-set descriptor store was already published with different descriptor keys", .{});
-                };
+        if (source_descriptors.len == 0) return;
+
+        var additions = std.ArrayList(canonical.CanonicalCallableSetDescriptor).empty;
+        defer additions.deinit(allocator);
+        for (source_descriptors) |source| {
+            if (self.descriptorFor(source.key)) |existing| {
                 if (!canonicalCallableSetDescriptorEql(existing.*, source)) {
                     checkedArtifactInvariant("callable-set descriptor store was already published with different descriptor contents", .{});
                 }
+                continue;
             }
-            return;
-        }
-        if (source_descriptors.len == 0) return;
 
-        var unique = std.ArrayList(canonical.CanonicalCallableSetDescriptor).empty;
-        defer unique.deinit(allocator);
-        for (source_descriptors) |source| {
-            var found = false;
-            for (unique.items) |existing| {
+            var duplicate_addition = false;
+            for (additions.items) |existing| {
                 if (!canonicalCallableSetKeyEql(existing.key, source.key)) continue;
-                found = true;
+                duplicate_addition = true;
                 if (!canonicalCallableSetDescriptorEql(existing, source)) {
                     checkedArtifactInvariant("duplicate callable-set descriptor key has different descriptor contents", .{});
                 }
                 break;
             }
-            if (!found) try unique.append(allocator, source);
+            if (!duplicate_addition) try additions.append(allocator, source);
+        }
+        if (additions.items.len == 0) {
+            return;
         }
 
-        const copied = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, unique.items.len);
+        const old = self.descriptors;
+        const copied = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, old.len + additions.items.len);
         errdefer allocator.free(copied);
+        @memcpy(copied[0..old.len], old);
 
-        var descriptor_count: usize = 0;
+        var descriptor_count: usize = old.len;
         errdefer {
-            for (copied[0..descriptor_count]) |descriptor| {
+            for (copied[old.len..descriptor_count]) |descriptor| {
                 for (descriptor.members) |member| allocator.free(member.capture_slots);
                 allocator.free(descriptor.members);
             }
         }
 
-        for (unique.items, 0..) |descriptor, i| {
+        for (additions.items) |descriptor| {
             const members = try cloneCallableSetMembers(allocator, descriptor.members);
-            copied[i] = .{
+            copied[descriptor_count] = .{
                 .key = descriptor.key,
                 .members = members,
             };
@@ -3612,6 +3621,7 @@ pub const CallableSetDescriptorStore = struct {
         }
 
         self.descriptors = copied;
+        if (old.len != 0) allocator.free(old);
     }
 
     pub fn deinit(self: *CallableSetDescriptorStore, allocator: Allocator) void {
@@ -3782,7 +3792,7 @@ pub const MaterializedErasedCallableValue = struct {
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
-    provenance: []const canonical.BoxBoundaryId,
+    provenance: []const BoxErasureProvenance,
 };
 
 /// Public `ErasedCaptureExecutableMaterializationNode` declaration.
@@ -3812,11 +3822,12 @@ pub const ErasedPromotedWrapperBodyPlan = struct {
     executable_signature: ErasedPromotedProcedureExecutableSignature,
     sig_key: canonical.ErasedFnSigKey,
     code: canonical.ErasedCallableCodeRef,
+    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
     capture: ErasedCaptureExecutableMaterializationPlan,
     arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
     hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
     result_transform: PublishedExecutableValueTransformRef,
-    provenance: []const canonical.BoxBoundaryId,
+    provenance: []const BoxErasureProvenance,
 };
 
 /// Public `PromotedCallableBodyPlan` declaration.
@@ -7178,7 +7189,7 @@ pub const FiniteCallableLeafInstance = struct {
 pub const ErasedCallableLeafInstance = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
-    provenance: []const canonical.BoxBoundaryId,
+    provenance: []const BoxErasureProvenance,
     code: canonical.ErasedCallableCodeRef,
     capture: ErasedCaptureExecutableMaterializationPlan,
 };
@@ -7370,7 +7381,7 @@ pub const ErasedCallableResultCodePlan = union(enum) {
 pub const ErasedCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     sig_key: canonical.ErasedFnSigKey,
-    provenance: []const canonical.BoxBoundaryId,
+    provenance: []const BoxErasureProvenance,
     code_plan: ErasedCallableResultCodePlan,
     capture: ErasedCaptureReificationPlan,
     result_ty: canonical.CanonicalExecValueTypeKey,
@@ -7908,6 +7919,7 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
         .erased => |erased| {
             var signature = erased.executable_signature;
             deinitErasedPromotedProcedureExecutableSignature(allocator, &signature);
+            deinitExecutableSpecializationKeySlice(allocator, erased.finite_adapter_member_targets);
             allocator.free(erased.params);
             allocator.free(erased.arg_transforms);
             allocator.free(erased.provenance);
@@ -8317,8 +8329,8 @@ fn verifyExecutableTypePayload(
             if (erased.sig_key.capture_ty != null and erased.capture_ty == null) {
                 std.debug.panic("checked artifact invariant violated: erased executable payload signature has capture but payload is missing", .{});
             }
-            if ((erased.sig_key.capture_ty == null) != (abi.capture_arg == null)) {
-                std.debug.panic("checked artifact invariant violated: erased executable payload signature capture disagrees with ABI payload", .{});
+            if (abi.capture_arg == null) {
+                std.debug.panic("checked artifact invariant violated: erased executable payload ABI has no opaque capture argument", .{});
             }
         },
         .recursive_ref => |ref| {
@@ -8391,8 +8403,8 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     if ((erased.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from signature key", .{});
     }
-    if ((erased.sig_key.capture_ty == null) != (abi.capture_arg == null)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from ABI payload", .{});
+    if (abi.capture_arg == null) {
+        std.debug.panic("checked artifact invariant violated: erased promoted executable ABI has no opaque capture argument", .{});
     }
     if (signature.hidden_capture) |hidden| {
         const capture_ty = erased.sig_key.capture_ty orelse unreachable;
@@ -8491,6 +8503,18 @@ fn verifyPromotedCallableBodyPlan(
         .erased => |erased| {
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
+            }
+            switch (erased.code) {
+                .direct_proc_value => {
+                    if (erased.finite_adapter_member_targets.len != 0) {
+                        std.debug.panic("checked artifact invariant violated: direct erased promoted callable body carried finite adapter member targets", .{});
+                    }
+                },
+                .finite_set_adapter => {
+                    if (erased.finite_adapter_member_targets.len == 0) {
+                        std.debug.panic("checked artifact invariant violated: finite erased promoted callable body has no adapter member targets", .{});
+                    }
+                },
             }
             if (erased.arg_transforms.len != erased.params.len) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable arg transform count differs from wrapper params", .{});
@@ -9184,13 +9208,14 @@ pub const ComptimeErasedCallValueDependency = struct {
     code: ErasedCallableCodeDependency,
     capture_availability: []const ComptimeAvailabilityUse = &.{},
     capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
-    provenance: []const canonical.BoxBoundaryId = &.{},
+    provenance: []const BoxErasureProvenance = &.{},
 };
 
 /// Public `ErasedCallableCodeDependency` declaration.
 pub const ErasedCallableCodeDependency = union(enum) {
     direct_proc_value: ErasedDirectProcCodeDependency,
     finite_set_adapter: ErasedFiniteAdapterDependency,
+    supplied_erased_value: SuppliedErasedValueDependency,
 };
 
 /// Public `ErasedDirectProcCodeDependency` declaration.
@@ -9211,6 +9236,14 @@ pub const ProcValueEraseDependencyPlan = struct {
 pub const ErasedFiniteAdapterDependency = struct {
     adapter_key: canonical.ErasedAdapterKey,
     member_targets: []const canonical.ExecutableSpecializationKey = &.{},
+};
+
+/// Public `SuppliedErasedValueDependency` declaration.
+///
+/// This records a call through an already-erased callable value whose concrete
+/// code is owned by the value producer, not by the procedure being summarized.
+pub const SuppliedErasedValueDependency = struct {
+    sig_key: canonical.ErasedFnSigKey,
 };
 
 /// Public `ConstGraphDependency` declaration.
@@ -9242,7 +9275,7 @@ pub const ErasedCallableDependency = struct {
     code: ErasedCallableCodeDependency,
     capture_availability: []const ComptimeAvailabilityUse = &.{},
     capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
-    provenance: []const canonical.BoxBoundaryId = &.{},
+    provenance: []const BoxErasureProvenance = &.{},
 };
 
 /// Public `ComptimeProcDependencySummary` declaration.
@@ -9492,7 +9525,7 @@ fn deinitErasedCallableDependencyFields(
     code: ErasedCallableCodeDependency,
     availability: []const ComptimeAvailabilityUse,
     concrete: []const ComptimeConcreteValueUse,
-    provenance: []const canonical.BoxBoundaryId,
+    provenance: []const BoxErasureProvenance,
 ) void {
     deinitErasedCallableCodeDependency(allocator, code);
     allocator.free(availability);
@@ -9504,6 +9537,7 @@ fn deinitErasedCallableCodeDependency(allocator: Allocator, code: ErasedCallable
     switch (code) {
         .direct_proc_value => |direct| deinitProcValueEraseDependencyPlan(allocator, direct.erase_plan),
         .finite_set_adapter => |adapter| deinitExecutableSpecializationKeySlice(allocator, adapter.member_targets),
+        .supplied_erased_value => {},
     }
 }
 

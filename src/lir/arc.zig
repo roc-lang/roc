@@ -57,6 +57,9 @@ const Inserter = struct {
     };
 
     fn rewritePath(self: *Inserter, start: LIR.CFStmtId, owned: *OwnedSet, options: RewriteOptions) ResourceError!LIR.CFStmtId {
+        if (options.stop_replacement) |replacement| {
+            if (start == replacement) return start;
+        }
         if (options.stop) |stop| {
             if (start == stop) {
                 const keep = options.keep_at_stop orelse arcInvariant("ARC stop reached without keep set");
@@ -93,7 +96,7 @@ const Inserter = struct {
             },
             .assign_call => |assign| {
                 var current_start = start;
-                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target);
+                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target, options.loop_keep);
                 if (!self.spanUsesLocal(assign.args, assign.target)) {
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
                 }
@@ -132,7 +135,13 @@ const Inserter = struct {
                 if ((assign.rc_effect.result_aliases_consumed_args & ~assign.rc_effect.consume_args) != 0) {
                     arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
                 }
-                const preserve_consumed_args = try self.preserveConsumedArgMask(assign.args, assign.rc_effect.consume_args, assign.next, assign.target);
+                const preserve_consumed_args = try self.preserveConsumedArgMask(
+                    assign.args,
+                    assign.rc_effect.consume_args,
+                    assign.next,
+                    assign.target,
+                    options.loop_keep,
+                );
                 const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
                 if (target_consumed) {
                     owned.unset(assign.target);
@@ -246,7 +255,34 @@ const Inserter = struct {
                 return start;
             },
             .runtime_error => return try self.releaseAll(owned, start),
-            .incref, .decref, .free => arcInvariant("ARC insertion received already-reference-counted LIR"),
+            .incref => |rc| {
+                if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                self.addOwnedIfRc(owned, rc.value);
+                self.store.getCFStmtPtr(start).* = .{ .incref = .{
+                    .value = rc.value,
+                    .count = rc.count,
+                    .next = try self.rewritePath(rc.next, owned, options),
+                } };
+                return start;
+            },
+            .decref => |rc| {
+                if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                owned.unset(rc.value);
+                self.store.getCFStmtPtr(start).* = .{ .decref = .{
+                    .value = rc.value,
+                    .next = try self.rewritePath(rc.next, owned, options),
+                } };
+                return start;
+            },
+            .free => |rc| {
+                if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                owned.unset(rc.value);
+                self.store.getCFStmtPtr(start).* = .{ .free = .{
+                    .value = rc.value,
+                    .next = try self.rewritePath(rc.next, owned, options),
+                } };
+                return start;
+            },
             .switch_stmt => |switch_stmt| return try self.rewriteSwitch(start, switch_stmt, owned, options),
             .for_list => |for_stmt| return try self.rewriteForList(start, for_stmt, owned, options),
             .loop_continue => {
@@ -316,11 +352,11 @@ const Inserter = struct {
             for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                 var branch_owned = try owned.clone();
                 defer branch_owned.deinit();
-                try self.analyzeUntil(branch.body, &branch_owned, continuation, &exit_states);
+                try self.analyzeUntil(branch.body, &branch_owned, continuation, &exit_states, options.loop_keep);
             }
             var default_owned = try owned.clone();
             defer default_owned.deinit();
-            try self.analyzeUntil(switch_stmt.default_branch, &default_owned, continuation, &exit_states);
+            try self.analyzeUntil(switch_stmt.default_branch, &default_owned, continuation, &exit_states, options.loop_keep);
 
             if (exit_states.items.len == 0) {
                 const branches = self.store.getCFSwitchBranchesMut(switch_stmt.branches);
@@ -435,6 +471,7 @@ const Inserter = struct {
         owned: *OwnedSet,
         stop: LIR.CFStmtId,
         exits: *std.ArrayList(OwnedSet),
+        loop_keep: ?*const OwnedSet,
     ) ResourceError!void {
         if (start == stop) {
             try exits.append(self.store.allocator, try owned.clone());
@@ -445,44 +482,56 @@ const Inserter = struct {
         switch (stmt) {
             .assign_ref => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_literal => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_call => |assign| {
-                self.unsetAllArgs(owned, assign.args);
+                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target, loop_keep);
+                self.unsetMaskedArgs(owned, assign.args, arg_ownership.transfer_mask);
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_call_erased => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_low_level => |assign| {
-                self.unsetMaskedArgsExcept(owned, assign.args, assign.rc_effect.consume_args, assign.target);
+                const preserve_consumed_args = try self.preserveConsumedArgMask(
+                    assign.args,
+                    assign.rc_effect.consume_args,
+                    assign.next,
+                    assign.target,
+                    loop_keep,
+                );
+                const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
+                if (target_consumed) {
+                    owned.unset(assign.target);
+                }
+                self.unsetMaskedArgsExcept(owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_list => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_struct => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_tag => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .set_local => |assign| {
                 self.addOwnedIfRc(owned, assign.target);
-                try self.analyzeUntil(assign.next, owned, stop, exits);
+                try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
-            .debug => |debug_stmt| try self.analyzeUntil(debug_stmt.next, owned, stop, exits),
-            .expect => |expect_stmt| try self.analyzeUntil(expect_stmt.next, owned, stop, exits),
+            .debug => |debug_stmt| try self.analyzeUntil(debug_stmt.next, owned, stop, exits, loop_keep),
+            .expect => |expect_stmt| try self.analyzeUntil(expect_stmt.next, owned, stop, exits, loop_keep),
             .switch_stmt => |switch_stmt| {
                 if (switch_stmt.continuation) |continuation| {
                     var switch_exits = std.ArrayList(OwnedSet).empty;
@@ -493,30 +542,41 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         var branch_owned = try owned.clone();
                         defer branch_owned.deinit();
-                        try self.analyzeUntil(branch.body, &branch_owned, continuation, &switch_exits);
+                        try self.analyzeUntil(branch.body, &branch_owned, continuation, &switch_exits, loop_keep);
                     }
                     var default_owned = try owned.clone();
                     defer default_owned.deinit();
-                    try self.analyzeUntil(switch_stmt.default_branch, &default_owned, continuation, &switch_exits);
+                    try self.analyzeUntil(switch_stmt.default_branch, &default_owned, continuation, &switch_exits, loop_keep);
                     if (switch_exits.items.len == 0) return;
                     var common = try switch_exits.items[0].clone();
                     defer common.deinit();
                     for (switch_exits.items[1..]) |*state| common.intersect(state);
-                    try self.analyzeUntil(continuation, &common, stop, exits);
+                    try self.analyzeUntil(continuation, &common, stop, exits, loop_keep);
                     return;
                 }
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                     var branch_owned = try owned.clone();
                     defer branch_owned.deinit();
-                    try self.analyzeUntil(branch.body, &branch_owned, stop, exits);
+                    try self.analyzeUntil(branch.body, &branch_owned, stop, exits, loop_keep);
                 }
                 var default_owned = try owned.clone();
                 defer default_owned.deinit();
-                try self.analyzeUntil(switch_stmt.default_branch, &default_owned, stop, exits);
+                try self.analyzeUntil(switch_stmt.default_branch, &default_owned, stop, exits, loop_keep);
             },
-            .for_list => |for_stmt| try self.analyzeUntil(for_stmt.next, owned, stop, exits),
-            .join => |join_stmt| try self.analyzeUntil(join_stmt.body, owned, stop, exits),
-            .incref, .decref, .free => arcInvariant("ARC analysis received already-reference-counted LIR"),
+            .for_list => |for_stmt| try self.analyzeUntil(for_stmt.next, owned, stop, exits, loop_keep),
+            .join => |join_stmt| try self.analyzeUntil(join_stmt.body, owned, stop, exits, loop_keep),
+            .incref => |rc| {
+                self.addOwnedIfRc(owned, rc.value);
+                try self.analyzeUntil(rc.next, owned, stop, exits, loop_keep);
+            },
+            .decref => |rc| {
+                owned.unset(rc.value);
+                try self.analyzeUntil(rc.next, owned, stop, exits, loop_keep);
+            },
+            .free => |rc| {
+                owned.unset(rc.value);
+                try self.analyzeUntil(rc.next, owned, stop, exits, loop_keep);
+            },
             .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => {},
         }
     }
@@ -550,6 +610,7 @@ const Inserter = struct {
         mask: u64,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
     ) ResourceError!u64 {
         if (mask == 0) return 0;
         var preserve: u64 = 0;
@@ -558,7 +619,7 @@ const Inserter = struct {
             const bit = argMaskBit(i);
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
-            if (try self.localUsedInPath(next, local)) {
+            if (try self.localUsedInPath(next, local, loop_keep)) {
                 preserve |= bit;
             }
         }
@@ -571,6 +632,7 @@ const Inserter = struct {
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
         var transferred = try OwnedSet.init(self.store.allocator, owned.bits.len);
@@ -581,7 +643,7 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
 
             const bit = argMaskBit(i);
-            const used_after_call = local != target and try self.localUsedInPath(next, local);
+            const used_after_call = local != target and try self.localUsedInPath(next, local, loop_keep);
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
 
             if (can_transfer) {
@@ -632,12 +694,6 @@ const Inserter = struct {
             if ((mask & argMaskBit(i)) != 0) {
                 owned.unset(local);
             }
-        }
-    }
-
-    fn unsetAllArgs(self: *Inserter, owned: *OwnedSet, span: LIR.LocalSpan) void {
-        for (self.store.getLocalSpan(span)) |local| {
-            owned.unset(local);
         }
     }
 
@@ -696,16 +752,22 @@ const Inserter = struct {
         }
     }
 
-    fn localUsedInPath(self: *Inserter, start: LIR.CFStmtId, needle: LIR.LocalId) ResourceError!bool {
+    fn localUsedInPath(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        needle: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
         var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
-        return try self.localUsedInPathInner(start, needle, &visited);
+        return try self.localUsedInPathInner(start, needle, loop_keep, &visited);
     }
 
     fn localUsedInPathInner(
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
         visited: *std.AutoHashMap(LIR.CFStmtId, void),
     ) ResourceError!bool {
         if (visited.contains(start)) return false;
@@ -714,58 +776,59 @@ const Inserter = struct {
         const stmt = self.store.getCFStmt(start);
         return switch (stmt) {
             .assign_ref => |assign| (refOpUsesLocal(assign.op, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
-            .assign_literal => |assign| try self.localUsedInPathInner(assign.next, needle, visited),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
+            .assign_literal => |assign| try self.localUsedInPathInner(assign.next, needle, loop_keep, visited),
             .assign_call => |assign| (self.spanUsesLocal(assign.args, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_call_erased => |assign| (assign.closure == needle or
                 self.spanUsesLocal(assign.args, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_low_level => |assign| (self.spanUsesLocal(assign.args, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_list => |assign| (self.spanUsesLocal(assign.elems, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_struct => |assign| (self.spanUsesLocal(assign.fields, needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .assign_tag => |assign| ((assign.payload != null and assign.payload.? == needle) or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .set_local => |assign| (assign.value == needle or
-                try self.localUsedInPathInner(assign.next, needle, visited)),
+                try self.localUsedInPathInner(assign.next, needle, loop_keep, visited)),
             .debug => |debug_stmt| (debug_stmt.message == needle or
-                try self.localUsedInPathInner(debug_stmt.next, needle, visited)),
+                try self.localUsedInPathInner(debug_stmt.next, needle, loop_keep, visited)),
             .expect => |expect_stmt| (expect_stmt.condition == needle or
-                try self.localUsedInPathInner(expect_stmt.next, needle, visited)),
+                try self.localUsedInPathInner(expect_stmt.next, needle, loop_keep, visited)),
             .switch_stmt => |switch_stmt| blk: {
                 if (switch_stmt.cond == needle) break :blk true;
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    if (try self.localUsedInPathInner(branch.body, needle, visited)) break :blk true;
+                    if (try self.localUsedInPathInner(branch.body, needle, loop_keep, visited)) break :blk true;
                 }
-                if (try self.localUsedInPathInner(switch_stmt.default_branch, needle, visited)) break :blk true;
+                if (try self.localUsedInPathInner(switch_stmt.default_branch, needle, loop_keep, visited)) break :blk true;
                 if (switch_stmt.continuation) |continuation| {
-                    if (try self.localUsedInPathInner(continuation, needle, visited)) break :blk true;
+                    if (try self.localUsedInPathInner(continuation, needle, loop_keep, visited)) break :blk true;
                 }
                 break :blk false;
             },
             .for_list => |for_stmt| (for_stmt.iterable == needle or
-                try self.localUsedInPathInner(for_stmt.body, needle, visited) or
-                try self.localUsedInPathInner(for_stmt.next, needle, visited)),
-            .join => |join_stmt| (try self.localUsedInPathInner(join_stmt.body, needle, visited) or
-                try self.localUsedInPathInner(join_stmt.remainder, needle, visited)),
+                try self.localUsedInPathInner(for_stmt.body, needle, loop_keep, visited) or
+                try self.localUsedInPathInner(for_stmt.next, needle, loop_keep, visited)),
+            .join => |join_stmt| (try self.localUsedInPathInner(join_stmt.body, needle, loop_keep, visited) or
+                try self.localUsedInPathInner(join_stmt.remainder, needle, loop_keep, visited)),
             .jump => |jump_stmt| blk: {
                 if (self.spanUsesLocal(jump_stmt.args, needle)) break :blk true;
                 const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
                 const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC liveness reached jump to unknown join point");
-                break :blk try self.localUsedInPathInner(target_body, needle, visited);
+                break :blk try self.localUsedInPathInner(target_body, needle, loop_keep, visited);
             },
             .ret => |ret_stmt| ret_stmt.value == needle,
-            .runtime_error,
             .loop_continue,
             .loop_break,
+            => if (loop_keep) |keep| keep.contains(needle) else false,
+            .runtime_error,
             .crash,
             => false,
-            .incref => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
-            .decref => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
-            .free => |rc| try self.localUsedInPathInner(rc.next, needle, visited),
+            .incref => |rc| try self.localUsedInPathInner(rc.next, needle, loop_keep, visited),
+            .decref => |rc| try self.localUsedInPathInner(rc.next, needle, loop_keep, visited),
+            .free => |rc| try self.localUsedInPathInner(rc.next, needle, loop_keep, visited),
         };
     }
 

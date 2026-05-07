@@ -69,6 +69,7 @@ pub const LoweredProgram = struct {
             if (entry.exec_arg_tys.len > 0) {
                 self.lir_result.store.allocator.free(entry.exec_arg_tys);
             }
+            deinitExecutableSpecializationKeys(self.lir_result.store.allocator, entry.finite_adapter_member_targets);
         }
         if (self.erased_callable_code_map.len > 0) {
             self.lir_result.store.allocator.free(self.erased_callable_code_map);
@@ -101,6 +102,7 @@ pub const CompileTimeDependencySummaryResult = struct {
 pub const LoweredErasedCallableCodeEntry = struct {
     lir_proc: LIR.LirProcSpecId,
     code: canonical.ErasedCallableCodeRef,
+    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
     source_fn_ty: canonical.CanonicalTypeKey,
     exec_arg_tys: []const canonical.CanonicalExecValueTypeKey,
     exec_ret_ty: canonical.CanonicalExecValueTypeKey,
@@ -110,6 +112,7 @@ pub const LoweredErasedCallableCodeEntry = struct {
 const ExecutableErasedCallableCodeOrigin = struct {
     executable_proc: mir.Executable.Ast.ExecutableProcId,
     code: canonical.ErasedCallableCodeRef,
+    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
     source_fn_ty: canonical.CanonicalTypeKey,
     exec_arg_tys: []const canonical.CanonicalExecValueTypeKey,
     exec_ret_ty: canonical.CanonicalExecValueTypeKey,
@@ -164,6 +167,19 @@ pub fn lowerArtifactsToLir(
     );
     errdefer if (compile_time_payloads.len > 0) allocator.free(compile_time_payloads);
 
+    const compile_time_layout_requests = try compileTimeLayoutRequests(
+        allocator,
+        &artifacts.root.artifact.comptime_plans,
+        compile_time_payloads,
+    );
+    defer if (compile_time_layout_requests.len > 0) allocator.free(compile_time_layout_requests);
+
+    const compile_time_layout_request_keys = try compileTimeLayoutRequestKeys(
+        allocator,
+        compile_time_layout_requests,
+    );
+    defer if (compile_time_layout_request_keys.len > 0) allocator.free(compile_time_layout_request_keys);
+
     var executable = try mir.Executable.Build.run(
         allocator,
         solved,
@@ -175,13 +191,19 @@ pub fn lowerArtifactsToLir(
     );
     errdefer executable.deinit();
 
+    try mir.Executable.Build.ensurePublishedExecutableTypeRequests(
+        allocator,
+        &executable,
+        compile_time_layout_requests,
+    );
+
     var erased_code_origins = try collectExecutableErasedCallableCodeOrigins(allocator, &executable);
     errdefer deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
 
     const executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
 
-    var lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir);
+    var lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir, compile_time_layout_request_keys);
     errdefer lowered_ir.deinit();
 
     const executable_roots = lowered_ir.root_procs.items;
@@ -322,6 +344,7 @@ fn collectExecutableErasedCallableCodeOrigins(
     errdefer {
         for (entries[0..initialized]) |entry| {
             if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+            deinitExecutableSpecializationKeys(allocator, entry.finite_adapter_member_targets);
         }
         if (entries.len > 0) allocator.free(entries);
     }
@@ -329,6 +352,8 @@ fn collectExecutableErasedCallableCodeOrigins(
     for (program.procs.items, 0..) |proc, i| {
         const def = program.ast.defs.items[@intFromEnum(proc.body)];
         const exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, def.specialization_key.exec_arg_tys);
+        var exec_arg_tys_owned = true;
+        errdefer if (exec_arg_tys_owned) allocator.free(exec_arg_tys);
         entries[i] = switch (proc.origin) {
             .source => |source| .{
                 .executable_proc = proc.executable_proc,
@@ -336,6 +361,7 @@ fn collectExecutableErasedCallableCodeOrigins(
                     .proc_value = source.callable,
                     .capture_shape_key = def.specialization_key.capture_shape_key,
                 } },
+                .finite_adapter_member_targets = &.{},
                 .source_fn_ty = source.callable.source_fn_ty,
                 .exec_arg_tys = exec_arg_tys,
                 .exec_ret_ty = def.specialization_key.exec_ret_ty,
@@ -351,6 +377,11 @@ fn collectExecutableErasedCallableCodeOrigins(
                 break :blk .{
                     .executable_proc = proc.executable_proc,
                     .code = .{ .finite_set_adapter = adapter },
+                    .finite_adapter_member_targets = try cloneExecutableKeysForExecutableAdapterOrigin(
+                        allocator,
+                        program,
+                        adapter,
+                    ),
                     .source_fn_ty = adapter.source_fn_ty,
                     .exec_arg_tys = exec_arg_tys,
                     .exec_ret_ty = def.specialization_key.exec_ret_ty,
@@ -358,6 +389,7 @@ fn collectExecutableErasedCallableCodeOrigins(
                 };
             },
         };
+        exec_arg_tys_owned = false;
         initialized += 1;
     }
 
@@ -370,8 +402,31 @@ fn deinitExecutableErasedCallableCodeOrigins(
 ) void {
     for (entries) |entry| {
         if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+        deinitExecutableSpecializationKeys(allocator, entry.finite_adapter_member_targets);
     }
     if (entries.len > 0) allocator.free(entries);
+}
+
+fn cloneExecutableKeysForExecutableAdapterOrigin(
+    allocator: Allocator,
+    program: *const mir.Executable.Build.Program,
+    adapter: canonical.ErasedAdapterKey,
+) Allocator.Error![]const canonical.ExecutableSpecializationKey {
+    for (program.erased_adapter_procs.items) |reservation| {
+        if (!erasedAdapterKeyEql(reservation.key, adapter)) continue;
+        if (reservation.member_targets.len == 0) {
+            checkedPipelineInvariant("erased adapter executable code origin has no member targets");
+        }
+        return try cloneExecutableSpecializationKeySlice(allocator, reservation.member_targets);
+    }
+    checkedPipelineInvariant("erased adapter executable code origin has no callable-set descriptor");
+}
+
+fn erasedAdapterKeyEql(a: canonical.ErasedAdapterKey, b: canonical.ErasedAdapterKey) bool {
+    return repr.canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and
+        repr.callableSetKeyEql(a.callable_set_key, b.callable_set_key) and
+        repr.erasedFnSigKeyEql(a.erased_fn_sig_key, b.erased_fn_sig_key) and
+        repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
 }
 
 fn buildLoweredErasedCallableCodeMap(
@@ -392,14 +447,23 @@ fn buildLoweredErasedCallableCodeMap(
         const lir_proc = lowered_lir.lirProcForExecutable(origin.executable_proc) orelse {
             checkedPipelineInvariant("lowered erased callable code origin has no LIR procedure");
         };
+        const member_targets = try cloneExecutableSpecializationKeySlice(allocator, origin.finite_adapter_member_targets);
+        var member_targets_owned = true;
+        errdefer if (member_targets_owned) deinitExecutableSpecializationKeys(allocator, member_targets);
+        const exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, origin.exec_arg_tys);
+        var exec_arg_tys_owned = true;
+        errdefer if (exec_arg_tys_owned) allocator.free(exec_arg_tys);
         entries[i] = .{
             .lir_proc = lir_proc,
             .code = origin.code,
+            .finite_adapter_member_targets = member_targets,
             .source_fn_ty = origin.source_fn_ty,
-            .exec_arg_tys = try allocator.dupe(canonical.CanonicalExecValueTypeKey, origin.exec_arg_tys),
+            .exec_arg_tys = exec_arg_tys,
             .exec_ret_ty = origin.exec_ret_ty,
             .capture_shape_key = origin.capture_shape_key,
         };
+        member_targets_owned = false;
+        exec_arg_tys_owned = false;
         initialized += 1;
     }
 
@@ -412,6 +476,7 @@ fn deinitLoweredErasedCallableCodeMap(
 ) void {
     for (entries) |entry| {
         if (entry.exec_arg_tys.len > 0) allocator.free(entry.exec_arg_tys);
+        deinitExecutableSpecializationKeys(allocator, entry.finite_adapter_member_targets);
     }
     if (entries.len > 0) allocator.free(entries);
 }
@@ -648,6 +713,181 @@ fn publishCompileTimePayloads(
     return payloads;
 }
 
+fn compileTimeLayoutRequests(
+    allocator: Allocator,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    payloads: []const checked_artifact.CompileTimeEvaluationPayload,
+) Allocator.Error![]const mir.Executable.Build.PublishedExecutableTypeRequest {
+    if (payloads.len == 0) return &.{};
+
+    var collector = CompileTimeLayoutRequestCollector.init(allocator, plans);
+    defer collector.deinit();
+    for (payloads) |payload| try collector.collectPayload(payload);
+    return try collector.toOwnedSlice();
+}
+
+fn compileTimeLayoutRequestKeys(
+    allocator: Allocator,
+    requests: []const mir.Executable.Build.PublishedExecutableTypeRequest,
+) Allocator.Error![]const canonical.CanonicalExecValueTypeKey {
+    if (requests.len == 0) return &.{};
+    const keys = try allocator.alloc(canonical.CanonicalExecValueTypeKey, requests.len);
+    for (requests, 0..) |request, i| keys[i] = request.key;
+    return keys;
+}
+
+const CompileTimeLayoutRequestCollector = struct {
+    allocator: Allocator,
+    plans: *const checked_artifact.CompileTimePlanStore,
+    requests: std.ArrayList(mir.Executable.Build.PublishedExecutableTypeRequest),
+    seen_keys: std.AutoHashMap(canonical.CanonicalExecValueTypeKey, void),
+    seen_const_graphs: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void),
+    seen_callable_results: std.AutoHashMap(checked_artifact.CallableResultPlanId, void),
+    seen_capture_slots: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void),
+
+    fn init(
+        allocator: Allocator,
+        plans: *const checked_artifact.CompileTimePlanStore,
+    ) CompileTimeLayoutRequestCollector {
+        return .{
+            .allocator = allocator,
+            .plans = plans,
+            .requests = .empty,
+            .seen_keys = std.AutoHashMap(canonical.CanonicalExecValueTypeKey, void).init(allocator),
+            .seen_const_graphs = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void).init(allocator),
+            .seen_callable_results = std.AutoHashMap(checked_artifact.CallableResultPlanId, void).init(allocator),
+            .seen_capture_slots = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *CompileTimeLayoutRequestCollector) void {
+        self.seen_capture_slots.deinit();
+        self.seen_callable_results.deinit();
+        self.seen_const_graphs.deinit();
+        self.seen_keys.deinit();
+        self.requests.deinit(self.allocator);
+    }
+
+    fn toOwnedSlice(
+        self: *CompileTimeLayoutRequestCollector,
+    ) Allocator.Error![]const mir.Executable.Build.PublishedExecutableTypeRequest {
+        return try self.requests.toOwnedSlice(self.allocator);
+    }
+
+    fn collectPayload(
+        self: *CompileTimeLayoutRequestCollector,
+        payload: checked_artifact.CompileTimeEvaluationPayload,
+    ) Allocator.Error!void {
+        switch (payload) {
+            .local_root => |root_payload| switch (root_payload) {
+                .pending => checkedPipelineInvariant("compile-time layout request reached pending root payload"),
+                .expect => {},
+                .const_graph => |plan| try self.collectConstGraph(plan),
+                .callable_result => |plan| try self.collectCallableResult(plan),
+            },
+            .const_instance => |plan| try self.collectConstGraph(plan),
+            .callable_binding_instance => |plan| try self.collectCallableResult(plan),
+        }
+    }
+
+    fn collectConstGraph(
+        self: *CompileTimeLayoutRequestCollector,
+        id: checked_artifact.ConstGraphReificationPlanId,
+    ) Allocator.Error!void {
+        const seen = try self.seen_const_graphs.getOrPut(id);
+        if (seen.found_existing) return;
+
+        switch (self.plans.constGraph(id)) {
+            .pending => checkedPipelineInvariant("compile-time layout request reached pending const graph"),
+            .scalar, .string, .callable_schema => {},
+            .list => |list| try self.collectConstGraph(list.elem),
+            .box => |box| try self.collectConstGraph(box.payload),
+            .tuple => |items| for (items) |item| try self.collectConstGraph(item.value),
+            .record => |fields| for (fields) |field| try self.collectConstGraph(field.value),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectConstGraph(payload.value);
+            },
+            .transparent_alias => |alias| try self.collectConstGraph(alias.backing),
+            .nominal => |nominal| try self.collectConstGraph(nominal.backing),
+            .callable_leaf => |leaf| switch (leaf) {
+                .finite => |plan| try self.collectCallableResult(plan),
+                .erased_boxed => |plan| try self.collectCallableResult(plan),
+                .already_resolved => {},
+            },
+            .recursive_ref => |ref| try self.collectConstGraph(ref),
+        }
+    }
+
+    fn collectCallableResult(
+        self: *CompileTimeLayoutRequestCollector,
+        id: checked_artifact.CallableResultPlanId,
+    ) Allocator.Error!void {
+        const seen = try self.seen_callable_results.getOrPut(id);
+        if (seen.found_existing) return;
+
+        switch (self.plans.callableResult(id)) {
+            .finite => |finite| {
+                for (finite.members) |member| {
+                    for (member.capture_slots) |capture| try self.collectCaptureSlot(capture);
+                }
+            },
+            .erased => |erased| {
+                if (erased.executable_signature_payloads.hidden_capture) |hidden| {
+                    try self.appendHiddenCaptureRequest(hidden);
+                }
+                try self.collectErasedCapture(erased.capture);
+            },
+        }
+    }
+
+    fn collectErasedCapture(
+        self: *CompileTimeLayoutRequestCollector,
+        capture: checked_artifact.ErasedCaptureReificationPlan,
+    ) Allocator.Error!void {
+        switch (capture) {
+            .none, .zero_sized_typed => {},
+            .whole_hidden_capture_value => |slot| try self.collectCaptureSlot(slot.plan),
+            .proc_capture_tuple => |slots| for (slots) |slot| try self.collectCaptureSlot(slot.plan),
+            .finite_callable_set_value => |plan| try self.collectCallableResult(plan),
+        }
+    }
+
+    fn collectCaptureSlot(
+        self: *CompileTimeLayoutRequestCollector,
+        id: checked_artifact.CaptureSlotReificationPlanId,
+    ) Allocator.Error!void {
+        const seen = try self.seen_capture_slots.getOrPut(id);
+        if (seen.found_existing) return;
+
+        switch (self.plans.captureSlot(id)) {
+            .pending => checkedPipelineInvariant("compile-time layout request reached pending capture slot"),
+            .serializable_leaf, .callable_schema => {},
+            .callable_leaf => |plan| try self.collectCallableResult(plan),
+            .record => |fields| for (fields) |field| try self.collectCaptureSlot(field.value),
+            .tuple => |items| for (items) |item| try self.collectCaptureSlot(item.value),
+            .tag_union => |variants| for (variants) |variant| {
+                for (variant.payloads) |payload| try self.collectCaptureSlot(payload.value);
+            },
+            .list => |list| try self.collectCaptureSlot(list.elem),
+            .box => |payload| try self.collectCaptureSlot(payload),
+            .nominal => |nominal| try self.collectCaptureSlot(nominal.backing),
+            .recursive_ref => |ref| try self.collectCaptureSlot(ref),
+        }
+    }
+
+    fn appendHiddenCaptureRequest(
+        self: *CompileTimeLayoutRequestCollector,
+        hidden: checked_artifact.ExecutableHiddenCapturePayload,
+    ) Allocator.Error!void {
+        const seen = try self.seen_keys.getOrPut(hidden.exec_ty_key);
+        if (seen.found_existing) return;
+        try self.requests.append(self.allocator, .{
+            .ty = hidden.exec_ty,
+            .key = hidden.exec_ty_key,
+        });
+    }
+};
+
 fn publishCompileTimeDependencySummariesFromSolved(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
@@ -790,6 +1030,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                         .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
                             try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
                         },
+                        .supplied_erased_value => {},
                     }
                 },
             }
@@ -886,6 +1127,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
     ) Allocator.Error!void {
         const expr = self.solved.ast.exprs.items[@intFromEnum(expr_id)];
+        if (!value_store.valueSourceMatchBranchReachable(value_store.values.items[@intFromEnum(expr.value_info)])) return;
         switch (expr.data) {
             .var_,
             .capture_ref,
@@ -901,6 +1143,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             => {},
             .const_instance => |const_instance| try self.appendConstInstanceDependency(const_instance, availability, concrete),
             .const_ref => |key| try self.appendConstRefDependency(key, availability),
+            .pending_local_root => |root| try availability.append(self.allocator, .{ .local_root = root }),
             .tag => |tag| {
                 for (self.sliceTagPayloadEval(tag.eval_order)) |payload| try self.collectExprImmediate(payload.value, value_store, representation_store, availability, concrete, call_deps);
             },
@@ -937,6 +1180,9 @@ const CompileTimeDependencySummaryBuilder = struct {
                 try self.collectExprImmediate(match_.cond, value_store, representation_store, availability, concrete, call_deps);
                 for (self.sliceBranches(match_.branches)) |branch_id| {
                     const branch = self.solved.ast.branches.items[@intFromEnum(branch_id)];
+                    if (branch.source_match_branch) |branch_ref| {
+                        if (!value_store.sourceMatchBranchReachable(branch_ref)) continue;
+                    }
                     if (branch.guard) |guard| try self.collectExprImmediate(guard, value_store, representation_store, availability, concrete, call_deps);
                     try self.collectExprImmediate(branch.body, value_store, representation_store, availability, concrete, call_deps);
                 }
@@ -1004,6 +1250,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         call_deps: *std.ArrayList(checked_artifact.ComptimeCallDependency),
     ) Allocator.Error!void {
         const call_site = value_store.call_sites.items[@intFromEnum(call_site_id)];
+        if (!value_store.callSiteSourceMatchBranchReachable(call_site)) return;
         const dispatch = call_site.dispatch orelse checkedPipelineInvariant("compile-time dependency summary reached unresolved call site");
         switch (dispatch) {
             .call_proc => |target| {
@@ -1043,6 +1290,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                     .provenance = provenance,
                 } });
             },
+            .pending_local_root_call => {},
         }
     }
 
@@ -1076,7 +1324,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                 if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
                     checkedPipelineInvariant("erased call_value dependency signature differs from already-erased plan");
                 }
-                checkedPipelineInvariant("already-erased call dependency requires resolved interpreted code before concrete dependency publication");
+                return .{ .supplied_erased_value = .{ .sig_key = erased.sig_key } };
             },
             .finite => checkedPipelineInvariant("erased call_value dependency reached finite callable emission"),
         };
@@ -1088,7 +1336,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         sig_key: canonical.ErasedFnSigKey,
         value_store: *const repr.ValueInfoStore,
         representation_store: *const repr.RepresentationStore,
-    ) Allocator.Error![]const canonical.BoxBoundaryId {
+    ) Allocator.Error![]const checked_artifact.BoxErasureProvenance {
         const info = value_store.values.items[@intFromEnum(callee)];
         const callable = info.callable orelse checkedPipelineInvariant("erased call_value dependency callee had no callable metadata");
         const provenance = switch (representation_store.callableEmissionPlan(callable.emission_plan)) {
@@ -1108,7 +1356,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             .finite => checkedPipelineInvariant("erased call provenance reached finite callable emission"),
         };
         if (provenance.len == 0) checkedPipelineInvariant("erased call dependency had empty Box(T) provenance");
-        return try self.allocator.dupe(canonical.BoxBoundaryId, provenance);
+        return try self.allocator.dupe(checked_artifact.BoxErasureProvenance, provenance);
     }
 
     fn procValueEraseDependencyPlan(
@@ -1265,6 +1513,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
                 try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
             },
+            .supplied_erased_value => {},
         }
     }
 
@@ -1424,6 +1673,24 @@ fn deinitExecutableSpecializationKeys(
     allocator.free(keys);
 }
 
+fn cloneExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const canonical.ExecutableSpecializationKey,
+) Allocator.Error![]const canonical.ExecutableSpecializationKey {
+    if (keys.len == 0) return &.{};
+    const out = try allocator.alloc(canonical.ExecutableSpecializationKey, keys.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |*key| repr.deinitExecutableSpecializationKey(allocator, key);
+        allocator.free(out);
+    }
+    for (keys, 0..) |key, i| {
+        out[i] = try repr.cloneExecutableSpecializationKey(allocator, key);
+        initialized += 1;
+    }
+    return out;
+}
+
 fn deinitErasedCallableCodeDependencyForPipeline(
     allocator: Allocator,
     code: checked_artifact.ErasedCallableCodeDependency,
@@ -1435,6 +1702,7 @@ fn deinitErasedCallableCodeDependencyForPipeline(
             allocator.free(direct.erase_plan.capture_slots);
         },
         .finite_set_adapter => |adapter| deinitExecutableSpecializationKeys(allocator, adapter.member_targets),
+        .supplied_erased_value => {},
     }
 }
 
@@ -2081,7 +2349,7 @@ fn erasedPromotedSignaturePayloadsForFiniteSetAdapter(
         first_instance,
         erase.adapter.erased_fn_sig_key,
         erase.adapter.source_fn_ty,
-        erase.result_ty,
+        first_instance.executable_specialization_key.exec_ret_ty,
         erase.adapter.capture_shape_key,
         hidden_capture,
     );
@@ -2476,12 +2744,12 @@ fn erasedCapturePlanForProcValue(
 
 fn cloneBoxBoundarySpan(
     allocator: Allocator,
-    provenance: []const canonical.BoxBoundaryId,
-) Allocator.Error![]const canonical.BoxBoundaryId {
+    provenance: []const checked_artifact.BoxErasureProvenance,
+) Allocator.Error![]const checked_artifact.BoxErasureProvenance {
     if (provenance.len == 0) {
         checkedPipelineInvariant("erased callable result had no Box(T) provenance");
     }
-    return try allocator.dupe(canonical.BoxBoundaryId, provenance);
+    return try allocator.dupe(checked_artifact.BoxErasureProvenance, provenance);
 }
 
 const CapturePlanKey = struct {
@@ -3157,10 +3425,10 @@ const CaptureSlotPlanBuilder = struct {
         exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         if (value_info_id) |info_id| {
-            if (self.boxPayloadNeedsExecutableMaterialization(info_id)) {
+            if (try self.boxPayloadNeedsExecutableMaterialization(info_id)) {
                 return try self.serializableLeafPlan(checked_ty, source_ty, info_id);
             }
-            return .{ .box = try self.boxPayloadPlan(payload_ty, info_id) };
+            return .{ .box = try self.boxPayloadPlan(payload_ty, info_id, exec_ty) };
         }
         return .{ .box = try self.planForOptionalExecutable(
             self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key,
@@ -3180,7 +3448,7 @@ const CaptureSlotPlanBuilder = struct {
         errdefer self.allocator.free(plans_out);
         for (fields, 0..) |field, i| {
             const child = self.recordFieldValue(value_info_id, field.name);
-            const child_exec = if (child == null) self.recordFieldExecutableKey(exec_ty, field.name) else null;
+            const child_exec = if (child == null) self.recordFieldExecutableKey(self.captureExecutableKey(value_info_id, exec_ty), field.name) else null;
             plans_out[i] = .{
                 .field = field.name,
                 .value = try self.planForOptionalExecutable(
@@ -3204,7 +3472,7 @@ const CaptureSlotPlanBuilder = struct {
         errdefer self.allocator.free(plans_out);
         for (items, 0..) |item, i| {
             const child = self.tupleElemValue(value_info_id, @intCast(i));
-            const child_exec = if (child == null) self.tupleElemExecutableKey(exec_ty, @intCast(i)) else null;
+            const child_exec = if (child == null) self.tupleElemExecutableKey(self.captureExecutableKey(value_info_id, exec_ty), @intCast(i)) else null;
             plans_out[i] = .{
                 .index = @intCast(i),
                 .value = try self.planForOptionalExecutable(
@@ -3233,7 +3501,7 @@ const CaptureSlotPlanBuilder = struct {
             errdefer self.allocator.free(payloads);
             for (tag.args, 0..) |arg_ty, arg_i| {
                 const child = self.tagPayloadValue(value_info_id, tag.name, @intCast(arg_i));
-                const child_exec = if (child == null) self.tagPayloadExecutableKey(exec_ty, tag.name, @intCast(arg_i)) else null;
+                const child_exec = if (child == null) self.tagPayloadExecutableKey(self.captureExecutableKey(value_info_id, exec_ty), tag.name, @intCast(arg_i)) else null;
                 payloads[arg_i] = .{
                     .index = @intCast(arg_i),
                     .value = try self.planForOptionalExecutable(
@@ -3255,7 +3523,7 @@ const CaptureSlotPlanBuilder = struct {
         exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
         const child = self.listRepresentativeValue(value_info_id);
-        const child_exec = if (child == null) self.listElemExecutableKey(exec_ty) else null;
+        const child_exec = if (child == null) self.listElemExecutableKey(self.captureExecutableKey(value_info_id, exec_ty)) else null;
         return try self.planForOptionalExecutable(
             self.artifact.checked_types.roots[@intFromEnum(elem_ty)].key,
             child,
@@ -3267,9 +3535,14 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         payload_ty: checked_artifact.CheckedTypeId,
         value_info_id: repr.ValueInfoId,
+        exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlanId {
         const info = self.valueInfo(value_info_id);
-        const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
+        const boxed = info.boxed orelse return try self.planForOptionalExecutable(
+            self.artifact.checked_types.roots[@intFromEnum(payload_ty)].key,
+            null,
+            self.boxPayloadExecutableKey(self.captureExecutableKey(value_info_id, exec_ty)),
+        );
         const payload_value = self.valueForRoot(boxed.payload_root) orelse {
             checkedPipelineInvariant("Box(T) capture payload root had no value-flow metadata");
         };
@@ -3280,23 +3553,69 @@ const CaptureSlotPlanBuilder = struct {
     }
 
     fn boxPayloadNeedsExecutableMaterialization(
-        self: *const CaptureSlotPlanBuilder,
+        self: *CaptureSlotPlanBuilder,
         value_info_id: repr.ValueInfoId,
-    ) bool {
+    ) Allocator.Error!bool {
         const info = self.valueInfo(value_info_id);
-        const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) capture had no boxed metadata");
+        const boxed = info.boxed orelse return false;
         const boundary_id = boxed.boundary orelse return false;
         const boundary = self.value_context.representation_store.box_boundaries[@intFromEnum(boundary_id)];
-        return switch (boundary.payload_plan) {
+        var visiting = std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void).init(self.allocator);
+        defer visiting.deinit();
+        return try self.boxPayloadPlanNeedsExecutableMaterialization(boundary.payload_plan, &visiting);
+    }
+
+    fn boxPayloadPlanIdNeedsExecutableMaterialization(
+        self: *CaptureSlotPlanBuilder,
+        plan_id: repr.BoxPayloadRepresentationPlanId,
+        visiting: *std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void),
+    ) Allocator.Error!bool {
+        if (visiting.contains(plan_id)) return false;
+        const index: usize = @intFromEnum(plan_id);
+        if (index >= self.value_context.representation_store.box_payload_plans.len) {
+            checkedPipelineInvariant("BoxPayloadRepresentationPlan referenced missing plan id");
+        }
+        try visiting.put(plan_id, {});
+        defer _ = visiting.remove(plan_id);
+        return try self.boxPayloadPlanNeedsExecutableMaterialization(
+            self.value_context.representation_store.box_payload_plans[index],
+            visiting,
+        );
+    }
+
+    fn boxPayloadPlanNeedsExecutableMaterialization(
+        self: *CaptureSlotPlanBuilder,
+        plan: repr.BoxPayloadRepresentationPlan,
+        visiting: *std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void),
+    ) Allocator.Error!bool {
+        return switch (plan) {
             .unchanged => false,
-            .function_erased,
-            .record,
-            .tag_union,
-            .tuple,
-            .list,
-            .nested_box,
-            .nominal,
-            => true,
+            .function_erased => true,
+            .record => |fields| for (fields) |field| {
+                if (try self.boxPayloadPlanIdNeedsExecutableMaterialization(field.plan, visiting)) break true;
+            } else false,
+            .tag_union => |variants| blk: {
+                for (variants) |variant| {
+                    for (variant.payloads) |payload| {
+                        if (try self.boxPayloadPlanIdNeedsExecutableMaterialization(payload.plan, visiting)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .tuple => |items| for (items) |item| {
+                if (try self.boxPayloadPlanIdNeedsExecutableMaterialization(item.plan, visiting)) break true;
+            } else false,
+            .list => |child| try self.boxPayloadPlanIdNeedsExecutableMaterialization(child, visiting),
+            .nested_box => |child| try self.boxPayloadPlanIdNeedsExecutableMaterialization(child, visiting),
+            .nominal => |nominal| switch (nominal) {
+                .transparent_backing => |backing| try self.boxPayloadPlanIdNeedsExecutableMaterialization(backing.backing_plan, visiting),
+                .imported_capability => |backing| try self.boxPayloadPlanIdNeedsExecutableMaterialization(backing.backing_plan, visiting),
+                .opaque_atomic,
+                .hosted_abi,
+                .platform_abi,
+                => false,
+            },
+            .recursive_ref => |ref| try self.boxPayloadPlanIdNeedsExecutableMaterialization(ref, visiting),
         };
     }
 
@@ -3310,6 +3629,16 @@ const CaptureSlotPlanBuilder = struct {
         return null;
     }
 
+    fn captureExecutableKey(
+        self: *const CaptureSlotPlanBuilder,
+        value_info_id: ?repr.ValueInfoId,
+        explicit: ?canonical.CanonicalExecValueTypeKey,
+    ) ?canonical.CanonicalExecValueTypeKey {
+        if (explicit) |key| return key;
+        const info_id = value_info_id orelse return null;
+        return (self.valueInfo(info_id).exec_ty orelse return null).key;
+    }
+
     fn recordFieldValue(
         self: *CaptureSlotPlanBuilder,
         value_info_id: ?repr.ValueInfoId,
@@ -3317,7 +3646,7 @@ const CaptureSlotPlanBuilder = struct {
     ) ?repr.ValueInfoId {
         const info_id = value_info_id orelse return null;
         const info = self.valueInfo(info_id);
-        const aggregate = info.aggregate orelse checkedPipelineInvariant("record capture had no aggregate metadata");
+        const aggregate = info.aggregate orelse return null;
         const record = switch (aggregate) {
             .record => |record| record,
             else => checkedPipelineInvariant("record capture value had non-record aggregate metadata"),
@@ -3338,7 +3667,7 @@ const CaptureSlotPlanBuilder = struct {
     ) ?repr.ValueInfoId {
         const info_id = value_info_id orelse return null;
         const info = self.valueInfo(info_id);
-        const aggregate = info.aggregate orelse checkedPipelineInvariant("tuple capture had no aggregate metadata");
+        const aggregate = info.aggregate orelse return null;
         const tuple = switch (aggregate) {
             .tuple => |tuple| tuple,
             else => checkedPipelineInvariant("tuple capture value had non-tuple aggregate metadata"),
@@ -3357,7 +3686,7 @@ const CaptureSlotPlanBuilder = struct {
     ) ?repr.ValueInfoId {
         const info_id = value_info_id orelse return null;
         const info = self.valueInfo(info_id);
-        const aggregate = info.aggregate orelse checkedPipelineInvariant("tag capture had no aggregate metadata");
+        const aggregate = info.aggregate orelse return null;
         const tag = switch (aggregate) {
             .tag => |tag| tag,
             else => checkedPipelineInvariant("tag capture value had non-tag aggregate metadata"),
@@ -3383,7 +3712,7 @@ const CaptureSlotPlanBuilder = struct {
     ) ?repr.ValueInfoId {
         const info_id = value_info_id orelse return null;
         const info = self.valueInfo(info_id);
-        const aggregate = info.aggregate orelse checkedPipelineInvariant("List(T) capture had no aggregate metadata");
+        const aggregate = info.aggregate orelse return null;
         const list = switch (aggregate) {
             .list => |list| list,
             else => checkedPipelineInvariant("List(T) capture value had non-list aggregate metadata"),

@@ -137,7 +137,7 @@ pub const RecordFieldEval = struct {
 /// Public `RecordFieldAssembly` declaration.
 pub const RecordFieldAssembly = struct {
     field: RecordFieldId,
-    value: ExprId,
+    eval_index: u32,
 };
 
 /// Public `TagPayloadEval` declaration.
@@ -149,7 +149,7 @@ pub const TagPayloadEval = struct {
 /// Public `TagPayloadAssembly` declaration.
 pub const TagPayloadAssembly = struct {
     payload: TagPayloadId,
-    value: ExprId,
+    eval_index: u32,
 };
 
 /// Public `CaptureArg` declaration.
@@ -175,6 +175,7 @@ pub const Expr = struct {
         str_lit: ProgramLiteralId,
         const_instance: checked_artifact.ConstInstanceRef,
         const_ref: checked_artifact.ConstInstantiationKey,
+        pending_local_root: checked_artifact.ComptimeRootId,
         tag: struct {
             union_shape: TagUnionShapeId,
             tag: TagId,

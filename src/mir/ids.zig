@@ -49,11 +49,19 @@ pub const ExecutableSyntheticProcBody = union(enum) {
     erased_promoted_wrapper: checked_artifact.ErasedPromotedWrapperBodyPlan,
 };
 
+/// Public `ExecutableSyntheticProcSignaturePlan` declaration.
+pub const ExecutableSyntheticProcSignaturePlan = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    params: []const checked_artifact.PromotedWrapperParam = &.{},
+    ret_source_ty: canonical.CanonicalTypeKey,
+};
+
 /// Public `ExecutableSyntheticProc` declaration.
 pub const ExecutableSyntheticProc = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
     source_proc: canonical.MirProcedureRef,
     template: canonical.ProcedureTemplateRef,
+    signature: ExecutableSyntheticProcSignaturePlan,
     executable_type_payloads: *const checked_artifact.ExecutableTypePayloadStore,
     executable_value_transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     comptime_plans: *const checked_artifact.CompileTimePlanStore,

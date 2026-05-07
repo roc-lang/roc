@@ -1288,7 +1288,7 @@ fn appendConcreteDependencySummaryForCallableRoot(
 ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
     var collector = ConcreteDependencyCollector.init(allocator, artifact);
     defer collector.deinit();
-    try collector.collectCallableResult(result_plan);
+    _ = result_plan;
     try collector.appendProcedureCallable(published_proc);
     return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
 }
@@ -1935,13 +1935,15 @@ fn selectFiniteCallableResult(
         compileTimeFinalizationInvariant("finite compile-time callable result plan had no members");
     }
 
-    const selected_member_id = readCallableSetMemberDiscriminant(
+    const result_layout = layouts.getLayout(layout_idx);
+    const selected = selectFiniteCallableSetMember(
         layouts,
         layout_idx,
+        result_layout,
         value,
-        finite.members.len,
+        finite.members,
     );
-    const planned_member = callableResultMember(finite.members, selected_member_id) orelse {
+    const planned_member = callableResultMember(finite.members, selected.member) orelse {
         compileTimeFinalizationInvariant("compile-time callable result selected a member outside the result plan");
     };
 
@@ -1957,18 +1959,12 @@ fn selectFiniteCallableResult(
     if (member.capture_slots.len != planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("compile-time callable result member capture arity differs from descriptor");
     }
-    const result_layout = layouts.getLayout(layout_idx);
-    if (result_layout.tag != .tag_union) {
-        compileTimeFinalizationInvariant("finite compile-time callable result did not lower to tag-union layout");
-    }
-    const info = layouts.getTagUnionInfo(result_layout);
-    const payload_layout = info.variants.get(@intCast(@intFromEnum(selected_member_id))).payload_layout;
     return .{
         .result_plan_id = result_plan_id,
         .result_plan = finite,
         .planned_member = planned_member,
         .descriptor_member = member,
-        .payload_layout = payload_layout,
+        .payload_layout = selected.payload_layout,
         .payload_value = value,
     };
 }
@@ -2141,6 +2137,13 @@ fn publishErasedCallableResult(
         ret_layout,
         ret_value,
     );
+    const finite_adapter_member_targets = try finiteAdapterMemberTargetsForResolvedErasedCode(
+        allocator,
+        lowered,
+        code,
+    );
+    var finite_adapter_member_targets_owned = true;
+    errdefer if (finite_adapter_member_targets_owned) deinitExecutableSpecializationKeySlice(allocator, finite_adapter_member_targets);
     const capture = try materializeErasedPromotedCapture(
         allocator,
         artifact,
@@ -2167,6 +2170,7 @@ fn publishErasedCallableResult(
         .executable_signature = executable_signature,
         .sig_key = erased.sig_key,
         .code = code,
+        .finite_adapter_member_targets = finite_adapter_member_targets,
         .capture = capture,
         .arg_transforms = transforms.args,
         .hidden_capture_arg = if (erased.sig_key.capture_ty == null)
@@ -2176,6 +2180,7 @@ fn publishErasedCallableResult(
         .result_transform = transforms.result,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
     } });
+    finite_adapter_member_targets_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
     const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
         allocator,
@@ -2226,14 +2231,24 @@ fn materializeErasedPromotedCapture(
             break :blk .{ .zero_sized_typed = ty };
         },
         .whole_hidden_capture_value => |capture| blk: {
-            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+            const physical = erasedClosureHiddenCapturePhysical(
+                &lowered.lir_result.layouts,
+                erasedHiddenCaptureLayout(lowered, erased),
+                ret_layout,
+                ret_value,
+            ) orelse {
                 compileTimeFinalizationInvariant("erased callable whole hidden capture had no returned hidden capture payload");
             };
             _ = capture.source_ty;
             break :blk try capture_builder.executablePlan(capture.plan, physical);
         },
         .proc_capture_tuple => |captures| blk: {
-            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+            const physical = erasedClosureHiddenCapturePhysical(
+                &lowered.lir_result.layouts,
+                erasedHiddenCaptureLayout(lowered, erased),
+                ret_layout,
+                ret_value,
+            ) orelse {
                 compileTimeFinalizationInvariant("erased proc-value capture tuple had no returned hidden capture payload");
             };
             if (captures.len == 0) {
@@ -2256,7 +2271,12 @@ fn materializeErasedPromotedCapture(
             ) };
         },
         .finite_callable_set_value => |result_plan| blk: {
-            const physical = erasedClosureHiddenCapturePhysical(&lowered.lir_result.layouts, ret_layout, ret_value) orelse {
+            const physical = erasedClosureHiddenCapturePhysical(
+                &lowered.lir_result.layouts,
+                erasedHiddenCaptureLayout(lowered, erased),
+                ret_layout,
+                ret_value,
+            ) orelse {
                 compileTimeFinalizationInvariant("erased finite callable-set adapter capture had no returned hidden capture payload");
             };
             const finite = try materializedFiniteCallableSetValue(
@@ -2377,6 +2397,75 @@ fn loweredErasedCallableCodeEntry(
     return null;
 }
 
+fn finiteAdapterMemberTargetsForResolvedErasedCode(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    code: canonical.ErasedCallableCodeRef,
+) Allocator.Error![]const canonical.ExecutableSpecializationKey {
+    switch (code) {
+        .direct_proc_value => return &.{},
+        .finite_set_adapter => {},
+    }
+    for (lowered.erased_callable_code_map) |entry| {
+        if (!erasedCallableCodeRefEql(entry.code, code)) continue;
+        if (entry.finite_adapter_member_targets.len == 0) {
+            compileTimeFinalizationInvariant("finite erased callable code entry has no member targets");
+        }
+        return try cloneExecutableSpecializationKeySlice(allocator, entry.finite_adapter_member_targets);
+    }
+    compileTimeFinalizationInvariant("finite erased callable code was not published in lowered code map");
+}
+
+fn erasedCallableCodeRefEql(a: canonical.ErasedCallableCodeRef, b: canonical.ErasedCallableCodeRef) bool {
+    return switch (a) {
+        .direct_proc_value => |left| switch (b) {
+            .direct_proc_value => |right| canonical.procedureCallableRefEql(left.proc_value, right.proc_value) and
+                repr.captureShapeKeyEql(left.capture_shape_key, right.capture_shape_key),
+            .finite_set_adapter => false,
+        },
+        .finite_set_adapter => |left| switch (b) {
+            .direct_proc_value => false,
+            .finite_set_adapter => |right| erasedAdapterKeyEql(left, right),
+        },
+    };
+}
+
+fn erasedAdapterKeyEql(a: canonical.ErasedAdapterKey, b: canonical.ErasedAdapterKey) bool {
+    return repr.canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and
+        repr.callableSetKeyEql(a.callable_set_key, b.callable_set_key) and
+        repr.erasedFnSigKeyEql(a.erased_fn_sig_key, b.erased_fn_sig_key) and
+        repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+}
+
+fn cloneExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const canonical.ExecutableSpecializationKey,
+) Allocator.Error![]const canonical.ExecutableSpecializationKey {
+    if (keys.len == 0) return &.{};
+    const out = try allocator.alloc(canonical.ExecutableSpecializationKey, keys.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |*key| repr.deinitExecutableSpecializationKey(allocator, key);
+        allocator.free(out);
+    }
+    for (keys, 0..) |key, i| {
+        out[i] = try repr.cloneExecutableSpecializationKey(allocator, key);
+        initialized += 1;
+    }
+    return out;
+}
+
+fn deinitExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const canonical.ExecutableSpecializationKey,
+) void {
+    for (keys) |key| {
+        var owned = key;
+        repr.deinitExecutableSpecializationKey(allocator, &owned);
+    }
+    if (keys.len > 0) allocator.free(keys);
+}
+
 fn validateLoweredErasedCallableCodeEntry(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     erased: checked_artifact.ErasedCallableResultPlan,
@@ -2414,6 +2503,9 @@ fn validateLoweredErasedCallableCodeEntry(
             }
         },
         .finite_set_adapter => |adapter| {
+            if (entry.finite_adapter_member_targets.len == 0) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter code has no member targets");
+            }
             if (!repr.canonicalTypeKeyEql(adapter.source_fn_ty, erased.source_fn_ty)) {
                 compileTimeFinalizationInvariant("interpreted finite-set adapter source function type differs from result plan");
             }
@@ -2453,8 +2545,28 @@ fn erasedClosureCodeProc(
     return @enumFromInt(@as(u32, @intCast(encoded - 1)));
 }
 
+fn erasedHiddenCaptureLayout(
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    erased: checked_artifact.ErasedCallableResultPlan,
+) layout_mod.Idx {
+    const hidden = erased.executable_signature_payloads.hidden_capture orelse {
+        compileTimeFinalizationInvariant("erased callable capture materialization has no published hidden capture payload");
+    };
+    if (erased.sig_key.capture_ty) |expected| {
+        if (!repr.canonicalExecValueTypeKeyEql(hidden.exec_ty_key, expected)) {
+            compileTimeFinalizationInvariant("erased callable hidden capture payload key differs from erased signature key");
+        }
+    } else {
+        compileTimeFinalizationInvariant("erased callable hidden capture payload exists but erased signature has no capture type");
+    }
+    return lowered.lir_result.requestedLayoutForKey(hidden.exec_ty_key) orelse {
+        compileTimeFinalizationInvariant("erased callable hidden capture payload layout was not requested during LIR lowering");
+    };
+}
+
 fn erasedClosureHiddenCapturePhysical(
     layouts: *const layout_mod.Store,
+    expected_capture_layout_idx: layout_mod.Idx,
     layout_idx: layout_mod.Idx,
     value: Value,
 ) ?PhysicalValue {
@@ -2465,18 +2577,41 @@ fn erasedClosureHiddenCapturePhysical(
     const capture_field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, 1);
     const capture_field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, 1);
     const capture_field_value = value.offset(capture_field_offset);
+    if (capture_field_layout_idx == .opaque_ptr) {
+        const payload = capture_field_value.read(?[*]u8) orelse {
+            if (!layouts.isZeroSized(layouts.getLayout(expected_capture_layout_idx))) {
+                compileTimeFinalizationInvariant("erased callable result hidden capture handle was null for non-zero-sized payload layout");
+            }
+            return .{
+                .layout_idx = .zst,
+                .value = Value.zst,
+            };
+        };
+        return .{
+            .layout_idx = expected_capture_layout_idx,
+            .value = .{ .ptr = payload },
+        };
+    }
     const capture_field_layout = layouts.getLayout(capture_field_layout_idx);
     return switch (capture_field_layout.tag) {
         .box => blk: {
             const payload = capture_field_value.read(?[*]u8) orelse compileTimeFinalizationInvariant("erased callable result hidden capture box was null");
+            if (capture_field_layout.data.box != expected_capture_layout_idx) {
+                compileTimeFinalizationInvariant("erased callable result hidden capture box layout differs from published payload layout");
+            }
             break :blk .{
                 .layout_idx = capture_field_layout.data.box,
                 .value = .{ .ptr = payload },
             };
         },
-        .box_of_zst => .{
-            .layout_idx = .zst,
-            .value = Value.zst,
+        .box_of_zst => blk: {
+            if (!layouts.isZeroSized(layouts.getLayout(expected_capture_layout_idx))) {
+                compileTimeFinalizationInvariant("erased callable result hidden capture box-of-zst differed from published payload layout");
+            }
+            break :blk .{
+                .layout_idx = .zst,
+                .value = Value.zst,
+            };
         },
         else => compileTimeFinalizationInvariant("erased callable result hidden capture field was not a Box(T) layout"),
     };
@@ -2600,12 +2735,12 @@ fn buildErasedPromotedProcedureExecutableSignature(
 
 fn cloneBoxBoundarySpan(
     allocator: Allocator,
-    provenance: []const canonical.BoxBoundaryId,
-) Allocator.Error![]const canonical.BoxBoundaryId {
+    provenance: []const checked_artifact.BoxErasureProvenance,
+) Allocator.Error![]const checked_artifact.BoxErasureProvenance {
     if (provenance.len == 0) {
         compileTimeFinalizationInvariant("erased callable publication had no Box(T) provenance");
     }
-    return try allocator.dupe(canonical.BoxBoundaryId, provenance);
+    return try allocator.dupe(checked_artifact.BoxErasureProvenance, provenance);
 }
 
 fn promotedWrapperParamsForFnRoot(
@@ -3148,6 +3283,7 @@ const PrivateCaptureBuilder = struct {
         const elem_layout_idx = switch (layout.tag) {
             .list => layout.data.list,
             .list_of_zst => layout_mod.Idx.zst,
+            .zst => return &.{},
             else => compileTimeFinalizationInvariant("private List(T) capture did not lower to list layout"),
         };
         const elem_layout = self.layouts.getLayout(elem_layout_idx);
@@ -3268,6 +3404,7 @@ const PrivateCaptureBuilder = struct {
         const elem_layout_idx = switch (layout.tag) {
             .list => layout.data.list,
             .list_of_zst => layout_mod.Idx.zst,
+            .zst => return &.{},
             else => compileTimeFinalizationInvariant("erased capture List(T) materialization did not lower to list layout"),
         };
         const elem_layout = self.layouts.getLayout(elem_layout_idx);
@@ -3367,22 +3504,37 @@ fn tagPayloadValue(
     };
 }
 
-fn readCallableSetMemberDiscriminant(
+const SelectedFiniteCallableSetMember = struct {
+    member: check.CanonicalNames.CallableSetMemberId,
+    payload_layout: layout_mod.Idx,
+};
+
+fn selectFiniteCallableSetMember(
     layouts: *const layout_mod.Store,
     layout_idx: layout_mod.Idx,
+    layout: layout_mod.Layout,
     value: Value,
-    member_count: usize,
-) check.CanonicalNames.CallableSetMemberId {
-    const layout = layouts.getLayout(layout_idx);
-    if (layout.tag != .tag_union) {
-        compileTimeFinalizationInvariant("finite compile-time callable result did not lower to tag-union layout");
+    members: []const checked_artifact.CallableResultMemberPlan,
+) SelectedFiniteCallableSetMember {
+    if (layout.tag == .tag_union) {
+        const info = layouts.getTagUnionInfo(layout);
+        const discriminant = info.data.readDiscriminant(value.ptr);
+        if (discriminant >= members.len) {
+            compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
+        }
+        return .{
+            .member = @enumFromInt(discriminant),
+            .payload_layout = info.variants.get(@intCast(discriminant)).payload_layout,
+        };
     }
-    const info = layouts.getTagUnionInfo(layout);
-    const discriminant = info.data.readDiscriminant(value.ptr);
-    if (discriminant >= member_count) {
-        compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
+
+    if (members.len != 1) {
+        compileTimeFinalizationInvariant("multi-member finite compile-time callable result did not lower to tag-union layout");
     }
-    return @enumFromInt(discriminant);
+    return .{
+        .member = members[0].member,
+        .payload_layout = layout_idx,
+    };
 }
 
 fn callableResultMember(
@@ -4113,8 +4265,13 @@ fn payloadLayoutForTagArg(
     arg_index: u32,
 ) layout_mod.Idx {
     if (arg_count == 0) return layout_mod.Idx.zst;
-    if (arg_count == 1) return variant_layout_idx;
     const variant_layout = layouts.getLayout(variant_layout_idx);
+    if (arg_count == 1) {
+        if (variant_layout.tag == .struct_ and layouts.getStructInfo(variant_layout).fields.len == 1) {
+            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, 0);
+        }
+        return variant_layout_idx;
+    }
     if (variant_layout.tag != .struct_) reifierInvariant("multi-payload tag did not use struct payload layout");
     return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
 }

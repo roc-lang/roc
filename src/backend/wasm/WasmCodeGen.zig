@@ -5758,6 +5758,14 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
             try self.emitLocalSet(capture_local);
+        } else if (capture_layout_idx == .opaque_ptr) {
+            const capture_offset = self.structFieldOffsetByOriginalIndexWasm(struct_idx, 1);
+            const capture_ptr_size = self.structFieldSizeByOriginalIndexWasm(struct_idx, 1);
+            capture_vt = self.resolveValType(capture_layout_idx);
+            capture_local = self.storage.allocAnonymousLocal(capture_vt) catch return error.OutOfMemory;
+            try self.emitLocalGet(struct_ptr);
+            try self.emitLoadOpSized(capture_vt, capture_ptr_size, capture_offset);
+            try self.emitLocalSet(capture_local);
         } else {
             const capture_offset = self.structFieldOffsetByOriginalIndexWasm(struct_idx, 1);
             const capture_ptr_size = self.structFieldSizeByOriginalIndexWasm(struct_idx, 1);
@@ -6266,6 +6274,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     for (fields, 0..) |field_expr_id, i| {
         const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
+        if (field_byte_size == 0) continue;
         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
@@ -6312,6 +6321,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         const field_offset = self.structFieldOffsetByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
+        if (field_byte_size == 0) continue;
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
         if (is_composite and field_byte_size > 0) {

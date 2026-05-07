@@ -7343,14 +7343,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (builtin.mode == .Debug and actual_layout != expected_layout) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                const stmt_id: u32 = if (self.current_stmt_id) |current| @intFromEnum(current) else std.math.maxInt(u32);
+                const stmt = if (self.current_stmt_id) |current| self.store.getCFStmt(current) else null;
                 std.debug.panic(
-                    "LIR/codegen invariant violated at {s}: actual layout {} ({s}) did not match expected layout {} ({s})",
+                    "LIR/codegen invariant violated at {s} stmt {}: actual layout {} ({s}) did not match expected layout {} ({s}); stmt={any}",
                     .{
                         site,
+                        stmt_id,
                         @intFromEnum(actual_layout),
                         @tagName(actual_layout_val.tag),
                         @intFromEnum(expected_layout),
                         @tagName(expected_layout_val.tag),
+                        stmt,
                     },
                 );
             }
@@ -8793,6 +8797,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (field_exprs, 0..) |field_expr_id, i| {
                         const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
                         const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                        if (field_size == 0) continue;
                         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
                         const field_loc = self.requireExactValueLocationToLayout(
                             try self.emitValueLocal(field_expr_id),
@@ -9131,7 +9136,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (has_capture_arg) {
                 const capture_layout_idx = capture_layout.?;
                 const capture_size = self.getLayoutSize(capture_layout_idx);
-                if (capture_size == 0) {
+                if (capture_layout_idx == .opaque_ptr or capture_size == 0) {
                     const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, 0, capture_layout_idx);
                     const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
                     arg_infos[arg_refs.len] = .{

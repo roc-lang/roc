@@ -9,6 +9,7 @@ const type_mod = @import("type.zig");
 const mir_ids = @import("../ids.zig");
 
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 const repr = solved.Representation;
 
 pub const TypeId = type_mod.TypeId;
@@ -64,6 +65,7 @@ pub const RecordFieldExpr = struct {
     expr: ExprId,
     ty: TypeId,
     value: ExecutableValueRef,
+    bridge: BridgeId,
 };
 
 /// Public `TagPayloadExpr` declaration.
@@ -72,6 +74,23 @@ pub const TagPayloadExpr = struct {
     expr: ExprId,
     ty: TypeId,
     value: ExecutableValueRef,
+    bridge: BridgeId,
+};
+
+/// Public `TupleItemExpr` declaration.
+pub const TupleItemExpr = struct {
+    expr: ExprId,
+    ty: TypeId,
+    value: ExecutableValueRef,
+    bridge: BridgeId,
+};
+
+/// Public `ListItemExpr` declaration.
+pub const ListItemExpr = struct {
+    expr: ExprId,
+    ty: TypeId,
+    value: ExecutableValueRef,
+    bridge: BridgeId,
 };
 
 /// Public `Pat` declaration.
@@ -203,6 +222,7 @@ pub const CallableMatchBranch = struct {
     capture_payload_ty: ?TypeId = null,
     executable_specialization_key: repr.ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
+    arg_transforms: Span(checked_artifact.ExecutableValueTransformRef),
     direct_args: Span(DirectCallArg),
     body: ExprId,
 };
@@ -369,6 +389,7 @@ pub const DecisionLeaf = struct {
 pub const PatternBinding = struct {
     binder: ExecutableValueRef,
     source: PatternPathValuePlanId,
+    bridge: BridgeId,
     ty: TypeId,
 };
 
@@ -458,7 +479,7 @@ pub const Expr = struct {
             stmts: Span(StmtId),
             final_expr: ExprId,
         },
-        tuple: Span(ExprId),
+        tuple: Span(TupleItemExpr),
         tag_payload: struct {
             tag_union: ExprId,
             payload: row.TagPayloadId,
@@ -467,10 +488,11 @@ pub const Expr = struct {
             tuple: ExprId,
             elem_index: u32,
         },
-        list: Span(ExprId),
+        list: Span(ListItemExpr),
         return_: ExprId,
         crash: ProgramLiteralId,
         runtime_error,
+        @"unreachable",
         for_: struct {
             patt: PatId,
             iterable: ExprId,
@@ -554,6 +576,7 @@ pub const Store = struct {
     stmt_ids: std.ArrayList(StmtId),
     bridge_ids: std.ArrayList(BridgeId),
     value_refs: std.ArrayList(ExecutableValueRef),
+    executable_value_transform_refs: std.ArrayList(checked_artifact.ExecutableValueTransformRef),
     capture_value_refs: std.ArrayList(CaptureValueRef),
     direct_call_args: std.ArrayList(DirectCallArg),
     callable_match_branches: std.ArrayList(CallableMatchBranch),
@@ -575,6 +598,8 @@ pub const Store = struct {
     typed_values: std.ArrayList(TypedValue),
     record_field_exprs: std.ArrayList(RecordFieldExpr),
     tag_payload_exprs: std.ArrayList(TagPayloadExpr),
+    tuple_item_exprs: std.ArrayList(TupleItemExpr),
+    list_item_exprs: std.ArrayList(ListItemExpr),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -591,6 +616,7 @@ pub const Store = struct {
             .stmt_ids = .empty,
             .bridge_ids = .empty,
             .value_refs = .empty,
+            .executable_value_transform_refs = .empty,
             .capture_value_refs = .empty,
             .direct_call_args = .empty,
             .callable_match_branches = .empty,
@@ -612,10 +638,14 @@ pub const Store = struct {
             .typed_values = .empty,
             .record_field_exprs = .empty,
             .tag_payload_exprs = .empty,
+            .tuple_item_exprs = .empty,
+            .list_item_exprs = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.list_item_exprs.deinit(self.allocator);
+        self.tuple_item_exprs.deinit(self.allocator);
         self.tag_payload_exprs.deinit(self.allocator);
         self.record_field_exprs.deinit(self.allocator);
         self.typed_values.deinit(self.allocator);
@@ -640,6 +670,7 @@ pub const Store = struct {
         self.value_transform_tag_branches.deinit(self.allocator);
         self.direct_call_args.deinit(self.allocator);
         self.capture_value_refs.deinit(self.allocator);
+        self.executable_value_transform_refs.deinit(self.allocator);
         self.value_refs.deinit(self.allocator);
         self.bridge_ids.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -666,6 +697,10 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.exprs.items.len);
         try self.exprs.append(self.allocator, .{ .ty = ty, .value = value, .data = data });
         return @enumFromInt(idx);
+    }
+
+    pub fn addValueRefExpr(self: *Store, ty: TypeId, value: ExecutableValueRef) std.mem.Allocator.Error!ExprId {
+        return self.addExpr(ty, self.freshValueRef(), .{ .value_ref = value });
     }
 
     pub fn freshValueRef(self: *Store) ExecutableValueRef {
@@ -834,10 +869,34 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addTupleItemExprSpan(self: *Store, values: []const TupleItemExpr) std.mem.Allocator.Error!Span(TupleItemExpr) {
+        if (values.len == 0) return Span(TupleItemExpr).empty();
+        const start: u32 = @intCast(self.tuple_item_exprs.items.len);
+        try self.tuple_item_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addListItemExprSpan(self: *Store, values: []const ListItemExpr) std.mem.Allocator.Error!Span(ListItemExpr) {
+        if (values.len == 0) return Span(ListItemExpr).empty();
+        const start: u32 = @intCast(self.list_item_exprs.items.len);
+        try self.list_item_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addDirectCallArgSpan(self: *Store, values: []const DirectCallArg) std.mem.Allocator.Error!Span(DirectCallArg) {
         if (values.len == 0) return Span(DirectCallArg).empty();
         const start: u32 = @intCast(self.direct_call_args.items.len);
         try self.direct_call_args.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addExecutableValueTransformRefSpan(
+        self: *Store,
+        values: []const checked_artifact.ExecutableValueTransformRef,
+    ) std.mem.Allocator.Error!Span(checked_artifact.ExecutableValueTransformRef) {
+        if (values.len == 0) return Span(checked_artifact.ExecutableValueTransformRef).empty();
+        const start: u32 = @intCast(self.executable_value_transform_refs.items.len);
+        try self.executable_value_transform_refs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

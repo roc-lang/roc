@@ -167,6 +167,7 @@ pub const Expr = struct {
         },
         const_instance: checked_artifact.ConstInstanceRef,
         const_ref: checked_artifact.ConstInstantiationKey,
+        pending_local_root: checked_artifact.ComptimeRootId,
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,

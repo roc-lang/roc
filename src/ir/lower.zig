@@ -26,6 +26,7 @@ pub const Program = struct {
     layouts: Layout.Graph,
     root_procs: std.ArrayList(Ast.ProcRef),
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
+    requested_layouts: std.ArrayList(RequestedLayout),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -37,10 +38,12 @@ pub const Program = struct {
             .layouts = .{},
             .root_procs = .empty,
             .root_metadata = .empty,
+            .requested_layouts = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.requested_layouts.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit(self.allocator);
@@ -52,8 +55,18 @@ pub const Program = struct {
     }
 };
 
+/// Public `RequestedLayout` declaration.
+pub const RequestedLayout = struct {
+    key: repr.CanonicalExecValueTypeKey,
+    layout: Ast.LayoutRef,
+};
+
 /// Public `fromExecutable` function.
-pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Program) LowerResourceError!Program {
+pub fn fromExecutable(
+    allocator: Allocator,
+    executable: mir.Executable.Build.Program,
+    layout_request_keys: []const repr.CanonicalExecValueTypeKey,
+) LowerResourceError!Program {
     var input = executable;
     errdefer input.deinit();
 
@@ -78,6 +91,7 @@ pub fn fromExecutable(allocator: Allocator, executable: mir.Executable.Build.Pro
     };
     defer lowerer.deinit();
     try lowerer.lowerAllDefs();
+    try lowerer.publishRequestedLayouts(layout_request_keys);
 
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
     try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
@@ -182,6 +196,7 @@ const IrBuilder = struct {
         return switch (expr.data) {
             .crash => |literal| .{ .crash = literal },
             .runtime_error => .runtime_error,
+            .@"unreachable" => .@"unreachable",
             .return_ => |child| blk: {
                 const value = try self.lowerExpr(child, stmts);
                 break :blk .{ .return_ = value };
@@ -197,14 +212,31 @@ const IrBuilder = struct {
         };
     }
 
+    fn exprCanUseExprMap(expr: Exec.Ast.Expr) bool {
+        return switch (expr.data) {
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .unit,
+            => true,
+
+            else => false,
+        };
+    }
+
     fn lowerExpr(
         self: *IrBuilder,
         expr_id: Exec.Ast.ExprId,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        if (self.expr_map.get(expr_id)) |existing| return existing;
-
         const expr = self.input.ast.getExpr(expr_id);
+        const can_use_expr_map = exprCanUseExprMap(expr);
+        if (can_use_expr_map) {
+            if (self.expr_map.get(expr_id)) |existing| return existing;
+        }
+
         const lowered: Ast.Var = switch (expr.data) {
             .value_ref => |value| self.value_env.get(value) orelse irInvariant("IR lowering reached executable value_ref before value was bound"),
             .int_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .int = literal } }, stmts),
@@ -212,12 +244,12 @@ const IrBuilder = struct {
             .frac_f64_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .f64 = literal } }, stmts),
             .dec_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .dec = literal } }, stmts),
             .str_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .str = literal } }, stmts),
-            .unit => try self.bindExpr(expr.value, .{ .canonical = .zst }, .{ .make_struct = Ast.Span(Ast.Var).empty() }, stmts),
+            .unit => try self.bindExpr(expr.value, .{ .canonical = .zst }, try self.makeDirectStructExpr(&.{}), stmts),
             .record => |record| blk: {
                 const fields = try self.lowerRecordFields(record.fields, stmts);
-                defer if (fields.len > 0) self.allocator.free(fields);
+                defer fields.deinit(self.allocator);
                 const layout = try self.layoutForType(expr.ty);
-                break :blk try self.bindExpr(expr.value, layout, .{ .make_struct = try self.output.store.addVarSpan(fields) }, stmts);
+                break :blk try self.bindExpr(expr.value, layout, try self.makeStructExpr(fields.vars, fields.bridges), stmts);
             },
             .nominal_reinterpret => |backing| blk: {
                 const lowered_backing = try self.lowerExpr(backing, stmts);
@@ -229,7 +261,8 @@ const IrBuilder = struct {
                 const payload = try self.lowerTagPayloadForConstruction(tag.tag, tag.payloads, stmts);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
                     .discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
-                    .payload = payload,
+                    .payload = payload.var_,
+                    .payload_bridge_plan = payload.bridge,
                 } }, stmts);
             },
             .access => |access| blk: {
@@ -252,18 +285,18 @@ const IrBuilder = struct {
                 break :blk try self.lowerExpr(block.final_expr, stmts);
             },
             .tuple => |items| blk: {
-                const values = try self.lowerVarSpanFromExprSpan(items, stmts);
-                defer if (values.len > 0) self.allocator.free(values);
-                const layout = try self.structLayout(values);
-                break :blk try self.bindExpr(expr.value, layout, .{ .make_struct = try self.output.store.addVarSpan(values) }, stmts);
+                const values = try self.lowerTupleItems(items, stmts);
+                defer values.deinit(self.allocator);
+                const layout = try self.structLayout(values.vars);
+                break :blk try self.bindExpr(expr.value, layout, try self.makeStructExpr(values.vars, values.bridges), stmts);
             },
             .list => |items| blk: {
-                const values = try self.lowerVarSpanFromExprSpan(items, stmts);
-                defer if (values.len > 0) self.allocator.free(values);
+                const values = try self.lowerListItems(items, stmts);
+                defer values.deinit(self.allocator);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{
                     .make_list = .{
-                        .elems = try self.output.store.addVarSpan(values),
-                        .elem_bridge_plans = Ast.Span(Ast.BridgePlanId).empty(),
+                        .elems = try self.output.store.addVarSpan(values.vars),
+                        .elem_bridge_plans = try self.output.store.addBridgePlanSpan(values.bridges),
                     },
                 }, stmts);
             },
@@ -314,11 +347,17 @@ const IrBuilder = struct {
                 try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error));
                 break :blk try self.freshVar(try self.layoutForType(expr.ty));
             },
+            .@"unreachable" => blk: {
+                try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error));
+                break :blk try self.freshVar(try self.layoutForType(expr.ty));
+            },
             .const_instance => irInvariant("IR lowering received executable const_instance; executable MIR must materialize constants before IR"),
             .const_ref => irInvariant("IR lowering received non-runnable compile-time dependency const_ref"),
         };
 
-        try self.expr_map.put(expr_id, lowered);
+        if (can_use_expr_map) {
+            try self.expr_map.put(expr_id, lowered);
+        }
         try self.value_env.put(expr.value, lowered);
         return lowered;
     }
@@ -368,19 +407,15 @@ const IrBuilder = struct {
         call: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const sig_has_capture = call.sig_key.capture_ty != null;
-        const type_has_capture = call.capture_ty != null;
-        if (sig_has_capture != type_has_capture) {
-            irInvariant("IR lowering call_erased hidden capture type disagrees with erased signature");
-        }
+        _ = call.sig_key;
+        _ = call.capture_ty;
         const func = self.value_env.get(call.func) orelse irInvariant("IR lowering call_erased function value was not bound");
         const args = try self.lowerVarSpanFromValueRefSpan(call.args);
         defer if (args.len > 0) self.allocator.free(args);
-        const capture_layout = if (call.capture_ty) |capture_ty| try self.layoutForType(capture_ty) else null;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_erased = .{
             .func = func,
             .args = try self.output.store.addVarSpan(args),
-            .capture_layout = capture_layout,
+            .capture_layout = .{ .canonical = .opaque_ptr },
         } }, stmts);
     }
 
@@ -390,8 +425,7 @@ const IrBuilder = struct {
         packed_fn: Exec.Ast.PackedErasedFn,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const field_count: usize = if (packed_fn.capture_ty == null) 1 else 2;
-        const fields = try self.allocator.alloc(Ast.Var, field_count);
+        const fields = try self.allocator.alloc(Ast.Var, 2);
         defer self.allocator.free(fields);
 
         const fn_ptr = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .{ .fn_ptr = packed_fn.code }, stmts);
@@ -412,14 +446,14 @@ const IrBuilder = struct {
                     .plan = box_plan,
                 } }),
             } }));
-            fields[1] = capture_box;
+            fields[1] = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .{ .nominal_reinterpret = capture_box }, stmts);
         } else if (packed_fn.capture != null) {
             irInvariant("IR lowering packed erased fn has capture value but no capture type");
+        } else {
+            fields[1] = try self.bindAnonymous(.{ .canonical = .opaque_ptr }, .null_ptr, stmts);
         }
 
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{
-            .make_struct = try self.output.store.addVarSpan(fields),
-        }, stmts);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), try self.makeDirectStructExpr(fields), stmts);
     }
 
     fn lowerCallableSetValue(
@@ -453,15 +487,15 @@ const IrBuilder = struct {
             }
 
             const layout = try self.structLayout(fields);
-            const bind = try self.bindExpr(record.record_tmp, layout, .{
-                .make_struct = try self.output.store.addVarSpan(fields),
-            }, stmts);
+            const bind = try self.bindExpr(record.record_tmp, layout, try self.makeDirectStructExpr(fields), stmts);
             payload = bind;
         }
 
+        const payload_bridge = if (payload != null) try self.output.store.addBridgePlan(.direct) else null;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
             .discriminant = @intCast(@intFromEnum(callable.member.member_index)),
             .payload = payload,
+            .payload_bridge_plan = payload_bridge,
         } }, stmts);
     }
 
@@ -705,7 +739,7 @@ const IrBuilder = struct {
         return try self.bindExpr(
             expr.value,
             .{ .canonical = .zst },
-            .{ .make_struct = Ast.Span(Ast.Var).empty() },
+            try self.makeDirectStructExpr(&.{}),
             stmts,
         );
     }
@@ -915,7 +949,7 @@ const IrBuilder = struct {
         const bindings = self.input.ast.slicePatternBindingSpan(leaf.bindings);
         for (bindings) |binding| {
             const value = try self.materializePatternPathValue(binding.source, scrutinee_values, path_values, stmts);
-            try self.pushValueBinding(binding.binder, value, &saved);
+            try self.bindPatternValue(binding, value, stmts, &saved);
         }
 
         if (leaf.guard) |guard_expr| {
@@ -982,6 +1016,7 @@ const IrBuilder = struct {
             },
             .crash => |literal| try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal })),
             .runtime_error => try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error)),
+            .@"unreachable" => try stmts.append(self.allocator, try self.output.store.addStmt(.runtime_error)),
             .block => |block| {
                 try self.lowerStmtSpan(block.stmts, stmts);
                 try self.appendExprResultOrTerminator(block.final_expr, result, stmts);
@@ -1104,7 +1139,7 @@ const IrBuilder = struct {
         for (seen) |was_seen| {
             if (!was_seen) irInvariant("IR lowering record-rest projection did not provide every result field");
         }
-        return try self.bindAnonymous(try self.layoutForType(ty), .{ .make_struct = try self.output.store.addVarSpan(fields) }, stmts);
+        return try self.bindAnonymous(try self.layoutForType(ty), try self.makeDirectStructExpr(fields), stmts);
     }
 
     fn materializeListElementPatternPath(
@@ -1147,9 +1182,7 @@ const IrBuilder = struct {
             .rc_effect = base.LowLevel.num_minus.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{ len_without_tail, start }),
         } }, stmts);
-        const slice_record = try self.bindAnonymous(try self.structLayout(&[_]Ast.Var{ rest_len, start }), .{
-            .make_struct = try self.output.store.addVarSpan(&[_]Ast.Var{ rest_len, start }),
-        }, stmts);
+        const slice_record = try self.bindAnonymous(try self.structLayout(&[_]Ast.Var{ rest_len, start }), try self.makeDirectStructExpr(&[_]Ast.Var{ rest_len, start }), stmts);
         return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
             .op = .list_sublist,
             .rc_effect = base.LowLevel.list_sublist.rcEffect(),
@@ -1379,6 +1412,30 @@ const IrBuilder = struct {
         });
     }
 
+    fn bindPatternValue(
+        self: *IrBuilder,
+        binding: Exec.Ast.PatternBinding,
+        source: Ast.Var,
+        stmts: *std.ArrayList(Ast.StmtId),
+        saved: *std.ArrayList(SavedValueBinding),
+    ) LowerResourceError!void {
+        const bridge_plan = try self.lowerBridgePlan(binding.bridge);
+        const bind = try self.freshVar(try self.layoutForType(binding.ty));
+        const expr = try self.output.store.addExpr(.{ .bridge = .{
+            .value = source,
+            .plan = bridge_plan,
+        } });
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
+            .bind = bind,
+            .expr = expr,
+        } }));
+        const previous = try self.value_env.fetchPut(binding.binder, bind);
+        try saved.append(self.allocator, .{
+            .value = binding.binder,
+            .previous = if (previous) |entry| entry.value else null,
+        });
+    }
+
     fn freshInternalValueRef(self: *IrBuilder) Exec.Ast.ExecutableValueRef {
         const value: Exec.Ast.ExecutableValueRef = @enumFromInt(self.next_internal_value_ref);
         self.next_internal_value_ref += 1;
@@ -1419,7 +1476,13 @@ const IrBuilder = struct {
         switch (stmt) {
             .decl => |decl| {
                 const value = try self.lowerExpr(decl.body, stmts);
-                try self.value_env.put(decl.value, value);
+                const bind = try self.freshVar(value.layout);
+                const expr = try self.output.store.addExpr(.{ .var_ = value });
+                try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
+                    .bind = bind,
+                    .expr = expr,
+                } }));
+                try self.value_env.put(decl.value, bind);
             },
             .reassign => |reassign| {
                 const value = try self.lowerExpr(reassign.body, stmts);
@@ -1449,18 +1512,72 @@ const IrBuilder = struct {
         }
     }
 
+    const LoweredConstructionValues = struct {
+        vars: []const Ast.Var,
+        bridges: []const Ast.BridgePlanId,
+
+        fn deinit(self: LoweredConstructionValues, allocator: Allocator) void {
+            if (self.vars.len > 0) allocator.free(self.vars);
+            if (self.bridges.len > 0) allocator.free(self.bridges);
+        }
+    };
+
+    const LoweredPayloadConstruction = struct {
+        var_: ?Ast.Var,
+        bridge: ?Ast.BridgePlanId,
+    };
+
+    fn makeDirectStructExpr(
+        self: *IrBuilder,
+        fields: []const Ast.Var,
+    ) LowerResourceError!Ast.Expr {
+        const bridge_plans = try self.directBridgePlanSpan(fields.len);
+        return .{ .make_struct = .{
+            .fields = try self.output.store.addVarSpan(fields),
+            .field_bridge_plans = bridge_plans,
+        } };
+    }
+
+    fn makeStructExpr(
+        self: *IrBuilder,
+        fields: []const Ast.Var,
+        bridge_plans: []const Ast.BridgePlanId,
+    ) LowerResourceError!Ast.Expr {
+        if (fields.len != bridge_plans.len) {
+            irInvariant("IR lowering struct construction bridge count did not match field count");
+        }
+        return .{ .make_struct = .{
+            .fields = try self.output.store.addVarSpan(fields),
+            .field_bridge_plans = try self.output.store.addBridgePlanSpan(bridge_plans),
+        } };
+    }
+
+    fn directBridgePlanSpan(
+        self: *IrBuilder,
+        count: usize,
+    ) LowerResourceError!Ast.Span(Ast.BridgePlanId) {
+        if (count == 0) return Ast.Span(Ast.BridgePlanId).empty();
+        const direct = try self.output.store.addBridgePlan(.direct);
+        const bridge_plans = try self.allocator.alloc(Ast.BridgePlanId, count);
+        defer self.allocator.free(bridge_plans);
+        @memset(bridge_plans, direct);
+        return try self.output.store.addBridgePlanSpan(bridge_plans);
+    }
+
     fn lowerRecordFields(
         self: *IrBuilder,
         span: Exec.Ast.Span(Exec.Ast.RecordFieldExpr),
         stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError![]const Ast.Var {
-        if (span.len == 0) return &.{};
+    ) LowerResourceError!LoweredConstructionValues {
+        if (span.len == 0) return .{ .vars = &.{}, .bridges = &.{} };
         const input_items = self.input.ast.record_field_exprs.items[span.start..][0..span.len];
         const values = try self.allocator.alloc(Ast.Var, input_items.len);
+        const bridges = try self.allocator.alloc(Ast.BridgePlanId, input_items.len);
         for (input_items, 0..) |field, i| {
             values[i] = try self.lowerExpr(field.expr, stmts);
+            bridges[i] = try self.lowerBridgePlan(field.bridge);
         }
-        return values;
+        return .{ .vars = values, .bridges = bridges };
     }
 
     fn lowerTagPayloadForConstruction(
@@ -1468,12 +1585,14 @@ const IrBuilder = struct {
         tag_id: mir.MonoRow.TagId,
         span: Exec.Ast.Span(Exec.Ast.TagPayloadExpr),
         stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError!?Ast.Var {
+    ) LowerResourceError!LoweredPayloadConstruction {
         const expected_payloads = self.input.row_shapes.tagPayloads(tag_id);
-        if (expected_payloads.len == 0) return null;
+        if (expected_payloads.len == 0) return .{ .var_ = null, .bridge = null };
 
         const payload_vars = try self.allocator.alloc(Ast.Var, expected_payloads.len);
         defer self.allocator.free(payload_vars);
+        const payload_bridges = try self.allocator.alloc(Ast.BridgePlanId, expected_payloads.len);
+        defer self.allocator.free(payload_bridges);
         var seen = try self.allocator.alloc(bool, expected_payloads.len);
         defer self.allocator.free(seen);
         @memset(seen, false);
@@ -1486,17 +1605,52 @@ const IrBuilder = struct {
             if (logical_index >= payload_vars.len) irInvariant("IR lowering tag construction payload index exceeded tag arity");
             if (seen[logical_index]) irInvariant("IR lowering tag construction saw duplicate payload slot");
             payload_vars[logical_index] = try self.lowerExpr(payload.expr, stmts);
+            payload_bridges[logical_index] = try self.lowerBridgePlan(payload.bridge);
             seen[logical_index] = true;
         }
         for (seen) |was_seen| {
             if (!was_seen) irInvariant("IR lowering tag construction did not provide every payload slot");
         }
 
-        if (payload_vars.len == 1) return payload_vars[0];
+        if (payload_vars.len == 1) return .{ .var_ = payload_vars[0], .bridge = payload_bridges[0] };
         const payload_layout = try self.structLayout(payload_vars);
-        return try self.bindAnonymous(payload_layout, .{
-            .make_struct = try self.output.store.addVarSpan(payload_vars),
-        }, stmts);
+        const payload_record = try self.bindAnonymous(payload_layout, try self.makeDirectStructExpr(payload_vars), stmts);
+        const payload_bridge = try self.output.store.addBridgePlan(.{
+            .struct_ = try self.output.store.addBridgePlanSpan(payload_bridges),
+        });
+        return .{ .var_ = payload_record, .bridge = payload_bridge };
+    }
+
+    fn lowerTupleItems(
+        self: *IrBuilder,
+        span: Exec.Ast.Span(Exec.Ast.TupleItemExpr),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!LoweredConstructionValues {
+        if (span.len == 0) return .{ .vars = &.{}, .bridges = &.{} };
+        const input_items = self.input.ast.tuple_item_exprs.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.Var, input_items.len);
+        const bridges = try self.allocator.alloc(Ast.BridgePlanId, input_items.len);
+        for (input_items, 0..) |item, i| {
+            values[i] = try self.lowerExpr(item.expr, stmts);
+            bridges[i] = try self.lowerBridgePlan(item.bridge);
+        }
+        return .{ .vars = values, .bridges = bridges };
+    }
+
+    fn lowerListItems(
+        self: *IrBuilder,
+        span: Exec.Ast.Span(Exec.Ast.ListItemExpr),
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!LoweredConstructionValues {
+        if (span.len == 0) return .{ .vars = &.{}, .bridges = &.{} };
+        const input_items = self.input.ast.list_item_exprs.items[span.start..][0..span.len];
+        const values = try self.allocator.alloc(Ast.Var, input_items.len);
+        const bridges = try self.allocator.alloc(Ast.BridgePlanId, input_items.len);
+        for (input_items, 0..) |item, i| {
+            values[i] = try self.lowerExpr(item.expr, stmts);
+            bridges[i] = try self.lowerBridgePlan(item.bridge);
+        }
+        return .{ .vars = values, .bridges = bridges };
     }
 
     fn lowerTagPayload(
@@ -1921,20 +2075,18 @@ const IrBuilder = struct {
         node: Layout.NodeId,
         erased: Exec.Type.ErasedFnType,
     ) LowerResourceError!void {
-        const field_count: usize = if (erased.capture_ty == null) 1 else 2;
-        const fields = try self.allocator.alloc(Ast.Var, field_count);
+        _ = erased;
+        const fields = try self.allocator.alloc(Ast.Var, 2);
         defer self.allocator.free(fields);
 
         fields[0] = .{
             .layout = .{ .canonical = .opaque_ptr },
             .symbol = symbol_mod.Symbol.none,
         };
-        if (erased.capture_ty) |capture_ty| {
-            fields[1] = .{
-                .layout = try self.boxLayout(try self.layoutForType(capture_ty)),
-                .symbol = symbol_mod.Symbol.none,
-            };
-        }
+        fields[1] = .{
+            .layout = .{ .canonical = .opaque_ptr },
+            .symbol = symbol_mod.Symbol.none,
+        };
         try self.fillStructLayoutNode(node, fields);
     }
 
@@ -1944,6 +2096,24 @@ const IrBuilder = struct {
             .list => |elem| elem,
             else => irInvariant("IR lowering for_list expected iterable expression to have List(T) type"),
         };
+    }
+
+    fn publishRequestedLayouts(
+        self: *IrBuilder,
+        request_keys: []const repr.CanonicalExecValueTypeKey,
+    ) LowerResourceError!void {
+        if (request_keys.len == 0) return;
+        try self.output.requested_layouts.ensureUnusedCapacity(self.allocator, request_keys.len);
+        for (request_keys) |key| {
+            const ty = self.input.lowered_session_types_by_key.get(key) orelse {
+                irInvariant("IR lowering requested a layout for an unpublished executable type key");
+            };
+            const layout = try self.layoutForType(ty);
+            self.output.requested_layouts.appendAssumeCapacity(.{
+                .key = key,
+                .layout = layout,
+            });
+        }
     }
 };
 

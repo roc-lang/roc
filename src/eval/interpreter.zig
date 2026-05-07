@@ -434,19 +434,32 @@ pub const Interpreter = struct {
 
     /// Allocate memory for a value of the given layout.
     fn alloc(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
-        const size = self.helper.sizeOf(layout_idx);
-        if (size == 0) return Value.zst;
-        const slice = self.arena.allocator().alloc(u8, size) catch return error.OutOfMemory;
-        @memset(slice, 0);
+        const sa = self.helper.sizeAlignOf(layout_idx);
+        if (sa.size == 0) return Value.zst;
+        const slice = try self.allocAlignedByteSlice(sa.size, sa.alignment);
         return Value.fromSlice(slice);
     }
 
-    /// Allocate raw bytes.
-    fn allocBytes(self: *LirInterpreter, size: usize) Error!Value {
+    fn allocAlignedBytes(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error!Value {
         if (size == 0) return Value.zst;
-        const slice = self.arena.allocator().alloc(u8, size) catch return error.OutOfMemory;
+        return Value.fromSlice(try self.allocAlignedByteSlice(size, alignment));
+    }
+
+    fn allocAlignedByteSlice(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error![]u8 {
+        const slice = switch (alignment) {
+            .@"1" => self.arena.allocator().alignedAlloc(u8, .@"1", size),
+            .@"2" => self.arena.allocator().alignedAlloc(u8, .@"2", size),
+            .@"4" => self.arena.allocator().alignedAlloc(u8, .@"4", size),
+            .@"8" => self.arena.allocator().alignedAlloc(u8, .@"8", size),
+            .@"16" => self.arena.allocator().alignedAlloc(u8, .@"16", size),
+            _ => unreachable,
+        } catch return error.OutOfMemory;
         @memset(slice, 0);
-        return Value.fromSlice(slice);
+        return slice;
+    }
+
+    fn maxRocAlignment(a: layout_mod.RocAlignment, b: layout_mod.RocAlignment) layout_mod.RocAlignment {
+        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
     }
 
     /// Allocate heap data through roc_ops with a refcount header.
@@ -508,7 +521,7 @@ pub const Interpreter = struct {
                 continue;
             }
 
-            const copy = try self.allocBytes(sa.size);
+            const copy = try self.allocAlignedBytes(sa.size, sa.alignment);
             @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
             args_buf[i] = copy;
         }
@@ -1311,6 +1324,14 @@ pub const Interpreter = struct {
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
+                    trace_rc.log("stmt incref: proc={d} stmt={d} local={d} layout={d} count={d} ptr=0x{x}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(inc.value),
+                        @intFromEnum(self.store.getLocal(inc.value).layout_idx),
+                        inc.count,
+                        @intFromPtr((try self.getLocalChecked(frame, inc.value)).ptr),
+                    });
                     self.performExplicitRcStmt(
                         .incref,
                         try self.getLocalChecked(frame, inc.value),
@@ -1328,6 +1349,13 @@ pub const Interpreter = struct {
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
+                    trace_rc.log("stmt decref: proc={d} stmt={d} local={d} layout={d} ptr=0x{x}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(dec.value),
+                        @intFromEnum(self.store.getLocal(dec.value).layout_idx),
+                        @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
+                    });
                     self.performExplicitRcStmt(
                         .decref,
                         try self.getLocalChecked(frame, dec.value),
@@ -1345,6 +1373,13 @@ pub const Interpreter = struct {
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
+                    trace_rc.log("stmt free: proc={d} stmt={d} local={d} layout={d} ptr=0x{x}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(free_stmt.value),
+                        @intFromEnum(self.store.getLocal(free_stmt.value).layout_idx),
+                        @intFromPtr((try self.getLocalChecked(frame, free_stmt.value)).ptr),
+                    });
                     self.performExplicitRcStmt(
                         .free,
                         try self.getLocalChecked(frame, free_stmt.value),
@@ -2063,25 +2098,26 @@ pub const Interpreter = struct {
 
         const capture_layout_idx = capture_layout.?;
         const capture_value = blk: {
+            const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+            const stored_capture_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+            const stored_capture_value = self.normalizeValueToLayout(
+                closure_base.value.offset(capture_offset),
+                stored_capture_layout,
+                stored_capture_layout,
+            );
+            if (capture_layout_idx == .opaque_ptr) break :blk stored_capture_value;
             if (capture_layout_idx == .zst) break :blk Value.zst;
 
-            const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-            const capture_ptr_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-            const capture_ptr_value = self.normalizeValueToLayout(
-                closure_base.value.offset(capture_offset),
-                capture_ptr_layout,
-                capture_ptr_layout,
-            );
-            const capture_ptr = self.readBoxedDataPointer(capture_ptr_value) orelse self.invariantFailed(
-                "LIR/interpreter invariant violated: erased call capture pointer is null",
-                .{},
-            );
-            const result = try self.alloc(capture_layout_idx);
+            const capture_ptr = self.readBoxedDataPointer(stored_capture_value) orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased call capture pointer is null for non-opaque capture layout {d}",
+                    .{@intFromEnum(capture_layout_idx)},
+                );
+            };
+            const materialized = try self.alloc(capture_layout_idx);
             const size = self.helper.sizeOf(capture_layout_idx);
-            if (size > 0) {
-                result.copyFrom(.{ .ptr = capture_ptr }, size);
-            }
-            break :blk result;
+            if (size > 0) materialized.copyFrom(.{ .ptr = capture_ptr }, size);
+            break :blk materialized;
         };
 
         const all_args = try self.arena.allocator().alloc(Value, args.len + 1);
@@ -2164,19 +2200,27 @@ pub const Interpreter = struct {
             return allocated.outer;
         }
         const expected_info = self.layout_store.getStructInfo(base_layout_val);
-        if (builtin.mode == .Debug and field_locals.len != expected_info.fields.len) {
+        var expected_field_count: usize = 0;
+        for (0..expected_info.fields.len) |i| {
+            const field = expected_info.fields.get(@intCast(i));
+            expected_field_count = @max(expected_field_count, @as(usize, @intCast(field.index)) + 1);
+        }
+        if (builtin.mode == .Debug and field_locals.len < expected_field_count) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: struct literal for layout {d} had {d} fields but layout expects {d}",
-                .{ @intFromEnum(struct_layout), field_locals.len, expected_info.fields.len },
+                .{ @intFromEnum(struct_layout), field_locals.len, expected_field_count },
             );
         }
         for (field_locals, 0..) |field_local, i| {
+            const field_size = self.layout_store.getStructFieldSizeByOriginalIndex(
+                base_layout_val.data.struct_.idx,
+                @intCast(i),
+            );
+            if (field_size == 0) continue;
             const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
                 base_layout_val.data.struct_.idx,
                 @intCast(i),
             );
-            const field_size = self.helper.sizeOf(field_layout);
-            if (field_size == 0) continue;
             const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
                 base_layout_val.data.struct_.idx,
                 @intCast(i),
@@ -2348,15 +2392,16 @@ pub const Interpreter = struct {
         ret_layout: layout_mod.Idx,
     ) Error!Value {
         var total_args_size: usize = 0;
+        var args_alignment: layout_mod.RocAlignment = .@"1";
         for (arg_layouts) |arg_layout| {
             const sa = self.helper.sizeAlignOf(arg_layout);
+            args_alignment = maxRocAlignment(args_alignment, sa.alignment);
             total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
             total_args_size += sa.size;
         }
 
         const args_buf_size = @max(total_args_size, 8);
-        const args_buf = try self.arena.allocator().alloc(u8, args_buf_size);
-        @memset(args_buf, 0);
+        const args_buf = try self.allocAlignedByteSlice(args_buf_size, args_alignment);
 
         var offset: usize = 0;
         for (args, arg_layouts) |arg, arg_layout| {
@@ -2368,9 +2413,8 @@ pub const Interpreter = struct {
             offset += sa.size;
         }
 
-        const ret_size = self.helper.sizeOf(ret_layout);
-        const ret_buf = try self.arena.allocator().alloc(u8, @max(ret_size, 1));
-        @memset(ret_buf, 0);
+        const ret_sa = self.helper.sizeAlignOf(ret_layout);
+        const ret_buf = try self.allocAlignedByteSlice(@max(ret_sa.size, 1), ret_sa.alignment);
 
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
@@ -2382,10 +2426,10 @@ pub const Interpreter = struct {
         hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
 
         if (self.roc_env.crashed) return error.Crash;
-        if (ret_size == 0) return Value.zst;
+        if (ret_sa.size == 0) return Value.zst;
 
         const result = try self.alloc(ret_layout);
-        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
+        @memcpy(result.ptr[0..ret_sa.size], ret_buf[0..ret_sa.size]);
         return result;
     }
 
@@ -3142,7 +3186,7 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(arg_layout);
                 if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ll.ret_layout);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
-                const val = try self.allocBytes(info.width);
+                const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
                 break :blk val;
             },
@@ -3303,7 +3347,7 @@ pub const Interpreter = struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
                 }).f;
                 // listReplace writes old element into out_element
-                const old_elem = try self.allocBytes(info.width);
+                const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
                 const result = builtins.list.listReplace(
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,

@@ -14,6 +14,7 @@ const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
 
 const Allocator = std.mem.Allocator;
+const repr = mir.LambdaSolved.Representation;
 
 /// Public `LowerResourceError` declaration.
 pub const LowerResourceError = Allocator.Error;
@@ -24,6 +25,12 @@ pub const ProcMapEntry = struct {
     lir_proc: LIR.LirProcSpecId,
 };
 
+/// Public `RequestedLayout` declaration.
+pub const RequestedLayout = struct {
+    key: repr.CanonicalExecValueTypeKey,
+    layout_idx: layout_mod.Idx,
+};
+
 /// Public `Result` declaration.
 pub const Result = struct {
     canonical_names: mir.Hosted.CanonicalNameStore,
@@ -32,8 +39,10 @@ pub const Result = struct {
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
+    requested_layouts: std.ArrayList(RequestedLayout),
 
     pub fn deinit(self: *Result) void {
+        self.requested_layouts.deinit(self.store.allocator);
         self.proc_map.deinit(self.store.allocator);
         self.root_metadata.deinit(self.store.allocator);
         self.root_procs.deinit(self.store.allocator);
@@ -45,6 +54,16 @@ pub const Result = struct {
     pub fn lirProcForExecutable(self: *const Result, proc: ir.Ast.ProcRef) ?LIR.LirProcSpecId {
         for (self.proc_map.items) |entry| {
             if (entry.executable_proc == proc) return entry.lir_proc;
+        }
+        return null;
+    }
+
+    pub fn requestedLayoutForKey(
+        self: *const Result,
+        key: repr.CanonicalExecValueTypeKey,
+    ) ?layout_mod.Idx {
+        for (self.requested_layouts.items) |entry| {
+            if (repr.canonicalExecValueTypeKeyEql(entry.key, key)) return entry.layout_idx;
         }
         return null;
     }
@@ -69,6 +88,7 @@ pub fn run(
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllDefs();
     try lowerer.bindRoots(explicit_roots, explicit_root_metadata);
+    try lowerer.lowerRequestedLayouts();
 
     owned_input.deinit();
     return lowerer.finish();
@@ -83,6 +103,7 @@ const Lowerer = struct {
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
+    requested_layouts: std.ArrayList(RequestedLayout),
     local_env: std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId),
     layout_ref_cache: std.AutoHashMap(u64, layout_mod.Idx),
     raw_layout_value_cache: std.AutoHashMap(layout_mod.Idx, layout_mod.Idx),
@@ -103,6 +124,7 @@ const Lowerer = struct {
             .root_procs = .empty,
             .root_metadata = .empty,
             .proc_map = .empty,
+            .requested_layouts = .empty,
             .break_targets = .empty,
             .next_join_point = 0,
             .local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(allocator),
@@ -117,6 +139,7 @@ const Lowerer = struct {
         self.layout_ref_cache.deinit();
         self.local_env.deinit();
         self.proc_map.deinit(self.allocator);
+        self.requested_layouts.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
@@ -132,6 +155,7 @@ const Lowerer = struct {
             .root_procs = self.root_procs,
             .root_metadata = self.root_metadata,
             .proc_map = self.proc_map,
+            .requested_layouts = self.requested_layouts,
         };
         self.local_env.deinit();
         self.layout_ref_cache.deinit();
@@ -143,6 +167,7 @@ const Lowerer = struct {
         self.root_procs = .empty;
         self.root_metadata = .empty;
         self.proc_map = .empty;
+        self.requested_layouts = .empty;
         self.break_targets = .empty;
         self.next_join_point = 0;
         self.local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(self.allocator);
@@ -237,6 +262,18 @@ const Lowerer = struct {
             };
             self.root_procs.appendAssumeCapacity(proc);
             self.root_metadata.appendAssumeCapacity(metadata);
+        }
+    }
+
+    fn lowerRequestedLayouts(self: *Lowerer) LowerResourceError!void {
+        const requests = self.input.requested_layouts.items;
+        if (requests.len == 0) return;
+        try self.requested_layouts.ensureUnusedCapacity(self.allocator, requests.len);
+        for (requests) |request| {
+            self.requested_layouts.appendAssumeCapacity(.{
+                .key = request.key,
+                .layout_idx = try self.lowerLayoutRef(request.layout),
+            });
         }
     }
 
@@ -439,8 +476,12 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const source_layout = self.store.getLocal(source).layout_idx;
-        const field_layout = self.structFieldLayout(source_layout, field_index);
         const target_layout = self.store.getLocal(target).layout_idx;
+        if (self.isZstLayout(source_layout)) {
+            if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
+            lirInvariant("lir.lower_ir field access from zst source expected zst target");
+        }
+        const field_layout = self.structFieldLayout(source_layout, field_index);
         if (target_layout == field_layout) {
             if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
             return try self.store.addCFStmt(.{ .assign_ref = .{
@@ -473,8 +514,12 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const source_layout = self.store.getLocal(source).layout_idx;
-        const payload_layout = self.tagPayloadLayoutFromSource(source_layout, tag_discriminant);
         const target_layout = self.store.getLocal(target).layout_idx;
+        if (self.isZstLayout(source_layout)) {
+            if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
+            lirInvariant("lir.lower_ir tag payload access from zst source expected zst target");
+        }
+        const payload_layout = self.tagPayloadLayoutFromSource(source_layout, tag_discriminant);
         if (target_layout == payload_layout) {
             if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
             return try self.store.addCFStmt(.{ .assign_ref = .{
@@ -502,15 +547,20 @@ const Lowerer = struct {
     fn lowerMakeStructInto(
         self: *Lowerer,
         target: LIR.LocalId,
-        fields: ir.Ast.Span(ir.Ast.Var),
+        make_struct: anytype,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const target_layout = self.store.getLocal(target).layout_idx;
         if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
 
-        const vars = self.input.store.sliceVarSpan(fields);
-        if (vars.len != self.structFieldCount(target_layout)) {
+        const vars = self.input.store.sliceVarSpan(make_struct.fields);
+        const bridge_plans = self.input.store.sliceBridgePlanSpan(make_struct.field_bridge_plans);
+        const logical_field_count = self.structLogicalFieldCount(target_layout);
+        if (vars.len < logical_field_count) {
             lirInvariant("lir.lower_ir struct construction field count does not match target layout");
+        }
+        if (bridge_plans.len != vars.len) {
+            lirInvariant("lir.lower_ir struct construction bridge count does not match field count");
         }
 
         const source_fields = try self.allocator.alloc(LIR.LocalId, vars.len);
@@ -538,7 +588,7 @@ const Lowerer = struct {
         while (i > 0) {
             i -= 1;
             if (physical_fields[i] != source_fields[i]) {
-                current = try self.lowerPhysicalSlotInto(physical_fields[i], source_fields[i], current);
+                current = try self.lowerBridgePlanInto(physical_fields[i], source_fields[i], bridge_plans[i], current);
             }
         }
         return current;
@@ -554,23 +604,36 @@ const Lowerer = struct {
         var payload_bridge: ?struct {
             target: LIR.LocalId,
             source: LIR.LocalId,
+            plan: ir.Ast.BridgePlanId,
         } = null;
+        const target_layout = self.store.getLocal(target).layout_idx;
         if (tag.payload) |payload_var| {
             const source = try self.lowerVar(payload_var);
-            const target_layout = self.store.getLocal(target).layout_idx;
+            if (self.isZstLayout(target_layout)) {
+                if (!self.isZstLayout(self.store.getLocal(source).layout_idx)) {
+                    lirInvariant("lir.lower_ir zst tag construction received non-zst payload");
+                }
+                return try self.assignZst(target, next);
+            }
             const expected_payload_layout = self.tagPayloadLayoutForConstruction(target_layout, tag.discriminant) orelse
                 lirInvariant("lir.lower_ir tag construction had payload for layout without payload storage");
             if (self.store.getLocal(source).layout_idx == expected_payload_layout) {
                 payload = source;
             } else {
+                const plan = tag.payload_bridge_plan orelse
+                    lirInvariant("lir.lower_ir tag construction missing payload bridge plan");
                 const physical_payload = try self.store.addLocal(.{ .layout_idx = expected_payload_layout });
                 payload = physical_payload;
                 payload_bridge = .{
                     .target = physical_payload,
                     .source = source,
+                    .plan = plan,
                 };
             }
+        } else if (tag.payload_bridge_plan != null) {
+            lirInvariant("lir.lower_ir tag construction had payload bridge without payload");
         }
+        if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
 
         const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
@@ -579,9 +642,59 @@ const Lowerer = struct {
             .next = next,
         } });
         return if (payload_bridge) |bridge|
-            try self.lowerPhysicalSlotInto(bridge.target, bridge.source, assign_tag)
+            try self.lowerBridgePlanInto(bridge.target, bridge.source, bridge.plan, assign_tag)
         else
             assign_tag;
+    }
+
+    fn lowerMakeListInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        list: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const vars = self.input.store.sliceVarSpan(list.elems);
+        const bridge_plans = self.input.store.sliceBridgePlanSpan(list.elem_bridge_plans);
+        if (bridge_plans.len != vars.len) {
+            lirInvariant("lir.lower_ir list construction bridge count does not match element count");
+        }
+        if (vars.len == 0) {
+            return try self.store.addCFStmt(.{ .assign_list = .{
+                .target = target,
+                .elems = LIR.LocalSpan.empty(),
+                .next = next,
+            } });
+        }
+
+        const elem_layout = self.listElemLayout(self.store.getLocal(target).layout_idx);
+        const source_elems = try self.allocator.alloc(LIR.LocalId, vars.len);
+        defer self.allocator.free(source_elems);
+        const physical_elems = try self.allocator.alloc(LIR.LocalId, vars.len);
+        defer self.allocator.free(physical_elems);
+
+        for (vars, 0..) |var_, i| {
+            const source = try self.lowerVar(var_);
+            source_elems[i] = source;
+            physical_elems[i] = if (self.store.getLocal(source).layout_idx == elem_layout)
+                source
+            else
+                try self.store.addLocal(.{ .layout_idx = elem_layout });
+        }
+
+        var current = try self.store.addCFStmt(.{ .assign_list = .{
+            .target = target,
+            .elems = try self.store.addLocalSpan(physical_elems),
+            .next = next,
+        } });
+
+        var i = physical_elems.len;
+        while (i > 0) {
+            i -= 1;
+            if (physical_elems[i] != source_elems[i]) {
+                current = try self.lowerBridgePlanInto(physical_elems[i], source_elems[i], bridge_plans[i], current);
+            }
+        }
+        return current;
     }
 
     fn lowerNominalReinterpretInto(
@@ -622,12 +735,8 @@ const Lowerer = struct {
                 .value = .null_ptr,
                 .next = next,
             } }),
-            .make_struct => |fields| try self.lowerMakeStructInto(target, fields, next),
-            .make_list => |list| try self.store.addCFStmt(.{ .assign_list = .{
-                .target = target,
-                .elems = try self.lowerVarSpan(list.elems),
-                .next = next,
-            } }),
+            .make_struct => |make_struct| try self.lowerMakeStructInto(target, make_struct, next),
+            .make_list => |list| try self.lowerMakeListInto(target, list, next),
             .make_union => |tag| try self.lowerMakeUnionInto(target, tag, next),
             .get_union_id => |source| try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
@@ -710,8 +819,7 @@ const Lowerer = struct {
         if (has_capture != (packed_fn.capture_layout != null)) {
             lirInvariant("lir.lower_ir packed erased fn capture value disagrees with capture layout");
         }
-        const field_count: usize = if (has_capture) 2 else 1;
-        const fields = try self.allocator.alloc(LIR.LocalId, field_count);
+        const fields = try self.allocator.alloc(LIR.LocalId, 2);
         defer self.allocator.free(fields);
         for (fields, 0..) |*field, i| {
             field.* = try self.store.addLocal(.{
@@ -726,12 +834,25 @@ const Lowerer = struct {
         } });
 
         if (packed_fn.capture) |capture| {
+            const capture_layout_ref = packed_fn.capture_layout orelse
+                lirInvariant("lir.lower_ir packed erased fn capture value has no capture layout");
+            const capture_layout = try self.lowerLayoutRef(capture_layout_ref);
+            const capture_box = try self.store.addLocal(.{
+                .layout_idx = try self.layouts.insertBox(capture_layout),
+            });
+            current = try self.lowerPhysicalSlotInto(fields[1], capture_box, current);
             const args = [_]LIR.LocalId{try self.lowerVar(capture)};
             current = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = fields[1],
+                .target = capture_box,
                 .op = .box_box,
                 .rc_effect = LIR.LowLevel.box_box.rcEffect(),
                 .args = try self.store.addLocalSpan(&args),
+                .next = current,
+            } });
+        } else {
+            current = try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = fields[1],
+                .value = .null_ptr,
                 .next = current,
             } });
         }
@@ -1015,6 +1136,17 @@ const Lowerer = struct {
         };
     }
 
+    fn listElemLayout(self: *const Lowerer, list_layout_idx: layout_mod.Idx) layout_mod.Idx {
+        const resolved = self.layouts.resolvedListLayoutIdx(list_layout_idx) orelse
+            lirInvariant("lir.lower_ir list construction expected a resolved list layout");
+        const list_layout = self.layouts.getLayout(resolved);
+        return switch (list_layout.tag) {
+            .list => list_layout.data.list,
+            .list_of_zst => .zst,
+            else => lirInvariant("lir.lower_ir list construction expected list layout"),
+        };
+    }
+
     fn lowerPhysicalSlotInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -1033,9 +1165,25 @@ const Lowerer = struct {
         }
 
         if (self.rawLayoutValueEquivalent(target_layout, source_layout)) {
+            if (self.isListLikeLayout(target_layout) and self.isListLikeLayout(source_layout)) {
+                return try self.store.addCFStmt(.{ .assign_ref = .{
+                    .target = target,
+                    .op = .{ .list_reinterpret = .{ .backing_ref = source } },
+                    .next = next,
+                } });
+            }
+
             return try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .local = source },
+                .op = .{ .nominal = .{ .backing_ref = source } },
+                .next = next,
+            } });
+        }
+
+        if (self.erasedHandlePointerEquivalent(target_layout, source_layout)) {
+            return try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .nominal = .{ .backing_ref = source } },
                 .next = next,
             } });
         }
@@ -1078,6 +1226,7 @@ const Lowerer = struct {
         const source_layout = self.store.getLocal(source).layout_idx;
         return target_layout == source_layout or
             self.rawLayoutValueEquivalent(target_layout, source_layout) or
+            self.erasedHandlePointerEquivalent(target_layout, source_layout) or
             self.boxLayoutContains(source_layout, target_layout) or
             self.boxLayoutContains(target_layout, source_layout);
     }
@@ -1090,6 +1239,25 @@ const Lowerer = struct {
             if (value == a) return true;
         }
         return false;
+    }
+
+    fn erasedHandlePointerEquivalent(self: *const Lowerer, a: layout_mod.Idx, b: layout_mod.Idx) bool {
+        return (a == .opaque_ptr and self.isBoxPointerLayout(b)) or
+            (b == .opaque_ptr and self.isBoxPointerLayout(a));
+    }
+
+    fn isBoxPointerLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) bool {
+        return switch (self.layouts.getLayout(layout_idx).tag) {
+            .box, .box_of_zst => true,
+            else => false,
+        };
+    }
+
+    fn isListLikeLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) bool {
+        return switch (self.layouts.getLayout(layout_idx).tag) {
+            .list, .list_of_zst => true,
+            else => false,
+        };
     }
 
     fn boxLayoutContains(self: *const Lowerer, box_layout_idx: layout_mod.Idx, payload_layout_idx: layout_mod.Idx) bool {
@@ -1143,10 +1311,24 @@ const Lowerer = struct {
         return data.getFields().count;
     }
 
+    fn structLogicalFieldCount(self: *const Lowerer, struct_layout_idx: layout_mod.Idx) usize {
+        const struct_layout = self.layouts.getLayout(struct_layout_idx);
+        if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
+        const data = self.layouts.getStructData(struct_layout.data.struct_.idx);
+        const fields = self.layouts.struct_fields.sliceRange(data.getFields());
+        var max_field_index: usize = 0;
+        for (0..fields.len) |i| {
+            const field = fields.get(@intCast(i));
+            max_field_index = @max(max_field_index, @as(usize, @intCast(field.index)) + 1);
+        }
+        return max_field_index;
+    }
+
     fn structFieldLayout(self: *const Lowerer, struct_layout_idx: layout_mod.Idx, field_index: usize) layout_mod.Idx {
         const struct_layout = self.layouts.getLayout(struct_layout_idx);
         if (struct_layout.tag != .struct_) lirInvariant("lir.lower_ir struct bridge expected struct layout");
-        return self.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(field_index));
+        const layout = self.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(field_index));
+        return if (layout == layout_mod.Idx.none) .zst else layout;
     }
 
     fn tagUnionVariantCount(self: *const Lowerer, tag_union_layout_idx: layout_mod.Idx) usize {

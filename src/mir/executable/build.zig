@@ -27,12 +27,22 @@ pub const ArtifactViews = struct {
     imports: []const checked_artifact.ImportedModuleView = &.{},
 };
 
+/// Public `PublishedExecutableTypeRequest` declaration.
+pub const PublishedExecutableTypeRequest = struct {
+    ty: checked_artifact.ExecutableTypePayloadRef,
+    key: canonical.CanonicalExecValueTypeKey,
+};
+
 const MaterializationStores = struct {
     owner: checked_artifact.CheckedModuleArtifactKey,
     canonical_names: *const canonical.CanonicalNameStore,
     plans: *const checked_artifact.CompileTimePlanStore,
     values: *const checked_artifact.CompileTimeValueStore,
 };
+
+fn artifactRefFromKey(key: checked_artifact.CheckedModuleArtifactKey) canonical.ArtifactRef {
+    return .{ .bytes = key.bytes };
+}
 
 const PublishedTransformContext = struct {
     artifact: checked_artifact.CheckedModuleArtifactKey,
@@ -41,6 +51,220 @@ const PublishedTransformContext = struct {
     executable_value_transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
 };
 
+fn constructionSlotBridgeForProgram(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    source_ty: Type.TypeId,
+    target_ty: Type.TypeId,
+) Allocator.Error!Ast.BridgeId {
+    if (source_ty == target_ty) {
+        return switch (program.types.getType(source_ty)) {
+            .placeholder => executableInvariant("executable construction bridge saw placeholder type"),
+            .link => executableInvariant("executable construction bridge saw unresolved link type"),
+            .primitive => try ast.addBridgePlan(.direct),
+            .nominal, .box, .callable_set, .erased_fn => try ast.addBridgePlan(.nominal_reinterpret),
+            .list => try ast.addBridgePlan(.list_reinterpret),
+            .tuple => |items| try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, items, items) }),
+            .record => |record| try ast.addBridgePlan(.{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, record, record) }),
+            .tag_union => |tag_union| try ast.addBridgePlan(.{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, tag_union, tag_union) }),
+            .vacant_callable_slot => try ast.addBridgePlan(.zst),
+        };
+    }
+
+    const source = program.types.getType(source_ty);
+    const target = program.types.getType(target_ty);
+    return try ast.addBridgePlan(switch (source) {
+        .placeholder => executableInvariant("executable construction bridge saw placeholder source type"),
+        .link => executableInvariant("executable construction bridge saw unresolved source link"),
+        .primitive => |source_prim| switch (target) {
+            .primitive => |target_prim| blk: {
+                if (source_prim != target_prim) executableInvariant("executable construction bridge crossed primitive types");
+                break :blk .direct;
+            },
+            else => executableInvariant("executable construction bridge crossed primitive/non-primitive types"),
+        },
+        .nominal => |source_nominal| switch (target) {
+            .nominal => |target_nominal| blk: {
+                if (source_nominal.nominal.module_name == target_nominal.nominal.module_name and
+                    source_nominal.nominal.type_name == target_nominal.nominal.type_name)
+                {
+                    break :blk .nominal_reinterpret;
+                }
+                executableInvariant("executable construction bridge crossed distinct nominal types");
+            },
+            else => .nominal_reinterpret,
+        },
+        .list => switch (target) {
+            .list => .list_reinterpret,
+            .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed list/non-list types"),
+        },
+        .box => switch (target) {
+            .box, .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed box/non-box types"),
+        },
+        .tuple => |source_items| switch (target) {
+            .tuple => |target_items| .{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_items, target_items) },
+            .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed tuple/non-tuple types"),
+        },
+        .record => |source_record| switch (target) {
+            .record => |target_record| .{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, source_record, target_record) },
+            .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed record/non-record types"),
+        },
+        .tag_union => |source_union| switch (target) {
+            .tag_union => |target_union| .{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, source_union, target_union) },
+            .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed tag-union/non-tag-union types"),
+        },
+        .callable_set => |source_callable| switch (target) {
+            .callable_set => |target_callable| blk: {
+                if (!repr.callableSetKeyEql(source_callable.key, target_callable.key)) {
+                    executableInvariant("executable construction bridge crossed callable-set keys");
+                }
+                break :blk .nominal_reinterpret;
+            },
+            .nominal => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed callable-set/non-callable-set types"),
+        },
+        .erased_fn => switch (target) {
+            .erased_fn => .nominal_reinterpret,
+            else => executableInvariant("executable construction bridge crossed erased-fn/non-erased-fn types"),
+        },
+        .vacant_callable_slot => switch (target) {
+            .vacant_callable_slot => .zst,
+            else => executableInvariant("executable construction bridge crossed vacant/non-vacant callable-slot types"),
+        },
+    });
+}
+
+fn constructionSlotStructBridgeForProgram(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    source_items: []const Type.TypeId,
+    target_items: []const Type.TypeId,
+) Allocator.Error!Ast.Span(Ast.BridgeId) {
+    if (source_items.len != target_items.len) executableInvariant("executable construction struct bridge arity mismatch");
+    if (source_items.len == 0) return Ast.Span(Ast.BridgeId).empty();
+    const children = try allocator.alloc(Ast.BridgeId, source_items.len);
+    defer allocator.free(children);
+    for (source_items, target_items, 0..) |source, target, i| {
+        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source, target);
+    }
+    return try ast.addBridgePlanSpan(children);
+}
+
+fn constructionSlotRecordBridgeForProgram(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    source: Type.RecordType,
+    target: Type.RecordType,
+) Allocator.Error!Ast.Span(Ast.BridgeId) {
+    if (source.fields.len != target.fields.len) executableInvariant("executable construction record bridge arity mismatch");
+    if (source.fields.len == 0) return Ast.Span(Ast.BridgeId).empty();
+    const children = try allocator.alloc(Ast.BridgeId, source.fields.len);
+    defer allocator.free(children);
+    for (target.fields, 0..) |target_field, i| {
+        const target_label = program.row_shapes.recordField(target_field.field).label;
+        const source_field = recordFieldForLabel(program, source, target_label);
+        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source_field.ty, target_field.ty);
+    }
+    return try ast.addBridgePlanSpan(children);
+}
+
+fn constructionSlotTagUnionBridgeForProgram(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    source: Type.TagUnionType,
+    target: Type.TagUnionType,
+) Allocator.Error!Ast.Span(Ast.BridgeId) {
+    if (source.tags.len != target.tags.len) executableInvariant("executable construction tag-union bridge arity mismatch");
+    if (source.tags.len == 0) return Ast.Span(Ast.BridgeId).empty();
+    const children = try allocator.alloc(Ast.BridgeId, target.tags.len);
+    defer allocator.free(children);
+    for (target.tags, 0..) |target_tag, i| {
+        const target_label = program.row_shapes.tag(target_tag.tag).label;
+        const source_tag = tagTypeForLabel(program, source, target_label);
+        children[i] = try constructionSlotTagPayloadBridgeForProgram(allocator, program, ast, source_tag, target_tag);
+    }
+    return try ast.addBridgePlanSpan(children);
+}
+
+fn constructionSlotTagPayloadBridgeForProgram(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    source: Type.TagType,
+    target: Type.TagType,
+) Allocator.Error!Ast.BridgeId {
+    if (source.payloads.len != target.payloads.len) executableInvariant("executable construction tag payload bridge arity mismatch");
+    if (source.payloads.len == 0) return try ast.addBridgePlan(.zst);
+    if (source.payloads.len == 1) {
+        return try constructionSlotBridgeForProgram(allocator, program, ast, source.payloads[0].ty, target.payloads[0].ty);
+    }
+    const source_payloads = try allocator.alloc(Type.TypeId, source.payloads.len);
+    defer allocator.free(source_payloads);
+    const target_payloads = try allocator.alloc(Type.TypeId, target.payloads.len);
+    defer allocator.free(target_payloads);
+    for (source.payloads) |payload| {
+        source_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
+    }
+    for (target.payloads) |payload| {
+        target_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
+    }
+    return try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_payloads, target_payloads) });
+}
+
+fn addTupleItemExprSpanForConstruction(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    exprs: []const Ast.ExprId,
+    target_tys: []const Type.TypeId,
+) Allocator.Error!Ast.Span(Ast.TupleItemExpr) {
+    if (exprs.len == 0) return Ast.Span(Ast.TupleItemExpr).empty();
+    if (exprs.len != target_tys.len) executableInvariant("executable tuple construction helper arity mismatch");
+    const items = try allocator.alloc(Ast.TupleItemExpr, exprs.len);
+    defer allocator.free(items);
+    for (exprs, 0..) |expr_id, i| {
+        const expr = ast.getExpr(expr_id);
+        items[i] = .{
+            .expr = expr_id,
+            .ty = target_tys[i],
+            .value = expr.value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, ast, expr.ty, target_tys[i]),
+        };
+    }
+    return try ast.addTupleItemExprSpan(items);
+}
+
+fn addListItemExprSpanForConstruction(
+    allocator: Allocator,
+    program: *const Program,
+    ast: *Ast.Store,
+    exprs: []const Ast.ExprId,
+    target_ty: Type.TypeId,
+) Allocator.Error!Ast.Span(Ast.ListItemExpr) {
+    if (exprs.len == 0) return Ast.Span(Ast.ListItemExpr).empty();
+    const items = try allocator.alloc(Ast.ListItemExpr, exprs.len);
+    defer allocator.free(items);
+    for (exprs, 0..) |expr_id, i| {
+        const expr = ast.getExpr(expr_id);
+        items[i] = .{
+            .expr = expr_id,
+            .ty = target_ty,
+            .value = expr.value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, ast, expr.ty, target_ty),
+        };
+    }
+    return try ast.addListItemExprSpan(items);
+}
+
 /// Public `Proc` declaration.
 pub const Proc = struct {
     executable_proc: Ast.ExecutableProcId,
@@ -48,9 +272,22 @@ pub const Proc = struct {
     body: Ast.DefId,
 };
 
-const ErasedAdapterProcReservation = struct {
+/// Public `ErasedAdapterProcReservation` declaration.
+pub const ErasedAdapterProcReservation = struct {
     key: repr.ErasedAdapterKey,
+    payload_solve_session: ?repr.RepresentationSolveSessionId = null,
+    payload_artifact_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
+    artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
+    member_targets: []const repr.ExecutableSpecializationKey = &.{},
     executable_proc: Ast.ExecutableProcId,
+};
+
+const ErasedAdapterRequirement = struct {
+    key: repr.ErasedAdapterKey,
+    payload_solve_session: ?repr.RepresentationSolveSessionId = null,
+    payload_artifact_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
+    artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
+    member_targets: []const repr.ExecutableSpecializationKey = &.{},
 };
 
 const ConstInstanceAdapterVisitKey = struct {
@@ -100,6 +337,7 @@ pub const Program = struct {
         self.lowered_session_types_by_key.deinit();
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        for (self.erased_adapter_procs.items) |*proc| deinitErasedAdapterProcReservation(self.allocator, proc);
         self.erased_adapter_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -142,21 +380,34 @@ pub fn run(
     defer proc_exec_map.deinit();
     const normal_proc_count = input.procs.items.len;
     const executable_synthetic_proc_count = input.executable_synthetic_procs.items.len;
-    var erased_adapter_keys = try collectErasedAdapterKeys(allocator, &input, program.artifact_views);
-    defer erased_adapter_keys.deinit(allocator);
-    const erased_adapter_proc_count = erased_adapter_keys.items.len;
+    var erased_adapter_requirements = try collectErasedAdapterRequirements(allocator, &input, program.artifact_views);
+    defer {
+        for (erased_adapter_requirements.items) |*requirement| deinitErasedAdapterRequirement(allocator, requirement);
+        erased_adapter_requirements.deinit(allocator);
+    }
+    const erased_adapter_proc_count = erased_adapter_requirements.items.len;
     const total_proc_count = normal_proc_count + executable_synthetic_proc_count + erased_adapter_proc_count;
 
-    try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len));
+    try proc_exec_map.ensureTotalCapacity(@intCast(input.procs.items.len + input.executable_synthetic_proc_instances.items.len));
     for (input.procs.items, 0..) |proc, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(i)));
         proc_exec_map.putAssumeCapacity(proc.representation_instance, executable_proc);
     }
+    for (input.executable_synthetic_proc_instances.items) |synthetic_instance| {
+        const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + synthetic_instance.synthetic_index)));
+        proc_exec_map.putAssumeCapacity(synthetic_instance.representation_instance, executable_proc);
+    }
     try program.erased_adapter_procs.ensureTotalCapacity(allocator, erased_adapter_proc_count);
-    for (erased_adapter_keys.items, 0..) |adapter, i| {
+    for (erased_adapter_requirements.items, 0..) |requirement, i| {
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(normal_proc_count + executable_synthetic_proc_count + i)));
+        const member_targets = try cloneExecutableSpecializationKeySlice(allocator, requirement.member_targets);
+        errdefer deinitExecutableSpecializationKeySlice(allocator, member_targets);
         program.erased_adapter_procs.appendAssumeCapacity(.{
-            .key = adapter,
+            .key = requirement.key,
+            .payload_solve_session = requirement.payload_solve_session,
+            .payload_artifact_owner = requirement.payload_artifact_owner,
+            .artifact_descriptor_owner = requirement.artifact_descriptor_owner,
+            .member_targets = member_targets,
             .executable_proc = executable_proc,
         });
     }
@@ -213,7 +464,7 @@ pub fn run(
         program.procs.appendAssumeCapacity(.{
             .executable_proc = adapter.executable_proc,
             .origin = .{ .erased_adapter = adapter.key },
-            .body = try lowerErasedFiniteSetAdapterProc(allocator, &program, &input, &type_lowerer, &proc_exec_map, adapter.key, adapter.executable_proc),
+            .body = try lowerErasedFiniteSetAdapterProc(allocator, &program, &input, &type_lowerer, &proc_exec_map, adapter, adapter.executable_proc),
         });
     }
 
@@ -233,6 +484,35 @@ pub fn run(
 
     input.deinit();
     return program;
+}
+
+/// Public `ensurePublishedExecutableTypeRequests` function.
+pub fn ensurePublishedExecutableTypeRequests(
+    allocator: Allocator,
+    program: *Program,
+    requests: []const PublishedExecutableTypeRequest,
+) Allocator.Error!void {
+    if (requests.len == 0) return;
+
+    for (requests) |request| {
+        if (program.lowered_session_types_by_key.get(request.key) != null) continue;
+
+        const artifact_key = checked_artifact.CheckedModuleArtifactKey{ .bytes = request.ty.artifact.bytes };
+        const context = resolvePublishedTransformContextInArtifactViews(program.artifact_views, artifact_key);
+        const ty = blk: {
+            var published_types = PublishedTypeLowerer.init(
+                allocator,
+                context.executable_type_payloads,
+                context.materialization.canonical_names,
+                &program.canonical_names,
+                &program.types,
+                &program.row_shapes,
+            );
+            defer published_types.deinit();
+            break :blk try published_types.lower(request.ty, request.key);
+        };
+        try program.lowered_session_types_by_key.put(request.key, ty);
+    }
 }
 
 fn verifyExecutableProgram(program: *const Program) void {
@@ -320,20 +600,28 @@ fn programCallableSetMember(
     return null;
 }
 
-fn collectErasedAdapterKeys(
+fn collectErasedAdapterRequirements(
     allocator: Allocator,
     input: *const LambdaSolved.Solve.Program,
     artifact_views: ArtifactViews,
-) Allocator.Error!std.ArrayList(repr.ErasedAdapterKey) {
-    var adapters = std.ArrayList(repr.ErasedAdapterKey).empty;
-    errdefer adapters.deinit(allocator);
+) Allocator.Error!std.ArrayList(ErasedAdapterRequirement) {
+    var adapters = std.ArrayList(ErasedAdapterRequirement).empty;
+    errdefer {
+        for (adapters.items) |*adapter| deinitErasedAdapterRequirement(allocator, adapter);
+        adapters.deinit(allocator);
+    }
     var visited_const_instances = std.AutoHashMap(ConstInstanceAdapterVisitKey, void).init(allocator);
     defer visited_const_instances.deinit();
 
-    for (input.solve_sessions.items) |*session| {
+    for (input.solve_sessions.items, 0..) |*session, raw_session| {
+        const payload_solve_session: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(raw_session)));
         for (session.representation_store.callable_emission_plans) |plan| {
             switch (plan) {
-                .erase_finite_set => |erase| try appendErasedAdapterKey(allocator, &adapters, erase.adapter),
+                .erase_finite_set => |erase| try appendErasedAdapterRequirement(allocator, &adapters, .{
+                    .key = erase.adapter,
+                    .payload_solve_session = payload_solve_session,
+                    .member_targets = try executableKeysForCallableSet(allocator, input, session, erase.adapter.callable_set_key),
+                }),
                 .already_erased,
                 .finite,
                 .erase_proc_value,
@@ -347,6 +635,7 @@ fn collectErasedAdapterKeys(
                 &adapters,
                 artifact_views,
                 &session.representation_store,
+                payload_solve_session,
                 plan,
             );
         }
@@ -362,6 +651,7 @@ fn collectErasedAdapterKeys(
                 const_instance,
             ),
             .const_ref => executableInvariant("executable adapter collection reached non-runnable compile-time dependency const_ref"),
+            .pending_local_root => executableInvariant("executable adapter collection reached summary-only pending local root"),
             else => {},
         }
     }
@@ -369,7 +659,13 @@ fn collectErasedAdapterKeys(
     for (input.executable_synthetic_procs.items) |synthetic| {
         switch (synthetic.body) {
             .erased_promoted_wrapper => |erased| {
-                try collectErasedCodeRefAdapter(allocator, &adapters, erased.code);
+                try collectErasedCodeRefAdapter(
+                    allocator,
+                    &adapters,
+                    erased.code,
+                    synthetic.artifact,
+                    try cloneExecutableSpecializationKeySlice(allocator, erased.finite_adapter_member_targets),
+                );
                 try collectErasedCaptureMaterializationAdapters(
                     allocator,
                     &adapters,
@@ -398,20 +694,33 @@ fn collectErasedAdapterKeys(
 
 fn collectErasedCodeRefAdapter(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     code: canonical.ErasedCallableCodeRef,
+    artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey,
+    member_targets: []const repr.ExecutableSpecializationKey,
 ) Allocator.Error!void {
     switch (code) {
-        .direct_proc_value => {},
-        .finite_set_adapter => |adapter| try appendErasedAdapterKey(allocator, adapters, adapter),
+        .direct_proc_value => {
+            if (member_targets.len != 0) {
+                executableInvariant("direct erased callable code carried finite adapter member targets");
+            }
+            deinitExecutableSpecializationKeySlice(allocator, member_targets);
+        },
+        .finite_set_adapter => |adapter| try appendErasedAdapterRequirement(allocator, adapters, .{
+            .key = adapter,
+            .payload_artifact_owner = artifact_descriptor_owner,
+            .artifact_descriptor_owner = artifact_descriptor_owner,
+            .member_targets = member_targets,
+        }),
     }
 }
 
 fn collectSessionValueTransformAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     store: *const repr.RepresentationStore,
+    payload_solve_session: repr.RepresentationSolveSessionId,
     plan: repr.SessionExecutableValueTransformPlan,
 ) Allocator.Error!void {
     switch (plan.op) {
@@ -419,32 +728,36 @@ fn collectSessionValueTransformAdapters(
         .already_erased_callable,
         => {},
         .callable_to_erased => |callable| switch (callable) {
-            .finite_value => |finite| try appendErasedAdapterKey(allocator, adapters, finite.adapter),
+            .finite_value => |finite| try appendErasedAdapterRequirement(allocator, adapters, .{
+                .key = finite.adapter,
+                .payload_solve_session = payload_solve_session,
+            }),
             .proc_value => {},
         },
         .record => |fields| for (fields) |field| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, field.transform);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, field.transform);
         },
         .tuple => |items| for (items) |item| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, item.transform);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, item.transform);
         },
         .tag_union => |cases| for (cases) |case| {
             for (case.payloads) |payload| {
-                try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload.transform);
+                try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, payload.transform);
             }
         },
-        .nominal => |nominal| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, nominal.backing),
-        .list => |list| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, list.elem),
-        .box_payload => |box| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, box.payload),
-        .structural_bridge => |bridge| try collectSessionStructuralBridgeAdapters(allocator, adapters, artifact_views, store, bridge),
+        .nominal => |nominal| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, nominal.backing),
+        .list => |list| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, list.elem),
+        .box_payload => |box| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, box.payload),
+        .structural_bridge => |bridge| try collectSessionStructuralBridgeAdapters(allocator, adapters, artifact_views, store, payload_solve_session, bridge),
     }
 }
 
 fn collectExecutableValueTransformRefAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     store: *const repr.RepresentationStore,
+    payload_solve_session: repr.RepresentationSolveSessionId,
     transform: checked_artifact.ExecutableValueTransformRef,
 ) Allocator.Error!void {
     switch (transform) {
@@ -453,6 +766,7 @@ fn collectExecutableValueTransformRefAdapters(
             adapters,
             artifact_views,
             store,
+            payload_solve_session,
             store.sessionExecutableValueTransform(id),
         ),
         .published => |published| {
@@ -461,6 +775,7 @@ fn collectExecutableValueTransformRefAdapters(
                 allocator,
                 adapters,
                 artifact_views,
+                context.artifact,
                 context.executable_value_transforms,
                 published.transform,
             );
@@ -470,9 +785,10 @@ fn collectExecutableValueTransformRefAdapters(
 
 fn collectSessionStructuralBridgeAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     store: *const repr.RepresentationStore,
+    payload_solve_session: repr.RepresentationSolveSessionId,
     bridge: repr.SessionExecutableStructuralBridgePlan,
 ) Allocator.Error!void {
     switch (bridge) {
@@ -481,21 +797,22 @@ fn collectSessionStructuralBridgeAdapters(
         .list_reinterpret,
         .nominal_reinterpret,
         => {},
-        .box_unbox => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child),
-        .box_box => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child),
+        .box_unbox => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child),
+        .box_box => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child),
         .singleton_to_tag_union => |singleton| if (singleton.value_transform) |child| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child);
         },
         .tag_union_to_singleton => |singleton| if (singleton.value_transform) |child| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, child);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child);
         },
     }
 }
 
 fn collectPublishedValueTransformAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     transform_id: checked_artifact.ExecutableValueTransformPlanId,
 ) Allocator.Error!void {
@@ -505,31 +822,35 @@ fn collectPublishedValueTransformAdapters(
         .already_erased_callable,
         => {},
         .callable_to_erased => |callable| switch (callable) {
-            .finite_value => |finite| try appendErasedAdapterKey(allocator, adapters, finite.adapter_key),
+            .finite_value => |finite| try appendErasedAdapterRequirement(allocator, adapters, .{
+                .key = finite.adapter_key,
+                .payload_artifact_owner = owner_artifact,
+            }),
             .proc_value => {},
         },
         .record => |fields| for (fields) |field| {
-            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, field.transform);
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, field.transform);
         },
         .tuple => |items| for (items) |item| {
-            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, item.transform);
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, item.transform);
         },
         .tag_union => |cases| for (cases) |case| {
             for (case.payloads) |payload| {
-                try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, payload.transform);
+                try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, payload.transform);
             }
         },
-        .nominal => |nominal| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, nominal.backing),
-        .list => |list| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, list.elem),
-        .box_payload => |box| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, box.payload),
-        .structural_bridge => |bridge| try collectPublishedStructuralBridgeAdapters(allocator, adapters, artifact_views, transforms, bridge),
+        .nominal => |nominal| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, nominal.backing),
+        .list => |list| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, list.elem),
+        .box_payload => |box| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, box.payload),
+        .structural_bridge => |bridge| try collectPublishedStructuralBridgeAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, bridge),
     }
 }
 
 fn collectPublishedStructuralBridgeAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
     bridge: checked_artifact.ExecutableStructuralBridgePlan,
 ) Allocator.Error!void {
@@ -539,20 +860,20 @@ fn collectPublishedStructuralBridgeAdapters(
         .list_reinterpret,
         .nominal_reinterpret,
         => {},
-        .box_unbox => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child),
-        .box_box => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child),
+        .box_unbox => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, child),
+        .box_box => |child| try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, child),
         .singleton_to_tag_union => |singleton| if (singleton.value_transform) |child| {
-            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child);
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, child);
         },
         .tag_union_to_singleton => |singleton| if (singleton.value_transform) |child| {
-            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, transforms, child);
+            try collectPublishedValueTransformAdapters(allocator, adapters, artifact_views, owner_artifact, transforms, child);
         },
     }
 }
 
 fn collectErasedCaptureMaterializationAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     plans: *const checked_artifact.CompileTimePlanStore,
@@ -575,7 +896,7 @@ fn collectErasedCaptureMaterializationAdapters(
 
 fn collectErasedCaptureMaterializationNodeAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     plans: *const checked_artifact.CompileTimePlanStore,
@@ -605,7 +926,17 @@ fn collectErasedCaptureMaterializationNodeAdapters(
             );
         },
         .erased_callable => |erased| {
-            try collectErasedCodeRefAdapter(allocator, adapters, erased.code);
+            try collectErasedCodeRefAdapter(
+                allocator,
+                adapters,
+                erased.code,
+                // Materialized erased callable values that need an artifact
+                // descriptor must publish member targets before reaching this
+                // path. The owner is unused for direct code and empty-target
+                // session descriptors.
+                null,
+                &.{},
+            );
             try collectErasedCaptureMaterializationAdapters(
                 allocator,
                 adapters,
@@ -684,7 +1015,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
 
 fn collectConstInstanceAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     ref: checked_artifact.ConstInstanceRef,
@@ -710,7 +1041,7 @@ fn collectConstInstanceAdapters(
 
 fn collectComptimeValueAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     materialization: MaterializationStores,
@@ -808,7 +1139,7 @@ fn collectComptimeValueAdapters(
 
 fn collectComptimeCallableLeafAdapters(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
     plans: *const checked_artifact.CompileTimePlanStore,
@@ -817,7 +1148,7 @@ fn collectComptimeCallableLeafAdapters(
     switch (leaf) {
         .finite => {},
         .erased_boxed => |erased| {
-            try collectErasedCodeRefAdapter(allocator, adapters, erased.code);
+            try collectErasedCodeRefAdapter(allocator, adapters, erased.code, null, &.{});
             try collectErasedCaptureMaterializationAdapters(
                 allocator,
                 adapters,
@@ -830,15 +1161,98 @@ fn collectComptimeCallableLeafAdapters(
     }
 }
 
-fn appendErasedAdapterKey(
+fn appendErasedAdapterRequirement(
     allocator: Allocator,
-    adapters: *std.ArrayList(repr.ErasedAdapterKey),
-    adapter: repr.ErasedAdapterKey,
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
+    requirement: ErasedAdapterRequirement,
 ) Allocator.Error!void {
-    for (adapters.items) |existing| {
-        if (erasedAdapterKeyEql(existing, adapter)) return;
+    var owned_requirement = requirement;
+    errdefer deinitErasedAdapterRequirement(allocator, &owned_requirement);
+    for (adapters.items) |*existing| {
+        if (!erasedAdapterKeyEql(existing.key, owned_requirement.key)) continue;
+        if (existing.payload_solve_session == null) {
+            existing.payload_solve_session = owned_requirement.payload_solve_session;
+        } else if (owned_requirement.payload_solve_session) |owner| {
+            if (existing.payload_solve_session.? != owner) {
+                executableInvariant("executable erased adapter requirement had conflicting payload solve sessions");
+            }
+        }
+        if (existing.payload_artifact_owner == null) {
+            existing.payload_artifact_owner = owned_requirement.payload_artifact_owner;
+        } else if (owned_requirement.payload_artifact_owner) |owner| {
+            if (!artifactKeyEql(existing.payload_artifact_owner.?, owner)) {
+                executableInvariant("executable erased adapter requirement had conflicting payload artifact owners");
+            }
+        }
+        if (existing.artifact_descriptor_owner == null) {
+            existing.artifact_descriptor_owner = owned_requirement.artifact_descriptor_owner;
+        } else if (owned_requirement.artifact_descriptor_owner) |owner| {
+            if (!artifactKeyEql(existing.artifact_descriptor_owner.?, owner)) {
+                executableInvariant("executable erased adapter requirement had conflicting artifact descriptor owners");
+            }
+        }
+        if (existing.member_targets.len == 0 and owned_requirement.member_targets.len != 0) {
+            existing.member_targets = owned_requirement.member_targets;
+            owned_requirement.member_targets = &.{};
+            return;
+        }
+        if (owned_requirement.member_targets.len != 0 and !executableSpecializationKeySlicesEql(existing.member_targets, owned_requirement.member_targets)) {
+            executableInvariant("executable erased adapter requirement had conflicting member target keys");
+        }
+        return;
     }
-    try adapters.append(allocator, adapter);
+    try adapters.append(allocator, owned_requirement);
+    owned_requirement.member_targets = &.{};
+}
+
+fn deinitErasedAdapterRequirement(allocator: Allocator, requirement: *ErasedAdapterRequirement) void {
+    deinitExecutableSpecializationKeySlice(allocator, requirement.member_targets);
+    requirement.member_targets = &.{};
+}
+
+fn deinitErasedAdapterProcReservation(allocator: Allocator, reservation: *ErasedAdapterProcReservation) void {
+    deinitExecutableSpecializationKeySlice(allocator, reservation.member_targets);
+    reservation.member_targets = &.{};
+}
+
+fn cloneExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const repr.ExecutableSpecializationKey,
+) Allocator.Error![]const repr.ExecutableSpecializationKey {
+    if (keys.len == 0) return &.{};
+    const out = try allocator.alloc(repr.ExecutableSpecializationKey, keys.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |*key| repr.deinitExecutableSpecializationKey(allocator, key);
+        allocator.free(out);
+    }
+    for (keys, 0..) |key, i| {
+        out[i] = try repr.cloneExecutableSpecializationKey(allocator, key);
+        initialized += 1;
+    }
+    return out;
+}
+
+fn deinitExecutableSpecializationKeySlice(
+    allocator: Allocator,
+    keys: []const repr.ExecutableSpecializationKey,
+) void {
+    for (keys) |key| {
+        var owned = key;
+        repr.deinitExecutableSpecializationKey(allocator, &owned);
+    }
+    if (keys.len > 0) allocator.free(keys);
+}
+
+fn executableSpecializationKeySlicesEql(
+    a: []const repr.ExecutableSpecializationKey,
+    b: []const repr.ExecutableSpecializationKey,
+) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (!repr.executableSpecializationKeyEql(left, right)) return false;
+    }
+    return true;
 }
 
 fn erasedAdapterKeyEql(a: repr.ErasedAdapterKey, b: repr.ErasedAdapterKey) bool {
@@ -846,6 +1260,99 @@ fn erasedAdapterKeyEql(a: repr.ErasedAdapterKey, b: repr.ErasedAdapterKey) bool 
         repr.callableSetKeyEql(a.callable_set_key, b.callable_set_key) and
         repr.erasedFnSigKeyEql(a.erased_fn_sig_key, b.erased_fn_sig_key) and
         repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+}
+
+const AdapterDescriptorView = struct {
+    descriptor: ?repr.CanonicalCallableSetDescriptor = null,
+    owned_members: []repr.CanonicalCallableSetMember = &.{},
+};
+
+fn artifactCallableSetDescriptorForErasedAdapterReservation(
+    allocator: Allocator,
+    program: *const Program,
+    input: *const LambdaSolved.Solve.Program,
+    reservation: ErasedAdapterProcReservation,
+) Allocator.Error!AdapterDescriptorView {
+    if (reservation.member_targets.len == 0) return .{};
+    const owner = reservation.artifact_descriptor_owner orelse {
+        executableInvariant("persisted erased finite-set adapter member targets have no artifact descriptor owner");
+    };
+    const descriptors = callableSetDescriptorsForArtifactInViews(program.artifact_views, owner) orelse {
+        executableInvariant("persisted erased finite-set adapter referenced unavailable artifact descriptors");
+    };
+    const artifact_descriptor = descriptors.descriptorFor(reservation.key.callable_set_key) orelse {
+        executableInvariant("persisted erased finite-set adapter referenced missing artifact callable-set descriptor");
+    };
+    if (artifact_descriptor.members.len != reservation.member_targets.len) {
+        executableInvariant("persisted erased finite-set adapter member target count differs from artifact descriptor");
+    }
+
+    const members = try allocator.alloc(repr.CanonicalCallableSetMember, artifact_descriptor.members.len);
+    errdefer allocator.free(members);
+    for (artifact_descriptor.members, reservation.member_targets, 0..) |artifact_member, target_key, i| {
+        const target_instance = procInstanceForExecutableSpecializationKey(input, target_key) orelse {
+            executableInvariant("persisted erased finite-set adapter member target was not reserved in current solve session");
+        };
+        members[i] = .{
+            .member = artifact_member.member,
+            .proc_value = artifact_member.proc_value,
+            .source_proc = artifact_member.source_proc,
+            .target_instance = target_instance,
+            .capture_slots = artifact_member.capture_slots,
+            .capture_shape_key = artifact_member.capture_shape_key,
+        };
+    }
+    return .{
+        .descriptor = .{
+            .key = artifact_descriptor.key,
+            .members = members,
+        },
+        .owned_members = members,
+    };
+}
+
+fn procInstanceForExecutableSpecializationKey(
+    input: *const LambdaSolved.Solve.Program,
+    key: repr.ExecutableSpecializationKey,
+) ?repr.ProcRepresentationInstanceId {
+    for (input.proc_instances.items, 0..) |instance, raw| {
+        if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
+            return @enumFromInt(@as(u32, @intCast(raw)));
+        }
+    }
+    return null;
+}
+
+fn executableKeysForCallableSet(
+    allocator: Allocator,
+    input: *const LambdaSolved.Solve.Program,
+    session: *const repr.RepresentationSolveSession,
+    key: repr.CanonicalCallableSetKey,
+) Allocator.Error![]const repr.ExecutableSpecializationKey {
+    const descriptor = session.representation_store.callableSetDescriptor(key) orelse {
+        executableInvariant("executable erased adapter requirement has no callable-set descriptor");
+    };
+    if (descriptor.members.len == 0) {
+        executableInvariant("executable erased adapter requirement descriptor has no members");
+    }
+    const out = try allocator.alloc(repr.ExecutableSpecializationKey, descriptor.members.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |*item| repr.deinitExecutableSpecializationKey(allocator, item);
+        allocator.free(out);
+    }
+    for (descriptor.members, 0..) |member, i| {
+        const instance_index = @intFromEnum(member.target_instance);
+        if (instance_index >= input.proc_instances.items.len) {
+            executableInvariant("executable erased adapter requirement member target is out of range");
+        }
+        out[i] = try repr.cloneExecutableSpecializationKey(
+            allocator,
+            input.proc_instances.items[instance_index].executable_specialization_key,
+        );
+        initialized += 1;
+    }
+    return out;
 }
 
 fn lowerExecutableSyntheticProc(
@@ -871,11 +1378,16 @@ fn lowerErasedFiniteSetAdapterProc(
     input: *const LambdaSolved.Solve.Program,
     type_lowerer: *TypeLowerer,
     proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
-    adapter: repr.ErasedAdapterKey,
+    reservation: ErasedAdapterProcReservation,
     executable_proc: Ast.ExecutableProcId,
 ) Allocator.Error!Ast.DefId {
-    const descriptor = programCallableSetDescriptor(program, adapter.callable_set_key) orelse {
-        executableInvariant("executable erased finite-set adapter has no callable-set descriptor");
+    const adapter = reservation.key;
+    var fallback_descriptor: AdapterDescriptorView = .{};
+    defer if (fallback_descriptor.owned_members.len > 0) allocator.free(fallback_descriptor.owned_members);
+    const descriptor = programCallableSetDescriptor(program, adapter.callable_set_key) orelse blk: {
+        fallback_descriptor = try artifactCallableSetDescriptorForErasedAdapterReservation(allocator, program, input, reservation);
+        if (fallback_descriptor.descriptor) |*descriptor| break :blk descriptor;
+        executableInvariant("executable erased finite-set adapter has no callable-set descriptor or persisted member targets");
     };
     if (descriptor.members.len == 0) {
         executableInvariant("executable erased finite-set adapter descriptor has no members");
@@ -889,7 +1401,33 @@ fn lowerErasedFiniteSetAdapterProc(
     }
 
     const value_store = &input.value_stores.items[@intFromEnum(first_instance.value_store)];
-    const representation_store = &input.solve_sessions.items[@intFromEnum(first_instance.solve_session)].representation_store;
+    const member_representation_store = &input.solve_sessions.items[@intFromEnum(first_instance.solve_session)].representation_store;
+    const payload_representation_store = if (reservation.payload_solve_session) |session_id| blk: {
+        const session_index = @intFromEnum(session_id);
+        if (session_index >= input.solve_sessions.items.len) {
+            executableInvariant("executable erased finite-set adapter payload solve session is out of range");
+        }
+        break :blk &input.solve_sessions.items[session_index].representation_store;
+    } else member_representation_store;
+    var published_adapter_payloads_storage: PublishedTypeLowerer = undefined;
+    var published_adapter_payloads: ?*PublishedTypeLowerer = null;
+    var published_adapter_artifact = canonical.ArtifactRef{};
+    if (reservation.payload_solve_session == null) {
+        if (reservation.payload_artifact_owner) |owner| {
+            const context = resolvePublishedTransformContextInArtifactViews(program.artifact_views, owner);
+            published_adapter_payloads_storage = PublishedTypeLowerer.init(
+                allocator,
+                context.executable_type_payloads,
+                context.materialization.canonical_names,
+                &program.canonical_names,
+                &program.types,
+                &program.row_shapes,
+            );
+            published_adapter_payloads = &published_adapter_payloads_storage;
+            published_adapter_artifact = .{ .bytes = owner.bytes };
+        }
+    }
+    defer if (published_adapter_payloads) |published| published.deinit();
     var builder = BodyBuilder{
         .allocator = allocator,
         .program = program,
@@ -897,9 +1435,11 @@ fn lowerErasedFiniteSetAdapterProc(
         .output = &program.ast,
         .canonical_names = &program.canonical_names,
         .type_lowerer = type_lowerer,
-        .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types, &program.lowered_session_types_by_key),
+        .session_type_lowerer = SessionTypeLowerer.init(allocator, &payload_representation_store.session_executable_type_payloads, &program.types, &program.lowered_session_types_by_key),
         .value_store = value_store,
-        .representation_store = representation_store,
+        .representation_store = payload_representation_store,
+        .published_adapter_payloads = published_adapter_payloads,
+        .published_adapter_artifact = published_adapter_artifact,
         .callable_set_descriptors = program.callable_set_descriptors,
         .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
         .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
@@ -916,31 +1456,28 @@ fn lowerErasedFiniteSetAdapterProc(
     defer builder.deinit();
 
     const public_params = value_store.sliceValueSpan(first_instance.public_roots.params);
-    const hidden_capture_ty = try builder.lowerFiniteSetAdapterCaptureType(adapter);
-    if (hidden_capture_ty == null and descriptor.members.len != 1) {
+    const hidden_capture_payload_ty = try builder.lowerFiniteSetAdapterCaptureType(adapter);
+    if (hidden_capture_payload_ty == null and descriptor.members.len != 1) {
         executableInvariant("executable erased finite-set adapter without hidden capture cannot dispatch a multi-member callable set");
     }
 
-    const hidden_capture_arg_count: usize = if (hidden_capture_ty == null) 0 else 1;
-    const typed_arg_count = public_params.len + hidden_capture_arg_count;
+    const hidden_capture_arg_ty = try program.types.addType(.{ .primitive = .erased });
+    const typed_arg_count = public_params.len + 1;
     const typed_args = try allocator.alloc(Ast.TypedValue, typed_arg_count);
     defer allocator.free(typed_args);
     for (public_params, 0..) |param, i| {
         const param_info = value_store.values.items[@intFromEnum(param)];
         typed_args[i] = .{
-            .ty = try builder.lowerExecutableValueTypeInStore(param_info.logical_ty, param, value_store, representation_store),
+            .ty = try builder.lowerExecutableValueTypeInStore(param_info.logical_ty, param, value_store, member_representation_store),
             .value = program.ast.freshValueRef(),
         };
     }
 
-    const hidden_capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_ty) |capture_ty| blk: {
-        const value = program.ast.freshValueRef();
-        typed_args[public_params.len] = .{
-            .ty = capture_ty,
-            .value = value,
-        };
-        break :blk value;
-    } else null;
+    const hidden_capture_value = program.ast.freshValueRef();
+    typed_args[public_params.len] = .{
+        .ty = hidden_capture_arg_ty,
+        .value = hidden_capture_value,
+    };
 
     const args = try program.ast.addTypedValueSpan(typed_args);
     const ret_info = value_store.values.items[@intFromEnum(first_instance.public_roots.ret)];
@@ -948,7 +1485,7 @@ fn lowerErasedFiniteSetAdapterProc(
         ret_info.logical_ty,
         first_instance.public_roots.ret,
         value_store,
-        representation_store,
+        member_representation_store,
     );
     const body = try lowerErasedFiniteSetAdapterBody(
         allocator,
@@ -958,6 +1495,7 @@ fn lowerErasedFiniteSetAdapterProc(
         descriptor,
         typed_args[0..public_params.len],
         hidden_capture_value,
+        hidden_capture_payload_ty,
         result_ty,
     );
 
@@ -982,14 +1520,36 @@ fn lowerErasedFiniteSetAdapterBody(
     adapter: repr.ErasedAdapterKey,
     descriptor: *const repr.CanonicalCallableSetDescriptor,
     explicit_args: []const Ast.TypedValue,
-    hidden_capture: ?Ast.ExecutableValueRef,
+    hidden_capture_handle: Ast.ExecutableValueRef,
+    hidden_capture_payload_ty: ?Type.TypeId,
     result_ty: Type.TypeId,
 ) Allocator.Error!Ast.ExprId {
     if (!repr.callableSetKeyEql(descriptor.key, adapter.callable_set_key)) {
         executableInvariant("executable erased finite-set adapter descriptor key differs from adapter key");
     }
 
-    const callee_value = hidden_capture orelse {
+    const CalleeValue = struct {
+        value: Ast.ExecutableValueRef,
+        stmt: Ast.StmtId,
+    };
+    const callee_value: CalleeValue = if (hidden_capture_payload_ty) |payload_ty| blk: {
+        const handle_ty = try program.types.addType(.{ .primitive = .erased });
+        const handle_expr = try program.ast.addValueRefExpr(handle_ty, hidden_capture_handle);
+        const value = program.ast.freshValueRef();
+        const payload_expr = try program.ast.addExpr(payload_ty, value, .{ .low_level = .{
+            .op = .box_unbox,
+            .rc_effect = base.LowLevel.box_unbox.rcEffect(),
+            .args = try program.ast.addExprSpan(&.{handle_expr}),
+        } });
+        const stmt = try program.ast.addStmt(.{ .decl = .{
+            .value = value,
+            .body = payload_expr,
+        } });
+        break :blk .{
+            .value = value,
+            .stmt = stmt,
+        };
+    } else blk: {
         const member = descriptor.members[0];
         if (member.capture_slots.len != 0) {
             executableInvariant("executable erased finite-set adapter without hidden capture cannot synthesize captured callable set");
@@ -1009,32 +1569,26 @@ fn lowerErasedFiniteSetAdapterBody(
             .value = value,
             .body = singleton,
         } });
-        const final_call = try lowerErasedFiniteSetAdapterCallableMatch(
-            allocator,
-            program,
-            builder,
-            adapter,
-            descriptor,
-            explicit_args,
-            value,
-            result_ty,
-        );
-        return try program.ast.addExpr(result_ty, program.ast.getExpr(final_call).value, .{ .block = .{
-            .stmts = try program.ast.addStmtSpan(&.{stmt}),
-            .final_expr = final_call,
-        } });
+        break :blk .{
+            .value = value,
+            .stmt = stmt,
+        };
     };
 
-    return try lowerErasedFiniteSetAdapterCallableMatch(
+    const final_call = try lowerErasedFiniteSetAdapterCallableMatch(
         allocator,
         program,
         builder,
         adapter,
         descriptor,
         explicit_args,
-        callee_value,
+        callee_value.value,
         result_ty,
     );
+    return try program.ast.addExpr(result_ty, program.ast.getExpr(final_call).value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(&.{callee_value.stmt}),
+        .final_expr = final_call,
+    } });
 }
 
 fn lowerErasedFiniteSetAdapterCallableMatch(
@@ -1076,21 +1630,17 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
 
         const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(adapter.callable_set_key, member);
         const capture_payload = if (capture_payload_ty != null) program.ast.freshValueRef() else null;
-        const capture_arg_len: usize = if (capture_payload == null) 0 else 1;
-        const direct_args = try allocator.alloc(Ast.DirectCallArg, explicit_args.len + capture_arg_len);
-        defer allocator.free(direct_args);
-        for (explicit_args, 0..) |arg, arg_i| {
-            direct_args[arg_i] = .{ .value = arg.value };
-        }
-        if (capture_payload) |payload| {
-            direct_args[explicit_args.len] = .{ .value = payload };
-        }
-        const direct_args_span = try program.ast.addDirectCallArgSpan(direct_args);
-        const branch_body = try builder.lowerCallableMatchBranchBody(
+        const lowered_branch = try builder.lowerCallableMatchBranchBody(
             member.source_proc,
             target_instance,
+            target_instance_id,
             executable_proc,
-            direct_args_span,
+            arg_values,
+            null,
+            null,
+            null,
+            null,
+            capture_payload,
             result_ty,
             null,
         );
@@ -1105,8 +1655,9 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
             .capture_payload_ty = capture_payload_ty,
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
             .executable_proc = executable_proc,
-            .direct_args = direct_args_span,
-            .body = branch_body,
+            .arg_transforms = lowered_branch.arg_transforms,
+            .direct_args = lowered_branch.direct_args,
+            .body = lowered_branch.body,
         };
     }
 
@@ -1299,7 +1850,7 @@ fn lowerErasedPromotedWrapperBody(
                 result_transform,
                 raw_call_value,
             );
-            break :blk try program.ast.addExpr(wrapper_ret_ty, result_value, .{ .value_ref = result_value });
+            break :blk try program.ast.addValueRefExpr(wrapper_ret_ty, result_value);
         },
     };
 
@@ -1482,7 +2033,7 @@ fn applyRecordValueTransform(
         executableInvariant("record value transform field count differs from target record");
     }
 
-    const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const source_expr = try program.ast.addValueRefExpr(from_ty, value);
     const seen = try program.allocator.alloc(bool, fields.len);
     defer program.allocator.free(seen);
     @memset(seen, false);
@@ -1515,9 +2066,10 @@ fn applyRecordValueTransform(
         );
         output_fields[target_i] = .{
             .field = target_field.field,
-            .expr = try program.ast.addExpr(target_field.ty, transformed, .{ .value_ref = transformed }),
+            .expr = try program.ast.addValueRefExpr(target_field.ty, transformed),
             .ty = target_field.ty,
             .value = transformed,
+            .bridge = try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, target_field.ty, target_field.ty),
         };
     }
     verifyAllSeen(seen, "record value transform had an extra source field transform");
@@ -1579,7 +2131,7 @@ fn applyNominalValueTransform(
         executableInvariant("nominal value transform target source type differs from plan");
     }
 
-    const source_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const source_expr = try program.ast.addValueRefExpr(from_ty, value);
     const backing_value = program.ast.freshValueRef();
     const backing_expr = try program.ast.addExpr(source.backing, backing_value, .{ .nominal_reinterpret = source_expr });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -1596,7 +2148,7 @@ fn applyNominalValueTransform(
         nominal.backing,
         backing_value,
     );
-    const transformed_expr = try program.ast.addExpr(target.backing, transformed_backing, .{ .value_ref = transformed_backing });
+    const transformed_expr = try program.ast.addValueRefExpr(target.backing, transformed_backing);
     const nominal_value = program.ast.freshValueRef();
     const nominal_expr = try program.ast.addExpr(to_ty, nominal_value, .{ .nominal_reinterpret = transformed_expr });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -1630,7 +2182,7 @@ fn applyTupleValueTransform(
         executableInvariant("tuple value transform arity differs from endpoint tuple");
     }
 
-    const tuple_expr = try program.ast.addExpr(from_ty, value, .{ .value_ref = value });
+    const tuple_expr = try program.ast.addValueRefExpr(from_ty, value);
     const seen = try program.allocator.alloc(bool, items.len);
     defer program.allocator.free(seen);
     @memset(seen, false);
@@ -1659,12 +2211,12 @@ fn applyTupleValueTransform(
             item_plan.transform,
             access_value,
         );
-        output_items[i] = try program.ast.addExpr(target_item_ty, transformed, .{ .value_ref = transformed });
+        output_items[i] = try program.ast.addValueRefExpr(target_item_ty, transformed);
     }
     verifyAllSeen(seen, "tuple value transform had an extra element transform");
 
     const tuple_value = program.ast.freshValueRef();
-    const result_expr = try program.ast.addExpr(to_ty, tuple_value, .{ .tuple = try program.ast.addExprSpan(output_items) });
+    const result_expr = try program.ast.addExpr(to_ty, tuple_value, .{ .tuple = try addTupleItemExprSpanForConstruction(program.allocator, program, &program.ast, output_items, target) });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
         .value = tuple_value,
         .body = result_expr,
@@ -1714,7 +2266,7 @@ fn applyListValueTransform(
         elem_transform,
         source_elem,
     );
-    const transformed_expr = try program.ast.addExpr(target_elem_ty, transformed_elem, .{ .value_ref = transformed_elem });
+    const transformed_expr = try program.ast.addValueRefExpr(target_elem_ty, transformed_elem);
     const body_expr = if (body_stmts.items.len == 0)
         transformed_expr
     else
@@ -1842,7 +2394,7 @@ fn tagUnionValueTransformBranchBody(
         executableInvariant("tag-union value transform payload edge count differs from target tag arity");
     }
 
-    const source_expr = try program.ast.addExpr(source_union_ty, value, .{ .value_ref = value });
+    const source_expr = try program.ast.addValueRefExpr(source_union_ty, value);
     const seen_payloads = try program.allocator.alloc(bool, case.payloads.len);
     defer program.allocator.free(seen_payloads);
     @memset(seen_payloads, false);
@@ -1880,9 +2432,10 @@ fn tagUnionValueTransformBranchBody(
         );
         payload_exprs[target_i] = .{
             .payload = target_payload.payload,
-            .expr = try program.ast.addExpr(target_payload.ty, transformed, .{ .value_ref = transformed }),
+            .expr = try program.ast.addValueRefExpr(target_payload.ty, transformed),
             .ty = target_payload.ty,
             .value = transformed,
+            .bridge = try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, target_payload.ty, target_payload.ty),
         };
     }
     verifyAllSeen(seen_payloads, "tag-union value transform had an extra payload edge");
@@ -1994,6 +2547,30 @@ fn tagTypeForId(
     executableInvariant("session tag-union value transform target tag id is absent from target type");
 }
 
+fn tagPayloadEndpointType(
+    allocator: Allocator,
+    program: *Program,
+    tag: Type.TagType,
+) Allocator.Error!?Type.TypeId {
+    if (tag.payloads.len == 0) return null;
+    if (tag.payloads.len == 1) return tag.payloads[0].ty;
+
+    const payload_tys = try allocator.alloc(Type.TypeId, tag.payloads.len);
+    var seen = try allocator.alloc(bool, tag.payloads.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+    for (tag.payloads) |payload| {
+        const index: usize = @intCast(program.row_shapes.tagPayload(payload.payload).logical_index);
+        if (index >= payload_tys.len or seen[index]) {
+            executableInvariant("executable tag payload endpoint type saw invalid payload index");
+        }
+        payload_tys[index] = payload.ty;
+        seen[index] = true;
+    }
+    verifyAllSeen(seen, "executable tag payload endpoint type omitted payload");
+    return try program.types.addType(.{ .tuple = payload_tys });
+}
+
 fn findSessionValueTransformTagCase(
     cases: []const repr.SessionValueTransformTagCase,
     source_tag: MonoRow.TagId,
@@ -2103,7 +2680,7 @@ fn unboxPayloadForTransform(
 ) Allocator.Error!Ast.ExecutableValueRef {
     const payload_ty = boxPayloadType(program, source_box_ty);
 
-    const source_expr = try program.ast.addExpr(source_box_ty, value, .{ .value_ref = value });
+    const source_expr = try program.ast.addValueRefExpr(source_box_ty, value);
     const unboxed_value = program.ast.freshValueRef();
     const args = [_]Ast.ExprId{source_expr};
     const unboxed_expr = try program.ast.addExpr(payload_ty, unboxed_value, .{ .low_level = .{
@@ -2126,7 +2703,7 @@ fn boxTransformedPayload(
 ) Allocator.Error!Ast.ExecutableValueRef {
     const payload_ty = boxPayloadType(program, target_box_ty);
 
-    const payload_expr = try program.ast.addExpr(payload_ty, payload, .{ .value_ref = payload });
+    const payload_expr = try program.ast.addValueRefExpr(payload_ty, payload);
     const boxed_value = program.ast.freshValueRef();
     const args = [_]Ast.ExprId{payload_expr};
     const boxed_expr = try program.ast.addExpr(target_box_ty, boxed_value, .{ .low_level = .{
@@ -2171,13 +2748,20 @@ fn applyCallableToErasedValueTransform(
                 executableInvariant("finite callable erasure transform source function type differs from adapter key");
             }
 
-            const hidden_capture = if (erased_ty.capture_ty == null) null else value;
+            _ = erased_ty.capture_ty;
+            const hidden_capture_ty = if (finite.adapter_key.erased_fn_sig_key.capture_ty) |capture_key| blk: {
+                const capture_ref = published_types.payloads.refForKey(artifactRefFromKey(materialization.owner), capture_key) orelse {
+                    executableInvariant("finite callable erasure transform hidden capture key has no published payload");
+                };
+                break :blk try published_types.lower(capture_ref, capture_key);
+            } else null;
+            const hidden_capture = if (hidden_capture_ty == null) null else value;
             const packed_value = program.ast.freshValueRef();
             const packed_expr = try program.ast.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
                 .sig_key = finite.adapter_key.erased_fn_sig_key,
                 .code = executableProcForErasedAdapter(program, finite.adapter_key),
                 .capture = hidden_capture,
-                .capture_ty = erased_ty.capture_ty,
+                .capture_ty = hidden_capture_ty,
                 .capture_shape = finite.adapter_key.capture_shape_key,
             } });
             try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -2247,7 +2831,13 @@ fn lowerExecutableValueChildBridge(
 ) Allocator.Error!Ast.BridgeId {
     const plan = transforms.get(child);
     return switch (plan.op) {
-        .identity => try program.ast.addBridgePlan(.direct),
+        .identity => try constructionSlotBridgeForProgram(
+            program.allocator,
+            program,
+            &program.ast,
+            try published_types.lower(plan.from.ty, plan.from.key),
+            try published_types.lower(plan.to.ty, plan.to.key),
+        ),
         .structural_bridge => |structural| try lowerPublishedExecutableValueTransformAsBridge(
             program,
             materialization,
@@ -2269,8 +2859,12 @@ fn lowerExecutableStructuralBridgePlan(
     to_ty: Type.TypeId,
     op: checked_artifact.ExecutableStructuralBridgePlan,
 ) Allocator.Error!Ast.BridgeId {
+    switch (op) {
+        .direct => return try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, from_ty, to_ty),
+        else => {},
+    }
     const plan: Ast.BridgePlan = switch (op) {
-        .direct => .direct,
+        .direct => unreachable,
         .zst => .zst,
         .list_reinterpret => .list_reinterpret,
         .nominal_reinterpret => .nominal_reinterpret,
@@ -2279,12 +2873,34 @@ fn lowerExecutableStructuralBridgePlan(
         .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
             .source_payload = from_ty,
             .target_discriminant = try tagDiscriminantForLabel(program, to_ty, try materializationTagLabel(program, materialization, singleton.target_tag)),
-            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload) else null,
+            .payload_plan = if (singleton.value_transform) |payload|
+                try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload)
+            else blk: {
+                const target_union = switch (program.types.getType(to_ty)) {
+                    .tag_union => |tag_union| tag_union,
+                    else => executableInvariant("executable singleton_to_tag_union bridge target was not a tag union"),
+                };
+                const target_label = try materializationTagLabel(program, materialization, singleton.target_tag);
+                const target_tag = tagTypeForLabel(program, target_union, target_label);
+                const target_payload_ty = (try tagPayloadEndpointType(program.allocator, program, target_tag)) orelse break :blk null;
+                break :blk try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, from_ty, target_payload_ty);
+            },
         } },
         .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
             .target_payload = to_ty,
             .source_discriminant = try tagDiscriminantForLabel(program, from_ty, try materializationTagLabel(program, materialization, singleton.source_tag)),
-            .payload_plan = if (singleton.value_transform) |payload| try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload) else null,
+            .payload_plan = if (singleton.value_transform) |payload|
+                try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload)
+            else blk: {
+                const source_union = switch (program.types.getType(from_ty)) {
+                    .tag_union => |tag_union| tag_union,
+                    else => executableInvariant("executable tag_union_to_singleton bridge source was not a tag union"),
+                };
+                const source_label = try materializationTagLabel(program, materialization, singleton.source_tag);
+                const source_tag = tagTypeForLabel(program, source_union, source_label);
+                const source_payload_ty = (try tagPayloadEndpointType(program.allocator, program, source_tag)) orelse break :blk null;
+                break :blk try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, source_payload_ty, to_ty);
+            },
         } },
     };
     return try program.ast.addBridgePlan(plan);
@@ -2616,6 +3232,22 @@ fn canonicalNamesForArtifactInViews(
     executableInvariant("executable materialization referenced an artifact name store that was not published");
 }
 
+fn callableSetDescriptorsForArtifactInViews(
+    artifact_views: ArtifactViews,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.CallableSetDescriptorStore {
+    if (artifact_views.root) |root| {
+        if (artifactKeyEql(root.artifact.key, artifact)) return &root.artifact.callable_set_descriptors;
+        for (root.relation_artifacts) |related| {
+            if (artifactKeyEql(related.key, artifact)) return related.callable_set_descriptors;
+        }
+    }
+    for (artifact_views.imports) |imported| {
+        if (artifactKeyEql(imported.key, artifact)) return imported.callable_set_descriptors;
+    }
+    return null;
+}
+
 fn resolveConstInstanceInView(
     materialization: MaterializationStores,
     instances: checked_artifact.ConstInstantiationStoreView,
@@ -2791,7 +3423,7 @@ fn lowerPureComptimeListExpr(
         exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, elem_ty, elem_schema, item, allow_callable);
     }
     const out = program.ast.freshValueRef();
-    return try program.ast.addExpr(expected_ty, out, .{ .list = try program.ast.addExprSpan(exprs) });
+    return try program.ast.addExpr(expected_ty, out, .{ .list = try addListItemExprSpanForConstruction(allocator, program, &program.ast, exprs, elem_ty) });
 }
 
 fn lowerPureComptimeBoxExpr(
@@ -2847,7 +3479,7 @@ fn lowerPureComptimeTupleExpr(
         exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, item_tys[i], schema, item, allow_callable);
     }
     const out = program.ast.freshValueRef();
-    return try program.ast.addExpr(expected_ty, out, .{ .tuple = try program.ast.addExprSpan(exprs) });
+    return try program.ast.addExpr(expected_ty, out, .{ .tuple = try addTupleItemExprSpanForConstruction(allocator, program, &program.ast, exprs, item_tys) });
 }
 
 fn lowerPureComptimeRecordExpr(
@@ -2894,6 +3526,7 @@ fn lowerPureComptimeRecordExpr(
             .expr = lowered,
             .ty = expected_field.ty,
             .value = program.ast.getExpr(lowered).value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, &program.ast, program.ast.getExpr(lowered).ty, expected_field.ty),
         };
     }
     const out = program.ast.freshValueRef();
@@ -2986,6 +3619,7 @@ fn lowerPureComptimeTagExpr(
             .expr = lowered,
             .ty = expected_payload.ty,
             .value = program.ast.getExpr(lowered).value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, &program.ast, program.ast.getExpr(lowered).ty, expected_payload.ty),
         };
     }
     const out = program.ast.freshValueRef();
@@ -3265,6 +3899,7 @@ fn lowerErasedCaptureRecordMaterialization(
             .expr = lowered,
             .ty = expected_field.ty,
             .value = program.ast.getExpr(lowered).value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, &program.ast, program.ast.getExpr(lowered).ty, expected_field.ty),
         };
     }
     verifyAllSeen(seen, "executable erased capture record materialization had extra field");
@@ -3313,7 +3948,7 @@ fn lowerErasedCaptureTupleMaterialization(
         exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, tuple_tys[i], item);
     }
     const value = program.ast.freshValueRef();
-    return try program.ast.addExpr(expected_ty, value, .{ .tuple = try program.ast.addExprSpan(exprs) });
+    return try program.ast.addExpr(expected_ty, value, .{ .tuple = try addTupleItemExprSpanForConstruction(allocator, program, &program.ast, exprs, tuple_tys) });
 }
 
 fn lowerErasedCaptureTagMaterialization(
@@ -3358,6 +3993,7 @@ fn lowerErasedCaptureTagMaterialization(
             .expr = lowered,
             .ty = expected_payload.ty,
             .value = program.ast.getExpr(lowered).value,
+            .bridge = try constructionSlotBridgeForProgram(allocator, program, &program.ast, program.ast.getExpr(lowered).ty, expected_payload.ty),
         };
     }
     verifyAllSeen(seen, "executable erased capture tag materialization had extra payload");
@@ -3412,7 +4048,7 @@ fn lowerErasedCaptureListMaterialization(
         exprs[i] = try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, elem_ty, item);
     }
     const value = program.ast.freshValueRef();
-    return try program.ast.addExpr(expected_ty, value, .{ .list = try program.ast.addExprSpan(exprs) });
+    return try program.ast.addExpr(expected_ty, value, .{ .list = try addListItemExprSpanForConstruction(allocator, program, &program.ast, exprs, elem_ty) });
 }
 
 fn lowerErasedCaptureBoxMaterialization(
@@ -3537,7 +4173,7 @@ fn lowerMaterializedFiniteCallableSetValue(
     if (!repr.callableSetKeyEql(callable_set.key, finite.callable_set_key)) {
         executableInvariant("executable erased finite capture materialization callable-set key differs from expected type");
     }
-    const descriptor_member = programCallableSetMember(program, finite.callable_set_key, finite.selected_member) orelse {
+    const descriptor_member = materializedCallableSetMember(program, materialization.owner, finite.callable_set_key, finite.selected_member) orelse {
         executableInvariant("executable erased finite capture materialization selected missing callable-set member");
     };
     if (descriptor_member.capture_slots.len != finite.captures.len) {
@@ -3614,6 +4250,35 @@ fn lowerMaterializedFiniteCallableSetValue(
         .stmts = try program.ast.addStmtSpan(stmt_ids),
         .final_expr = final_expr,
     } });
+}
+
+const MaterializedCallableSetMember = struct {
+    capture_slots: []const repr.CallableSetCaptureSlot,
+    capture_shape_key: repr.CaptureShapeKey,
+};
+
+fn materializedCallableSetMember(
+    program: *const Program,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    key: repr.CanonicalCallableSetKey,
+    member_id: repr.CallableSetMemberId,
+) ?MaterializedCallableSetMember {
+    if (programCallableSetMember(program, key, member_id)) |member| {
+        return .{
+            .capture_slots = member.capture_slots,
+            .capture_shape_key = member.capture_shape_key,
+        };
+    }
+    const descriptors = callableSetDescriptorsForArtifactInViews(program.artifact_views, owner) orelse return null;
+    const descriptor = descriptors.descriptorFor(key) orelse return null;
+    for (descriptor.members) |member| {
+        if (member.member != member_id) continue;
+        return .{
+            .capture_slots = member.capture_slots,
+            .capture_shape_key = member.capture_shape_key,
+        };
+    }
+    return null;
 }
 
 fn lowerMaterializedErasedCallableValue(
@@ -4349,6 +5014,8 @@ const BodyBuilder = struct {
     session_type_lowerer: SessionTypeLowerer,
     value_store: *const repr.ValueInfoStore,
     representation_store: *const repr.RepresentationStore,
+    published_adapter_payloads: ?*PublishedTypeLowerer = null,
+    published_adapter_artifact: canonical.ArtifactRef = .{},
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     env: std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef),
     expr_map: std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId),
@@ -4535,6 +5202,9 @@ const BodyBuilder = struct {
         callable_set_key: repr.CanonicalCallableSetKey,
         member: repr.CanonicalCallableSetMember,
     ) Allocator.Error!?Type.TypeId {
+        if (self.published_adapter_payloads) |published| {
+            return try self.lowerPublishedCallableSetMemberPayloadType(published, callable_set_key, member);
+        }
         const callable_set_payload_key = repr.finiteCallableSetExecValueTypeKey(callable_set_key);
         const callable_set_ref = self.representation_store.session_executable_type_payloads.refForKey(callable_set_payload_key) orelse {
             executableInvariant("executable callable-set member payload type has no published callable-set payload");
@@ -4572,11 +5242,57 @@ const BodyBuilder = struct {
         executableInvariant("executable callable-set member had no published payload entry");
     }
 
+    fn lowerPublishedCallableSetMemberPayloadType(
+        self: *BodyBuilder,
+        published: *PublishedTypeLowerer,
+        callable_set_key: repr.CanonicalCallableSetKey,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!?Type.TypeId {
+        const callable_set_payload_key = repr.finiteCallableSetExecValueTypeKey(callable_set_key);
+        const callable_set_ref = published.payloads.refForKey(self.published_adapter_artifact, callable_set_payload_key) orelse {
+            executableInvariant("executable published callable-set member payload type has no published callable-set payload");
+        };
+        const payload = published.payloads.get(callable_set_ref.payload);
+        const callable_set = switch (payload) {
+            .callable_set => |set| set,
+            else => executableInvariant("executable published callable-set member payload key did not point at a callable-set payload"),
+        };
+        if (!repr.callableSetKeyEql(callable_set.key, callable_set_key)) {
+            executableInvariant("executable published callable-set payload key disagrees with descriptor key");
+        }
+        for (callable_set.members) |payload_member| {
+            if (payload_member.member != member.member) continue;
+            if (member.capture_slots.len == 0) {
+                if (payload_member.payload_ty != null or payload_member.payload_ty_key != null) {
+                    executableInvariant("executable published callable-set member has no captures but published a capture payload");
+                }
+                return null;
+            }
+            const payload_ty = payload_member.payload_ty orelse {
+                executableInvariant("executable published callable-set captured member has no published capture payload");
+            };
+            const payload_key = payload_member.payload_ty_key orelse {
+                executableInvariant("executable published callable-set captured member payload has no key");
+            };
+            if (!repr.canonicalExecValueTypeKeyEql(payload_key, repr.captureTupleExecKeyForSlots(member.capture_slots))) {
+                executableInvariant("executable published callable-set member payload key differs from member capture schema");
+            }
+            return try published.lower(payload_ty, payload_key);
+        }
+        executableInvariant("executable published callable-set member had no published payload entry");
+    }
+
     fn lowerFiniteSetAdapterCaptureType(
         self: *BodyBuilder,
         adapter: repr.ErasedAdapterKey,
     ) Allocator.Error!?Type.TypeId {
         const capture_key = adapter.erased_fn_sig_key.capture_ty orelse return null;
+        if (self.published_adapter_payloads) |published| {
+            const ref = published.payloads.refForKey(self.published_adapter_artifact, capture_key) orelse {
+                executableInvariant("executable finite-set adapter published capture key has no payload");
+            };
+            return try published.lower(ref, capture_key);
+        }
         return try self.lowerSessionExecutableTypeKey(capture_key);
     }
 
@@ -4584,7 +5300,14 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!Type.TypeId {
-        return try self.lowerSessionExecutableTypeKey(repr.finiteCallableSetExecValueTypeKey(key));
+        const payload_key = repr.finiteCallableSetExecValueTypeKey(key);
+        if (self.published_adapter_payloads) |published| {
+            const ref = published.payloads.refForKey(self.published_adapter_artifact, payload_key) orelse {
+                executableInvariant("executable callable-set published payload key has no payload");
+            };
+            return try published.lower(ref, payload_key);
+        }
+        return try self.lowerSessionExecutableTypeKey(payload_key);
     }
 
     fn lowerFnArgSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
@@ -4648,18 +5371,38 @@ const BodyBuilder = struct {
         };
     }
 
-    fn lowerExpr(self: *BodyBuilder, expr_id: LambdaSolved.Ast.ExprId) Allocator.Error!Ast.ExprId {
-        if (self.expr_map.get(expr_id)) |existing| return existing;
+    fn expressionCanUseExprMap(expr: LambdaSolved.Ast.Expr) bool {
+        return switch (expr.data) {
+            .capture_ref,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bool_lit,
+            .unit,
+            .const_instance,
+            .crash,
+            .runtime_error,
+            => true,
+            else => false,
+        };
+    }
 
+    fn lowerExpr(self: *BodyBuilder, expr_id: LambdaSolved.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.exprs.items[@intFromEnum(expr_id)];
+        const can_cache = expressionCanUseExprMap(expr);
+        if (can_cache) {
+            if (self.expr_map.get(expr_id)) |existing| return existing;
+        }
+
         const lowered = switch (expr.data) {
             .var_ => |var_| blk: {
                 const value = self.env.get(var_.binding_info) orelse executableInvariant("executable variable occurrence has no lowered binding value");
                 const binding = self.value_store.bindings.items[@intFromEnum(var_.binding_info)];
-                break :blk try self.output.addExpr(
+                break :blk try self.output.addValueRefExpr(
                     try self.lowerExecutableValueType(expr.ty, binding.value),
                     value,
-                    .{ .value_ref = value },
                 );
             },
             .int_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .int_lit = literal }),
@@ -4687,9 +5430,10 @@ const BodyBuilder = struct {
                 );
             },
             .const_ref => executableInvariant("executable lowering reached non-runnable compile-time dependency const_ref"),
+            .pending_local_root => executableInvariant("executable lowering reached summary-only pending local root"),
             .record => |record| blk: {
                 const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
-                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.assembly_order, ty);
+                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.eval_order, record.assembly_order, ty);
                 break :blk try self.output.addExpr(
                     ty,
                     self.output.freshValueRef(),
@@ -4712,7 +5456,7 @@ const BodyBuilder = struct {
                 const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
                 const resolved_tag = self.tagTypeForType(ty, tag.tag);
                 const tag_id = resolved_tag.tag_type.tag;
-                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.assembly_order);
+                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.eval_order, tag.assembly_order);
                 break :blk try self.output.addExpr(
                     ty,
                     self.output.freshValueRef(),
@@ -4736,7 +5480,8 @@ const BodyBuilder = struct {
             },
             .let_ => |let_| blk: {
                 const body = try self.lowerExpr(let_.body);
-                const previous = try self.env.fetchPut(let_.bind.binding_info, self.exprValue(body));
+                const bind_value = self.output.freshValueRef();
+                const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
                         self.env.put(let_.bind.binding_info, entry.value) catch unreachable;
@@ -4746,7 +5491,7 @@ const BodyBuilder = struct {
                 }
                 const rest = try self.lowerExpr(let_.rest);
                 const stmt = try self.output.addStmt(.{ .decl = .{
-                    .value = self.exprValue(body),
+                    .value = bind_value,
                     .body = body,
                 } });
                 const stmt_span = try self.output.addStmtSpan(&.{stmt});
@@ -4863,9 +5608,8 @@ const BodyBuilder = struct {
                 const cond = try self.lowerExpr(match_.cond);
                 const scrutinee_exprs = [_]Ast.ExprId{cond};
                 const scrutinees = [_]Ast.ExecutableValueRef{self.exprValue(cond)};
-                const lowered_branches = try self.lowerBranchSpan(match_.branches);
                 const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
-                const transformed_branches = try self.wrapSourceMatchBranches(match_.join_info, lowered_branches, result_ty);
+                const transformed_branches = try self.lowerBranchSpanAtType(match_.branches, match_.join_info, self.output.getExpr(cond).ty, result_ty);
                 const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
                 const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
                 const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, transformed_branches);
@@ -4904,7 +5648,9 @@ const BodyBuilder = struct {
             .call_proc => |call| try self.lowerCallProc(expr.ty, call),
             .proc_value => |proc_value| try self.lowerProcValue(expr.ty, expr.value_info, proc_value),
         };
-        try self.expr_map.put(expr_id, lowered);
+        if (can_cache) {
+            try self.expr_map.put(expr_id, lowered);
+        }
         return lowered;
     }
 
@@ -4916,7 +5662,7 @@ const BodyBuilder = struct {
         const expr = self.input.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
             .record => |record| blk: {
-                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.assembly_order, expected_ty);
+                const fields = try self.lowerRecordFieldsForType(expr.value_info, record.eval_order, record.assembly_order, expected_ty);
                 break :blk try self.output.addExpr(
                     expected_ty,
                     self.output.freshValueRef(),
@@ -4936,7 +5682,7 @@ const BodyBuilder = struct {
             },
             .tag => |tag| blk: {
                 const resolved_tag = self.tagTypeForType(expected_ty, tag.tag);
-                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.assembly_order);
+                const payloads = try self.lowerTagPayloadValuesForTagType(expr.value_info, resolved_tag.tag_type, tag.eval_order, tag.assembly_order);
                 break :blk try self.output.addExpr(
                     expected_ty,
                     self.output.freshValueRef(),
@@ -4965,7 +5711,8 @@ const BodyBuilder = struct {
             },
             .let_ => |let_| blk: {
                 const body = try self.lowerExpr(let_.body);
-                const previous = try self.env.fetchPut(let_.bind.binding_info, self.exprValue(body));
+                const bind_value = self.output.freshValueRef();
+                const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
                         self.env.put(let_.bind.binding_info, entry.value) catch unreachable;
@@ -4973,9 +5720,12 @@ const BodyBuilder = struct {
                         _ = self.env.remove(let_.bind.binding_info);
                     }
                 }
-                const rest = try self.lowerExprAtType(let_.rest, expected_ty);
+                const rest = if (self.lambdaExprCanCompleteNormally(let_.body))
+                    try self.lowerExprAtType(let_.rest, expected_ty)
+                else
+                    try self.lowerExpr(let_.rest);
                 const stmt = try self.output.addStmt(.{ .decl = .{
-                    .value = self.exprValue(body),
+                    .value = bind_value,
                     .body = body,
                 } });
                 const stmt_span = try self.output.addStmtSpan(&.{stmt});
@@ -4990,13 +5740,51 @@ const BodyBuilder = struct {
             },
             .block => |block| blk: {
                 const stmts = try self.lowerStmtSpan(block.stmts);
-                const final_expr = try self.lowerExprAtType(block.final_expr, expected_ty);
+                const final_expr = if (self.lambdaStmtSpanCanCompleteNormally(block.stmts))
+                    try self.lowerExprAtType(block.final_expr, expected_ty)
+                else
+                    try self.lowerExpr(block.final_expr);
                 break :blk try self.output.addExpr(
                     expected_ty,
                     self.exprValue(final_expr),
                     .{ .block = .{
                         .stmts = stmts,
                         .final_expr = final_expr,
+                    } },
+                );
+            },
+            .match_ => |match_| blk: {
+                const cond = try self.lowerExpr(match_.cond);
+                const scrutinee_exprs = [_]Ast.ExprId{cond};
+                const scrutinees = [_]Ast.ExecutableValueRef{self.exprValue(cond)};
+                const lowered_branches = try self.lowerBranchSpanAtType(match_.branches, match_.join_info, self.output.getExpr(cond).ty, expected_ty);
+                const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
+                const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
+                const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, lowered_branches);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .source_match = .{
+                        .scrutinee_exprs = scrutinee_expr_span,
+                        .scrutinees = scrutinee_span,
+                        .decision_plan = decision_plan,
+                        .branches = lowered_branches,
+                    } },
+                );
+            },
+            .if_ => |if_| blk: {
+                const cond = try self.lowerExpr(if_.cond);
+                const then_body = try self.lowerIfBranchAtType(if_.then_body, if_.join_info, .then_, expected_ty);
+                const else_body = try self.lowerIfBranchAtType(if_.else_body, if_.join_info, .else_, expected_ty);
+                const true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(cond).ty);
+                break :blk try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .{ .if_ = .{
+                        .cond = cond,
+                        .true_discriminant = true_discriminant,
+                        .then_body = then_body,
+                        .else_body = else_body,
                     } },
                 );
             },
@@ -5030,13 +5818,9 @@ const BodyBuilder = struct {
                 }
                 var stmt_ids = std.ArrayList(Ast.StmtId).empty;
                 defer stmt_ids.deinit(self.allocator);
-                const lowered_value = self.exprValue(lowered);
-                try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                    .value = lowered_value,
-                    .body = lowered,
-                } }));
+                const lowered_value = try self.materializeExprValue(&stmt_ids, lowered);
                 const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, lowered_value);
-                const final_expr = try self.output.addExpr(expected_ty, transformed, .{ .value_ref = transformed });
+                const final_expr = try self.output.addValueRefExpr(expected_ty, transformed);
                 break :blk try self.output.addExpr(expected_ty, transformed, .{ .block = .{
                     .stmts = try self.output.addStmtSpan(stmt_ids.items),
                     .final_expr = final_expr,
@@ -5081,25 +5865,26 @@ const BodyBuilder = struct {
         expr: LambdaSolved.Ast.ExprId,
         return_info: repr.ReturnInfoId,
     ) Allocator.Error!Ast.ExprId {
-        const body = try self.lowerExpr(expr);
-        const boundary = self.returnTransformBoundary(return_info);
-        self.verifyReturnBoundary(boundary, return_info);
-        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
-        defer stmt_ids.deinit(self.allocator);
+        const ret = self.returnInfo(return_info);
+        const use_id = ret.consumer_use orelse executableInvariant("executable return reached unfinalized return consumer-use plan");
+        const plan = self.representation_store.consumerUsePlan(use_id);
+        const owner_return = switch (plan.owner) {
+            .return_value => |owner| owner,
+            else => executableInvariant("executable return consumer-use plan had non-return owner"),
+        };
+        if (owner_return != return_info) {
+            executableInvariant("executable return consumer-use plan owner points at a different return");
+        }
+        if (plan.child_value != ret.value) {
+            executableInvariant("executable return consumer-use child value differs from return info");
+        }
 
-        const body_value = self.exprValue(body);
-        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-            .value = body_value,
-            .body = body,
-        } }));
-        const return_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, body_value);
-        const return_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
-        const final_expr = try self.output.addExpr(return_ty, return_value, .{ .value_ref = return_value });
-
-        return try self.output.addExpr(return_ty, return_value, .{ .block = .{
-            .stmts = try self.output.addStmtSpan(stmt_ids.items),
-            .final_expr = final_expr,
-        } });
+        const body = try self.lowerExprAtConsumerUse(expr, use_id);
+        const return_ty = try self.lowerSessionExecutableEndpointType(plan.expected_endpoint);
+        if (self.output.getExpr(body).ty != return_ty) {
+            executableInvariant("executable return expression type differs from return endpoint type");
+        }
+        return body;
     }
 
     fn wrapIfBranches(
@@ -5151,57 +5936,6 @@ const BodyBuilder = struct {
         return result;
     }
 
-    fn wrapSourceMatchBranches(
-        self: *BodyBuilder,
-        join_id: repr.JoinInfoId,
-        branches: Ast.Span(Ast.BranchId),
-        result_ty: Type.TypeId,
-    ) Allocator.Error!Ast.Span(Ast.BranchId) {
-        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
-        const join = self.value_store.joins.items[@intFromEnum(join_id)];
-        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
-        const transforms = self.value_store.sliceValueTransformBoundarySpan(join.input_transforms);
-        if (inputs.len != transforms.len or inputs.len > branch_ids.len) {
-            executableInvariant("executable source_match join transform count differs from published join inputs");
-        }
-
-        const out = try self.allocator.alloc(Ast.BranchId, branch_ids.len);
-        defer self.allocator.free(out);
-        var input_index: usize = 0;
-        for (branch_ids, 0..) |branch_id, i| {
-            const branch = self.output.branches.items[@intFromEnum(branch_id)];
-            if (!self.executableExprReturnsValue(branch.body)) {
-                out[i] = branch_id;
-                continue;
-            }
-            if (input_index >= inputs.len) {
-                executableInvariant("executable source_match returning branch has no published join input");
-            }
-            const input = inputs[input_index];
-            const transform_id = transforms[input_index];
-            const source = switch (input.source) {
-                .source_match_branch => |source| source,
-                else => executableInvariant("executable source_match join input has non-match source"),
-            };
-            if (@intFromEnum(source.branch) != @as(u32, @intCast(i))) {
-                executableInvariant("executable source_match join input branch id differs from branch order");
-            }
-            const boundary = self.representation_store.valueTransformBoundary(transform_id);
-            self.verifyJoinInputBoundary(boundary, input);
-            out[i] = try self.output.addBranch(.{
-                .pat = branch.pat,
-                .guard = branch.guard,
-                .body = try self.wrapJoinInputBody(branch.body, boundary, result_ty),
-                .degenerate = branch.degenerate,
-            });
-            input_index += 1;
-        }
-        if (input_index != inputs.len) {
-            executableInvariant("executable source_match join inputs were not consumed by returning branches");
-        }
-        return try self.output.addBranchSpan(out);
-    }
-
     fn wrapJoinInputBody(
         self: *BodyBuilder,
         body: Ast.ExprId,
@@ -5215,13 +5949,9 @@ const BodyBuilder = struct {
         var stmt_ids = std.ArrayList(Ast.StmtId).empty;
         defer stmt_ids.deinit(self.allocator);
 
-        const body_value = self.exprValue(body);
-        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-            .value = body_value,
-            .body = body,
-        } }));
+        const body_value = try self.materializeExprValue(&stmt_ids, body);
         const result_value = try self.applyValueTransformBoundary(&stmt_ids, boundary, body_value);
-        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
+        const final_expr = try self.output.addValueRefExpr(result_ty, result_value);
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_expr,
@@ -5233,6 +5963,7 @@ const BodyBuilder = struct {
             .return_,
             .crash,
             .runtime_error,
+            .@"unreachable",
             => false,
             .block => |block| self.executableBlockReturnsValue(block.stmts, block.final_expr),
             .if_ => |if_| self.executableExprReturnsValue(if_.then_body) or
@@ -5349,48 +6080,78 @@ const BodyBuilder = struct {
         return false;
     }
 
-    fn returnTransformBoundary(
+    fn lambdaExprCanCompleteNormally(self: *const BodyBuilder, expr_id: LambdaSolved.Ast.ExprId) bool {
+        return switch (self.input.exprs.items[@intFromEnum(expr_id)].data) {
+            .return_,
+            .crash,
+            .runtime_error,
+            => false,
+            .block => |block| self.lambdaBlockCanCompleteNormally(block.stmts, block.final_expr),
+            .if_ => |if_| self.lambdaExprCanCompleteNormally(if_.then_body) or
+                self.lambdaExprCanCompleteNormally(if_.else_body),
+            .match_ => |match_| self.lambdaAnyBranchCanCompleteNormally(match_.branches),
+            else => true,
+        };
+    }
+
+    fn lambdaBlockCanCompleteNormally(
+        self: *const BodyBuilder,
+        stmts: LambdaSolved.Ast.Span(LambdaSolved.Ast.StmtId),
+        final_expr: LambdaSolved.Ast.ExprId,
+    ) bool {
+        if (!self.lambdaStmtSpanCanCompleteNormally(stmts)) return false;
+        return self.lambdaExprCanCompleteNormally(final_expr);
+    }
+
+    fn lambdaStmtSpanCanCompleteNormally(
+        self: *const BodyBuilder,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.StmtId),
+    ) bool {
+        const stmt_ids = self.input.stmt_ids.items[span.start..][0..span.len];
+        for (stmt_ids) |stmt_id| {
+            if (!self.lambdaStmtCanCompleteNormally(stmt_id)) return false;
+        }
+        return true;
+    }
+
+    fn lambdaStmtCanCompleteNormally(self: *const BodyBuilder, stmt_id: LambdaSolved.Ast.StmtId) bool {
+        return switch (self.input.stmts.items[@intFromEnum(stmt_id)]) {
+            .decl => |decl| self.lambdaExprCanCompleteNormally(decl.body),
+            .var_decl => |decl| self.lambdaExprCanCompleteNormally(decl.body),
+            .reassign => |reassign| self.lambdaExprCanCompleteNormally(reassign.body),
+            .expr => |expr| self.lambdaExprCanCompleteNormally(expr),
+            .debug => |expr| self.lambdaExprCanCompleteNormally(expr),
+            .expect => |expr| self.lambdaExprCanCompleteNormally(expr),
+            .crash,
+            .return_,
+            .break_,
+            => false,
+            .for_,
+            .while_,
+            => true,
+        };
+    }
+
+    fn lambdaAnyBranchCanCompleteNormally(
+        self: *const BodyBuilder,
+        branches: LambdaSolved.Ast.Span(LambdaSolved.Ast.BranchId),
+    ) bool {
+        const branch_ids = self.input.branch_ids.items[branches.start..][0..branches.len];
+        for (branch_ids) |branch_id| {
+            if (self.lambdaExprCanCompleteNormally(self.input.branches.items[@intFromEnum(branch_id)].body)) return true;
+        }
+        return false;
+    }
+
+    fn returnInfo(
         self: *BodyBuilder,
         return_info_id: repr.ReturnInfoId,
-    ) repr.ValueTransformBoundary {
+    ) repr.ReturnInfo {
         const index = @intFromEnum(return_info_id);
         if (index >= self.value_store.returns.items.len) {
             executableInvariant("executable return referenced missing return info");
         }
-        const ret = self.value_store.returns.items[index];
-        const boundary_id = ret.transform orelse {
-            executableInvariant("executable return reached unfinalized return transform");
-        };
-        return self.representation_store.valueTransformBoundary(boundary_id);
-    }
-
-    fn verifyReturnBoundary(
-        self: *BodyBuilder,
-        boundary: repr.ValueTransformBoundary,
-        return_info_id: repr.ReturnInfoId,
-    ) void {
-        const ret = self.value_store.returns.items[@intFromEnum(return_info_id)];
-        const actual_return = switch (boundary.kind) {
-            .return_value => |return_value| return_value,
-            else => executableInvariant("executable return boundary has non-return kind"),
-        };
-        if (@intFromEnum(actual_return) != @intFromEnum(return_info_id)) {
-            executableInvariant("executable return boundary points at a different return");
-        }
-        if (boundary.from_value != ret.value) {
-            executableInvariant("executable return boundary source value differs from return info");
-        }
-        const from = switch (boundary.from_endpoint.owner) {
-            .local_value => |value| value,
-            else => executableInvariant("executable return boundary source endpoint is not local_value"),
-        };
-        if (from != ret.value) {
-            executableInvariant("executable return boundary source endpoint differs from return info");
-        }
-        switch (boundary.to_endpoint.owner) {
-            .procedure_return => {},
-            else => executableInvariant("executable return boundary target endpoint is not procedure_return"),
-        }
+        return self.value_store.returns.items[index];
     }
 
     fn verifyJoinInputBoundary(
@@ -5959,15 +6720,21 @@ const BodyBuilder = struct {
         const pat = self.output.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
             .wildcard => {},
-            .bind => |bind| try bindings.append(self.allocator, .{
-                .binder = bind,
-                .source = path_value,
-                .ty = pat.ty,
-            }),
+            .bind => |bind| {
+                const source_plan = self.output.getPatternPathValuePlan(path_value);
+                try bindings.append(self.allocator, .{
+                    .binder = bind,
+                    .source = path_value,
+                    .bridge = try self.patternBindingBridge(source_plan.ty, pat.ty),
+                    .ty = pat.ty,
+                });
+            },
             .as => |as| {
+                const source_plan = self.output.getPatternPathValuePlan(path_value);
                 try bindings.append(self.allocator, .{
                     .binder = as.bind,
                     .source = path_value,
+                    .bridge = try self.patternBindingBridge(source_plan.ty, pat.ty),
                     .ty = pat.ty,
                 });
                 try self.collectPatternDecisionData(as.pattern, path_value, tests, bindings, path_plans);
@@ -6194,6 +6961,231 @@ const BodyBuilder = struct {
         executableInvariant("executable tag pattern payload was absent from tag-union type");
     }
 
+    fn patternBindingBridge(
+        self: *BodyBuilder,
+        source_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.BridgeId {
+        return try self.valueBridge(source_ty, target_ty, .pattern_binding);
+    }
+
+    fn constructionSlotBridge(
+        self: *BodyBuilder,
+        source_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.BridgeId {
+        return try self.valueBridge(source_ty, target_ty, .construction_slot);
+    }
+
+    const ValueBridgeMode = enum {
+        pattern_binding,
+        construction_slot,
+    };
+
+    fn valueBridge(
+        self: *BodyBuilder,
+        source_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+        mode: ValueBridgeMode,
+    ) Allocator.Error!Ast.BridgeId {
+        if (mode == .pattern_binding and source_ty == target_ty) return try self.output.addBridgePlan(.direct);
+
+        const source = self.program.types.getType(source_ty);
+        const target = self.program.types.getType(target_ty);
+        const plan: Ast.BridgePlan = switch (source) {
+            .placeholder => executableInvariant("executable value bridge saw placeholder source type"),
+            .link => executableInvariant("executable value bridge saw unresolved source link"),
+            .primitive => |source_prim| switch (target) {
+                .primitive => |target_prim| blk: {
+                    if (source_prim != target_prim) executableInvariant("executable value bridge crossed primitive types");
+                    break :blk .direct;
+                },
+                else => executableInvariant("executable value bridge crossed primitive/non-primitive types"),
+            },
+            .nominal => |source_nominal| switch (target) {
+                .nominal => |target_nominal| blk: {
+                    if (source_nominal.nominal.module_name == target_nominal.nominal.module_name and
+                        source_nominal.nominal.type_name == target_nominal.nominal.type_name)
+                    {
+                        break :blk .nominal_reinterpret;
+                    }
+                    executableInvariant("executable value bridge crossed distinct nominal types");
+                },
+                else => .nominal_reinterpret,
+            },
+            .list => switch (target) {
+                .list => .list_reinterpret,
+                .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed list/non-list types"),
+            },
+            .box => switch (target) {
+                .box, .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed box/non-box types"),
+            },
+            .tuple => |source_items| switch (target) {
+                .tuple => |target_items| .{ .struct_ = try self.valueStructBridge(source_items, target_items, mode) },
+                .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed tuple/non-tuple types"),
+            },
+            .record => |source_record| switch (target) {
+                .record => |target_record| .{ .struct_ = try self.valueRecordBridge(source_record, target_record, mode) },
+                .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed record/non-record types"),
+            },
+            .tag_union => |source_union| switch (target) {
+                .tag_union => |target_union| .{ .tag_union = try self.valueTagUnionBridge(source_union, target_union, mode) },
+                .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed tag-union/non-tag-union types"),
+            },
+            .callable_set => |source_callable| switch (target) {
+                .callable_set => |target_callable| blk: {
+                    if (!repr.callableSetKeyEql(source_callable.key, target_callable.key)) {
+                        executableInvariant("executable value bridge crossed callable-set keys");
+                    }
+                    break :blk .nominal_reinterpret;
+                },
+                .nominal => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed callable-set/non-callable-set types"),
+            },
+            .erased_fn => switch (target) {
+                .erased_fn => .nominal_reinterpret,
+                else => executableInvariant("executable value bridge crossed erased-fn/non-erased-fn types"),
+            },
+            .vacant_callable_slot => switch (target) {
+                .vacant_callable_slot => .zst,
+                else => executableInvariant("executable value bridge crossed vacant/non-vacant callable-slot types"),
+            },
+        };
+        return try self.output.addBridgePlan(plan);
+    }
+
+    fn valueStructBridge(
+        self: *BodyBuilder,
+        source_items: []const Type.TypeId,
+        target_items: []const Type.TypeId,
+        mode: ValueBridgeMode,
+    ) Allocator.Error!Ast.Span(Ast.BridgeId) {
+        if (source_items.len != target_items.len) {
+            executableInvariant("executable value struct bridge arity mismatch");
+        }
+        if (source_items.len == 0) return Ast.Span(Ast.BridgeId).empty();
+        const children = try self.allocator.alloc(Ast.BridgeId, source_items.len);
+        defer self.allocator.free(children);
+        for (source_items, target_items, 0..) |source, target, i| {
+            children[i] = try self.valueBridge(source, target, mode);
+        }
+        return try self.output.addBridgePlanSpan(children);
+    }
+
+    fn valueRecordBridge(
+        self: *BodyBuilder,
+        source: Type.RecordType,
+        target: Type.RecordType,
+        mode: ValueBridgeMode,
+    ) Allocator.Error!Ast.Span(Ast.BridgeId) {
+        if (source.fields.len != target.fields.len) {
+            executableInvariant("executable value record bridge arity mismatch");
+        }
+        if (source.fields.len == 0) return Ast.Span(Ast.BridgeId).empty();
+        const children = try self.allocator.alloc(Ast.BridgeId, source.fields.len);
+        defer self.allocator.free(children);
+        for (target.fields, 0..) |target_field, i| {
+            const source_field = self.recordFieldTypeByLabel(source, target_field.field);
+            children[i] = try self.valueBridge(source_field.ty, target_field.ty, mode);
+        }
+        return try self.output.addBridgePlanSpan(children);
+    }
+
+    fn recordFieldTypeByLabel(
+        self: *BodyBuilder,
+        record: Type.RecordType,
+        target_field_id: MonoRow.RecordFieldId,
+    ) Type.RecordFieldType {
+        const target_label = self.program.row_shapes.recordField(target_field_id).label;
+        for (record.fields) |field| {
+            const source_label = self.program.row_shapes.recordField(field.field).label;
+            if (source_label == target_label) return field;
+        }
+        executableInvariant("executable value record bridge could not find field by finalized label");
+    }
+
+    fn valueTagUnionBridge(
+        self: *BodyBuilder,
+        source: Type.TagUnionType,
+        target: Type.TagUnionType,
+        mode: ValueBridgeMode,
+    ) Allocator.Error!Ast.Span(Ast.BridgeId) {
+        if (source.tags.len != target.tags.len) {
+            executableInvariant("executable value tag-union bridge arity mismatch");
+        }
+        if (source.tags.len == 0) return Ast.Span(Ast.BridgeId).empty();
+        const children = try self.allocator.alloc(Ast.BridgeId, target.tags.len);
+        defer self.allocator.free(children);
+        for (target.tags, 0..) |target_tag, i| {
+            const source_tag = self.tagTypeByLabel(source, target_tag.tag);
+            children[i] = try self.valueTagPayloadBridge(source_tag, target_tag, mode);
+        }
+        return try self.output.addBridgePlanSpan(children);
+    }
+
+    fn tagTypeByLabel(
+        self: *BodyBuilder,
+        tag_union: Type.TagUnionType,
+        target_tag_id: MonoRow.TagId,
+    ) Type.TagType {
+        const target_label = self.program.row_shapes.tag(target_tag_id).label;
+        for (tag_union.tags) |tag| {
+            const source_label = self.program.row_shapes.tag(tag.tag).label;
+            if (source_label == target_label) return tag;
+        }
+        executableInvariant("executable value tag-union bridge could not find tag by finalized label");
+    }
+
+    fn valueTagPayloadBridge(
+        self: *BodyBuilder,
+        source: Type.TagType,
+        target: Type.TagType,
+        mode: ValueBridgeMode,
+    ) Allocator.Error!Ast.BridgeId {
+        if (source.payloads.len != target.payloads.len) {
+            executableInvariant("executable value tag payload bridge arity mismatch");
+        }
+        if (source.payloads.len == 0) return try self.output.addBridgePlan(.zst);
+        if (source.payloads.len == 1) {
+            return try self.valueBridge(source.payloads[0].ty, target.payloads[0].ty, mode);
+        }
+
+        const source_payloads = try self.allocator.alloc(Type.TypeId, source.payloads.len);
+        defer self.allocator.free(source_payloads);
+        const target_payloads = try self.allocator.alloc(Type.TypeId, target.payloads.len);
+        defer self.allocator.free(target_payloads);
+        var seen_source = try self.allocator.alloc(bool, source.payloads.len);
+        defer self.allocator.free(seen_source);
+        var seen_target = try self.allocator.alloc(bool, target.payloads.len);
+        defer self.allocator.free(seen_target);
+        @memset(seen_source, false);
+        @memset(seen_target, false);
+        for (source.payloads) |payload| {
+            const index: usize = @intCast(self.program.row_shapes.tagPayload(payload.payload).logical_index);
+            if (index >= source_payloads.len or seen_source[index]) {
+                executableInvariant("executable value source payload bridge index mismatch");
+            }
+            source_payloads[index] = payload.ty;
+            seen_source[index] = true;
+        }
+        for (target.payloads) |payload| {
+            const index: usize = @intCast(self.program.row_shapes.tagPayload(payload.payload).logical_index);
+            if (index >= target_payloads.len or seen_target[index]) {
+                executableInvariant("executable value target payload bridge index mismatch");
+            }
+            target_payloads[index] = payload.ty;
+            seen_target[index] = true;
+        }
+        verifyAllSeen(seen_source, "executable value source payload bridge omitted payload");
+        verifyAllSeen(seen_target, "executable value target payload bridge omitted payload");
+        return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads, mode) });
+    }
+
     const SavedBinding = struct {
         binding: repr.BindingInfoId,
         previous: ?Ast.ExecutableValueRef,
@@ -6205,8 +7197,74 @@ const BodyBuilder = struct {
         saved: *std.ArrayList(SavedBinding),
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.pats.items[@intFromEnum(pat_id)];
-        const ty = try self.type_lowerer.lowerType(pat.ty);
+        const ty = try self.lowerExecutableValueType(pat.ty, pat.value_info);
         return try self.lowerPatScopedWithType(pat_id, ty, saved);
+    }
+
+    fn lowerUnreachableDecisionPat(
+        self: *BodyBuilder,
+        pat_id: LambdaSolved.Ast.PatId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatId {
+        const pat = self.input.pats.items[@intFromEnum(pat_id)];
+        return try self.output.addPat(.{ .ty = ty, .data = switch (pat.data) {
+            .bool_lit => |literal| blk: {
+                const resolved_tag = self.boolTagForType(ty, literal);
+                break :blk .{ .tag = .{
+                    .union_shape = resolved_tag.union_shape,
+                    .tag = resolved_tag.tag,
+                    .payloads = Ast.Span(Ast.TagPayloadPattern).empty(),
+                } };
+            },
+            .int_lit => |literal| .{ .int_lit = literal },
+            .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
+            .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
+            .dec_lit => |literal| .{ .dec_lit = literal },
+            .str_lit => |literal| .{ .str_lit = literal },
+            .tag => |tag| blk: {
+                const resolved_tag = self.tagForType(ty, tag.tag);
+                break :blk .{ .tag = .{
+                    .union_shape = resolved_tag.union_shape,
+                    .tag = resolved_tag.tag,
+                    .payloads = try self.lowerUnreachableDecisionTagPayloadPatterns(ty, resolved_tag.tag, tag.payloads),
+                } };
+            },
+            .nominal => |child| blk: {
+                const backing_ty = switch (self.program.types.getType(ty)) {
+                    .nominal => |nominal| nominal.backing,
+                    else => ty,
+                };
+                break :blk .{ .nominal = try self.lowerUnreachableDecisionPat(child, backing_ty) };
+            },
+            .as => |as| return try self.lowerUnreachableDecisionPat(as.pattern, ty),
+            .wildcard,
+            .var_,
+            .tuple,
+            .record,
+            .list,
+            => .wildcard,
+        } });
+    }
+
+    fn lowerUnreachableDecisionTagPayloadPatterns(
+        self: *BodyBuilder,
+        parent_ty: Type.TypeId,
+        target_tag: MonoRow.TagId,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadPattern),
+    ) Allocator.Error!Ast.Span(Ast.TagPayloadPattern) {
+        if (span.len == 0) return Ast.Span(Ast.TagPayloadPattern).empty();
+        const input_items = self.input.tag_payload_patterns.items[span.start..][0..span.len];
+        const payloads = try self.allocator.alloc(Ast.TagPayloadPattern, input_items.len);
+        defer self.allocator.free(payloads);
+        for (input_items, 0..) |payload, i| {
+            const target_payload = self.payloadForTag(target_tag, payload.payload);
+            const child_ty = self.tagPayloadTypeForPattern(parent_ty, target_payload);
+            payloads[i] = .{
+                .payload = target_payload,
+                .pattern = try self.lowerUnreachableDecisionPat(payload.pattern, child_ty),
+            };
+        }
+        return try self.output.addTagPayloadPatternSpan(payloads);
     }
 
     fn lowerPatScopedWithType(
@@ -6325,20 +7383,88 @@ const BodyBuilder = struct {
         }
     }
 
-    fn lowerBranch(self: *BodyBuilder, branch_id: LambdaSolved.Ast.BranchId) Allocator.Error!Ast.BranchId {
+    fn lowerBranchAtType(
+        self: *BodyBuilder,
+        branch_id: LambdaSolved.Ast.BranchId,
+        join_id: repr.JoinInfoId,
+        branch_index: u32,
+        scrutinee_ty: Type.TypeId,
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.BranchId {
         const branch = self.input.branches.items[@intFromEnum(branch_id)];
         var saved = std.ArrayList(SavedBinding).empty;
         defer saved.deinit(self.allocator);
+        if (branch.source_match_branch) |branch_ref| {
+            if (!self.value_store.sourceMatchBranchReachable(branch_ref)) {
+                const pat = try self.lowerUnreachableDecisionPat(branch.pat, scrutinee_ty);
+                const body = try self.output.addExpr(
+                    expected_ty,
+                    self.output.freshValueRef(),
+                    .@"unreachable",
+                );
+                return try self.output.addBranch(.{
+                    .pat = pat,
+                    .guard = null,
+                    .body = body,
+                    .degenerate = branch.degenerate,
+                });
+            }
+        }
         const pat = try self.lowerPatScoped(branch.pat, &saved);
         defer self.restoreBindings(&saved, 0);
         const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
-        const body = try self.lowerExpr(branch.body);
+        const body = if (self.lambdaExprCanCompleteNormally(branch.body)) blk: {
+            const use_id = self.contextualMatchBranchConsumerUse(join_id, branch_index) orelse {
+                executableInvariant("executable contextual source_match branch has no published consumer-use plan");
+            };
+            break :blk try self.lowerExprAtConsumerUse(branch.body, use_id);
+        } else try self.lowerExpr(branch.body);
+        if (self.lambdaExprCanCompleteNormally(branch.body) and self.output.getExpr(body).ty != expected_ty) {
+            executableInvariant("executable contextual source_match branch type differs from expected type");
+        }
         return try self.output.addBranch(.{
             .pat = pat,
             .guard = guard,
             .body = body,
             .degenerate = branch.degenerate,
         });
+    }
+
+    fn lowerBranchSpanAtType(
+        self: *BodyBuilder,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.BranchId),
+        join_id: repr.JoinInfoId,
+        scrutinee_ty: Type.TypeId,
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
+        if (span.len == 0) return Ast.Span(Ast.BranchId).empty();
+        const input_items = self.input.branch_ids.items[span.start..][0..span.len];
+        const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |item, i| {
+            output_items[i] = try self.lowerBranchAtType(item, join_id, @intCast(i), scrutinee_ty, expected_ty);
+        }
+        return try self.output.addBranchSpan(output_items);
+    }
+
+    fn lowerIfBranchAtType(
+        self: *BodyBuilder,
+        branch_expr: LambdaSolved.Ast.ExprId,
+        join_id: repr.JoinInfoId,
+        branch: repr.IfBranch,
+        expected_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!self.lambdaExprCanCompleteNormally(branch_expr)) {
+            return try self.lowerExpr(branch_expr);
+        }
+        const use_id = self.contextualIfBranchConsumerUse(join_id, branch) orelse {
+            executableInvariant("executable contextual if branch has no published consumer-use plan");
+        };
+        const body = try self.lowerExprAtConsumerUse(branch_expr, use_id);
+        if (self.output.getExpr(body).ty != expected_ty) {
+            executableInvariant("executable contextual if branch type differs from expected type");
+        }
+        return body;
     }
 
     fn lowerCaptureRef(
@@ -6400,17 +7526,19 @@ const BodyBuilder = struct {
         return try self.output.addStmt(switch (stmt) {
             .decl => |decl| blk: {
                 const body = try self.lowerExpr(decl.body);
-                try self.env.put(decl.bind.binding_info, self.exprValue(body));
+                const bind_value = self.output.freshValueRef();
+                try self.env.put(decl.bind.binding_info, bind_value);
                 break :blk .{ .decl = .{
-                    .value = self.exprValue(body),
+                    .value = bind_value,
                     .body = body,
                 } };
             },
             .var_decl => |decl| blk: {
                 const body = try self.lowerExpr(decl.body);
-                try self.env.put(decl.bind.binding_info, self.exprValue(body));
+                const bind_value = self.output.freshValueRef();
+                try self.env.put(decl.bind.binding_info, bind_value);
                 break :blk .{ .decl = .{
-                    .value = self.exprValue(body),
+                    .value = bind_value,
                     .body = body,
                 } };
             },
@@ -6468,17 +7596,6 @@ const BodyBuilder = struct {
             exprs[i] = try self.lowerExpr(expr);
         }
         return try self.output.addExprSpan(exprs);
-    }
-
-    fn lowerBranchSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.BranchId)) Allocator.Error!Ast.Span(Ast.BranchId) {
-        if (span.len == 0) return Ast.Span(Ast.BranchId).empty();
-        const input_items = self.input.branch_ids.items[span.start..][0..span.len];
-        const branches = try self.allocator.alloc(Ast.BranchId, input_items.len);
-        defer self.allocator.free(branches);
-        for (input_items, 0..) |branch, i| {
-            branches[i] = try self.lowerBranch(branch);
-        }
-        return try self.output.addBranchSpan(branches);
     }
 
     const TypeTag = struct {
@@ -6737,20 +7854,106 @@ const BodyBuilder = struct {
         return null;
     }
 
+    fn contextualIfBranchConsumerUse(
+        self: *const BodyBuilder,
+        join_id: repr.JoinInfoId,
+        branch: repr.IfBranch,
+    ) ?repr.ConsumerUsePlanId {
+        const join_index = @intFromEnum(join_id);
+        if (join_index >= self.value_store.joins.items.len) {
+            executableInvariant("executable contextual if consumer-use referenced missing join");
+        }
+        const join = self.value_store.joins.items[join_index];
+        if (join.kind != .if_expr) {
+            executableInvariant("executable contextual if consumer-use referenced non-if join");
+        }
+        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
+        const uses = self.value_store.sliceConsumerUsePlanSpan(join.contextual_consumer_uses);
+        if (uses.len != inputs.len) {
+            executableInvariant("executable contextual if consumer-use count differs from join inputs");
+        }
+        for (inputs, uses) |input, use_id| {
+            const source = switch (input.source) {
+                .if_branch => |if_branch| if_branch,
+                else => executableInvariant("executable contextual if consumer-use saw non-if join input"),
+            };
+            if (source.branch == branch) return use_id;
+        }
+        return null;
+    }
+
+    fn contextualMatchBranchConsumerUse(
+        self: *const BodyBuilder,
+        join_id: repr.JoinInfoId,
+        branch_index: u32,
+    ) ?repr.ConsumerUsePlanId {
+        const join_index = @intFromEnum(join_id);
+        if (join_index >= self.value_store.joins.items.len) {
+            executableInvariant("executable contextual match consumer-use referenced missing join");
+        }
+        const join = self.value_store.joins.items[join_index];
+        if (join.kind != .match_expr) {
+            executableInvariant("executable contextual match consumer-use referenced non-match join");
+        }
+        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
+        const uses = self.value_store.sliceConsumerUsePlanSpan(join.contextual_consumer_uses);
+        if (uses.len != inputs.len) {
+            executableInvariant("executable contextual match consumer-use count differs from join inputs");
+        }
+        for (inputs, uses) |input, use_id| {
+            const source = switch (input.source) {
+                .source_match_branch => |match_branch| match_branch,
+                else => executableInvariant("executable contextual match consumer-use saw non-match join input"),
+            };
+            if (@intFromEnum(source.branch) == branch_index) return use_id;
+        }
+        return null;
+    }
+
+    fn recordAssemblyEval(
+        evals: []const LambdaSolved.Ast.RecordFieldEval,
+        assembly: LambdaSolved.Ast.RecordFieldAssembly,
+    ) LambdaSolved.Ast.RecordFieldEval {
+        if (assembly.eval_index >= evals.len) {
+            executableInvariant("executable record assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.field != assembly.field) {
+            executableInvariant("executable record assembly field disagreed with eval-order field");
+        }
+        return evaluated;
+    }
+
+    fn tagAssemblyEval(
+        evals: []const LambdaSolved.Ast.TagPayloadEval,
+        assembly: LambdaSolved.Ast.TagPayloadAssembly,
+    ) LambdaSolved.Ast.TagPayloadEval {
+        if (assembly.eval_index >= evals.len) {
+            executableInvariant("executable tag assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.payload != assembly.payload) {
+            executableInvariant("executable tag assembly payload disagreed with eval-order payload");
+        }
+        return evaluated;
+    }
+
     fn lowerRecordFieldsForType(
         self: *BodyBuilder,
         parent_value: repr.ValueInfoId,
-        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly),
+        eval_order: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldEval),
+        assembly_order: LambdaSolved.Ast.Span(LambdaSolved.Ast.RecordFieldAssembly),
         expected_ty: Type.TypeId,
     ) Allocator.Error!Ast.Span(Ast.RecordFieldExpr) {
         const record_ty = self.recordTypeForConstruction(expected_ty);
-        if (span.len == 0) {
+        if (assembly_order.len == 0) {
             if (record_ty.fields.len != 0) {
                 executableInvariant("executable record construction expected fields but source assembly was empty");
             }
             return Ast.Span(Ast.RecordFieldExpr).empty();
         }
-        const input_items = self.input.record_field_assemblies.items[span.start..][0..span.len];
+        const evals = self.input.record_field_evals.items[eval_order.start..][0..eval_order.len];
+        const input_items = self.input.record_field_assemblies.items[assembly_order.start..][0..assembly_order.len];
         if (input_items.len != record_ty.fields.len) {
             executableInvariant("executable record construction field arity disagreed with expected endpoint");
         }
@@ -6771,12 +7974,15 @@ const BodyBuilder = struct {
             seen[field_index] = true;
             const use_id = self.recordFieldConsumerUse(parent_value, field.field) orelse
                 executableInvariant("executable record construction field had no published consumer-use plan");
-            const lowered = try self.lowerExprAtConsumerUse(field.value, use_id);
+            const evaluated = recordAssemblyEval(evals, field);
+            const lowered = try self.lowerExprAtConsumerUse(evaluated.value, use_id);
+            const lowered_expr = self.output.getExpr(lowered);
             values[field_index] = .{
                 .field = target_field.field,
                 .expr = lowered,
                 .ty = target_field.ty,
-                .value = self.exprValue(lowered),
+                .value = lowered_expr.value,
+                .bridge = try self.constructionSlotBridge(lowered_expr.ty, target_field.ty),
             };
         }
         verifyAllSeen(seen, "executable record construction omitted field");
@@ -6787,15 +7993,17 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         parent_value: repr.ValueInfoId,
         target_tag: Type.TagType,
-        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly),
+        eval_order: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadEval),
+        assembly_order: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadAssembly),
     ) Allocator.Error!Ast.Span(Ast.TagPayloadExpr) {
-        if (span.len == 0) {
+        if (assembly_order.len == 0) {
             if (target_tag.payloads.len != 0) {
                 executableInvariant("executable tag construction expected payloads but source assembly was empty");
             }
             return Ast.Span(Ast.TagPayloadExpr).empty();
         }
-        const input_items = self.input.tag_payload_assemblies.items[span.start..][0..span.len];
+        const evals = self.input.tag_payload_evals.items[eval_order.start..][0..eval_order.len];
+        const input_items = self.input.tag_payload_assemblies.items[assembly_order.start..][0..assembly_order.len];
         if (input_items.len != target_tag.payloads.len) {
             executableInvariant("executable tag construction payload arity disagreed with expected endpoint");
         }
@@ -6824,12 +8032,15 @@ const BodyBuilder = struct {
                     .{ planned_ty, target_payload.ty },
                 );
             }
-            const lowered = try self.lowerExprAtConsumerUse(payload.value, use_id);
+            const evaluated = tagAssemblyEval(evals, payload);
+            const lowered = try self.lowerExprAtConsumerUse(evaluated.value, use_id);
+            const lowered_expr = self.output.getExpr(lowered);
             values[payload_index] = .{
                 .payload = target_payload.payload,
                 .expr = lowered,
                 .ty = target_payload.ty,
-                .value = self.exprValue(lowered),
+                .value = lowered_expr.value,
+                .bridge = try self.constructionSlotBridge(lowered_expr.ty, target_payload.ty),
             };
         }
         verifyAllSeen(seen, "executable tag construction omitted payload");
@@ -6841,27 +8052,33 @@ const BodyBuilder = struct {
         parent_value: repr.ValueInfoId,
         span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId),
         expected_ty: Type.TypeId,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+    ) Allocator.Error!Ast.Span(Ast.TupleItemExpr) {
         const tuple_tys = self.tupleTypesForConstruction(expected_ty);
         if (span.len == 0) {
             if (tuple_tys.len != 0) {
                 executableInvariant("executable tuple construction expected elements but source assembly was empty");
             }
-            return Ast.Span(Ast.ExprId).empty();
+            return Ast.Span(Ast.TupleItemExpr).empty();
         }
         const input_items = self.input.expr_ids.items[span.start..][0..span.len];
         if (input_items.len != tuple_tys.len) {
             executableInvariant("executable tuple construction arity disagreed with expected endpoint");
         }
-        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        const exprs = try self.allocator.alloc(Ast.TupleItemExpr, input_items.len);
         defer self.allocator.free(exprs);
         for (input_items, tuple_tys, 0..) |expr, elem_ty, i| {
-            _ = elem_ty;
             const use_id = self.tupleElemConsumerUse(parent_value, @intCast(i)) orelse
                 executableInvariant("executable tuple construction element had no published consumer-use plan");
-            exprs[i] = try self.lowerExprAtConsumerUse(expr, use_id);
+            const lowered = try self.lowerExprAtConsumerUse(expr, use_id);
+            const lowered_expr = self.output.getExpr(lowered);
+            exprs[i] = .{
+                .expr = lowered,
+                .ty = elem_ty,
+                .value = lowered_expr.value,
+                .bridge = try self.constructionSlotBridge(lowered_expr.ty, elem_ty),
+            };
         }
-        return try self.output.addExprSpan(exprs);
+        return try self.output.addTupleItemExprSpan(exprs);
     }
 
     fn lowerListItemsForType(
@@ -6869,19 +8086,25 @@ const BodyBuilder = struct {
         parent_value: repr.ValueInfoId,
         span: LambdaSolved.Ast.Span(LambdaSolved.Ast.ExprId),
         expected_ty: Type.TypeId,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        if (span.len == 0) return Ast.Span(Ast.ExprId).empty();
+    ) Allocator.Error!Ast.Span(Ast.ListItemExpr) {
+        if (span.len == 0) return Ast.Span(Ast.ListItemExpr).empty();
         const elem_ty = self.listElemTypeForConstruction(expected_ty);
         const input_items = self.input.expr_ids.items[span.start..][0..span.len];
-        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        const exprs = try self.allocator.alloc(Ast.ListItemExpr, input_items.len);
         defer self.allocator.free(exprs);
         for (input_items, 0..) |expr, i| {
-            _ = elem_ty;
             const use_id = self.listElemConsumerUse(parent_value, @intCast(i)) orelse
                 executableInvariant("executable list construction element had no published consumer-use plan");
-            exprs[i] = try self.lowerExprAtConsumerUse(expr, use_id);
+            const lowered = try self.lowerExprAtConsumerUse(expr, use_id);
+            const lowered_expr = self.output.getExpr(lowered);
+            exprs[i] = .{
+                .expr = lowered,
+                .ty = elem_ty,
+                .value = lowered_expr.value,
+                .bridge = try self.constructionSlotBridge(lowered_expr.ty, elem_ty),
+            };
         }
-        return try self.output.addExprSpan(exprs);
+        return try self.output.addListItemExprSpan(exprs);
     }
 
     fn lowerCallProc(
@@ -6894,6 +8117,7 @@ const BodyBuilder = struct {
             .call_proc => |target| target,
             .call_value_finite,
             .call_value_erased,
+            .pending_local_root_call,
             => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         };
         const target_proc = self.proc_exec_map.get(target_instance_id) orelse executableInvariant("executable call_proc target was not reserved before body lowering");
@@ -6915,6 +8139,10 @@ const BodyBuilder = struct {
         if (arg_transform_ids.len != arg_items.len) {
             executableInvariant("executable call_proc argument transform count differs from call arity");
         }
+        const arg_consumer_use_ids = self.value_store.sliceConsumerUsePlanSpan(call_site.arg_consumer_uses);
+        if (arg_consumer_use_ids.len != arg_items.len) {
+            executableInvariant("executable call_proc argument consumer-use count differs from call arity");
+        }
         const result_transform_id = call_site.result_transform orelse {
             executableInvariant("executable call_proc has no result transform");
         };
@@ -6927,15 +8155,12 @@ const BodyBuilder = struct {
         defer stmt_ids.deinit(self.allocator);
 
         for (arg_items, 0..) |arg, i| {
-            const lowered = try self.lowerExpr(arg);
-            const value = self.exprValue(lowered);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = lowered,
-            } }));
             const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
             self.verifyCallProcArgBoundary(boundary, call.call_site, target_instance_id, target_instance, @intCast(i));
-            direct_args[i] = .{ .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, value) };
+            self.verifyCallArgConsumerUse(arg_consumer_use_ids[i], arg, boundary, call.call_site, @intCast(i));
+            const lowered = try self.lowerExprAtConsumerUse(arg, arg_consumer_use_ids[i]);
+            const value = try self.materializeExprValue(&stmt_ids, lowered);
+            direct_args[i] = .{ .value = value };
         }
 
         const raw_result_ty = try self.lowerSessionExecutableEndpointType(result_boundary.from_endpoint);
@@ -6952,7 +8177,7 @@ const BodyBuilder = struct {
         } }));
         const result_value = try self.applyValueTransformBoundary(&stmt_ids, result_boundary, raw_result_value);
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
-        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
+        const final_expr = try self.output.addValueRefExpr(result_ty, result_value);
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
@@ -6993,6 +8218,34 @@ const BodyBuilder = struct {
         }
         if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
             executableInvariant("executable call_proc argument endpoint key differs from target specialization");
+        }
+    }
+
+    fn verifyCallArgConsumerUse(
+        self: *BodyBuilder,
+        use_id: repr.ConsumerUsePlanId,
+        arg_expr: LambdaSolved.Ast.ExprId,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        index: u32,
+    ) void {
+        const plan = self.representation_store.consumerUsePlan(use_id);
+        const owner = switch (plan.owner) {
+            .call_arg => |call_arg| call_arg,
+            else => executableInvariant("executable call argument consumer-use has non-call-arg owner"),
+        };
+        if (owner.call != call_site_id or owner.arg_index != index) {
+            executableInvariant("executable call argument consumer-use owner differs from call site");
+        }
+        const source_expr = self.input.exprs.items[@intFromEnum(arg_expr)];
+        if (source_expr.value_info != plan.child_value) {
+            executableInvariant("executable call argument consumer-use child value differs from argument expression");
+        }
+        if (boundary.from_value != plan.child_value) {
+            executableInvariant("executable call argument boundary source value differs from consumer-use child");
+        }
+        if (!sessionExecutableValueEndpointEql(boundary.to_endpoint, plan.expected_endpoint)) {
+            executableInvariant("executable call argument consumer-use endpoint differs from call boundary");
         }
     }
 
@@ -7087,11 +8340,7 @@ const BodyBuilder = struct {
             const boundary = self.representation_store.valueTransformBoundary(construction.capture_transforms[i]);
             self.verifyCallableConstructionCaptureBoundary(boundary, construction_id, construction, member, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const raw_value = self.exprValue(lowered);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = raw_value,
-                .body = lowered,
-            } }));
+            const raw_value = try self.materializeExprValue(&stmt_ids, lowered);
             const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
             capture_refs[i] = .{
                 .slot = capture.slot,
@@ -7202,11 +8451,7 @@ const BodyBuilder = struct {
             const boundary = self.representation_store.valueTransformBoundary(construction.capture_transforms[i]);
             self.verifyCallableConstructionCaptureBoundary(boundary, construction_id, construction, member, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const raw_value = self.exprValue(lowered);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = raw_value,
-                .body = lowered,
-            } }));
+            const raw_value = try self.materializeExprValue(&stmt_ids, lowered);
             const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
             capture_refs[i] = .{
                 .slot = capture.slot,
@@ -7328,14 +8573,10 @@ const BodyBuilder = struct {
             const boundary = self.representation_store.valueTransformBoundary(erase.capture_transforms[slot_index]);
             self.verifyProcValueEraseCaptureBoundary(boundary, callable.emission_plan, erase, capture.slot, capture.value_info);
             const lowered = try self.lowerExpr(capture.expr);
-            const raw_value = self.exprValue(lowered);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = raw_value,
-                .body = lowered,
-            } }));
+            const raw_value = try self.materializeExprValue(&stmt_ids, lowered);
             const value = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
             const transformed_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
-            lowered_captures[slot_index] = try self.output.addExpr(transformed_ty, value, .{ .value_ref = value });
+            lowered_captures[slot_index] = try self.output.addValueRefExpr(transformed_ty, value);
             seen[slot_index] = true;
         }
         for (seen) |was_seen| {
@@ -7343,15 +8584,15 @@ const BodyBuilder = struct {
         }
 
         const capture_value: ?Ast.ExecutableValueRef = if (capture_ty) |ty| blk: {
+            const capture_tuple_items: []const Type.TypeId = switch (self.program.types.getType(ty)) {
+                .tuple => |items| items,
+                else => executableInvariant("executable erased proc-value capture type was not a tuple"),
+            };
             const capture_expr = if (lowered_captures.len == 0)
                 try self.output.addExpr(ty, self.output.freshValueRef(), .unit)
             else
-                try self.output.addExpr(ty, self.output.freshValueRef(), .{ .tuple = try self.output.addExprSpan(lowered_captures) });
-            const value = self.exprValue(capture_expr);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = capture_expr,
-            } }));
+                try self.output.addExpr(ty, self.output.freshValueRef(), .{ .tuple = try addTupleItemExprSpanForConstruction(self.allocator, self.program, self.output, lowered_captures, capture_tuple_items) });
+            const value = try self.materializeExprValue(&stmt_ids, capture_expr);
             break :blk value;
         } else null;
 
@@ -7377,7 +8618,6 @@ const BodyBuilder = struct {
         call: anytype,
     ) Allocator.Error!Ast.ExprId {
         const func = try self.lowerExpr(call.func);
-        const func_value = self.exprValue(func);
         const call_site = self.value_store.call_sites.items[@intFromEnum(call.call_site)];
         if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
             executableInvariant("executable call_value call-site requested source type differs from expression");
@@ -7385,8 +8625,9 @@ const BodyBuilder = struct {
         const dispatch = call_site.dispatch orelse executableInvariant("executable call_value reached unresolved call-site dispatch");
         const finite_dispatch = switch (dispatch) {
             .call_value_finite => |plan| self.value_store.callValueFiniteDispatchPlan(plan),
-            .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, func_value, call.call_site, call_site, sig_key),
+            .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, call.call_site, call_site, sig_key),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
+            .pending_local_root_call => executableInvariant("executable call_value reached summary-only pending local root dispatch"),
         };
         const callable_set_key = finite_dispatch.callable_set_key;
         const finite_branches = self.value_store.sliceCallValueFiniteDispatchBranches(finite_dispatch.branches);
@@ -7414,13 +8655,14 @@ const BodyBuilder = struct {
         defer self.allocator.free(arg_values);
         const stmt_ids = try self.allocator.alloc(Ast.StmtId, arg_items.len + 1);
         defer self.allocator.free(stmt_ids);
+        const materialized_func_value = self.output.freshValueRef();
         stmt_ids[0] = try self.output.addStmt(.{ .decl = .{
-            .value = func_value,
+            .value = materialized_func_value,
             .body = func,
         } });
         for (arg_items, 0..) |arg, i| {
             const lowered = try self.lowerExpr(arg);
-            const value = self.exprValue(lowered);
+            const value = self.output.freshValueRef();
             arg_values[i] = value;
             stmt_ids[i + 1] = try self.output.addStmt(.{ .decl = .{
                 .value = value,
@@ -7430,9 +8672,12 @@ const BodyBuilder = struct {
 
         const requested_source_fn_ty = call_site.requested_source_fn_ty;
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
-        const branch_result_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.branch_result_transforms);
-        if (branch_result_ids.len != finite_branches.len or finite_branches.len != descriptor.members.len) {
-            executableInvariant("executable call_value finite branch result transform count differs from callable-set member count");
+        const call_arg_infos = self.value_store.sliceValueSpan(call_site.args);
+        if (call_arg_infos.len != arg_values.len) {
+            executableInvariant("executable call_value finite call-site argument metadata differs from call arity");
+        }
+        if (finite_branches.len != descriptor.members.len) {
+            executableInvariant("executable call_value finite branch count differs from callable-set member count");
         }
         const branches = try self.allocator.alloc(Ast.CallableMatchBranch, finite_branches.len);
         defer self.allocator.free(branches);
@@ -7457,24 +8702,15 @@ const BodyBuilder = struct {
             if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, requested_source_fn_ty)) {
                 executableInvariant("executable call_value member target specialization source type differs from call site");
             }
-            const capture_arg_len: usize = if (member.capture_slots.len == 0) 0 else 1;
             const capture_payload_ty = try self.lowerCallableSetMemberPayloadType(callable_set_key, member);
             const capture_payload = if (capture_payload_ty != null) self.output.freshValueRef() else null;
-            const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_values.len + capture_arg_len);
-            defer self.allocator.free(direct_args);
-            for (arg_values, 0..) |arg_value, arg_i| {
-                direct_args[arg_i] = .{ .value = arg_value };
-            }
-            if (capture_payload) |payload_value| {
-                direct_args[arg_values.len] = .{ .value = payload_value };
-            }
-            const direct_args_span = try self.output.addDirectCallArgSpan(direct_args);
             const member_ref: repr.CallableSetMemberRef = .{
                 .callable_set_key = callable_set_key,
                 .member_index = member.member,
             };
-            if (branch_result_ids[i] != finite_branch.result_transform) {
-                executableInvariant("executable call_value finite branch transform differs from dispatch plan");
+            const branch_arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(finite_branch.arg_transforms);
+            if (branch_arg_transform_ids.len != arg_values.len) {
+                executableInvariant("executable call_value finite branch argument transform count differs from call arity");
             }
             const result_boundary = self.representation_store.valueTransformBoundary(finite_branch.result_transform);
             self.verifyCallableMatchBranchResultBoundary(
@@ -7485,11 +8721,17 @@ const BodyBuilder = struct {
                 target_instance,
                 call_site.result,
             );
-            const branch_body = try self.lowerCallableMatchBranchBody(
+            const lowered_branch = try self.lowerCallableMatchBranchBody(
                 target,
                 target_instance,
+                target_instance_id,
                 executable_proc,
-                direct_args_span,
+                arg_values,
+                branch_arg_transform_ids,
+                call_arg_infos,
+                call.call_site,
+                member_ref,
+                capture_payload,
                 result_ty,
                 result_boundary,
             );
@@ -7500,8 +8742,9 @@ const BodyBuilder = struct {
                 .capture_payload_ty = capture_payload_ty,
                 .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
                 .executable_proc = executable_proc,
-                .direct_args = direct_args_span,
-                .body = branch_body,
+                .arg_transforms = lowered_branch.arg_transforms,
+                .direct_args = lowered_branch.direct_args,
+                .body = lowered_branch.body,
             };
         }
 
@@ -7509,7 +8752,7 @@ const BodyBuilder = struct {
         const final_call = try self.output.addExpr(result_ty, result_value, .{ .callable_match = .{
             .callable_set_key = callable_set_key,
             .requested_source_fn_ty = requested_source_fn_ty,
-            .callee = func_value,
+            .callee = materialized_func_value,
             .args = try self.output.addValueRefSpan(arg_values),
             .branches = try self.output.addCallableMatchBranchSpan(branches),
             .result_ty = result_ty,
@@ -7527,7 +8770,6 @@ const BodyBuilder = struct {
         source_ty: LambdaSolved.Type.TypeVarId,
         call: anytype,
         func: Ast.ExprId,
-        func_value: Ast.ExecutableValueRef,
         call_site_id: repr.CallSiteInfoId,
         call_site: repr.CallSiteInfo,
         sig_key: repr.ErasedFnSigKey,
@@ -7562,6 +8804,10 @@ const BodyBuilder = struct {
         if (arg_transform_ids.len != arg_items.len) {
             executableInvariant("executable erased call_value argument transform count differs from call arity");
         }
+        const arg_consumer_use_ids = self.value_store.sliceConsumerUsePlanSpan(call_site.arg_consumer_uses);
+        if (arg_consumer_use_ids.len != arg_items.len) {
+            executableInvariant("executable erased call_value argument consumer-use count differs from call arity");
+        }
         const result_transform_id = call_site.result_transform orelse {
             executableInvariant("executable erased call_value has no result transform");
         };
@@ -7572,26 +8818,24 @@ const BodyBuilder = struct {
         defer self.allocator.free(arg_values);
         var stmt_ids = std.ArrayList(Ast.StmtId).empty;
         defer stmt_ids.deinit(self.allocator);
+        const materialized_func_value = self.output.freshValueRef();
         try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-            .value = func_value,
+            .value = materialized_func_value,
             .body = func,
         } }));
         for (arg_items, 0..) |arg, i| {
-            const lowered = try self.lowerExpr(arg);
-            const value = self.exprValue(lowered);
-            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
-                .value = value,
-                .body = lowered,
-            } }));
             const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
             self.verifyErasedCallRawArgBoundary(boundary, call_site_id, @intCast(i), sig_key);
-            arg_values[i] = try self.applyValueTransformBoundary(&stmt_ids, boundary, value);
+            self.verifyCallArgConsumerUse(arg_consumer_use_ids[i], arg, boundary, call_site_id, @intCast(i));
+            const lowered = try self.lowerExprAtConsumerUse(arg, arg_consumer_use_ids[i]);
+            const value = try self.materializeExprValue(&stmt_ids, lowered);
+            arg_values[i] = value;
         }
 
         const raw_result_ty = try self.lowerSessionExecutableEndpointType(result_boundary.from_endpoint);
         const raw_result_value = self.output.freshValueRef();
         const final_call = try self.output.addExpr(raw_result_ty, raw_result_value, .{ .call_erased = .{
-            .func = func_value,
+            .func = materialized_func_value,
             .args = try self.output.addValueRefSpan(arg_values),
             .sig_key = sig_key,
             .capture_ty = capture_ty,
@@ -7602,7 +8846,7 @@ const BodyBuilder = struct {
         } }));
         const result_value = try self.applyValueTransformBoundary(&stmt_ids, result_boundary, raw_result_value);
         const result_ty = try self.lowerExecutableValueType(source_ty, call_site.result);
-        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
+        const final_expr = try self.output.addValueRefExpr(result_ty, result_value);
 
         return try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
@@ -7610,17 +8854,73 @@ const BodyBuilder = struct {
         } });
     }
 
+    const LoweredCallableMatchBranch = struct {
+        arg_transforms: Ast.Span(checked_artifact.ExecutableValueTransformRef),
+        direct_args: Ast.Span(Ast.DirectCallArg),
+        body: Ast.ExprId,
+    };
+
     fn lowerCallableMatchBranchBody(
         self: *BodyBuilder,
         source_proc: canonical.MirProcedureRef,
         target_instance: repr.ProcRepresentationInstance,
+        target_instance_id: repr.ProcRepresentationInstanceId,
         executable_proc: Ast.ExecutableProcId,
-        direct_args: Ast.Span(Ast.DirectCallArg),
+        arg_values: []const Ast.ExecutableValueRef,
+        branch_arg_transform_ids: ?[]const repr.ValueTransformBoundaryId,
+        call_arg_infos: ?[]const repr.ValueInfoId,
+        branch_call_site_id: ?repr.CallSiteInfoId,
+        branch_member_ref: ?repr.CallableSetMemberRef,
+        capture_payload: ?Ast.ExecutableValueRef,
         result_ty: Ast.TypeId,
         result_boundary: ?repr.ValueTransformBoundary,
-    ) Allocator.Error!Ast.ExprId {
+    ) Allocator.Error!LoweredCallableMatchBranch {
         var stmt_ids = std.ArrayList(Ast.StmtId).empty;
         defer stmt_ids.deinit(self.allocator);
+
+        const capture_arg_len: usize = if (capture_payload == null) 0 else 1;
+        const direct_args = try self.allocator.alloc(Ast.DirectCallArg, arg_values.len + capture_arg_len);
+        defer self.allocator.free(direct_args);
+
+        const arg_transform_count: usize = if (branch_arg_transform_ids) |boundary_ids| boundary_ids.len else 0;
+        const arg_transform_refs = try self.allocator.alloc(checked_artifact.ExecutableValueTransformRef, arg_transform_count);
+        defer self.allocator.free(arg_transform_refs);
+
+        if (branch_arg_transform_ids) |boundary_ids| {
+            const infos = call_arg_infos orelse executableInvariant("executable callable_match branch argument transforms require call argument metadata");
+            if (boundary_ids.len != arg_values.len or infos.len != arg_values.len) {
+                executableInvariant("executable callable_match branch argument transform count differs from call arity");
+            }
+            for (arg_values, boundary_ids, infos, 0..) |arg_value, boundary_id, source_arg_info, arg_i| {
+                const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+                self.verifyCallableMatchBranchArgBoundary(
+                    boundary,
+                    branch_call_site_id orelse executableInvariant("executable callable_match branch argument transforms require call-site id"),
+                    branch_member_ref orelse executableInvariant("executable callable_match branch argument transforms require member ref"),
+                    source_arg_info,
+                    target_instance_id,
+                    target_instance,
+                    @intCast(arg_i),
+                );
+                arg_transform_refs[arg_i] = boundary.transform;
+                direct_args[arg_i] = .{
+                    .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, arg_value),
+                };
+            }
+        } else {
+            if (call_arg_infos != null) {
+                executableInvariant("executable callable_match raw branch arguments received unexpected call argument metadata");
+            }
+            for (arg_values, 0..) |arg_value, arg_i| {
+                direct_args[arg_i] = .{ .value = arg_value };
+            }
+        }
+
+        if (capture_payload) |payload| {
+            direct_args[arg_values.len] = .{ .value = payload };
+        }
+        const direct_args_span = try self.output.addDirectCallArgSpan(direct_args);
+        const arg_transforms_span = try self.output.addExecutableValueTransformRefSpan(arg_transform_refs);
 
         const raw_result_ty = if (result_boundary) |boundary|
             try self.lowerSessionExecutableEndpointType(boundary.from_endpoint)
@@ -7631,7 +8931,7 @@ const BodyBuilder = struct {
             .source = source_proc.proc,
             .executable_specialization_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key),
             .executable_proc = executable_proc,
-            .direct_args = direct_args,
+            .direct_args = direct_args_span,
         } });
         try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
             .value = raw_result_value,
@@ -7642,11 +8942,63 @@ const BodyBuilder = struct {
             try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_result_value)
         else
             raw_result_value;
-        const final_expr = try self.output.addExpr(result_ty, result_value, .{ .value_ref = result_value });
-        return try self.output.addExpr(result_ty, result_value, .{ .block = .{
+        const final_expr = try self.output.addValueRefExpr(result_ty, result_value);
+        const body = try self.output.addExpr(result_ty, result_value, .{ .block = .{
             .stmts = try self.output.addStmtSpan(stmt_ids.items),
             .final_expr = final_expr,
         } });
+        return .{
+            .arg_transforms = arg_transforms_span,
+            .direct_args = direct_args_span,
+            .body = body,
+        };
+    }
+
+    fn verifyCallableMatchBranchArgBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        call_site_id: repr.CallSiteInfoId,
+        member_ref: repr.CallableSetMemberRef,
+        source_arg: repr.ValueInfoId,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+        index: u32,
+    ) void {
+        _ = self;
+        const kind = switch (boundary.kind) {
+            .callable_match_branch_arg => |branch_arg| branch_arg,
+            else => executableInvariant("executable callable_match argument boundary has non-branch-arg kind"),
+        };
+        if (kind.arg_index != index) {
+            executableInvariant("executable callable_match argument boundary index differs from branch argument");
+        }
+        if (kind.call != call_site_id or
+            !repr.callableSetKeyEql(kind.member.callable_set_key, member_ref.callable_set_key) or
+            kind.member.member_index != member_ref.member_index)
+        {
+            executableInvariant("executable callable_match argument boundary points at a different branch");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .local_value => |value| value,
+            else => executableInvariant("executable callable_match argument boundary source is not local_value"),
+        };
+        if (from != source_arg) {
+            executableInvariant("executable callable_match argument boundary source differs from call argument");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_param => |param| param,
+            else => executableInvariant("executable callable_match argument boundary target is not procedure_param"),
+        };
+        if (to.instance != target_instance_id or to.index != index) {
+            executableInvariant("executable callable_match argument boundary target differs from branch target");
+        }
+        const arg_index: usize = @intCast(index);
+        if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
+            executableInvariant("executable callable_match argument boundary index exceeds branch target arity");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+            executableInvariant("executable callable_match argument boundary target key differs from branch specialization");
+        }
     }
 
     fn verifyCallableMatchBranchResultBoundary(
@@ -7997,7 +9349,7 @@ const BodyBuilder = struct {
             executableInvariant("session record value transform field count differs from target record");
         }
 
-        const source_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const source_expr = try self.output.addValueRefExpr(from_ty, value);
         const seen = try self.allocator.alloc(bool, fields.len);
         defer self.allocator.free(seen);
         @memset(seen, false);
@@ -8021,9 +9373,10 @@ const BodyBuilder = struct {
             const transformed = try self.applyExecutableValueTransformRef(stmts, field_plan.transform, access_value);
             output_fields[target_i] = .{
                 .field = target_field.field,
-                .expr = try self.output.addExpr(target_field.ty, transformed, .{ .value_ref = transformed }),
+                .expr = try self.output.addValueRefExpr(target_field.ty, transformed),
                 .ty = target_field.ty,
                 .value = transformed,
+                .bridge = try self.constructionSlotBridge(target_field.ty, target_field.ty),
             };
         }
         verifyAllSeen(seen, "session record value transform had an extra field transform");
@@ -8061,7 +9414,7 @@ const BodyBuilder = struct {
             executableInvariant("session tuple value transform arity differs from endpoint tuple");
         }
 
-        const tuple_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const tuple_expr = try self.output.addValueRefExpr(from_ty, value);
         const seen = try self.allocator.alloc(bool, items.len);
         defer self.allocator.free(seen);
         @memset(seen, false);
@@ -8082,12 +9435,12 @@ const BodyBuilder = struct {
                 .body = access_expr,
             } }));
             const transformed = try self.applyExecutableValueTransformRef(stmts, item_plan.transform, access_value);
-            output_items[i] = try self.output.addExpr(target_item_ty, transformed, .{ .value_ref = transformed });
+            output_items[i] = try self.output.addValueRefExpr(target_item_ty, transformed);
         }
         verifyAllSeen(seen, "session tuple value transform had an extra element transform");
 
         const tuple_value = self.output.freshValueRef();
-        const result_expr = try self.output.addExpr(to_ty, tuple_value, .{ .tuple = try self.output.addExprSpan(output_items) });
+        const result_expr = try self.output.addExpr(to_ty, tuple_value, .{ .tuple = try addTupleItemExprSpanForConstruction(self.allocator, self.program, self.output, output_items, target) });
         try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
             .value = tuple_value,
             .body = result_expr,
@@ -8119,7 +9472,7 @@ const BodyBuilder = struct {
             executableInvariant("session nominal value transform target source type differs from plan");
         }
 
-        const source_expr = try self.output.addExpr(from_ty, value, .{ .value_ref = value });
+        const source_expr = try self.output.addValueRefExpr(from_ty, value);
         const backing_value = self.output.freshValueRef();
         const backing_expr = try self.output.addExpr(source.backing, backing_value, .{ .nominal_reinterpret = source_expr });
         try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
@@ -8128,7 +9481,7 @@ const BodyBuilder = struct {
         } }));
 
         const transformed_backing = try self.applyExecutableValueTransformRef(stmts, nominal.backing, backing_value);
-        const transformed_expr = try self.output.addExpr(target.backing, transformed_backing, .{ .value_ref = transformed_backing });
+        const transformed_expr = try self.output.addValueRefExpr(target.backing, transformed_backing);
         const nominal_value = self.output.freshValueRef();
         const nominal_expr = try self.output.addExpr(to_ty, nominal_value, .{ .nominal_reinterpret = transformed_expr });
         try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
@@ -8155,7 +9508,7 @@ const BodyBuilder = struct {
         defer body_stmts.deinit(self.allocator);
 
         const transformed_elem = try self.applyExecutableValueTransformRef(&body_stmts, elem_transform, source_elem);
-        const transformed_expr = try self.output.addExpr(target_elem_ty, transformed_elem, .{ .value_ref = transformed_elem });
+        const transformed_expr = try self.output.addValueRefExpr(target_elem_ty, transformed_elem);
         const body_expr = if (body_stmts.items.len == 0)
             transformed_expr
         else
@@ -8289,7 +9642,7 @@ const BodyBuilder = struct {
             executableInvariant("session tag-union value transform payload edge count differs from target tag arity");
         }
 
-        const source_expr = try self.output.addExpr(source_union_ty, value, .{ .value_ref = value });
+        const source_expr = try self.output.addValueRefExpr(source_union_ty, value);
         const seen_payloads = try self.allocator.alloc(bool, case.payloads.len);
         defer self.allocator.free(seen_payloads);
         @memset(seen_payloads, false);
@@ -8318,9 +9671,10 @@ const BodyBuilder = struct {
             const transformed = try self.applyExecutableValueTransformRef(branch_stmts, edge.transform, access_value);
             payload_exprs[target_i] = .{
                 .payload = target_payload.payload,
-                .expr = try self.output.addExpr(target_payload.ty, transformed, .{ .value_ref = transformed }),
+                .expr = try self.output.addValueRefExpr(target_payload.ty, transformed),
                 .ty = target_payload.ty,
                 .value = transformed,
+                .bridge = try self.constructionSlotBridge(target_payload.ty, target_payload.ty),
             };
         }
         verifyAllSeen(seen_payloads, "session tag-union value transform had an extra payload edge");
@@ -8356,7 +9710,10 @@ const BodyBuilder = struct {
             .session => |id| blk: {
                 const plan = self.representation_store.sessionExecutableValueTransform(id);
                 break :blk switch (plan.op) {
-                    .identity => try self.output.addBridgePlan(.direct),
+                    .identity => try self.constructionSlotBridge(
+                        try self.lowerSessionExecutableEndpointType(plan.from),
+                        try self.lowerSessionExecutableEndpointType(plan.to),
+                    ),
                     .structural_bridge => |structural| try self.lowerSessionExecutableValueTransformAsBridge(plan, structural),
                     else => executableInvariant("session structural bridge child was not a bridge transform"),
                 };
@@ -8389,8 +9746,12 @@ const BodyBuilder = struct {
         to_ty: Type.TypeId,
         op: repr.SessionExecutableStructuralBridgePlan,
     ) Allocator.Error!Ast.BridgeId {
+        switch (op) {
+            .direct => return try self.constructionSlotBridge(from_ty, to_ty),
+            else => {},
+        }
         const plan: Ast.BridgePlan = switch (op) {
-            .direct => .direct,
+            .direct => unreachable,
             .zst => .zst,
             .list_reinterpret => .list_reinterpret,
             .nominal_reinterpret => .nominal_reinterpret,
@@ -8399,12 +9760,32 @@ const BodyBuilder = struct {
             .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
                 .source_payload = from_ty,
                 .target_discriminant = try tagDiscriminantForId(self.program, to_ty, singleton.target_tag),
-                .payload_plan = if (singleton.value_transform) |payload| try self.lowerSessionExecutableValueChildBridge(payload) else null,
+                .payload_plan = if (singleton.value_transform) |payload|
+                    try self.lowerSessionExecutableValueChildBridge(payload)
+                else blk: {
+                    const target_union = switch (self.program.types.getType(to_ty)) {
+                        .tag_union => |tag_union| tag_union,
+                        else => executableInvariant("executable session singleton_to_tag_union bridge target was not a tag union"),
+                    };
+                    const target_tag = tagTypeForId(self.program, target_union, singleton.target_tag);
+                    const target_payload_ty = (try tagPayloadEndpointType(self.allocator, self.program, target_tag)) orelse break :blk null;
+                    break :blk try self.constructionSlotBridge(from_ty, target_payload_ty);
+                },
             } },
             .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
                 .target_payload = to_ty,
                 .source_discriminant = try tagDiscriminantForId(self.program, from_ty, singleton.source_tag),
-                .payload_plan = if (singleton.value_transform) |payload| try self.lowerSessionExecutableValueChildBridge(payload) else null,
+                .payload_plan = if (singleton.value_transform) |payload|
+                    try self.lowerSessionExecutableValueChildBridge(payload)
+                else blk: {
+                    const source_union = switch (self.program.types.getType(from_ty)) {
+                        .tag_union => |tag_union| tag_union,
+                        else => executableInvariant("executable session tag_union_to_singleton bridge source was not a tag union"),
+                    };
+                    const source_tag = tagTypeForId(self.program, source_union, singleton.source_tag);
+                    const source_payload_ty = (try tagPayloadEndpointType(self.allocator, self.program, source_tag)) orelse break :blk null;
+                    break :blk try self.constructionSlotBridge(source_payload_ty, to_ty);
+                },
             } },
         };
         return try self.output.addBridgePlan(plan);
@@ -8432,13 +9813,15 @@ const BodyBuilder = struct {
                 if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, finite.adapter.erased_fn_sig_key)) {
                     executableInvariant("finite session callable erasure target signature differs from adapter key");
                 }
-                const hidden_capture = if (erased_ty.capture_ty == null) null else value;
+                _ = erased_ty.capture_ty;
+                const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(finite.adapter);
+                const hidden_capture = if (hidden_capture_ty == null) null else value;
                 const packed_value = self.output.freshValueRef();
                 const packed_expr = try self.output.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
                     .sig_key = finite.adapter.erased_fn_sig_key,
                     .code = self.executableProcForErasedAdapter(finite.adapter),
                     .capture = hidden_capture,
-                    .capture_ty = erased_ty.capture_ty,
+                    .capture_ty = hidden_capture_ty,
                     .capture_shape = finite.adapter.capture_shape_key,
                 } });
                 try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
@@ -8462,11 +9845,6 @@ const BodyBuilder = struct {
                 if (!repr.erasedFnSigKeyEql(erased.sig_key, sig_key)) {
                     executableInvariant("executable erased call callee type signature differs from call site");
                 }
-                const sig_has_capture = sig_key.capture_ty != null;
-                const type_has_capture = erased.capture_ty != null;
-                if (sig_has_capture != type_has_capture) {
-                    executableInvariant("executable erased call callee type hidden capture disagrees with signature");
-                }
                 break :blk erased.capture_ty;
             },
             else => executableInvariant("executable erased call callee is not an erased function value"),
@@ -8488,6 +9866,19 @@ const BodyBuilder = struct {
 
     fn exprValue(self: *const BodyBuilder, expr: Ast.ExprId) Ast.ExecutableValueRef {
         return self.output.getExpr(expr).value;
+    }
+
+    fn materializeExprValue(
+        self: *BodyBuilder,
+        stmt_ids: *std.ArrayList(Ast.StmtId),
+        expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const value = self.output.freshValueRef();
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = value,
+            .body = expr,
+        } }));
+        return value;
     }
 };
 
@@ -8569,12 +9960,6 @@ fn sessionExecutableValueEndpointOwnerEql(
             .call_raw_result => |other| call == other,
             else => false,
         },
-        .callable_match_branch_raw_result => |branch| switch (b) {
-            .callable_match_branch_raw_result => |other| branch.call == other.call and
-                branch.member.member_index == other.member.member_index and
-                repr.callableSetKeyEql(branch.member.callable_set_key, other.member.callable_set_key),
-            else => false,
-        },
         .consumer_use => |owner| switch (b) {
             .consumer_use => |other| consumerUseOwnerEql(owner, other),
             else => false,
@@ -8593,6 +9978,14 @@ fn consumerUseOwnerEql(
     b: repr.ConsumerUseOwner,
 ) bool {
     return switch (a) {
+        .return_value => |ret| switch (b) {
+            .return_value => |other| ret == other,
+            else => false,
+        },
+        .call_arg => |arg| switch (b) {
+            .call_arg => |other| arg.call == other.call and arg.arg_index == other.arg_index,
+            else => false,
+        },
         .record_field => |field| switch (b) {
             .record_field => |other| field.parent == other.parent and field.field == other.field,
             else => false,
@@ -8615,6 +10008,18 @@ fn consumerUseOwnerEql(
             .nominal_backing => |other| backing.parent == other.parent and
                 backing.nominal.module_name == other.nominal.module_name and
                 backing.nominal.type_name == other.nominal.type_name,
+            else => false,
+        },
+        .if_branch_result => |branch| switch (b) {
+            .if_branch_result => |other| branch.parent == other.parent and
+                branch.join == other.join and
+                branch.branch == other.branch,
+            else => false,
+        },
+        .source_match_branch_result => |branch| switch (b) {
+            .source_match_branch_result => |other| branch.parent == other.parent and
+                branch.join == other.join and
+                branch.branch_index == other.branch_index,
             else => false,
         },
     };

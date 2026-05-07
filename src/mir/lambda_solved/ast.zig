@@ -106,6 +106,7 @@ pub const Branch = struct {
     guard: ?ExprId = null,
     body: ExprId,
     degenerate: bool = false,
+    source_match_branch: ?repr.SourceMatchBranchRef = null,
 };
 
 /// Public `RecordFieldPattern` declaration.
@@ -136,7 +137,7 @@ pub const RecordFieldEval = struct {
 /// Public `RecordFieldAssembly` declaration.
 pub const RecordFieldAssembly = struct {
     field: row.RecordFieldId,
-    value: ExprId,
+    eval_index: u32,
 };
 
 /// Public `TagPayloadEval` declaration.
@@ -148,7 +149,7 @@ pub const TagPayloadEval = struct {
 /// Public `TagPayloadAssembly` declaration.
 pub const TagPayloadAssembly = struct {
     payload: row.TagPayloadId,
-    value: ExprId,
+    eval_index: u32,
 };
 
 /// Public `Expr` declaration.
@@ -173,6 +174,7 @@ pub const Expr = struct {
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
         const_ref: check.CheckedArtifact.ConstInstantiationKey,
+        pending_local_root: check.CheckedArtifact.ComptimeRootId,
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,
@@ -520,6 +522,46 @@ pub const Store = struct {
         const start: u32 = @intCast(self.tag_payload_assemblies.items.len);
         try self.tag_payload_assemblies.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceExprSpan(self: *const Store, span: Span(ExprId)) []const ExprId {
+        if (span.len == 0) return &.{};
+        return self.expr_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn slicePatSpan(self: *const Store, span: Span(PatId)) []const PatId {
+        if (span.len == 0) return &.{};
+        return self.pat_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceStmtSpan(self: *const Store, span: Span(StmtId)) []const StmtId {
+        if (span.len == 0) return &.{};
+        return self.stmt_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceCaptureArgSpan(self: *const Store, span: Span(CaptureArg)) []const CaptureArg {
+        if (span.len == 0) return &.{};
+        return self.capture_args.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceTagPayloadPatternSpan(self: *const Store, span: Span(TagPayloadPattern)) []const TagPayloadPattern {
+        if (span.len == 0) return &.{};
+        return self.tag_payload_patterns.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceRecordFieldPatternSpan(self: *const Store, span: Span(RecordFieldPattern)) []const RecordFieldPattern {
+        if (span.len == 0) return &.{};
+        return self.record_field_patterns.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceRecordFieldEvalSpan(self: *const Store, span: Span(RecordFieldEval)) []const RecordFieldEval {
+        if (span.len == 0) return &.{};
+        return self.record_field_evals.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceTagPayloadEvalSpan(self: *const Store, span: Span(TagPayloadEval)) []const TagPayloadEval {
+        if (span.len == 0) return &.{};
+        return self.tag_payload_evals.items[span.start..][0..span.len];
     }
 };
 

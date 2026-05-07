@@ -2215,7 +2215,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: top-level empty callable list has no reachable callable slots",
         .source_kind = .module,
         .source =
-        \\empty_fns : List(I64 -> I64)
+        \\empty_fns : List((I64 -> I64))
         \\empty_fns = []
         \\
         \\main = List.len(empty_fns)
@@ -2226,7 +2226,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: promoted callable captures empty callable list schema only",
         .source_kind = .module,
         .source =
-        \\make_len : List(I64 -> I64) -> (I64 -> U64)
+        \\make_len : List((I64 -> I64)) -> (I64 -> U64)
         \\make_len = |fns| |_x| List.len(fns)
         \\
         \\len_empty : I64 -> U64
@@ -2240,7 +2240,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: promoted callable ignores inactive callable tag payload",
         .source_kind = .module,
         .source =
-        \\make_tagged : [A(I64), B(I64 -> I64)] -> (I64 -> I64)
+        \\make_tagged : [A(I64), B((I64 -> I64))] -> (I64 -> I64)
         \\make_tagged = |tagged| |x|
         \\    match tagged {
         \\        A(n) => x + n

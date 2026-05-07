@@ -1111,9 +1111,13 @@ pub fn main() !void {
         return;
     }
 
-    // Coverage mode: simple single-threaded loop, no fork, no watchdog, no threads.
-    // Just run each test with the interpreter and print progress to stdout.
-    if (coverage_mode) {
+    const disable_fork_env = std.process.getEnvVarOwned(gpa, "ROC_EVAL_NO_FORK") catch null;
+    defer if (disable_fork_env) |value| gpa.free(value);
+
+    // Coverage mode and ROC_EVAL_NO_FORK use a simple single-threaded loop: no
+    // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
+    // forkAndEval below, so backend calls run in-process too.
+    if (coverage_mode or disable_fork_env != null) {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 

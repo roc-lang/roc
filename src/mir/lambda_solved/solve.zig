@@ -34,13 +34,27 @@ pub const Proc = struct {
 
 const ProcBuildRecord = struct {
     proc: canonical.MirProcedureRef,
+    kind: ProcBuildRecordKind,
     body: Ast.DefId = @enumFromInt(std.math.maxInt(u32)),
     representation_instance: repr.ProcRepresentationInstanceId,
     solve_session: repr.RepresentationSolveSessionId,
     recursive_group_anchor: ?repr.ProcRepresentationInstanceId = null,
     value_store: repr.ValueInfoStoreId,
+    owner: ProcedureInstanceOwner,
     public_roots: repr.ProcPublicValueRoots = undefined,
     built: bool = false,
+};
+
+const ProcBuildRecordKind = union(enum) {
+    normal,
+    executable_synthetic: u32,
+};
+
+/// Public `ExecutableSyntheticProcInstance` declaration.
+pub const ExecutableSyntheticProcInstance = struct {
+    source_proc: canonical.MirProcedureRef,
+    synthetic_index: u32,
+    representation_instance: repr.ProcRepresentationInstanceId,
 };
 
 /// Public `Program` declaration.
@@ -55,6 +69,7 @@ pub const Program = struct {
     ast: Ast.Store,
     procs: std.ArrayList(Proc),
     executable_synthetic_procs: std.ArrayList(ids.ExecutableSyntheticProc),
+    executable_synthetic_proc_instances: std.ArrayList(ExecutableSyntheticProcInstance),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_instances: std.ArrayList(repr.ProcRepresentationInstanceId),
     root_metadata: std.ArrayList(ids.RootMetadata),
@@ -74,6 +89,7 @@ pub const Program = struct {
             .ast = Ast.Store.init(allocator),
             .procs = .empty,
             .executable_synthetic_procs = .empty,
+            .executable_synthetic_proc_instances = .empty,
             .root_procs = .empty,
             .root_instances = .empty,
             .root_metadata = .empty,
@@ -99,6 +115,7 @@ pub const Program = struct {
         self.root_metadata.deinit(self.allocator);
         self.root_instances.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
+        self.executable_synthetic_proc_instances.deinit(self.allocator);
         self.executable_synthetic_procs.deinit(self.allocator);
         self.procs.deinit(self.allocator);
         self.ast.deinit();
@@ -124,6 +141,10 @@ const ProcedureInstanceOwner = union(enum) {
     },
     recursive_group_member: struct {
         anchor: repr.ProcRepresentationInstanceId,
+    },
+    executable_erased_adapter_member: struct {
+        synthetic_index: u32,
+        member_index: u32,
     },
 };
 
@@ -176,10 +197,28 @@ fn buildProcIndexMap(
     return map;
 }
 
+fn buildExecutableSyntheticProcIndexMap(
+    allocator: Allocator,
+    input: *const Lifted.Lift.Program,
+) Allocator.Error!MirProcedureRefIndexMap {
+    var map = MirProcedureRefIndexMap.init(allocator);
+    errdefer map.deinit();
+    try map.ensureTotalCapacity(@intCast(input.executable_synthetic_procs.items.len));
+    for (input.executable_synthetic_procs.items, 0..) |proc, raw_index| {
+        const entry = try map.getOrPut(proc.source_proc);
+        if (entry.found_existing) {
+            lambdaInvariant("lambda-solved executable synthetic proc index map saw duplicate procedure identity");
+        }
+        entry.value_ptr.* = @intCast(raw_index);
+    }
+    return map;
+}
+
 fn buildDirectCallSccInfo(
     allocator: Allocator,
     input: *const Lifted.Lift.Program,
     proc_indices: *const MirProcedureRefIndexMap,
+    executable_synthetic_indices: *const MirProcedureRefIndexMap,
 ) Allocator.Error![]ProcSccInfo {
     var adjacency: std.ArrayList(std.ArrayList(u32)) = .empty;
     defer {
@@ -194,7 +233,8 @@ fn buildDirectCallSccInfo(
     for (input.procs.items, 0..) |proc, raw_index| {
         for (proc.direct_calls.get(input.direct_call_targets.items)) |target| {
             const target_index = proc_indices.get(target) orelse {
-                lambdaInvariant("lambda-solved direct-call metadata referenced missing lifted procedure");
+                if (executable_synthetic_indices.get(target) != null) continue;
+                lambdaInvariant("lambda-solved direct-call metadata referenced missing procedure");
             };
             try adjacency.items[raw_index].append(allocator, target_index);
         }
@@ -355,6 +395,7 @@ const ProcedureInstanceRegistry = struct {
     type_importer: *TypeImporter,
     records: *std.ArrayList(ProcBuildRecord),
     proc_indices: MirProcedureRefIndexMap,
+    executable_synthetic_indices: MirProcedureRefIndexMap,
     proc_sccs: []ProcSccInfo,
     reservations: std.ArrayList(ProcedureInstanceReservation),
     recursive_group_members: std.ArrayList(RecursiveGroupMemberReservation),
@@ -372,7 +413,9 @@ const ProcedureInstanceRegistry = struct {
     ) Allocator.Error!ProcedureInstanceRegistry {
         var proc_indices = try buildProcIndexMap(allocator, input);
         errdefer proc_indices.deinit();
-        const proc_sccs = try buildDirectCallSccInfo(allocator, input, &proc_indices);
+        var executable_synthetic_indices = try buildExecutableSyntheticProcIndexMap(allocator, input);
+        errdefer executable_synthetic_indices.deinit();
+        const proc_sccs = try buildDirectCallSccInfo(allocator, input, &proc_indices, &executable_synthetic_indices);
         return .{
             .allocator = allocator,
             .input = input,
@@ -381,6 +424,7 @@ const ProcedureInstanceRegistry = struct {
             .type_importer = type_importer,
             .records = records,
             .proc_indices = proc_indices,
+            .executable_synthetic_indices = executable_synthetic_indices,
             .proc_sccs = proc_sccs,
             .reservations = .empty,
             .recursive_group_members = .empty,
@@ -400,6 +444,7 @@ const ProcedureInstanceRegistry = struct {
         self.recursive_group_members.deinit(self.allocator);
         self.reservations.deinit(self.allocator);
         self.allocator.free(self.proc_sccs);
+        self.executable_synthetic_indices.deinit();
         self.proc_indices.deinit();
     }
 
@@ -480,17 +525,28 @@ const ProcedureInstanceRegistry = struct {
             }
         }
 
-        _ = self.inputProc(proc);
+        const kind: ProcBuildRecordKind = if (self.proc_indices.get(proc) != null)
+            .normal
+        else if (self.executable_synthetic_indices.get(proc)) |synthetic_index|
+            .{ .executable_synthetic = synthetic_index }
+        else {
+            lambdaInvariant("lambda-solved procedure instance registry referenced missing procedure");
+        };
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(self.records.items.len)));
         const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(self.program.value_stores.items.len)));
         try self.program.value_stores.append(self.allocator, repr.ValueInfoStore.init(self.allocator));
-        const anchor = recursive_group_anchor orelse if (self.procIsRecursive(proc)) instance else null;
+        const anchor = recursive_group_anchor orelse switch (kind) {
+            .normal => if (self.procIsRecursive(proc)) instance else null,
+            .executable_synthetic => null,
+        };
         try self.records.append(self.allocator, .{
             .proc = proc,
+            .kind = kind,
             .representation_instance = instance,
             .solve_session = session_id,
             .recursive_group_anchor = anchor,
             .value_store = value_store_id,
+            .owner = owner,
         });
         try self.reservations.append(self.allocator, .{
             .proc = proc,
@@ -498,7 +554,6 @@ const ProcedureInstanceRegistry = struct {
             .owner = owner,
             .instance = instance,
         });
-        try self.pending.append(self.allocator, instance);
         try self.session_members.items[@intFromEnum(session_id)].append(self.allocator, instance);
         if (anchor) |group_anchor| {
             try self.recursive_group_members.append(self.allocator, .{
@@ -506,6 +561,10 @@ const ProcedureInstanceRegistry = struct {
                 .proc = proc,
                 .instance = instance,
             });
+        }
+        switch (kind) {
+            .normal => try self.pending.append(self.allocator, instance),
+            .executable_synthetic => try self.buildExecutableSyntheticInstance(instance),
         }
         return instance;
     }
@@ -526,6 +585,10 @@ const ProcedureInstanceRegistry = struct {
     ) Allocator.Error!void {
         const record = &self.records.items[@intFromEnum(instance)];
         if (record.built) return;
+        switch (record.kind) {
+            .normal => {},
+            .executable_synthetic => lambdaInvariant("lambda-solved tried to body-lower an executable synthetic procedure"),
+        }
         const input_proc = self.inputProc(record.proc);
         try self.active.append(self.allocator, instance);
         defer _ = self.active.pop();
@@ -552,10 +615,81 @@ const ProcedureInstanceRegistry = struct {
 
         const body = try solver.lowerDef(input_proc.body);
         const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
+        try solver.appendExecutableDependencyRequirements(record.owner, roots);
         const completed_record = &self.records.items[@intFromEnum(instance)];
         completed_record.body = body;
         completed_record.public_roots = roots;
         completed_record.built = true;
+    }
+
+    fn buildExecutableSyntheticInstance(
+        self: *ProcedureInstanceRegistry,
+        instance: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!void {
+        const record = &self.records.items[@intFromEnum(instance)];
+        if (record.built) return;
+        const synthetic_index = switch (record.kind) {
+            .normal => lambdaInvariant("lambda-solved tried to signature-lower a normal procedure"),
+            .executable_synthetic => |index| index,
+        };
+        const synthetic = self.input.executable_synthetic_procs.items[synthetic_index];
+        const session_index = @intFromEnum(record.solve_session);
+        const value_store_index = @intFromEnum(record.value_store);
+        var solver = BodySolver{
+            .allocator = self.allocator,
+            .input = &self.input.ast,
+            .output = &self.program.ast,
+            .canonical_names = &self.program.canonical_names,
+            .row_shapes = &self.program.row_shapes,
+            .symbols = &self.program.symbols,
+            .type_importer = self.type_importer,
+            .concrete_source_types = &self.program.concrete_source_types,
+            .representation_store = &self.program.solve_sessions.items[session_index].representation_store,
+            .value_store = &self.program.value_stores.items[value_store_index],
+            .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(self.allocator),
+            .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(self.allocator),
+            .instance = instance,
+            .registry = self,
+        };
+        defer solver.deinit();
+
+        record.public_roots = try solver.lowerExecutableSyntheticSignature(synthetic);
+        try self.reserveExecutableSyntheticCodeDependencies(record.solve_session, synthetic_index, synthetic);
+        record.built = true;
+    }
+
+    fn reserveExecutableSyntheticCodeDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        synthetic_index: u32,
+        synthetic: ids.ExecutableSyntheticProc,
+    ) Allocator.Error!void {
+        switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| switch (erased.code) {
+                .direct_proc_value => {},
+                .finite_set_adapter => |adapter| {
+                    if (erased.finite_adapter_member_targets.len == 0) {
+                        lambdaInvariant("lambda-solved executable synthetic finite adapter has no member targets");
+                    }
+                    const descriptors = callableSetDescriptorsForArtifactViews(self.artifact_views, synthetic.artifact) orelse {
+                        lambdaInvariant("lambda-solved executable synthetic finite adapter artifact descriptors are unavailable");
+                    };
+                    const descriptor = descriptors.descriptorFor(adapter.callable_set_key) orelse {
+                        lambdaInvariant("lambda-solved executable synthetic finite adapter descriptor is unavailable");
+                    };
+                    if (descriptor.members.len != erased.finite_adapter_member_targets.len) {
+                        lambdaInvariant("lambda-solved executable synthetic finite adapter member target count differs from descriptor");
+                    }
+                    for (descriptor.members, erased.finite_adapter_member_targets, 0..) |member, target_key, member_index| {
+                        validatePersistedFiniteAdapterMemberTarget(member, target_key);
+                        _ = try self.reserve(member.source_proc, session_id, .{ .executable_erased_adapter_member = .{
+                            .synthetic_index = synthetic_index,
+                            .member_index = @intCast(member_index),
+                        } }, null);
+                    }
+                },
+            },
+        }
     }
 
     fn recursiveGroupAnchorForCall(
@@ -609,9 +743,11 @@ const ProcedureInstanceRegistry = struct {
         a: canonical.MirProcedureRef,
         b: canonical.MirProcedureRef,
     ) bool {
-        const a_info = self.proc_sccs[self.inputProcIndex(a)];
+        const a_index = self.proc_indices.get(a) orelse return false;
+        const b_index = self.proc_indices.get(b) orelse return false;
+        const a_info = self.proc_sccs[a_index];
         if (!a_info.recursive) return false;
-        const b_info = self.proc_sccs[self.inputProcIndex(b)];
+        const b_info = self.proc_sccs[b_index];
         return b_info.recursive and a_info.group == b_info.group;
     }
 
@@ -678,7 +814,27 @@ fn procedureInstanceOwnerEql(a: ProcedureInstanceOwner, b: ProcedureInstanceOwne
             .recursive_group_member => |b_member| a_member.anchor == b_member.anchor,
             else => false,
         },
+        .executable_erased_adapter_member => |a_member| switch (b) {
+            .executable_erased_adapter_member => |b_member| a_member.synthetic_index == b_member.synthetic_index and
+                a_member.member_index == b_member.member_index,
+            else => false,
+        },
     };
+}
+
+fn validatePersistedFiniteAdapterMemberTarget(
+    member: canonical.CanonicalCallableSetMember,
+    target: canonical.ExecutableSpecializationKey,
+) void {
+    if (member.source_proc.proc.proc_base != target.base) {
+        lambdaInvariant("lambda-solved persisted finite-set adapter member target base differs from descriptor member");
+    }
+    if (!repr.canonicalTypeKeyEql(member.source_proc.callable.source_fn_ty, target.requested_fn_ty)) {
+        lambdaInvariant("lambda-solved persisted finite-set adapter member target source type differs from source procedure");
+    }
+    if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, target.requested_fn_ty)) {
+        lambdaInvariant("lambda-solved persisted finite-set adapter member target source type differs from procedure value");
+    }
 }
 
 fn isLiftedProcedure(proc: canonical.MirProcedureRef) bool {
@@ -752,6 +908,7 @@ pub fn run(
     }
     try registry.buildPending();
     try registry.finalizeSessions();
+    try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);
     _ = try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items, true);
     while (true) {
         try solveRepresentationSessions(&program, proc_build_records.items);
@@ -759,8 +916,9 @@ pub fn run(
         if (!try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items, false)) break;
     }
     try solveRepresentationSessions(&program, proc_build_records.items);
+    try finalizeSourceMatchBranchReachability(&program, proc_build_records.items);
     try assignCallableEmissionPlans(&program, proc_build_records.items, .strict);
-    try sealProcRepresentationInstances(&program, proc_build_records.items);
+    try sealProcRepresentationInstances(&program, proc_build_records.items, input.executable_synthetic_procs.items);
     try publishSessionExecutableTypePayloads(&program);
     try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try finalizeValueTransformBoundaries(&program);
@@ -774,7 +932,6 @@ pub fn run(
     for (program.solve_sessions.items) |*session| {
         session.state = .sealed;
     }
-    try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);
     try program.root_procs.appendSlice(allocator, input.root_procs.items);
     try program.root_metadata.appendSlice(allocator, input.root_metadata.items);
 
@@ -787,6 +944,11 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
     for (program.value_stores.items) |value_store| {
         for (value_store.values.items, 0..) |value, raw_value| {
             verifyConcreteSourcePayload(program, value.source_ty, value.source_ty_payload, "lambda-solved value");
+            if (value.source_match_branch) |branch_ref| {
+                if (value_store.sourceMatchBranchReachabilityId(branch_ref) == null) {
+                    lambdaInvariant("lambda-solved sealed program contains a value with an unpublished source-match branch");
+                }
+            }
             if (value.value_alias_source) |source| {
                 if (@intFromEnum(source) >= value_store.values.items.len) {
                     lambdaInvariant("lambda-solved value alias source points outside the value store");
@@ -817,11 +979,19 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
             if (value.solved_class == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
             }
+            if (!value_store.valueSourceMatchBranchReachable(value)) continue;
+            if (value.pending_local_root_origin) continue;
             if (value.exec_ty == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a published executable type endpoint");
             }
         }
         for (value_store.call_sites.items) |call_site| {
+            if (call_site.source_match_branch) |branch_ref| {
+                if (value_store.sourceMatchBranchReachabilityId(branch_ref) == null) {
+                    lambdaInvariant("lambda-solved sealed program contains a call site with an unpublished source-match branch");
+                }
+            }
+            if (!value_store.callSiteSourceMatchBranchReachable(call_site)) continue;
             if (call_site.dispatch == null) {
                 lambdaInvariant("lambda-solved sealed program contains an unresolved call-site dispatch");
             }
@@ -873,8 +1043,32 @@ const SessionExecutablePayloadPublisher = struct {
     session: *repr.RepresentationSolveSession,
 
     fn publish(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        try self.publishFiniteAdapterHiddenCaptures();
         try self.publishCallableSetMemberCaptures();
         try self.publishLocalValues();
+    }
+
+    fn publishFiniteAdapterHiddenCaptures(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        for (self.representationStore().callable_emission_plans) |plan| {
+            const erase = switch (plan) {
+                .erase_finite_set => |erase| erase,
+                else => continue,
+            };
+            const capture_key = erase.adapter.erased_fn_sig_key.capture_ty orelse continue;
+            const endpoint = try repr.sessionExecutableTypeEndpointForCallableSetIntoStore(
+                self.program.allocator,
+                &self.program.canonical_names,
+                &self.program.row_shapes,
+                &self.program.types,
+                self.representationStore(),
+                &self.representationStore().session_executable_type_payloads,
+                erase.adapter.callable_set_key,
+                capture_key,
+            );
+            if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, capture_key)) {
+                lambdaInvariant("lambda-solved finite adapter hidden capture payload key differs from adapter signature");
+            }
+        }
     }
 
     fn publishCallableSetMemberCaptures(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
@@ -921,7 +1115,9 @@ const SessionExecutablePayloadPublisher = struct {
                 lambdaInvariant("lambda-solved executable payload publication session member pointed at another session");
             }
             const value_store = self.mutableValueStoreFor(instance);
-            for (value_store.values.items, 0..) |_, raw_value| {
+            for (value_store.values.items, 0..) |value_info, raw_value| {
+                if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
+                if (value_info.pending_local_root_origin) continue;
                 const value: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
                 const endpoint = try repr.sessionExecutableTypeEndpointForValue(
                     self.program.allocator,
@@ -995,20 +1191,30 @@ const SessionExecutablePayloadPublisher = struct {
 fn sealProcRepresentationInstances(
     program: *Program,
     records: []const ProcBuildRecord,
+    executable_synthetic_procs: []const ids.ExecutableSyntheticProc,
 ) Allocator.Error!void {
     for (records) |record| {
         const session_index = @intFromEnum(record.solve_session);
         const value_store_index = @intFromEnum(record.value_store);
-        const executable_key = try repr.executableSpecializationKeyForProc(
-            program.allocator,
-            &program.canonical_names,
-            &program.row_shapes,
-            &program.types,
-            &program.solve_sessions.items[session_index].representation_store,
-            &program.value_stores.items[value_store_index],
-            record.proc,
-            record.public_roots,
-        );
+        const executable_key = switch (record.kind) {
+            .normal => try repr.executableSpecializationKeyForProc(
+                program.allocator,
+                &program.canonical_names,
+                &program.row_shapes,
+                &program.types,
+                &program.solve_sessions.items[session_index].representation_store,
+                &program.value_stores.items[value_store_index],
+                record.proc,
+                record.public_roots,
+            ),
+            .executable_synthetic => |synthetic_index| blk: {
+                const synthetic = executable_synthetic_procs[synthetic_index];
+                const key = switch (synthetic.body) {
+                    .erased_promoted_wrapper => |erased| erased.executable_signature.specialization_key,
+                };
+                break :blk try repr.cloneExecutableSpecializationKey(program.allocator, key);
+            },
+        };
         try program.proc_instances.append(program.allocator, .{
             .proc = record.proc,
             .executable_specialization_key = executable_key,
@@ -1016,11 +1222,18 @@ fn sealProcRepresentationInstances(
             .value_store = record.value_store,
             .public_roots = record.public_roots,
         });
-        try program.procs.append(program.allocator, .{
-            .proc = record.proc,
-            .body = record.body,
-            .representation_instance = record.representation_instance,
-        });
+        switch (record.kind) {
+            .normal => try program.procs.append(program.allocator, .{
+                .proc = record.proc,
+                .body = record.body,
+                .representation_instance = record.representation_instance,
+            }),
+            .executable_synthetic => |synthetic_index| try program.executable_synthetic_proc_instances.append(program.allocator, .{
+                .source_proc = record.proc,
+                .synthetic_index = synthetic_index,
+                .representation_instance = record.representation_instance,
+            }),
+        }
     }
 }
 
@@ -1054,6 +1267,7 @@ const CrossProcedureRepresentationLinker = struct {
     fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!bool {
         var changed = false;
         for (self.value_store.call_sites.items) |*call_site| {
+            if (!self.value_store.callSiteSourceMatchBranchReachable(call_site.*)) continue;
             if (call_site.representation_edges_resolved) continue;
             const dispatch = call_site.dispatch orelse {
                 const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
@@ -1078,6 +1292,7 @@ const CrossProcedureRepresentationLinker = struct {
                     changed = true;
                 },
                 .call_value_erased => call_site.representation_edges_resolved = true,
+                .pending_local_root_call => call_site.representation_edges_resolved = true,
             }
         }
         return changed;
@@ -1180,6 +1395,19 @@ const CrossProcedureRepresentationLinker = struct {
             if (source_captures.len != target_captures.len) {
                 lambdaInvariant("lambda-solved proc_value representation edge capture arity differs from target captures");
             }
+            const target_params = self.valueStoreFor(target).sliceValueSpan(target.public_roots.params);
+            for (target_params, 0..) |target_param, i| {
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .procedure_public = self.publicRootRef(target_id, target, target_param) },
+                    .to = .{ .local = callable.whole_function_root },
+                    .kind = .{ .function_arg = @intCast(i) },
+                });
+            }
+            _ = try self.representation_store.appendRepresentationEdge(.{
+                .from = .{ .local = callable.whole_function_root },
+                .to = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
+                .kind = .function_return,
+            });
             _ = raw_value;
             for (source_captures, target_captures) |source_capture, target_capture| {
                 _ = try self.representation_store.appendRepresentationEdge(.{
@@ -1399,7 +1627,7 @@ const RepresentationClassSolver = struct {
             => true,
             .function_arg,
             .function_return,
-            => !self.edgeTouchesRequestedFunctionRoot(edge),
+            => !self.edgeTouchesFunctionShapeRoot(edge),
             .function_callable,
             .record_field,
             .tuple_elem,
@@ -1411,16 +1639,17 @@ const RepresentationClassSolver = struct {
         };
     }
 
-    fn edgeTouchesRequestedFunctionRoot(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
-        if (self.endpointIsRequestedFunctionRoot(edge.from)) return true;
-        return self.endpointIsRequestedFunctionRoot(edge.to);
+    fn edgeTouchesFunctionShapeRoot(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
+        if (self.endpointIsFunctionShapeRoot(edge.from)) return true;
+        return self.endpointIsFunctionShapeRoot(edge.to);
     }
 
-    fn endpointIsRequestedFunctionRoot(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) bool {
+    fn endpointIsFunctionShapeRoot(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) bool {
         const root = self.endpointRootInSession(endpoint) orelse return false;
         return switch (self.session.representation_store.rootKind(root)) {
             .call_value_requested_fn,
             .call_proc_requested_fn,
+            .proc_value_fn,
             => true,
             else => false,
         };
@@ -1525,6 +1754,374 @@ const RepresentationClassSolver = struct {
     }
 };
 
+fn finalizeSourceMatchBranchReachability(
+    program: *Program,
+    records: []const ProcBuildRecord,
+) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        var finalizer = SourceMatchReachabilityFinalizer{
+            .allocator = program.allocator,
+            .program = program,
+            .records = records,
+            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+            .session = session,
+            .class_states = .empty,
+            .class_state_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+        };
+        defer finalizer.deinit();
+        try finalizer.finalize();
+    }
+}
+
+const SourceMatchReachabilityFinalizer = struct {
+    allocator: Allocator,
+    program: *Program,
+    records: []const ProcBuildRecord,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+    class_states: std.ArrayList(ClassTagInhabitance),
+    class_state_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+
+    const TagSelection = struct {
+        union_shape: MonoRow.TagUnionShapeId,
+        tag: MonoRow.TagId,
+    };
+
+    const ClassTagInhabitance = struct {
+        class: repr.RepresentationClassId,
+        tags: std.ArrayList(TagSelection),
+        unknown: bool = false,
+    };
+
+    fn deinit(self: *SourceMatchReachabilityFinalizer) void {
+        for (self.class_states.items) |*state| state.tags.deinit(self.allocator);
+        self.class_state_index.deinit();
+        self.class_states.deinit(self.allocator);
+    }
+
+    fn finalize(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
+        try self.collectSelectedTagInhabitance();
+        try self.markRootParameterUnknowns();
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            switch (record.kind) {
+                .normal => {},
+                .executable_synthetic => continue,
+            }
+            const value_store = self.valueStoreFor(record);
+            const def = self.program.ast.defs.items[@intFromEnum(record.body)];
+            switch (def.value) {
+                .fn_ => |fn_def| try self.finalizeExpr(fn_def.body, value_store),
+                .val => |expr| try self.finalizeExpr(expr, value_store),
+                .run => |run_def| try self.finalizeExpr(run_def.body, value_store),
+                .hosted_fn => {},
+            }
+        }
+    }
+
+    fn collectSelectedTagInhabitance(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items) |value| {
+                const aggregate = value.aggregate orelse continue;
+                const tag = switch (aggregate) {
+                    .tag => |tag| tag,
+                    else => continue,
+                };
+                const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match reachability saw value without solved class");
+                try self.addSelectedTag(class, .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                });
+            }
+        }
+    }
+
+    fn markRootParameterUnknowns(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
+        if (self.program.root_instances.items.len == 0) {
+            for (self.session.members) |instance| {
+                try self.markInstanceParamsUnknown(instance);
+            }
+            return;
+        }
+        for (self.program.root_instances.items) |root_instance| {
+            try self.markInstanceParamsUnknown(root_instance);
+        }
+    }
+
+    fn markInstanceParamsUnknown(
+        self: *SourceMatchReachabilityFinalizer,
+        instance_id: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!void {
+        const record = self.recordForInstance(instance_id);
+        if (record.solve_session != self.session_id) return;
+        const value_store = self.valueStoreFor(record);
+        const params = value_store.sliceValueSpan(record.public_roots.params);
+        for (params) |param| {
+            const value = value_store.values.items[@intFromEnum(param)];
+            if (!self.typeCanContainTagUnion(value.logical_ty)) continue;
+            const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match reachability saw root param without solved class");
+            try self.markClassUnknown(class);
+        }
+    }
+
+    fn finalizeExpr(
+        self: *SourceMatchReachabilityFinalizer,
+        expr_id: Ast.ExprId,
+        value_store: *repr.ValueInfoStore,
+    ) Allocator.Error!void {
+        const expr = self.program.ast.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .match_ => |match_| {
+                try self.finalizeExpr(match_.cond, value_store);
+                const branch_ids = self.program.ast.branch_ids.items[match_.branches.start..][0..match_.branches.len];
+                for (branch_ids) |branch_id| {
+                    const branch = self.program.ast.branches.items[@intFromEnum(branch_id)];
+                    const branch_ref = branch.source_match_branch orelse {
+                        lambdaInvariant("lambda-solved source-match branch had no published branch identity");
+                    };
+                    const reachable = self.patternReachable(branch.pat, value_store);
+                    value_store.setSourceMatchBranchReachable(branch_ref, reachable);
+                    if (!reachable) continue;
+                    if (branch.guard) |guard| try self.finalizeExpr(guard, value_store);
+                    try self.finalizeExpr(branch.body, value_store);
+                }
+            },
+            .tag => |tag| for (self.program.ast.sliceTagPayloadEvalSpan(tag.eval_order)) |payload| try self.finalizeExpr(payload.value, value_store),
+            .record => |record| for (self.program.ast.sliceRecordFieldEvalSpan(record.eval_order)) |field| try self.finalizeExpr(field.value, value_store),
+            .nominal_reinterpret => |child| try self.finalizeExpr(child, value_store),
+            .access => |access| try self.finalizeExpr(access.record, value_store),
+            .structural_eq => |eq| {
+                try self.finalizeExpr(eq.lhs, value_store);
+                try self.finalizeExpr(eq.rhs, value_store);
+            },
+            .bool_not => |child| try self.finalizeExpr(child, value_store),
+            .let_ => |let_| {
+                try self.finalizeExpr(let_.body, value_store);
+                try self.finalizeExpr(let_.rest, value_store);
+            },
+            .call_value => |call| {
+                try self.finalizeExpr(call.func, value_store);
+                for (self.program.ast.sliceExprSpan(call.args)) |arg| try self.finalizeExpr(arg, value_store);
+            },
+            .call_proc => |call| for (self.program.ast.sliceExprSpan(call.args)) |arg| try self.finalizeExpr(arg, value_store),
+            .proc_value => |proc_value| for (self.program.ast.sliceCaptureArgSpan(proc_value.captures)) |capture| try self.finalizeExpr(capture.expr, value_store),
+            .low_level => |low_level| for (self.program.ast.sliceExprSpan(low_level.args)) |arg| try self.finalizeExpr(arg, value_store),
+            .if_ => |if_| {
+                try self.finalizeExpr(if_.cond, value_store);
+                try self.finalizeExpr(if_.then_body, value_store);
+                try self.finalizeExpr(if_.else_body, value_store);
+            },
+            .block => |block| {
+                for (self.program.ast.sliceStmtSpan(block.stmts)) |stmt| try self.finalizeStmt(stmt, value_store);
+                try self.finalizeExpr(block.final_expr, value_store);
+            },
+            .tuple,
+            .list,
+            => |items| for (self.program.ast.sliceExprSpan(items)) |item| try self.finalizeExpr(item, value_store),
+            .tag_payload => |payload| try self.finalizeExpr(payload.tag_union, value_store),
+            .tuple_access => |access| try self.finalizeExpr(access.tuple, value_store),
+            .return_ => |ret| try self.finalizeExpr(ret.expr, value_store),
+            .for_ => |for_| {
+                try self.finalizeExpr(for_.iterable, value_store);
+                try self.finalizeExpr(for_.body, value_store);
+            },
+            .var_,
+            .capture_ref,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bool_lit,
+            .unit,
+            .const_instance,
+            .const_ref,
+            .pending_local_root,
+            .crash,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn finalizeStmt(
+        self: *SourceMatchReachabilityFinalizer,
+        stmt_id: Ast.StmtId,
+        value_store: *repr.ValueInfoStore,
+    ) Allocator.Error!void {
+        const stmt = self.program.ast.stmts.items[@intFromEnum(stmt_id)];
+        switch (stmt) {
+            .decl => |decl| try self.finalizeExpr(decl.body, value_store),
+            .var_decl => |decl| try self.finalizeExpr(decl.body, value_store),
+            .reassign => |reassign| try self.finalizeExpr(reassign.body, value_store),
+            .expr,
+            .debug,
+            .expect,
+            => |expr| try self.finalizeExpr(expr, value_store),
+            .return_ => |ret| try self.finalizeExpr(ret.expr, value_store),
+            .for_ => |for_| {
+                try self.finalizeExpr(for_.iterable, value_store);
+                try self.finalizeExpr(for_.body, value_store);
+            },
+            .while_ => |while_| {
+                try self.finalizeExpr(while_.cond, value_store);
+                try self.finalizeExpr(while_.body, value_store);
+            },
+            .crash,
+            .break_,
+            => {},
+        }
+    }
+
+    fn patternReachable(
+        self: *SourceMatchReachabilityFinalizer,
+        pat_id: Ast.PatId,
+        value_store: *const repr.ValueInfoStore,
+    ) bool {
+        const pat = self.program.ast.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .tag => |tag| {
+                const value = value_store.values.items[@intFromEnum(pat.value_info)];
+                const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match pattern had no solved class");
+                if (!self.classCanContainTag(class, .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                })) return false;
+                const payloads = self.program.ast.sliceTagPayloadPatternSpan(tag.payloads);
+                for (payloads) |payload| {
+                    if (!self.patternReachable(payload.pattern, value_store)) return false;
+                }
+            },
+            .nominal => |child| return self.patternReachable(child, value_store),
+            .tuple => |items| for (self.program.ast.slicePatSpan(items)) |item| {
+                if (!self.patternReachable(item, value_store)) return false;
+            },
+            .record => |record| {
+                for (self.program.ast.sliceRecordFieldPatternSpan(record.fields)) |field| {
+                    if (!self.patternReachable(field.pattern, value_store)) return false;
+                }
+                if (record.rest) |rest| {
+                    if (!self.patternReachable(rest, value_store)) return false;
+                }
+            },
+            .list => |list| {
+                for (self.program.ast.slicePatSpan(list.items)) |item| {
+                    if (!self.patternReachable(item, value_store)) return false;
+                }
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pat| {
+                        if (!self.patternReachable(rest_pat, value_store)) return false;
+                    }
+                }
+            },
+            .as => |as| return self.patternReachable(as.pattern, value_store),
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .var_,
+            .wildcard,
+            => {},
+        }
+        return true;
+    }
+
+    fn classCanContainTag(
+        self: *SourceMatchReachabilityFinalizer,
+        class: repr.RepresentationClassId,
+        selection: TagSelection,
+    ) bool {
+        const state = self.classState(class) orelse return true;
+        if (state.unknown or state.tags.items.len == 0) return true;
+        for (state.tags.items) |tag| {
+            if (tag.union_shape == selection.union_shape and tag.tag == selection.tag) return true;
+        }
+        return false;
+    }
+
+    fn addSelectedTag(
+        self: *SourceMatchReachabilityFinalizer,
+        class: repr.RepresentationClassId,
+        selection: TagSelection,
+    ) Allocator.Error!void {
+        const state = try self.ensureClassState(class);
+        for (state.tags.items) |existing| {
+            if (existing.union_shape == selection.union_shape and existing.tag == selection.tag) return;
+        }
+        try state.tags.append(self.allocator, selection);
+    }
+
+    fn markClassUnknown(
+        self: *SourceMatchReachabilityFinalizer,
+        class: repr.RepresentationClassId,
+    ) Allocator.Error!void {
+        const state = try self.ensureClassState(class);
+        state.unknown = true;
+    }
+
+    fn ensureClassState(
+        self: *SourceMatchReachabilityFinalizer,
+        class: repr.RepresentationClassId,
+    ) Allocator.Error!*ClassTagInhabitance {
+        if (self.class_state_index.get(class)) |index| return &self.class_states.items[index];
+        const index = self.class_states.items.len;
+        try self.class_states.append(self.allocator, .{
+            .class = class,
+            .tags = .empty,
+        });
+        try self.class_state_index.put(class, index);
+        return &self.class_states.items[index];
+    }
+
+    fn classState(
+        self: *SourceMatchReachabilityFinalizer,
+        class: repr.RepresentationClassId,
+    ) ?*const ClassTagInhabitance {
+        const index = self.class_state_index.get(class) orelse return null;
+        return &self.class_states.items[index];
+    }
+
+    fn typeCanContainTagUnion(
+        self: *SourceMatchReachabilityFinalizer,
+        ty: Type.TypeVarId,
+    ) bool {
+        const root = self.program.types.unlinkConst(ty);
+        return switch (self.program.types.getNode(root)) {
+            .nominal => |nominal| self.typeCanContainTagUnion(nominal.backing),
+            .content => |content| switch (content) {
+                .tag_union => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn recordForInstance(
+        self: *SourceMatchReachabilityFinalizer,
+        instance: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(instance);
+        if (index >= self.records.len) {
+            lambdaInvariant("lambda-solved source-match reachability referenced out-of-range procedure instance");
+        }
+        return &self.records[index];
+    }
+
+    fn valueStoreFor(
+        self: *SourceMatchReachabilityFinalizer,
+        record: *const ProcBuildRecord,
+    ) *repr.ValueInfoStore {
+        const index = @intFromEnum(record.value_store);
+        if (index >= self.program.value_stores.items.len) {
+            lambdaInvariant("lambda-solved source-match reachability referenced missing value store");
+        }
+        return &self.program.value_stores.items[index];
+    }
+};
+
 const CallableEmissionAssignmentMode = enum {
     allow_pending_call_values,
     strict,
@@ -1581,7 +2178,7 @@ const CallableClassPublishState = enum {
 
 const ErasedClassProvenance = struct {
     class: repr.RepresentationClassId,
-    boundaries: std.ArrayList(repr.BoxBoundaryId),
+    provenance: std.ArrayList(repr.BoxErasureProvenance),
 };
 
 const CallableEmissionAssigner = struct {
@@ -1599,7 +2196,7 @@ const CallableEmissionAssigner = struct {
     mode: CallableEmissionAssignmentMode,
 
     fn deinit(self: *CallableEmissionAssigner) void {
-        for (self.erased_classes.items) |*entry| entry.boundaries.deinit(self.allocator);
+        for (self.erased_classes.items) |*entry| entry.provenance.deinit(self.allocator);
         self.erased_class_index.deinit();
         self.erased_classes.deinit(self.allocator);
         for (self.class_sets.items) |*entry| {
@@ -1630,6 +2227,7 @@ const CallableEmissionAssigner = struct {
             const record = self.recordForInstance(instance);
             const value_store = self.valueStoreFor(record);
             for (value_store.values.items) |value_info| {
+                if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
                 const callable = value_info.callable orelse continue;
                 const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
@@ -1815,13 +2413,12 @@ const CallableEmissionAssigner = struct {
     fn collectBoxErasureRequirements(self: *CallableEmissionAssigner) Allocator.Error!void {
         for (self.representationStore().representation_requirements.items) |requirement| {
             switch (requirement) {
-                .require_box_erased => |boundary_id| {
-                    const boundary = self.boxBoundary(boundary_id);
-                    const payload_root = switch (boundary.direction) {
-                        .box => boundary.source_root,
-                        .unbox => boundary.boundary_root,
-                    };
-                    try self.markErasedPayloadRoot(payload_root, boundary_id);
+                .require_box_erased => |erasure| {
+                    switch (erasure.provenance) {
+                        .local_box_boundary => |boundary_id| _ = self.boxBoundary(boundary_id),
+                        .promoted_wrapper => {},
+                    }
+                    try self.markErasedPayloadRoot(erasure.payload_root, erasure.provenance);
                 },
             }
         }
@@ -1830,40 +2427,47 @@ const CallableEmissionAssigner = struct {
     fn markErasedPayloadRoot(
         self: *CallableEmissionAssigner,
         root: repr.RepRootId,
-        boundary: repr.BoxBoundaryId,
+        provenance: repr.BoxErasureProvenance,
     ) Allocator.Error!void {
-        var visited = std.AutoHashMap(repr.RepRootId, void).init(self.allocator);
+        const start_class = self.classForRoot(root) orelse return;
+        var visited = std.AutoHashMap(repr.RepresentationClassId, void).init(self.allocator);
         defer visited.deinit();
-        var stack = std.ArrayList(repr.RepRootId).empty;
+        var stack = std.ArrayList(repr.RepresentationClassId).empty;
         defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, root);
+        try stack.append(self.allocator, start_class);
 
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
-            if (self.classForRoot(current)) |class| {
-                try self.addErasedClassBoundary(class, boundary);
-            }
+            try self.addErasedClassProvenance(current, provenance);
             for (self.representationStore().representation_edges.items) |edge| {
                 if (!edgePropagatesBoxErasure(edge.kind)) continue;
-                const from = self.endpointRootInSession(edge.from) orelse continue;
-                if (from != current) continue;
-                const to = self.endpointRootInSession(edge.to) orelse continue;
-                try stack.append(self.allocator, to);
+                const from_root = self.endpointRootInSession(edge.from) orelse continue;
+                const to_root = self.endpointRootInSession(edge.to) orelse continue;
+                const from = self.classForRoot(from_root) orelse continue;
+                const to = self.classForRoot(to_root) orelse continue;
+                switch (edge.kind) {
+                    .function_arg => {
+                        if (to == current) try stack.append(self.allocator, from);
+                    },
+                    else => {
+                        if (from == current) try stack.append(self.allocator, to);
+                    },
+                }
             }
         }
     }
 
-    fn addErasedClassBoundary(
+    fn addErasedClassProvenance(
         self: *CallableEmissionAssigner,
         class: repr.RepresentationClassId,
-        boundary: repr.BoxBoundaryId,
+        provenance: repr.BoxErasureProvenance,
     ) Allocator.Error!void {
         const entry = try self.erasedClassFor(class);
-        for (entry.boundaries.items) |existing| {
-            if (existing == boundary) return;
+        for (entry.provenance.items) |existing| {
+            if (boxErasureProvenanceEql(existing, provenance)) return;
         }
-        try entry.boundaries.append(self.allocator, boundary);
+        try entry.provenance.append(self.allocator, provenance);
     }
 
     fn erasedClassFor(
@@ -1874,7 +2478,7 @@ const CallableEmissionAssigner = struct {
         const index = self.erased_classes.items.len;
         try self.erased_classes.append(self.allocator, .{
             .class = class,
-            .boundaries = .empty,
+            .provenance = .empty,
         });
         try self.erased_class_index.put(class, index);
         return &self.erased_classes.items[index];
@@ -1885,6 +2489,7 @@ const CallableEmissionAssigner = struct {
             const record = self.recordForInstance(instance);
             const value_store = self.valueStoreFor(record);
             for (value_store.values.items, 0..) |*value_info, raw_value| {
+                if (!value_store.valueSourceMatchBranchReachable(value_info.*)) continue;
                 if (value_info.callable) |existing| {
                     switch (self.representationStore().callableEmissionPlan(existing.emission_plan)) {
                         .already_erased => continue,
@@ -1897,7 +2502,19 @@ const CallableEmissionAssigner = struct {
                 }
                 const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
                 const class_set = self.callableClassSet(class) orelse {
+                    if (value_info.callable == null and self.valueHasFunctionType(value_info.logical_ty)) {
+                        if (self.erasedProvenance(class)) |provenance| {
+                            const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                            const callable = try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
+                            value_info.callable = callable;
+                            if (self.representationStore().callableClassEmission(class) == null) {
+                                try self.representationStore().publishCallableClassEmission(class, callable.emission_plan);
+                            }
+                            continue;
+                        }
+                    }
                     if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
+                    if (value_info.pending_local_root_origin) continue;
                     if (self.mode == .allow_pending_call_values and value_info.callable == null) continue;
                     lambdaInvariantFmt(
                         "lambda-solved function-typed value {d} in instance {d} solved to class {d} with no finite callable members (callable={}, projection={}, alias={})",
@@ -1965,11 +2582,50 @@ const CallableEmissionAssigner = struct {
         };
     }
 
+    fn synthesizeAlreadyErasedCallableInfo(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+        value_store: *const repr.ValueInfoStore,
+        value_id: repr.ValueInfoId,
+        value_info: repr.ValueInfo,
+        provenance: []const repr.BoxErasureProvenance,
+    ) Allocator.Error!repr.CallableValueInfo {
+        const endpoint = try self.publishTargetErasedBoundaryEndpoint(value_store, value_id);
+        const payload = self.representationStore().session_executable_type_payloads.get(endpoint.ty.payload);
+        const erased = switch (payload) {
+            .erased_fn => |erased| erased,
+            else => lambdaInvariant("lambda-solved erased function slot endpoint did not publish erased callable payload"),
+        };
+        _ = record;
+
+        const plan = repr.AlreadyErasedCallablePlan{
+            .sig_key = erased.sig_key,
+            .capture_shape_key = erased.capture_shape_key,
+            .result_ty = endpoint.key,
+            .capture = .none,
+            .provenance = provenance,
+        };
+        const emission = try self.representationStore().appendAlreadyErasedCallableEmissionPlan(plan);
+        return .{
+            .whole_function_root = value_info.root,
+            .callable_root = value_info.root,
+            .source = .{ .already_erased = .{
+                .sig_key = erased.sig_key,
+                .capture_shape_key = erased.capture_shape_key,
+                .result_ty = endpoint.key,
+                .capture = .none,
+                .provenance = &.{},
+            } },
+            .emission_plan = emission,
+            .construction_plan = null,
+        };
+    }
+
     fn ensureCallableClassEmission(
         self: *CallableEmissionAssigner,
         class_set: *const CallableClassSet,
         class_key: repr.CanonicalCallableSetKey,
-        provenance: ?[]const repr.BoxBoundaryId,
+        provenance: ?[]const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         if (self.representationStore().callableClassEmission(class_set.class)) |existing| return existing;
         const emission = if (provenance) |boundaries|
@@ -2081,12 +2737,12 @@ const CallableEmissionAssigner = struct {
         callable: repr.CallableValueInfo,
         class_set: *const CallableClassSet,
         class_key: repr.CanonicalCallableSetKey,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         _ = record;
         _ = value_id;
         _ = callable;
-        if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty BoxBoundaryId provenance");
+        if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty Box(T) provenance");
         return try self.appendFiniteSetErasePlan(class_set, class_key, provenance);
     }
 
@@ -2134,7 +2790,7 @@ const CallableEmissionAssigner = struct {
         self: *CallableEmissionAssigner,
         class_set: *const CallableClassSet,
         class_key: repr.CanonicalCallableSetKey,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         const first_member = class_set.members.items[0];
         const hidden_capture_key = repr.finiteCallableSetExecValueTypeKey(class_key);
@@ -2178,17 +2834,17 @@ const CallableEmissionAssigner = struct {
         defer if (arg_abis.len > 0) self.allocator.free(arg_abis);
 
         for (params, 0..) |param, i| {
-            const endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, param);
+            const endpoint = try self.publishTargetErasedBoundaryEndpoint(target_value_store, param);
             arg_keys[i] = endpoint.key;
             arg_abis[i] = .ordinary_roc_value;
         }
-        const ret_endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, target_record.public_roots.ret);
+        const ret_endpoint = try self.publishTargetErasedBoundaryEndpoint(target_value_store, target_record.public_roots.ret);
         const abi_key = try self.representationStore().erased_fn_abis.append(self.allocator, .{
             .fixed_arity = @intCast(params.len),
             .arg_exec_keys = arg_keys,
             .ret_exec_key = ret_endpoint.key,
             .arg_abis = arg_abis,
-            .capture_arg = if (capture_ty == null) null else .ordinary_roc_value,
+            .capture_arg = .ordinary_roc_value,
         });
         return .{
             .source_fn_ty = source_fn_ty,
@@ -2212,6 +2868,24 @@ const CallableEmissionAssigner = struct {
             &self.representationStore().session_executable_type_payloads,
             target_value_store,
             value,
+        );
+    }
+
+    fn publishTargetErasedBoundaryEndpoint(
+        self: *CallableEmissionAssigner,
+        target_value_store: *const repr.ValueInfoStore,
+        value: repr.ValueInfoId,
+    ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
+        const info = target_value_store.values.items[@intFromEnum(value)];
+        return try repr.sessionExecutableTypeEndpointForErasedBoundaryTypeIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStore(),
+            &self.representationStore().session_executable_type_payloads,
+            info.logical_ty,
+            info.source_ty,
         );
     }
 
@@ -2245,9 +2919,9 @@ const CallableEmissionAssigner = struct {
     fn erasedProvenance(
         self: *CallableEmissionAssigner,
         class: repr.RepresentationClassId,
-    ) ?[]const repr.BoxBoundaryId {
+    ) ?[]const repr.BoxErasureProvenance {
         const index = self.erased_class_index.get(class) orelse return null;
-        return self.erased_classes.items[index].boundaries.items;
+        return self.erased_classes.items[index].provenance.items;
     }
 
     fn classForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationClassId {
@@ -2330,15 +3004,20 @@ fn finalizeBoxPayloadRepresentationPlans(
     artifact_views: ArtifactViews,
 ) Allocator.Error!void {
     for (program.solve_sessions.items, 0..) |*session, raw_session| {
-        var finalizer = BoxPayloadPlanFinalizer{
-            .allocator = program.allocator,
-            .program = program,
-            .records = records,
-            .artifact_views = artifact_views,
-            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
-            .session = session,
-        };
-        try finalizer.finalize();
+        {
+            var finalizer = BoxPayloadPlanFinalizer{
+                .allocator = program.allocator,
+                .program = program,
+                .records = records,
+                .artifact_views = artifact_views,
+                .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+                .session = session,
+                .active_payload_plans = std.AutoHashMap(repr.SessionExecutableTypePayloadId, repr.BoxPayloadRepresentationPlanId).init(program.allocator),
+                .completed_payload_plans = std.AutoHashMap(repr.SessionExecutableTypePayloadId, repr.BoxPayloadRepresentationPlanId).init(program.allocator),
+            };
+            defer finalizer.deinit();
+            try finalizer.finalize();
+        }
     }
 }
 
@@ -2349,9 +3028,20 @@ const BoxPayloadPlanFinalizer = struct {
     artifact_views: ArtifactViews,
     session_id: repr.RepresentationSolveSessionId,
     session: *repr.RepresentationSolveSession,
+    active_payload_plans: std.AutoHashMap(repr.SessionExecutableTypePayloadId, repr.BoxPayloadRepresentationPlanId),
+    completed_payload_plans: std.AutoHashMap(repr.SessionExecutableTypePayloadId, repr.BoxPayloadRepresentationPlanId),
+
+    fn deinit(self: *BoxPayloadPlanFinalizer) void {
+        self.active_payload_plans.deinit();
+        self.completed_payload_plans.deinit();
+    }
 
     fn finalize(self: *BoxPayloadPlanFinalizer) Allocator.Error!void {
         for (self.representationStore().box_boundaries, 0..) |boundary, raw_boundary| {
+            self.active_payload_plans.clearRetainingCapacity();
+            self.completed_payload_plans.clearRetainingCapacity();
+            const plan_start_len = self.representationStore().box_payload_plans.len;
+
             const boundary_id: repr.BoxBoundaryId = @enumFromInt(@as(u32, @intCast(raw_boundary)));
             const payload_root = switch (boundary.direction) {
                 .box => boundary.source_root,
@@ -2369,12 +3059,36 @@ const BoxPayloadPlanFinalizer = struct {
                 payload_value.value_store,
                 payload_value.value,
             );
-            const plan = try self.planForPayload(endpoint.ty);
+            const root_plan = try self.planForPayload(endpoint.ty);
+            var visiting = std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void).init(self.allocator);
+            defer visiting.deinit();
+            const plan = if (try self.planIdNeedsMaterialization(root_plan, &visiting))
+                repr.BoxPayloadRepresentationPlan{ .recursive_ref = root_plan }
+            else blk: {
+                try self.representationStore().truncateBoxPayloadPlans(plan_start_len);
+                break :blk repr.BoxPayloadRepresentationPlan.unchanged;
+            };
             self.representationStore().setBoxBoundaryPayloadPlan(boundary_id, plan);
         }
     }
 
     fn planForPayload(
+        self: *BoxPayloadPlanFinalizer,
+        payload_ref: repr.SessionExecutableTypePayloadRef,
+    ) Allocator.Error!repr.BoxPayloadRepresentationPlanId {
+        if (self.completed_payload_plans.get(payload_ref.payload)) |completed| return completed;
+        if (self.active_payload_plans.get(payload_ref.payload)) |active| return active;
+
+        const plan_id = try self.representationStore().appendBoxPayloadPlan(.unchanged);
+        try self.active_payload_plans.put(payload_ref.payload, plan_id);
+        const plan = try self.planForPayloadInner(payload_ref);
+        self.representationStore().setBoxPayloadPlan(plan_id, plan);
+        _ = self.active_payload_plans.remove(payload_ref.payload);
+        try self.completed_payload_plans.put(payload_ref.payload, plan_id);
+        return plan_id;
+    }
+
+    fn planForPayloadInner(
         self: *BoxPayloadPlanFinalizer,
         payload_ref: repr.SessionExecutableTypePayloadRef,
     ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
@@ -2405,18 +3119,11 @@ const BoxPayloadPlanFinalizer = struct {
         if (record.fields.len == 0) return .unchanged;
         const fields = try self.allocator.alloc(repr.BoxPayloadFieldPlan, record.fields.len);
         errdefer self.allocator.free(fields);
-        var changed = false;
         for (record.fields, 0..) |field, i| {
-            const child = try self.planForPayload(field.ty);
-            if (planNeedsMaterialization(child)) changed = true;
             fields[i] = .{
                 .field = field.field,
-                .plan = try self.representationStore().appendBoxPayloadPlan(child),
+                .plan = try self.planForPayload(field.ty),
             };
-        }
-        if (!changed) {
-            self.allocator.free(fields);
-            return .unchanged;
         }
         return .{ .record = fields };
     }
@@ -2428,18 +3135,11 @@ const BoxPayloadPlanFinalizer = struct {
         if (items.len == 0) return .unchanged;
         const elems = try self.allocator.alloc(repr.BoxPayloadTupleElemPlan, items.len);
         errdefer self.allocator.free(elems);
-        var changed = false;
         for (items, 0..) |item, i| {
-            const child = try self.planForPayload(item.ty);
-            if (planNeedsMaterialization(child)) changed = true;
             elems[i] = .{
                 .index = item.index,
-                .plan = try self.representationStore().appendBoxPayloadPlan(child),
+                .plan = try self.planForPayload(item.ty),
             };
-        }
-        if (!changed) {
-            self.allocator.free(elems);
-            return .unchanged;
         }
         return .{ .tuple = elems };
     }
@@ -2458,29 +3158,19 @@ const BoxPayloadPlanFinalizer = struct {
             self.allocator.free(variants);
         }
 
-        var changed = false;
         for (tag_union.variants, 0..) |variant, i| {
             const payloads = try self.allocator.alloc(repr.BoxPayloadTagPayloadPlan, variant.payloads.len);
             errdefer self.allocator.free(payloads);
             for (variant.payloads, 0..) |payload, payload_i| {
-                const child = try self.planForPayload(payload.ty);
-                if (planNeedsMaterialization(child)) changed = true;
                 payloads[payload_i] = .{
                     .payload = payload.payload,
-                    .plan = try self.representationStore().appendBoxPayloadPlan(child),
+                    .plan = try self.planForPayload(payload.ty),
                 };
             }
             variants[i] = .{
                 .tag = variant.tag,
                 .payloads = payloads,
             };
-        }
-        if (!changed) {
-            for (variants) |variant| {
-                if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
-            }
-            self.allocator.free(variants);
-            return .unchanged;
         }
         return .{ .tag_union = variants };
     }
@@ -2489,18 +3179,14 @@ const BoxPayloadPlanFinalizer = struct {
         self: *BoxPayloadPlanFinalizer,
         child: repr.SessionExecutableTypePayloadChild,
     ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
-        const child_plan = try self.planForPayload(child.ty);
-        if (!planNeedsMaterialization(child_plan)) return .unchanged;
-        return .{ .list = try self.representationStore().appendBoxPayloadPlan(child_plan) };
+        return .{ .list = try self.planForPayload(child.ty) };
     }
 
     fn nestedBoxPlan(
         self: *BoxPayloadPlanFinalizer,
         child: repr.SessionExecutableTypePayloadChild,
     ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
-        const child_plan = try self.planForPayload(child.ty);
-        if (!planNeedsMaterialization(child_plan)) return .unchanged;
-        return .{ .nested_box = try self.representationStore().appendBoxPayloadPlan(child_plan) };
+        return .{ .nested_box = try self.planForPayload(child.ty) };
     }
 
     fn nominalPlan(
@@ -2521,9 +3207,7 @@ const BoxPayloadPlanFinalizer = struct {
             } } };
         }
 
-        const backing_plan = try self.planForPayload(nominal.backing);
-        if (!planNeedsMaterialization(backing_plan)) return .unchanged;
-        const backing_plan_id = try self.representationStore().appendBoxPayloadPlan(backing_plan);
+        const backing_plan_id = try self.planForPayload(nominal.backing);
 
         const nominal_plan: repr.NominalPayloadRepresentation = if (capability.is_root)
             .{ .transparent_backing = .{
@@ -2581,6 +3265,57 @@ const BoxPayloadPlanFinalizer = struct {
         };
     }
 
+    fn planIdNeedsMaterialization(
+        self: *BoxPayloadPlanFinalizer,
+        plan_id: repr.BoxPayloadRepresentationPlanId,
+        visiting: *std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void),
+    ) Allocator.Error!bool {
+        if (visiting.contains(plan_id)) return false;
+        const index: usize = @intFromEnum(plan_id);
+        if (index >= self.representationStore().box_payload_plans.len) {
+            lambdaInvariant("lambda-solved boxed payload plan referenced missing plan id");
+        }
+        try visiting.put(plan_id, {});
+        defer _ = visiting.remove(plan_id);
+        return try self.planNeedsMaterialization(self.representationStore().box_payload_plans[index], visiting);
+    }
+
+    fn planNeedsMaterialization(
+        self: *BoxPayloadPlanFinalizer,
+        plan: repr.BoxPayloadRepresentationPlan,
+        visiting: *std.AutoHashMap(repr.BoxPayloadRepresentationPlanId, void),
+    ) Allocator.Error!bool {
+        return switch (plan) {
+            .unchanged => false,
+            .function_erased => true,
+            .record => |fields| for (fields) |field| {
+                if (try self.planIdNeedsMaterialization(field.plan, visiting)) break true;
+            } else false,
+            .tuple => |items| for (items) |item| {
+                if (try self.planIdNeedsMaterialization(item.plan, visiting)) break true;
+            } else false,
+            .tag_union => |variants| blk: {
+                for (variants) |variant| {
+                    for (variant.payloads) |payload| {
+                        if (try self.planIdNeedsMaterialization(payload.plan, visiting)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .list => |child| try self.planIdNeedsMaterialization(child, visiting),
+            .nested_box => |child| try self.planIdNeedsMaterialization(child, visiting),
+            .nominal => |nominal| switch (nominal) {
+                .transparent_backing => |backing| try self.planIdNeedsMaterialization(backing.backing_plan, visiting),
+                .imported_capability => |backing| try self.planIdNeedsMaterialization(backing.backing_plan, visiting),
+                .opaque_atomic,
+                .hosted_abi,
+                .platform_abi,
+                => false,
+            },
+            .recursive_ref => |ref| try self.planIdNeedsMaterialization(ref, visiting),
+        };
+    }
+
     fn valueForRoot(self: *BoxPayloadPlanFinalizer, root: repr.RepRootId) ?BoxPayloadValueRef {
         for (self.session.members) |instance| {
             const record = self.recordForInstance(instance);
@@ -2621,20 +3356,6 @@ const BoxPayloadPlanFinalizer = struct {
     }
 };
 
-fn planNeedsMaterialization(plan: repr.BoxPayloadRepresentationPlan) bool {
-    return switch (plan) {
-        .unchanged => false,
-        .function_erased,
-        .record,
-        .tag_union,
-        .tuple,
-        .list,
-        .nested_box,
-        .nominal,
-        => true,
-    };
-}
-
 fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
     return switch (kind) {
         .record_field,
@@ -2656,6 +3377,22 @@ fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
     };
 }
 
+fn boxErasureProvenanceEql(
+    a: repr.BoxErasureProvenance,
+    b: repr.BoxErasureProvenance,
+) bool {
+    return switch (a) {
+        .local_box_boundary => |left| switch (b) {
+            .local_box_boundary => |right| left == right,
+            .promoted_wrapper => false,
+        },
+        .promoted_wrapper => |left| switch (b) {
+            .local_box_boundary => false,
+            .promoted_wrapper => |right| canonical.mirProcedureRefEql(left, right),
+        },
+    };
+}
+
 fn callableSetMemberEquivalent(
     a: repr.CanonicalCallableSetMember,
     b: repr.CanonicalCallableSetMember,
@@ -2673,6 +3410,110 @@ fn callableSetMemberEquivalent(
     return true;
 }
 
+fn sessionExecutableValueEndpointEql(
+    a: repr.SessionExecutableValueEndpoint,
+    b: repr.SessionExecutableValueEndpoint,
+) bool {
+    return sessionExecutableValueEndpointOwnerEql(a.owner, b.owner) and
+        a.logical_ty == b.logical_ty and
+        a.exec_ty.ty.payload == b.exec_ty.ty.payload and
+        repr.canonicalExecValueTypeKeyEql(a.exec_ty.key, b.exec_ty.key);
+}
+
+fn sessionExecutableValueEndpointOwnerEql(
+    a: repr.SessionExecutableValueEndpointOwner,
+    b: repr.SessionExecutableValueEndpointOwner,
+) bool {
+    return switch (a) {
+        .local_value => |value| switch (b) {
+            .local_value => |other| value == other,
+            else => false,
+        },
+        .procedure_param => |param| switch (b) {
+            .procedure_param => |other| param.instance == other.instance and param.index == other.index,
+            else => false,
+        },
+        .procedure_return => |proc| switch (b) {
+            .procedure_return => |other| proc == other,
+            else => false,
+        },
+        .procedure_capture => |capture| switch (b) {
+            .procedure_capture => |other| capture.instance == other.instance and capture.slot == other.slot,
+            else => false,
+        },
+        .call_raw_arg => |arg| switch (b) {
+            .call_raw_arg => |other| arg.call == other.call and arg.index == other.index,
+            else => false,
+        },
+        .call_raw_result => |call| switch (b) {
+            .call_raw_result => |other| call == other,
+            else => false,
+        },
+        .consumer_use => |owner| switch (b) {
+            .consumer_use => |other| consumerUseOwnerEql(owner, other),
+            else => false,
+        },
+        .transform_child => |child| switch (b) {
+            .transform_child => |other| child.scope == other.scope and
+                child.side == other.side and
+                child.path == other.path,
+            else => false,
+        },
+    };
+}
+
+fn consumerUseOwnerEql(
+    a: repr.ConsumerUseOwner,
+    b: repr.ConsumerUseOwner,
+) bool {
+    return switch (a) {
+        .return_value => |ret| switch (b) {
+            .return_value => |other| ret == other,
+            else => false,
+        },
+        .call_arg => |arg| switch (b) {
+            .call_arg => |other| arg.call == other.call and arg.arg_index == other.arg_index,
+            else => false,
+        },
+        .record_field => |field| switch (b) {
+            .record_field => |other| field.parent == other.parent and field.field == other.field,
+            else => false,
+        },
+        .tuple_elem => |elem| switch (b) {
+            .tuple_elem => |other| elem.parent == other.parent and elem.index == other.index,
+            else => false,
+        },
+        .tag_payload => |payload| switch (b) {
+            .tag_payload => |other| payload.parent == other.parent and
+                payload.tag == other.tag and
+                payload.payload == other.payload,
+            else => false,
+        },
+        .list_elem => |elem| switch (b) {
+            .list_elem => |other| elem.parent == other.parent and elem.index == other.index,
+            else => false,
+        },
+        .nominal_backing => |backing| switch (b) {
+            .nominal_backing => |other| backing.parent == other.parent and
+                backing.nominal.module_name == other.nominal.module_name and
+                backing.nominal.type_name == other.nominal.type_name,
+            else => false,
+        },
+        .if_branch_result => |branch| switch (b) {
+            .if_branch_result => |other| branch.parent == other.parent and
+                branch.join == other.join and
+                branch.branch == other.branch,
+            else => false,
+        },
+        .source_match_branch_result => |branch| switch (b) {
+            .source_match_branch_result => |other| branch.parent == other.parent and
+                branch.join == other.join and
+                branch.branch_index == other.branch_index,
+            else => false,
+        },
+    };
+}
+
 fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
     for (program.proc_instances.items, 0..) |*instance, raw_instance| {
         var finalizer = ValueTransformFinalizer{
@@ -2685,8 +3526,8 @@ fn finalizeValueTransformBoundaries(program: *Program) Allocator.Error!void {
         try finalizer.finalizeCallableConstructions();
         try finalizer.finalizeProcValueErasePlans();
         try finalizer.finalizeJoins();
-        try finalizer.finalizeReturns();
         try finalizer.finalizeConstructionConsumerUses();
+        finalizer.verifyReturnsFinalized();
     }
 }
 
@@ -2699,6 +3540,7 @@ const ValueTransformFinalizer = struct {
     fn finalizeCallSites(self: *ValueTransformFinalizer) Allocator.Error!void {
         const value_store = self.valueStore();
         for (value_store.call_sites.items, 0..) |*call_site, raw_call_site| {
+            if (!value_store.callSiteSourceMatchBranchReachable(call_site.*)) continue;
             const call_site_id: repr.CallSiteInfoId = @enumFromInt(@as(u32, @intCast(raw_call_site)));
             const dispatch = call_site.dispatch orelse {
                 const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
@@ -2709,6 +3551,7 @@ const ValueTransformFinalizer = struct {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
                 .call_value_finite => |plan| try self.verifyFinalizedCallValueFinite(call_site_id, call_site, plan),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
+                .pending_local_root_call => {},
             }
         }
     }
@@ -2723,13 +3566,18 @@ const ValueTransformFinalizer = struct {
             const inputs = value_store.sliceJoinInputSpan(join.inputs);
             const boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, inputs.len);
             defer self.allocator.free(boundaries);
+            const reachable_inputs = try self.allocator.alloc(repr.JoinInputInfo, inputs.len);
+            defer self.allocator.free(reachable_inputs);
 
             const result_to = try self.localEndpoint(join.result);
-            for (inputs, 0..) |input, i| {
+            var input_len: usize = 0;
+            for (inputs) |input| {
+                if (!self.joinInputReachable(input)) continue;
                 const from = try self.localEndpoint(input.value);
                 const kind = self.joinBoundaryKind(join_id, input.source);
                 const transform = try self.appendExistingValueTransform(kind, from, result_to);
-                boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+                reachable_inputs[input_len] = input;
+                boundaries[input_len] = try self.representationStore().appendValueTransformBoundary(.{
                     .kind = kind,
                     .from_value = input.value,
                     .to_value = join.result,
@@ -2737,40 +3585,48 @@ const ValueTransformFinalizer = struct {
                     .to_endpoint = result_to,
                     .transform = transform,
                 });
+                input_len += 1;
             }
 
-            join.input_transforms = try self.valueStore().addValueTransformBoundarySpan(boundaries);
+            join.inputs = try self.valueStore().addJoinInputSpan(reachable_inputs[0..input_len]);
+            join.input_transforms = try self.valueStore().addValueTransformBoundarySpan(boundaries[0..input_len]);
         }
     }
 
-    fn finalizeReturns(self: *ValueTransformFinalizer) Allocator.Error!void {
-        const value_store = self.valueStore();
-        for (value_store.returns.items, 0..) |*ret, raw_return| {
-            if (ret.transform != null) {
-                lambdaInvariant("lambda-solved value transform finalization reached an already-finalized return");
-            }
+    fn joinInputReachable(
+        self: *ValueTransformFinalizer,
+        input: repr.JoinInputInfo,
+    ) bool {
+        return switch (input.source) {
+            .source_match_branch => |branch| self.valueStore().sourceMatchBranchReachable(.{
+                .match = branch.match,
+                .branch = branch.branch,
+                .alternative = branch.alternative,
+            }),
+            .if_branch,
+            .loop_phi,
+            => true,
+        };
+    }
 
-            const from = try self.localEndpoint(ret.value);
-            const to = try self.targetReturnEndpoint(self.instance_id, self.instance);
-            const kind: repr.ValueTransformBoundaryKind = .{ .return_value = @enumFromInt(@as(u32, @intCast(raw_return))) };
-            const transform = try self.appendExistingValueTransform(kind, from, to);
-            ret.transform = try self.representationStore().appendValueTransformBoundary(.{
-                .kind = kind,
-                .from_value = ret.value,
-                .to_value = self.instance.public_roots.ret,
-                .from_endpoint = from,
-                .to_endpoint = to,
-                .transform = transform,
-            });
+    fn verifyReturnsFinalized(self: *ValueTransformFinalizer) void {
+        const value_store = self.valueStore();
+        for (value_store.returns.items) |ret| {
+            const value = value_store.values.items[@intFromEnum(ret.value)];
+            if (!value_store.valueSourceMatchBranchReachable(value)) continue;
+            if (value.pending_local_root_origin) continue;
+            if (ret.consumer_use == null) {
+                lambdaInvariant("lambda-solved value transform finalization reached a return with no consumer-use plan");
+            }
         }
     }
 
     fn finalizeConstructionConsumerUses(self: *ValueTransformFinalizer) Allocator.Error!void {
-        const body = self.procBodyExpr();
+        const body = self.procBodyExprOrNull() orelse return;
         try self.finalizeExprConstructionUsesAtEndpoint(body, null);
     }
 
-    fn procBodyExpr(self: *ValueTransformFinalizer) Ast.ExprId {
+    fn procBodyExprOrNull(self: *ValueTransformFinalizer) ?Ast.ExprId {
         for (self.program.procs.items) |proc| {
             if (proc.representation_instance != self.instance_id) continue;
             const def = self.program.ast.defs.items[@intFromEnum(proc.body)];
@@ -2781,7 +3637,35 @@ const ValueTransformFinalizer = struct {
                 .hosted_fn => lambdaInvariant("lambda-solved consumer-use finalization reached hosted function body"),
             };
         }
-        lambdaInvariant("lambda-solved consumer-use finalization could not find procedure body");
+        return null;
+    }
+
+    fn recordAssemblyEvalForFinalizer(
+        evals: []const Ast.RecordFieldEval,
+        assembly: Ast.RecordFieldAssembly,
+    ) Ast.RecordFieldEval {
+        if (assembly.eval_index >= evals.len) {
+            lambdaInvariant("lambda-solved consumer-use record assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.field != assembly.field) {
+            lambdaInvariant("lambda-solved consumer-use record assembly field disagreed with eval-order field");
+        }
+        return evaluated;
+    }
+
+    fn tagAssemblyEvalForFinalizer(
+        evals: []const Ast.TagPayloadEval,
+        assembly: Ast.TagPayloadAssembly,
+    ) Ast.TagPayloadEval {
+        if (assembly.eval_index >= evals.len) {
+            lambdaInvariant("lambda-solved consumer-use tag assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.payload != assembly.payload) {
+            lambdaInvariant("lambda-solved consumer-use tag assembly payload disagreed with eval-order payload");
+        }
+        return evaluated;
     }
 
     fn finalizeExprConstructionUsesAtEndpoint(
@@ -2790,36 +3674,43 @@ const ValueTransformFinalizer = struct {
         expected: ?repr.SessionExecutableValueEndpoint,
     ) Allocator.Error!void {
         const expr = self.program.ast.exprs.items[@intFromEnum(expr_id)];
+        const value_info = self.valueStore().values.items[@intFromEnum(expr.value_info)];
+        if (!self.valueStore().valueSourceMatchBranchReachable(value_info)) return;
+        if (value_info.pending_local_root_origin) return;
         const parent_endpoint = expected orelse try self.localEndpoint(expr.value_info);
         switch (expr.data) {
             .record => |record| {
+                const evals = self.program.ast.record_field_evals.items[record.eval_order.start..][0..record.eval_order.len];
                 const fields = self.program.ast.record_field_assemblies.items[record.assembly_order.start..][0..record.assembly_order.len];
                 for (fields) |field| {
+                    const field_value = recordAssemblyEvalForFinalizer(evals, field).value;
                     const owner: repr.ConsumerUseOwner = .{ .record_field = .{
                         .parent = expr.value_info,
                         .field = field.field,
                     } };
                     const child_endpoint = try self.recordFieldConsumerEndpoint(parent_endpoint, owner, field.field);
-                    const use_id = try self.publishConsumerUse(field.value, owner, child_endpoint);
+                    const use_id = try self.publishConsumerUse(field_value, owner, child_endpoint);
                     self.setRecordFieldConsumerUse(expr.value_info, field.field, use_id);
                     if (self.consumerUsePushesEndpoint(use_id)) {
-                        try self.finalizeExprConstructionUsesAtEndpoint(field.value, child_endpoint);
+                        try self.finalizeExprConstructionUsesAtEndpoint(field_value, child_endpoint);
                     }
                 }
             },
             .tag => |tag| {
+                const evals = self.program.ast.tag_payload_evals.items[tag.eval_order.start..][0..tag.eval_order.len];
                 const payloads = self.program.ast.tag_payload_assemblies.items[tag.assembly_order.start..][0..tag.assembly_order.len];
                 for (payloads) |payload| {
+                    const payload_value = tagAssemblyEvalForFinalizer(evals, payload).value;
                     const owner: repr.ConsumerUseOwner = .{ .tag_payload = .{
                         .parent = expr.value_info,
                         .tag = tag.tag,
                         .payload = payload.payload,
                     } };
                     const child_endpoint = try self.tagPayloadConsumerEndpoint(parent_endpoint, owner, tag.tag, payload.payload);
-                    const use_id = try self.publishConsumerUse(payload.value, owner, child_endpoint);
+                    const use_id = try self.publishConsumerUse(payload_value, owner, child_endpoint);
                     self.setTagPayloadConsumerUse(expr.value_info, payload.payload, use_id);
                     if (self.consumerUsePushesEndpoint(use_id)) {
-                        try self.finalizeExprConstructionUsesAtEndpoint(payload.value, child_endpoint);
+                        try self.finalizeExprConstructionUsesAtEndpoint(payload_value, child_endpoint);
                     }
                 }
             },
@@ -2854,6 +3745,14 @@ const ValueTransformFinalizer = struct {
                 }
             },
             .nominal_reinterpret => |backing| {
+                const payload = self.sessionPayload(parent_endpoint.exec_ty.ty);
+                switch (payload) {
+                    .nominal => {},
+                    else => {
+                        try self.finalizeExprConstructionUsesAtEndpoint(backing, parent_endpoint);
+                        return;
+                    },
+                }
                 const owner: repr.ConsumerUseOwner = .{ .nominal_backing = .{
                     .parent = expr.value_info,
                     .nominal = self.nominalKeyForReinterpret(expr.ty),
@@ -2871,21 +3770,44 @@ const ValueTransformFinalizer = struct {
             },
             .block => |block| {
                 const stmts = self.program.ast.stmt_ids.items[block.stmts.start..][0..block.stmts.len];
-                for (stmts) |stmt| try self.finalizeStmtConstructionUses(stmt);
-                try self.finalizeExprConstructionUsesAtEndpoint(block.final_expr, expected);
+                var final_expr_reachable = true;
+                for (stmts) |stmt| {
+                    try self.finalizeStmtConstructionUses(stmt);
+                    if (final_expr_reachable and !self.stmtCanCompleteNormally(stmt)) {
+                        final_expr_reachable = false;
+                    }
+                }
+                try self.finalizeExprConstructionUsesAtEndpoint(block.final_expr, if (final_expr_reachable) expected else null);
             },
             .if_ => |if_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(if_.cond, null);
-                try self.finalizeExprConstructionUsesAtEndpoint(if_.then_body, expected);
-                try self.finalizeExprConstructionUsesAtEndpoint(if_.else_body, expected);
+                if (expected) |endpoint| {
+                    try self.finalizeContextualIfBranchConsumerUses(expr.value_info, if_, endpoint);
+                } else {
+                    try self.finalizeExprConstructionUsesAtEndpoint(if_.then_body, null);
+                    try self.finalizeExprConstructionUsesAtEndpoint(if_.else_body, null);
+                }
             },
             .match_ => |match_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(match_.cond, null);
                 const branches = self.program.ast.branch_ids.items[match_.branches.start..][0..match_.branches.len];
                 for (branches) |branch_id| {
                     const branch = self.program.ast.branches.items[@intFromEnum(branch_id)];
+                    if (branch.source_match_branch) |branch_ref| {
+                        if (!self.valueStore().sourceMatchBranchReachable(branch_ref)) continue;
+                    }
                     if (branch.guard) |guard| try self.finalizeExprConstructionUsesAtEndpoint(guard, null);
-                    try self.finalizeExprConstructionUsesAtEndpoint(branch.body, expected);
+                }
+                if (expected) |endpoint| {
+                    try self.finalizeContextualMatchBranchConsumerUses(expr.value_info, match_, endpoint);
+                } else {
+                    for (branches) |branch_id| {
+                        const branch = self.program.ast.branches.items[@intFromEnum(branch_id)];
+                        if (branch.source_match_branch) |branch_ref| {
+                            if (!self.valueStore().sourceMatchBranchReachable(branch_ref)) continue;
+                        }
+                        try self.finalizeExprConstructionUsesAtEndpoint(branch.body, null);
+                    }
                 }
             },
             .access => |access| try self.finalizeExprConstructionUsesAtEndpoint(access.record, null),
@@ -2895,10 +3817,27 @@ const ValueTransformFinalizer = struct {
             },
             .bool_not => |child| try self.finalizeExprConstructionUsesAtEndpoint(child, null),
             .call_value => |call| {
+                const call_site = self.valueStore().call_sites.items[@intFromEnum(call.call_site)];
+                const dispatch = call_site.dispatch orelse {
+                    lambdaInvariant("lambda-solved consumer-use finalization reached unresolved call_value dispatch");
+                };
+                switch (dispatch) {
+                    .pending_local_root_call => {
+                        try self.finalizeExprSpanConstructionUses(call.args);
+                        return;
+                    },
+                    else => {},
+                }
                 try self.finalizeExprConstructionUsesAtEndpoint(call.func, null);
-                try self.finalizeExprSpanConstructionUses(call.args);
+                switch (dispatch) {
+                    .call_value_erased => try self.finalizeCallArgConsumerUses(call.call_site, call.args),
+                    .call_value_finite,
+                    .call_proc,
+                    => try self.finalizeExprSpanConstructionUses(call.args),
+                    .pending_local_root_call => unreachable,
+                }
             },
-            .call_proc => |call| try self.finalizeExprSpanConstructionUses(call.args),
+            .call_proc => |call| try self.finalizeCallArgConsumerUses(call.call_site, call.args),
             .proc_value => |proc_value| {
                 const captures = self.program.ast.capture_args.items[proc_value.captures.start..][0..proc_value.captures.len];
                 for (captures) |capture| try self.finalizeExprConstructionUsesAtEndpoint(capture.expr, null);
@@ -2907,12 +3846,7 @@ const ValueTransformFinalizer = struct {
             .tag_payload => |payload| try self.finalizeExprConstructionUsesAtEndpoint(payload.tag_union, null),
             .tuple_access => |access| try self.finalizeExprConstructionUsesAtEndpoint(access.tuple, null),
             .return_ => |ret| {
-                const ret_info = self.valueStore().returns.items[@intFromEnum(ret.return_info)];
-                const return_endpoint = if (ret_info.transform) |transform_id|
-                    self.representationStore().valueTransformBoundary(transform_id).to_endpoint
-                else
-                    expected orelse lambdaInvariant("lambda-solved consumer-use return expression had no finalized return endpoint");
-                try self.finalizeExprConstructionUsesAtEndpoint(ret.expr, return_endpoint);
+                try self.finalizeReturnConsumerUse(ret.return_info, ret.expr);
             },
             .for_ => |for_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
@@ -2929,6 +3863,7 @@ const ValueTransformFinalizer = struct {
             .unit,
             .const_instance,
             .const_ref,
+            .pending_local_root,
             .crash,
             .runtime_error,
             => {},
@@ -2943,6 +3878,157 @@ const ValueTransformFinalizer = struct {
         for (exprs) |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null);
     }
 
+    fn finalizeContextualIfBranchConsumerUses(
+        self: *ValueTransformFinalizer,
+        parent_value: repr.ValueInfoId,
+        if_: anytype,
+        expected_endpoint: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!void {
+        const join_index = @intFromEnum(if_.join_info);
+        if (join_index >= self.valueStore().joins.items.len) {
+            lambdaInvariant("lambda-solved contextual if consumer-use referenced missing join");
+        }
+        if (self.valueStore().joins.items[join_index].kind != .if_expr) {
+            lambdaInvariant("lambda-solved contextual if consumer-use referenced non-if join");
+        }
+        if (!self.valueStore().joins.items[join_index].contextual_consumer_uses.isEmpty()) return;
+
+        const inputs = self.valueStore().sliceJoinInputSpan(self.valueStore().joins.items[join_index].inputs);
+        const use_ids = try self.allocator.alloc(repr.ConsumerUsePlanId, inputs.len);
+        defer self.allocator.free(use_ids);
+
+        var saw_then = false;
+        var saw_else = false;
+        for (inputs, 0..) |input, i| {
+            const source = switch (input.source) {
+                .if_branch => |branch| branch,
+                else => lambdaInvariant("lambda-solved contextual if consumer-use saw non-if join input"),
+            };
+            const branch_expr = switch (source.branch) {
+                .then_ => if_.then_body,
+                .else_ => if_.else_body,
+            };
+            if (!self.exprCanCompleteNormally(branch_expr)) {
+                lambdaInvariant("lambda-solved contextual if consumer-use input referenced non-completing branch");
+            }
+            if (input.value != self.exprValue(branch_expr)) {
+                lambdaInvariant("lambda-solved contextual if consumer-use branch value differs from join input");
+            }
+            const owner: repr.ConsumerUseOwner = .{ .if_branch_result = .{
+                .parent = parent_value,
+                .join = if_.join_info,
+                .branch = source.branch,
+            } };
+            const use_id = try self.publishConsumerUse(branch_expr, owner, expected_endpoint);
+            self.verifyPublishedConsumerUse(use_id, owner, self.exprValue(branch_expr), expected_endpoint);
+            use_ids[i] = use_id;
+            if (self.consumerUsePushesEndpoint(use_id)) {
+                try self.finalizeExprConstructionUsesAtEndpoint(branch_expr, expected_endpoint);
+            }
+            switch (source.branch) {
+                .then_ => {
+                    if (saw_then) lambdaInvariant("lambda-solved contextual if consumer-use saw duplicate then branch");
+                    saw_then = true;
+                },
+                .else_ => {
+                    if (saw_else) lambdaInvariant("lambda-solved contextual if consumer-use saw duplicate else branch");
+                    saw_else = true;
+                },
+            }
+        }
+
+        try self.finalizeNonInputIfBranch(if_.then_body, saw_then);
+        try self.finalizeNonInputIfBranch(if_.else_body, saw_else);
+
+        self.valueStore().joins.items[join_index].contextual_consumer_uses =
+            try self.valueStore().addConsumerUsePlanSpan(use_ids);
+    }
+
+    fn finalizeNonInputIfBranch(
+        self: *ValueTransformFinalizer,
+        branch_expr: Ast.ExprId,
+        saw_input: bool,
+    ) Allocator.Error!void {
+        if (saw_input) return;
+        if (self.exprCanCompleteNormally(branch_expr)) {
+            lambdaInvariant("lambda-solved contextual if consumer-use missing normally-completing branch input");
+        }
+        try self.finalizeExprConstructionUsesAtEndpoint(branch_expr, null);
+    }
+
+    fn finalizeContextualMatchBranchConsumerUses(
+        self: *ValueTransformFinalizer,
+        parent_value: repr.ValueInfoId,
+        match_: anytype,
+        expected_endpoint: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!void {
+        const join_index = @intFromEnum(match_.join_info);
+        if (join_index >= self.valueStore().joins.items.len) {
+            lambdaInvariant("lambda-solved contextual match consumer-use referenced missing join");
+        }
+        if (self.valueStore().joins.items[join_index].kind != .match_expr) {
+            lambdaInvariant("lambda-solved contextual match consumer-use referenced non-match join");
+        }
+        if (!self.valueStore().joins.items[join_index].contextual_consumer_uses.isEmpty()) return;
+
+        const branch_ids = self.program.ast.branch_ids.items[match_.branches.start..][0..match_.branches.len];
+        const seen = try self.allocator.alloc(bool, branch_ids.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        const inputs = self.valueStore().sliceJoinInputSpan(self.valueStore().joins.items[join_index].inputs);
+        const use_ids = try self.allocator.alloc(repr.ConsumerUsePlanId, inputs.len);
+        defer self.allocator.free(use_ids);
+
+        for (inputs, 0..) |input, i| {
+            const source = switch (input.source) {
+                .source_match_branch => |branch| branch,
+                else => lambdaInvariant("lambda-solved contextual match consumer-use saw non-match join input"),
+            };
+            const branch_index: usize = @intCast(@intFromEnum(source.branch));
+            if (branch_index >= branch_ids.len) {
+                lambdaInvariant("lambda-solved contextual match consumer-use branch index is outside branch span");
+            }
+            if (seen[branch_index]) {
+                lambdaInvariant("lambda-solved contextual match consumer-use saw duplicate branch input");
+            }
+            const branch = self.program.ast.branches.items[@intFromEnum(branch_ids[branch_index])];
+            if (!self.exprCanCompleteNormally(branch.body)) {
+                lambdaInvariant("lambda-solved contextual match consumer-use input referenced non-completing branch");
+            }
+            if (input.value != self.exprValue(branch.body)) {
+                lambdaInvariant("lambda-solved contextual match consumer-use branch value differs from join input");
+            }
+            const owner: repr.ConsumerUseOwner = .{ .source_match_branch_result = .{
+                .parent = parent_value,
+                .join = match_.join_info,
+                .branch_index = @intCast(branch_index),
+            } };
+            const use_id = try self.publishConsumerUse(branch.body, owner, expected_endpoint);
+            self.verifyPublishedConsumerUse(use_id, owner, self.exprValue(branch.body), expected_endpoint);
+            use_ids[i] = use_id;
+            if (self.consumerUsePushesEndpoint(use_id)) {
+                try self.finalizeExprConstructionUsesAtEndpoint(branch.body, expected_endpoint);
+            }
+            seen[branch_index] = true;
+        }
+
+        for (branch_ids, 0..) |branch_id, branch_index| {
+            if (seen[branch_index]) continue;
+            const branch = self.program.ast.branches.items[@intFromEnum(branch_id)];
+            if (branch.source_match_branch) |branch_ref| {
+                if (!self.valueStore().sourceMatchBranchReachable(branch_ref)) continue;
+            }
+            if (self.exprCanCompleteNormally(branch.body)) {
+                lambdaInvariant("lambda-solved contextual match consumer-use missing normally-completing branch input");
+            }
+            try self.finalizeExprConstructionUsesAtEndpoint(branch.body, null);
+        }
+
+        self.valueStore().joins.items[join_index].contextual_consumer_uses =
+            try self.valueStore().addConsumerUsePlanSpan(use_ids);
+    }
+
     fn finalizeStmtConstructionUses(
         self: *ValueTransformFinalizer,
         stmt_id: Ast.StmtId,
@@ -2954,10 +4040,7 @@ const ValueTransformFinalizer = struct {
             .reassign => |reassign| try self.finalizeExprConstructionUsesAtEndpoint(reassign.body, null),
             .expr, .debug, .expect => |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null),
             .return_ => |ret| {
-                const ret_info = self.valueStore().returns.items[@intFromEnum(ret.return_info)];
-                const transform_id = ret_info.transform orelse lambdaInvariant("lambda-solved consumer-use return statement had no finalized return endpoint");
-                const return_endpoint = self.representationStore().valueTransformBoundary(transform_id).to_endpoint;
-                try self.finalizeExprConstructionUsesAtEndpoint(ret.expr, return_endpoint);
+                try self.finalizeReturnConsumerUse(ret.return_info, ret.expr);
             },
             .for_ => |for_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
@@ -2978,6 +4061,16 @@ const ValueTransformFinalizer = struct {
         child_expr: Ast.ExprId,
         owner: repr.ConsumerUseOwner,
         expected_endpoint: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!repr.ConsumerUsePlanId {
+        return try self.publishConsumerUseWithExistingBoundary(child_expr, owner, expected_endpoint, null);
+    }
+
+    fn publishConsumerUseWithExistingBoundary(
+        self: *ValueTransformFinalizer,
+        child_expr: Ast.ExprId,
+        owner: repr.ConsumerUseOwner,
+        expected_endpoint: repr.SessionExecutableValueEndpoint,
+        existing_boundary: ?repr.ValueTransformBoundaryId,
     ) Allocator.Error!repr.ConsumerUsePlanId {
         const child = self.program.ast.exprs.items[@intFromEnum(child_expr)];
         const child_value = child.value_info;
@@ -3017,14 +4110,174 @@ const ValueTransformFinalizer = struct {
             .block,
             .if_,
             .match_,
+            => {
+                if (existing_boundary) |boundary_id| {
+                    const boundary = self.representationStore().valueTransformBoundary(boundary_id);
+                    if (boundary.from_value != child_value) {
+                        lambdaInvariant("lambda-solved consumer-use existing call boundary source value differs from child");
+                    }
+                    if (!sessionExecutableValueEndpointEql(boundary.to_endpoint, expected_endpoint)) {
+                        lambdaInvariant("lambda-solved consumer-use existing call boundary target endpoint differs from expected endpoint");
+                    }
+                }
+                return use_id;
+            },
+            else => {
+                const boundary = if (existing_boundary) |boundary_id| blk: {
+                    const existing = self.representationStore().valueTransformBoundary(boundary_id);
+                    if (existing.from_value != child_value) {
+                        lambdaInvariant("lambda-solved consumer-use existing call boundary source value differs from child");
+                    }
+                    if (!sessionExecutableValueEndpointEql(existing.to_endpoint, expected_endpoint)) {
+                        lambdaInvariant("lambda-solved consumer-use existing call boundary target endpoint differs from expected endpoint");
+                    }
+                    break :blk boundary_id;
+                } else blk: {
+                    const from = try self.localEndpoint(child_value);
+                    const transform = try self.appendExistingValueTransform(.{ .consumer_use = use_id }, from, expected_endpoint);
+                    break :blk try self.representationStore().appendValueTransformBoundary(.{
+                        .kind = .{ .consumer_use = use_id },
+                        .from_value = child_value,
+                        .to_value = child_value,
+                        .from_endpoint = from,
+                        .to_endpoint = expected_endpoint,
+                        .transform = transform,
+                    });
+                };
+                self.representationStore().setConsumerUsePlanLowering(use_id, .{ .existing_value = boundary });
+                try self.finalizeExprConstructionUsesAtEndpoint(child_expr, null);
+                return use_id;
+            },
+        }
+    }
+
+    fn finalizeCallArgConsumerUses(
+        self: *ValueTransformFinalizer,
+        call_site_id: repr.CallSiteInfoId,
+        args_span: Ast.Span(Ast.ExprId),
+    ) Allocator.Error!void {
+        const call_site_index = @intFromEnum(call_site_id);
+        if (call_site_index >= self.valueStore().call_sites.items.len) {
+            lambdaInvariant("lambda-solved call argument consumer-use referenced missing call site");
+        }
+        const arg_exprs = self.program.ast.expr_ids.items[args_span.start..][0..args_span.len];
+        const call_site = self.valueStore().call_sites.items[call_site_index];
+        if (!call_site.arg_consumer_uses.isEmpty()) return;
+        const arg_boundaries = self.valueStore().sliceValueTransformBoundarySpan(call_site.arg_transforms);
+        if (arg_boundaries.len != arg_exprs.len) {
+            lambdaInvariant("lambda-solved call argument consumer-use count differs from call arity");
+        }
+        const arg_use_ids = try self.allocator.alloc(repr.ConsumerUsePlanId, arg_exprs.len);
+        defer self.allocator.free(arg_use_ids);
+        for (arg_exprs, arg_boundaries, 0..) |arg_expr, boundary_id, raw_i| {
+            const boundary = self.representationStore().valueTransformBoundary(boundary_id);
+            const owner: repr.ConsumerUseOwner = .{ .call_arg = .{
+                .call = call_site_id,
+                .arg_index = @intCast(raw_i),
+            } };
+            arg_use_ids[raw_i] = try self.publishConsumerUseWithExistingBoundary(
+                arg_expr,
+                owner,
+                boundary.to_endpoint,
+                boundary_id,
+            );
+            const plan = self.representationStore().consumerUsePlan(arg_use_ids[raw_i]);
+            if (!sessionExecutableValueEndpointEql(plan.expected_endpoint, boundary.to_endpoint)) {
+                lambdaInvariant("lambda-solved call argument consumer-use endpoint differs from call boundary");
+            }
+            if (!consumerUseOwnerEql(plan.owner, owner)) {
+                lambdaInvariant("lambda-solved call argument consumer-use owner differs from call boundary");
+            }
+            if (self.consumerUsePushesEndpoint(arg_use_ids[raw_i])) {
+                try self.finalizeExprConstructionUsesAtEndpoint(arg_expr, boundary.to_endpoint);
+            }
+        }
+        self.valueStore().call_sites.items[call_site_index].arg_consumer_uses =
+            try self.valueStore().addConsumerUsePlanSpan(arg_use_ids);
+    }
+
+    fn finalizeReturnConsumerUse(
+        self: *ValueTransformFinalizer,
+        return_info_id: repr.ReturnInfoId,
+        expr_id: Ast.ExprId,
+    ) Allocator.Error!void {
+        const return_index = @intFromEnum(return_info_id);
+        if (return_index >= self.valueStore().returns.items.len) {
+            lambdaInvariant("lambda-solved return consumer-use referenced missing return info");
+        }
+        const expr = self.program.ast.exprs.items[@intFromEnum(expr_id)];
+        if (!self.valueStore().valueSourceMatchBranchReachable(self.valueStore().values.items[@intFromEnum(expr.value_info)])) return;
+        if (self.valueStore().returns.items[return_index].consumer_use != null) return;
+
+        const expected_endpoint = try self.targetReturnEndpoint(self.instance_id, self.instance);
+        const use_id = try self.publishReturnConsumerUse(return_info_id, expr_id, expected_endpoint);
+        self.valueStore().returns.items[return_index].consumer_use = use_id;
+
+        const plan = self.representationStore().consumerUsePlan(use_id);
+        switch (plan.lowering) {
+            .construct_directly,
+            .lower_control_flow_contextually,
+            => try self.finalizeExprConstructionUsesAtEndpoint(expr_id, expected_endpoint),
+            .existing_value => |boundary| {
+                self.valueStore().returns.items[return_index].transform = boundary;
+                try self.finalizeExprConstructionUsesAtEndpoint(expr_id, null);
+            },
+        }
+    }
+
+    fn publishReturnConsumerUse(
+        self: *ValueTransformFinalizer,
+        return_info_id: repr.ReturnInfoId,
+        child_expr: Ast.ExprId,
+        expected_endpoint: repr.SessionExecutableValueEndpoint,
+    ) Allocator.Error!repr.ConsumerUsePlanId {
+        const child = self.program.ast.exprs.items[@intFromEnum(child_expr)];
+        const child_value = child.value_info;
+        const return_info = self.valueStore().returns.items[@intFromEnum(return_info_id)];
+        if (return_info.value != child_value) {
+            lambdaInvariant("lambda-solved return consumer-use child value differs from return info");
+        }
+
+        const owner: repr.ConsumerUseOwner = .{ .return_value = return_info_id };
+        const initial_lowering: repr.ConsumerUseLowering = switch (child.data) {
+            .record,
+            .tag,
+            .tuple,
+            .list,
+            .nominal_reinterpret,
+            => .construct_directly,
+            .let_,
+            .block,
+            .if_,
+            .match_,
+            => .lower_control_flow_contextually,
+            else => .construct_directly,
+        };
+        const use_id = try self.representationStore().appendConsumerUsePlan(.{
+            .owner = owner,
+            .child_value = child_value,
+            .expected_endpoint = expected_endpoint,
+            .lowering = initial_lowering,
+        });
+        switch (child.data) {
+            .record,
+            .tag,
+            .tuple,
+            .list,
+            .nominal_reinterpret,
+            .let_,
+            .block,
+            .if_,
+            .match_,
             => return use_id,
             else => {
                 const from = try self.localEndpoint(child_value);
-                const transform = try self.appendExistingValueTransform(.{ .consumer_use = use_id }, from, expected_endpoint);
+                const kind: repr.ValueTransformBoundaryKind = .{ .return_value = return_info_id };
+                const transform = try self.appendExistingValueTransform(kind, from, expected_endpoint);
                 const boundary = try self.representationStore().appendValueTransformBoundary(.{
-                    .kind = .{ .consumer_use = use_id },
+                    .kind = kind,
                     .from_value = child_value,
-                    .to_value = child_value,
+                    .to_value = self.instance.public_roots.ret,
                     .from_endpoint = from,
                     .to_endpoint = expected_endpoint,
                     .transform = transform,
@@ -3047,6 +4300,25 @@ const ValueTransformFinalizer = struct {
         };
     }
 
+    fn verifyPublishedConsumerUse(
+        self: *ValueTransformFinalizer,
+        use_id: repr.ConsumerUsePlanId,
+        owner: repr.ConsumerUseOwner,
+        child_value: repr.ValueInfoId,
+        expected_endpoint: repr.SessionExecutableValueEndpoint,
+    ) void {
+        const plan = self.representationStore().consumerUsePlan(use_id);
+        if (!consumerUseOwnerEql(plan.owner, owner)) {
+            lambdaInvariant("lambda-solved contextual consumer-use owner differs from published owner");
+        }
+        if (plan.child_value != child_value) {
+            lambdaInvariant("lambda-solved contextual consumer-use child value differs from branch value");
+        }
+        if (!sessionExecutableValueEndpointEql(plan.expected_endpoint, expected_endpoint)) {
+            lambdaInvariant("lambda-solved contextual consumer-use endpoint differs from expected endpoint");
+        }
+    }
+
     fn recordFieldConsumerEndpoint(
         self: *ValueTransformFinalizer,
         parent: repr.SessionExecutableValueEndpoint,
@@ -3054,8 +4326,16 @@ const ValueTransformFinalizer = struct {
         source_field: MonoRow.RecordFieldId,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
         const payload = self.sessionPayload(parent.exec_ty.ty);
+        var logical_record_ty = parent.logical_ty;
         const record = switch (payload) {
             .record => |record| record,
+            .nominal => |nominal| blk: {
+                logical_record_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                break :blk switch (self.sessionPayload(nominal.backing)) {
+                    .record => |record| record,
+                    else => lambdaInvariant("lambda-solved consumer-use record field nominal endpoint had non-record backing"),
+                };
+            },
             else => lambdaInvariant("lambda-solved consumer-use record field expected record endpoint"),
         };
         const label = self.program.row_shapes.recordField(source_field).label;
@@ -3064,7 +4344,7 @@ const ValueTransformFinalizer = struct {
         };
         return .{
             .owner = .{ .consumer_use = owner },
-            .logical_ty = try self.recordFieldLogicalType(parent.logical_ty, target_field.field),
+            .logical_ty = try self.recordFieldLogicalType(logical_record_ty, target_field.field),
             .exec_ty = .{
                 .ty = target_field.ty,
                 .key = target_field.key,
@@ -3079,8 +4359,16 @@ const ValueTransformFinalizer = struct {
         index: u32,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
         const payload = self.sessionPayload(parent.exec_ty.ty);
+        var logical_tuple_ty = parent.logical_ty;
         const elems = switch (payload) {
             .tuple => |elems| elems,
+            .nominal => |nominal| blk: {
+                logical_tuple_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                break :blk switch (self.sessionPayload(nominal.backing)) {
+                    .tuple => |elems| elems,
+                    else => lambdaInvariant("lambda-solved consumer-use tuple element nominal endpoint had non-tuple backing"),
+                };
+            },
             else => lambdaInvariant("lambda-solved consumer-use tuple element expected tuple endpoint"),
         };
         const raw_index: usize = @intCast(index);
@@ -3090,7 +4378,7 @@ const ValueTransformFinalizer = struct {
         const elem = elems[raw_index];
         return .{
             .owner = .{ .consumer_use = owner },
-            .logical_ty = try self.tupleElemLogicalType(parent.logical_ty, index),
+            .logical_ty = try self.tupleElemLogicalType(logical_tuple_ty, index),
             .exec_ty = .{
                 .ty = elem.ty,
                 .key = elem.key,
@@ -3106,8 +4394,16 @@ const ValueTransformFinalizer = struct {
         source_payload: MonoRow.TagPayloadId,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
         const payload = self.sessionPayload(parent.exec_ty.ty);
+        var logical_tag_union_ty = parent.logical_ty;
         const tag_union = switch (payload) {
             .tag_union => |tag_union| tag_union,
+            .nominal => |nominal| blk: {
+                logical_tag_union_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                break :blk switch (self.sessionPayload(nominal.backing)) {
+                    .tag_union => |tag_union| tag_union,
+                    else => lambdaInvariant("lambda-solved consumer-use tag payload nominal endpoint had non-tag backing"),
+                };
+            },
             else => lambdaInvariant("lambda-solved consumer-use tag payload expected tag-union endpoint"),
         };
         const tag_label = self.program.row_shapes.tag(source_tag).label;
@@ -3125,7 +4421,7 @@ const ValueTransformFinalizer = struct {
         }
         return .{
             .owner = .{ .consumer_use = owner },
-            .logical_ty = try self.tagPayloadLogicalType(parent.logical_ty, target_tag.tag, payload_index),
+            .logical_ty = try self.tagPayloadLogicalType(logical_tag_union_ty, target_tag.tag, payload_index),
             .exec_ty = .{
                 .ty = target_payload.ty,
                 .key = target_payload.key,
@@ -3139,13 +4435,21 @@ const ValueTransformFinalizer = struct {
         owner: repr.ConsumerUseOwner,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
         const payload = self.sessionPayload(parent.exec_ty.ty);
+        var logical_list_ty = parent.logical_ty;
         const elem = switch (payload) {
             .list => |elem| elem,
+            .nominal => |nominal| blk: {
+                logical_list_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                break :blk switch (self.sessionPayload(nominal.backing)) {
+                    .list => |elem| elem,
+                    else => lambdaInvariant("lambda-solved consumer-use list element nominal endpoint had non-list backing"),
+                };
+            },
             else => lambdaInvariant("lambda-solved consumer-use list element expected list endpoint"),
         };
         return .{
             .owner = .{ .consumer_use = owner },
-            .logical_ty = try self.listElemLogicalType(parent.logical_ty),
+            .logical_ty = try self.listElemLogicalType(logical_list_ty),
             .exec_ty = .{
                 .ty = elem.ty,
                 .key = elem.key,
@@ -3402,8 +4706,7 @@ const ValueTransformFinalizer = struct {
             lambdaInvariant("lambda-solved finite call boundary finalization saw empty callable-set descriptor");
         }
 
-        const branch_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, descriptor.members.len);
-        defer self.allocator.free(branch_boundaries);
+        const args = self.valueStore().sliceValueSpan(call_site.args);
         const branches = try self.allocator.alloc(repr.CallValueFiniteDispatchBranch, descriptor.members.len);
         defer self.allocator.free(branches);
 
@@ -3411,16 +4714,42 @@ const ValueTransformFinalizer = struct {
         for (descriptor.members, 0..) |member, i| {
             const target_id = member.target_instance;
             const target_instance = self.procInstance(target_id);
+            const target_params = self.valueStoreFor(target_instance).sliceValueSpan(target_instance.public_roots.params);
+            if (args.len != target_params.len or args.len != target_instance.executable_specialization_key.exec_arg_tys.len) {
+                lambdaInvariant("lambda-solved finite call boundary finalization saw target arity mismatch");
+            }
+            const arg_boundaries = try self.allocator.alloc(repr.ValueTransformBoundaryId, args.len);
+            defer self.allocator.free(arg_boundaries);
+            const member_ref: repr.CallableSetMemberRef = .{
+                .callable_set_key = callable_set_key,
+                .member_index = member.member,
+            };
+            for (args, target_params, 0..) |arg, target_param, arg_i| {
+                const from = try self.localEndpoint(arg);
+                const to = try self.targetParamEndpoint(target_id, target_instance, target_param, @intCast(arg_i));
+                const kind: repr.ValueTransformBoundaryKind = .{ .callable_match_branch_arg = .{
+                    .call = call_site_id,
+                    .member = member_ref,
+                    .arg_index = @intCast(arg_i),
+                } };
+                const transform = try self.appendExistingValueTransform(kind, from, to);
+                arg_boundaries[arg_i] = try self.representationStore().appendValueTransformBoundary(.{
+                    .kind = kind,
+                    .from_value = arg,
+                    .to_value = target_param,
+                    .from_endpoint = from,
+                    .to_endpoint = to,
+                    .transform = transform,
+                });
+            }
+
             const result_from = try self.targetReturnEndpoint(target_id, target_instance);
             const kind: repr.ValueTransformBoundaryKind = .{ .callable_match_branch_result = .{
                 .call = call_site_id,
-                .member = .{
-                    .callable_set_key = callable_set_key,
-                    .member_index = member.member,
-                },
+                .member = member_ref,
             } };
             const result_transform = try self.appendExistingValueTransform(kind, result_from, result_to);
-            branch_boundaries[i] = try self.representationStore().appendValueTransformBoundary(.{
+            const result_boundary = try self.representationStore().appendValueTransformBoundary(.{
                 .kind = kind,
                 .from_value = target_instance.public_roots.ret,
                 .to_value = call_site.result,
@@ -3429,16 +4758,13 @@ const ValueTransformFinalizer = struct {
                 .transform = result_transform,
             });
             branches[i] = .{
-                .member = .{
-                    .callable_set_key = callable_set_key,
-                    .member_index = member.member,
-                },
+                .member = member_ref,
                 .target_instance = target_id,
-                .result_transform = branch_boundaries[i],
+                .arg_transforms = try self.valueStore().addValueTransformBoundarySpan(arg_boundaries),
+                .result_transform = result_boundary,
             };
         }
 
-        call_site.branch_result_transforms = try self.valueStore().addValueTransformBoundarySpan(branch_boundaries);
         return try self.valueStore().addCallValueFiniteDispatchPlan(.{
             .callable_set_key = callable_set_key,
             .branches = try self.valueStore().addCallValueFiniteDispatchBranchSpan(branches),
@@ -3451,14 +4777,42 @@ const ValueTransformFinalizer = struct {
         call_site: *const repr.CallSiteInfo,
         plan_id: repr.CallValueFiniteDispatchPlanId,
     ) Allocator.Error!void {
-        _ = call_site_id;
         const plan = self.valueStore().callValueFiniteDispatchPlan(plan_id);
         const branches = self.valueStore().sliceCallValueFiniteDispatchBranches(plan.branches);
         if (branches.len == 0) {
             lambdaInvariant("lambda-solved finalized finite call dispatch plan has no branches");
         }
-        if (call_site.branch_result_transforms.len != branches.len) {
-            lambdaInvariant("lambda-solved finalized finite call dispatch branch count differs from result transforms");
+        const args = self.valueStore().sliceValueSpan(call_site.args);
+        for (branches) |branch| {
+            const arg_transforms = self.valueStore().sliceValueTransformBoundarySpan(branch.arg_transforms);
+            if (arg_transforms.len != args.len) {
+                lambdaInvariant("lambda-solved finalized finite call dispatch branch argument transform count differs from call arity");
+            }
+            for (arg_transforms, 0..) |boundary_id, arg_i| {
+                const boundary = self.representationStore().valueTransformBoundary(boundary_id);
+                const kind = switch (boundary.kind) {
+                    .callable_match_branch_arg => |kind| kind,
+                    else => lambdaInvariant("lambda-solved finalized finite call dispatch argument boundary has wrong kind"),
+                };
+                if (kind.call != call_site_id or
+                    kind.arg_index != @as(u32, @intCast(arg_i)) or
+                    !repr.callableSetKeyEql(kind.member.callable_set_key, branch.member.callable_set_key) or
+                    kind.member.member_index != branch.member.member_index)
+                {
+                    lambdaInvariant("lambda-solved finalized finite call dispatch argument boundary points at a different branch");
+                }
+            }
+            const result_boundary = self.representationStore().valueTransformBoundary(branch.result_transform);
+            const kind = switch (result_boundary.kind) {
+                .callable_match_branch_result => |kind| kind,
+                else => lambdaInvariant("lambda-solved finalized finite call dispatch result boundary has wrong kind"),
+            };
+            if (kind.call != call_site_id or
+                !repr.callableSetKeyEql(kind.member.callable_set_key, branch.member.callable_set_key) or
+                kind.member.member_index != branch.member.member_index)
+            {
+                lambdaInvariant("lambda-solved finalized finite call dispatch result boundary points at a different branch");
+            }
         }
     }
 
@@ -3518,6 +4872,7 @@ const ValueTransformFinalizer = struct {
     fn finalizeCallableConstructions(self: *ValueTransformFinalizer) Allocator.Error!void {
         const value_store = self.valueStore();
         for (value_store.values.items, 0..) |value_info, raw_value| {
+            if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
             const callable = value_info.callable orelse continue;
             const construction_id = callable.construction_plan orelse continue;
             const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
@@ -3599,6 +4954,7 @@ const ValueTransformFinalizer = struct {
     fn finalizeProcValueErasePlans(self: *ValueTransformFinalizer) Allocator.Error!void {
         const value_store = self.valueStore();
         for (value_store.values.items, 0..) |value_info, raw_value| {
+            if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
             const callable = value_info.callable orelse continue;
             const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
             const erase = switch (emission) {
@@ -3689,7 +5045,6 @@ const ValueTransformFinalizer = struct {
     ) void {
         _ = self;
         if (!call_site.arg_transforms.isEmpty() or
-            !call_site.branch_result_transforms.isEmpty() or
             call_site.result_transform != null)
         {
             lambdaInvariant("lambda-solved value transform finalization reached an already-finalized call site");
@@ -3715,7 +5070,7 @@ const ValueTransformFinalizer = struct {
         scope: repr.TransformEndpointScopeId,
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, to.exec_ty.key)) {
             return try self.planNonIdentityValueTransform(scope, from, to, provenance);
@@ -3728,7 +5083,7 @@ const ValueTransformFinalizer = struct {
         scope: repr.TransformEndpointScopeId,
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const from_payload = self.sessionPayload(from.exec_ty.ty);
         const to_payload = self.sessionPayload(to.exec_ty.ty);
@@ -3840,7 +5195,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableRecordPayload,
         target: repr.SessionExecutableRecordPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const fields = try self.allocator.alloc(repr.SessionValueTransformRecordField, target.fields.len);
         defer self.allocator.free(fields);
@@ -3890,7 +5245,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: []const repr.SessionExecutableTupleElemPayload,
         target: []const repr.SessionExecutableTupleElemPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         if (source.len != target.len) {
             lambdaInvariant("lambda-solved tuple transform arity mismatch");
@@ -3939,7 +5294,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableTagUnionPayload,
         target: repr.SessionExecutableTagUnionPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const cases = try self.allocator.alloc(repr.SessionValueTransformTagCase, source.variants.len);
         @memset(cases, .{
@@ -4017,7 +5372,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableNominalPayload,
         target: repr.SessionExecutableTagUnionPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         _ = target;
         if (!repr.canonicalExecValueTypeKeyEql(source.backing_key, to.exec_ty.key)) {
@@ -4035,7 +5390,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableTagUnionPayload,
         target: repr.SessionExecutableNominalPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         _ = source;
         if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, target.backing_key)) {
@@ -4053,7 +5408,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableNominalPayload,
         target: repr.SessionExecutableNominalPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         if (source.nominal.module_name != target.nominal.module_name or
             source.nominal.type_name != target.nominal.type_name)
@@ -4092,7 +5447,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableTypePayloadChild,
         target: repr.SessionExecutableTypePayloadChild,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const from_child = try self.transformChildEndpoint(
             scope,
@@ -4125,13 +5480,18 @@ const ValueTransformFinalizer = struct {
         source: repr.SessionExecutableTypePayloadChild,
         target: repr.SessionExecutableTypePayloadChild,
         kind: checked_artifact.BoxPayloadTransformKind,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const boundary = self.boxBoundaryForEndpoints(from, to) orelse blk: {
-            if (provenance.len == 0) {
-                lambdaInvariant("lambda-solved box transform has no explicit Box boundary provenance");
+            var index = provenance.len;
+            while (index > 0) {
+                index -= 1;
+                switch (provenance[index]) {
+                    .local_box_boundary => |boundary| break :blk boundary,
+                    .promoted_wrapper => {},
+                }
             }
-            break :blk provenance[provenance.len - 1];
+            lambdaInvariant("lambda-solved box transform has no local Box boundary provenance");
         };
         const child_provenance = try self.extendBoxProvenance(provenance, boundary);
         const child_provenance_owned = child_provenance.len != provenance.len;
@@ -4169,7 +5529,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableCallableSetPayload,
         target: repr.SessionExecutableErasedFnPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const plan = try self.selectedFiniteCallableErasurePlan(from, to, source, target, provenance);
         return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
@@ -4183,7 +5543,7 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableCallableSetPayload,
         target: repr.SessionExecutableErasedFnPayload,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.FiniteSetErasePlan {
         _ = to;
         _ = provenance;
@@ -4225,7 +5585,13 @@ const ValueTransformFinalizer = struct {
         target: repr.SessionExecutableErasedFnPayload,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         if (!repr.erasedFnSigKeyEql(source.sig_key, target.sig_key)) {
-            lambdaInvariant("lambda-solved already-erased callable transform changed erased signature");
+            lambdaInvariantFmt(
+                "lambda-solved already-erased callable transform changed erased signature: same_source_fn={} same_abi={}",
+                .{
+                    repr.canonicalTypeKeyEql(source.sig_key.source_fn_ty, target.sig_key.source_fn_ty),
+                    std.mem.eql(u8, source.sig_key.abi.bytes[0..], target.sig_key.abi.bytes[0..]),
+                },
+            );
         }
         return try self.appendSessionValueTransform(scope, from, to, .none, .{
             .already_erased_callable = .{ .sig_key = target.sig_key },
@@ -4234,7 +5600,7 @@ const ValueTransformFinalizer = struct {
 
     fn provenanceFor(
         self: *ValueTransformFinalizer,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
     ) checked_artifact.ValueTransformProvenance {
         _ = self;
         return if (provenance.len == 0) .none else .{ .box_erasure = provenance };
@@ -4242,15 +5608,16 @@ const ValueTransformFinalizer = struct {
 
     fn extendBoxProvenance(
         self: *ValueTransformFinalizer,
-        provenance: []const repr.BoxBoundaryId,
+        provenance: []const repr.BoxErasureProvenance,
         boundary: repr.BoxBoundaryId,
-    ) Allocator.Error![]const repr.BoxBoundaryId {
+    ) Allocator.Error![]const repr.BoxErasureProvenance {
+        const local = repr.BoxErasureProvenance{ .local_box_boundary = boundary };
         for (provenance) |existing| {
-            if (existing == boundary) return provenance;
+            if (boxErasureProvenanceEql(existing, local)) return provenance;
         }
-        const out = try self.allocator.alloc(repr.BoxBoundaryId, provenance.len + 1);
+        const out = try self.allocator.alloc(repr.BoxErasureProvenance, provenance.len + 1);
         @memcpy(out[0..provenance.len], provenance);
-        out[provenance.len] = boundary;
+        out[provenance.len] = local;
         return out;
     }
 
@@ -4492,6 +5859,7 @@ const ValueTransformFinalizer = struct {
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
         const target_value_store = self.valueStoreFor(target_instance);
         const target_info = target_value_store.values.items[@intFromEnum(target_value)];
+        const arg_index: usize = @intCast(index);
         const exec_ty = try repr.sessionExecutableTypeEndpointForValueIntoStore(
             self.allocator,
             &self.program.canonical_names,
@@ -4502,8 +5870,23 @@ const ValueTransformFinalizer = struct {
             target_value_store,
             target_value,
         );
-        const arg_index: usize = @intCast(index);
-        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+        const synthetic_target = self.executableSyntheticForInstance(target_id);
+        const expected_key = if (synthetic_target) |synthetic|
+            self.executableSyntheticParamKey(synthetic, arg_index)
+        else
+            target_instance.executable_specialization_key.exec_arg_tys[arg_index];
+        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, expected_key)) {
+            if (synthetic_target != null) {
+                const expected_exec_ty = try self.executableSyntheticEndpointForExpectedKey(target_info.logical_ty, target_info.source_ty, expected_key);
+                return .{
+                    .owner = .{ .procedure_param = .{
+                        .instance = target_id,
+                        .index = index,
+                    } },
+                    .logical_ty = target_info.logical_ty,
+                    .exec_ty = expected_exec_ty,
+                };
+            }
             lambdaInvariant("lambda-solved target procedure parameter endpoint key differs from target executable specialization");
         }
         return .{
@@ -4534,7 +5917,20 @@ const ValueTransformFinalizer = struct {
             target_value_store,
             target_value,
         );
-        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+        const synthetic_target = self.executableSyntheticForInstance(target_id);
+        const expected_key = if (synthetic_target) |synthetic|
+            self.executableSyntheticReturnKey(synthetic)
+        else
+            target_instance.executable_specialization_key.exec_ret_ty;
+        if (!repr.canonicalExecValueTypeKeyEql(exec_ty.key, expected_key)) {
+            if (synthetic_target != null) {
+                const expected_exec_ty = try self.executableSyntheticEndpointForExpectedKey(target_info.logical_ty, target_info.source_ty, expected_key);
+                return .{
+                    .owner = .{ .procedure_return = target_id },
+                    .logical_ty = target_info.logical_ty,
+                    .exec_ty = expected_exec_ty,
+                };
+            }
             lambdaInvariant("lambda-solved target procedure return endpoint key differs from target executable specialization");
         }
         return .{
@@ -4620,6 +6016,69 @@ const ValueTransformFinalizer = struct {
         };
     }
 
+    fn executableSyntheticEndpointForExpectedKey(
+        self: *ValueTransformFinalizer,
+        logical_ty: Type.TypeVarId,
+        source_ty: canonical.CanonicalTypeKey,
+        expected_key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
+        const endpoint = try repr.sessionExecutableTypeEndpointForErasedBoundaryTypeIntoStore(
+            self.allocator,
+            &self.program.canonical_names,
+            &self.program.row_shapes,
+            &self.program.types,
+            self.representationStore(),
+            &self.representationStore().session_executable_type_payloads,
+            logical_ty,
+            source_ty,
+        );
+        if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, expected_key)) {
+            lambdaInvariant("lambda-solved executable synthetic boundary endpoint key differs from published signature");
+        }
+        return endpoint;
+    }
+
+    fn executableSyntheticForInstance(
+        self: *ValueTransformFinalizer,
+        id: repr.ProcRepresentationInstanceId,
+    ) ?ids.ExecutableSyntheticProc {
+        for (self.program.executable_synthetic_proc_instances.items) |instance| {
+            if (instance.representation_instance != id) continue;
+            const index: usize = @intCast(instance.synthetic_index);
+            if (index >= self.program.executable_synthetic_procs.items.len) {
+                lambdaInvariant("lambda-solved executable synthetic instance referenced missing synthetic proc");
+            }
+            return self.program.executable_synthetic_procs.items[index];
+        }
+        return null;
+    }
+
+    fn executableSyntheticParamKey(
+        self: *ValueTransformFinalizer,
+        synthetic: ids.ExecutableSyntheticProc,
+        index: usize,
+    ) repr.CanonicalExecValueTypeKey {
+        _ = self;
+        return switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| blk: {
+                if (index >= erased.executable_signature.wrapper_params.len) {
+                    lambdaInvariant("lambda-solved executable synthetic param index exceeded published signature");
+                }
+                break :blk erased.executable_signature.wrapper_params[index].exec_ty_key;
+            },
+        };
+    }
+
+    fn executableSyntheticReturnKey(
+        self: *ValueTransformFinalizer,
+        synthetic: ids.ExecutableSyntheticProc,
+    ) repr.CanonicalExecValueTypeKey {
+        _ = self;
+        return switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| erased.executable_signature.wrapper_ret_key,
+        };
+    }
+
     fn procInstance(
         self: *ValueTransformFinalizer,
         id: repr.ProcRepresentationInstanceId,
@@ -4629,6 +6088,65 @@ const ValueTransformFinalizer = struct {
             lambdaInvariant("lambda-solved value transform finalization referenced missing procedure instance");
         }
         return &self.program.proc_instances.items[index];
+    }
+
+    fn exprValue(self: *const ValueTransformFinalizer, expr_id: Ast.ExprId) repr.ValueInfoId {
+        return self.program.ast.exprs.items[@intFromEnum(expr_id)].value_info;
+    }
+
+    fn exprCanCompleteNormally(self: *const ValueTransformFinalizer, expr_id: Ast.ExprId) bool {
+        return switch (self.program.ast.exprs.items[@intFromEnum(expr_id)].data) {
+            .return_,
+            .crash,
+            .runtime_error,
+            => false,
+            .block => |block| self.blockCanCompleteNormally(block.stmts, block.final_expr),
+            .if_ => |if_| self.exprCanCompleteNormally(if_.then_body) or
+                self.exprCanCompleteNormally(if_.else_body),
+            .match_ => |match_| self.anyBranchCanCompleteNormally(match_.branches),
+            else => true,
+        };
+    }
+
+    fn blockCanCompleteNormally(
+        self: *const ValueTransformFinalizer,
+        stmts: Ast.Span(Ast.StmtId),
+        final_expr: Ast.ExprId,
+    ) bool {
+        const stmt_ids = self.program.ast.stmt_ids.items[stmts.start..][0..stmts.len];
+        for (stmt_ids) |stmt_id| {
+            if (!self.stmtCanCompleteNormally(stmt_id)) return false;
+        }
+        return self.exprCanCompleteNormally(final_expr);
+    }
+
+    fn stmtCanCompleteNormally(self: *const ValueTransformFinalizer, stmt_id: Ast.StmtId) bool {
+        return switch (self.program.ast.stmts.items[@intFromEnum(stmt_id)]) {
+            .decl => |decl| self.exprCanCompleteNormally(decl.body),
+            .var_decl => |decl| self.exprCanCompleteNormally(decl.body),
+            .reassign => |reassign| self.exprCanCompleteNormally(reassign.body),
+            .expr => |expr| self.exprCanCompleteNormally(expr),
+            .debug => |expr| self.exprCanCompleteNormally(expr),
+            .expect => |expr| self.exprCanCompleteNormally(expr),
+            .crash,
+            .return_,
+            .break_,
+            => false,
+            .for_,
+            .while_,
+            => true,
+        };
+    }
+
+    fn anyBranchCanCompleteNormally(
+        self: *const ValueTransformFinalizer,
+        branches: Ast.Span(Ast.BranchId),
+    ) bool {
+        const branch_ids = self.program.ast.branch_ids.items[branches.start..][0..branches.len];
+        for (branch_ids) |branch_id| {
+            if (self.exprCanCompleteNormally(self.program.ast.branches.items[@intFromEnum(branch_id)].body)) return true;
+        }
+        return false;
     }
 
     fn valueStore(self: *ValueTransformFinalizer) *repr.ValueInfoStore {
@@ -4893,6 +6411,20 @@ fn checkedTypesForArtifactViews(
     return null;
 }
 
+fn callableSetDescriptorsForArtifactViews(
+    views: ArtifactViews,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.CallableSetDescriptorStore {
+    if (std.mem.eql(u8, &views.root.artifact.key.bytes, &key.bytes)) return &views.root.artifact.callable_set_descriptors;
+    for (views.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.callable_set_descriptors;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.callable_set_descriptors;
+    }
+    return null;
+}
+
 const BodySolver = struct {
     allocator: Allocator,
     input: *const Lifted.Ast.Store,
@@ -4911,6 +6443,7 @@ const BodySolver = struct {
     public_roots: ?repr.ProcPublicValueRoots = null,
     active_captures: ?repr.Span(repr.ValueInfoId) = null,
     active_return_value: ?repr.ValueInfoId = null,
+    active_source_match_branch: ?repr.SourceMatchBranchRef = null,
     next_source_match_id: u32 = 0,
     next_if_expr_id: u32 = 0,
 
@@ -5013,6 +6546,231 @@ const BodySolver = struct {
         source_ty: canonical.CanonicalTypeKey,
     };
 
+    fn lowerExecutableSyntheticSignature(
+        self: *BodySolver,
+        synthetic: ids.ExecutableSyntheticProc,
+    ) Allocator.Error!repr.ProcPublicValueRoots {
+        const signature = synthetic.signature;
+        const concrete = self.concrete_source_types.refForKey(signature.source_fn_ty) orelse {
+            lambdaInvariant("lambda-solved executable synthetic signature source function type has no concrete payload");
+        };
+        const fn_ty = try self.type_importer.importConcreteRef(concrete);
+        const fn_root = self.type_importer.output.unlinkConst(fn_ty);
+        const func = switch (self.type_importer.output.getNode(fn_root)) {
+            .content => |content| switch (content) {
+                .func => |func| func,
+                else => lambdaInvariant("lambda-solved executable synthetic signature source type was not a function"),
+            },
+            else => lambdaInvariant("lambda-solved executable synthetic signature source type was not a function"),
+        };
+        const arg_tys = self.type_importer.output.sliceTypeVarSpan(func.args);
+        if (arg_tys.len != signature.params.len) {
+            lambdaInvariant("lambda-solved executable synthetic signature param arity disagrees with source function type");
+        }
+
+        const param_values: []repr.ValueInfoId = if (arg_tys.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(repr.ValueInfoId, arg_tys.len);
+        defer if (param_values.len > 0) self.allocator.free(param_values);
+        const erased = switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| erased,
+        };
+        const exec_signature = erased.executable_signature;
+        const provenance = repr.BoxErasureProvenance{ .promoted_wrapper = synthetic.source_proc };
+        for (arg_tys, signature.params, 0..) |arg_ty, param, i| {
+            param_values[i] = try self.newValue(arg_ty, param.source_ty);
+            try self.attachExecutableSyntheticAlreadyErasedCallable(
+                synthetic,
+                param_values[i],
+                exec_signature.wrapper_params[i].exec_ty,
+                exec_signature.wrapper_params[i].exec_ty_key,
+                provenance,
+            );
+        }
+        const ret = try self.newValue(func.ret, signature.ret_source_ty);
+        try self.attachExecutableSyntheticAlreadyErasedCallable(
+            synthetic,
+            ret,
+            exec_signature.wrapper_ret,
+            exec_signature.wrapper_ret_key,
+            provenance,
+        );
+
+        try self.appendExecutableSyntheticErasureRequirements(synthetic, param_values, ret);
+
+        return .{
+            .params = try self.value_store.addValueSpan(param_values),
+            .ret = ret,
+            .captures = repr.Span(repr.ValueInfoId).empty(),
+            .function_root = self.representation_store.reserveRoot(),
+        };
+    }
+
+    fn attachExecutableSyntheticAlreadyErasedCallable(
+        self: *BodySolver,
+        synthetic: ids.ExecutableSyntheticProc,
+        value: repr.ValueInfoId,
+        exec_ty: checked_artifact.ExecutableTypePayloadRef,
+        exec_ty_key: canonical.CanonicalExecValueTypeKey,
+        provenance: repr.BoxErasureProvenance,
+    ) Allocator.Error!void {
+        if (!std.mem.eql(u8, &exec_ty.artifact.bytes, &synthetic.artifact.bytes)) {
+            lambdaInvariant("lambda-solved executable synthetic erased payload ref points at a different artifact");
+        }
+        const payload_key = synthetic.executable_type_payloads.keyFor(exec_ty.payload);
+        if (!repr.canonicalExecValueTypeKeyEql(payload_key, exec_ty_key)) {
+            lambdaInvariant("lambda-solved executable synthetic erased payload key differs from signature key");
+        }
+        const erased = switch (synthetic.executable_type_payloads.get(exec_ty.payload)) {
+            .erased_fn => |erased| erased,
+            else => return,
+        };
+
+        const provenance_items = [_]repr.BoxErasureProvenance{provenance};
+        const plan = repr.AlreadyErasedCallablePlan{
+            .sig_key = erased.sig_key,
+            .capture_shape_key = erased.capture_shape_key,
+            .result_ty = exec_ty_key,
+            .capture = .none,
+            .provenance = &provenance_items,
+        };
+        const emission = try self.representation_store.appendAlreadyErasedCallableEmissionPlan(plan);
+        const value_info = &self.value_store.values.items[@intFromEnum(value)];
+        if (!self.valueHasFunctionType(value_info.logical_ty)) {
+            lambdaInvariant("lambda-solved executable synthetic erased payload was attached to a non-function value");
+        }
+        if (value_info.callable != null) {
+            lambdaInvariant("lambda-solved executable synthetic value already had callable metadata");
+        }
+        value_info.callable = .{
+            .whole_function_root = value_info.root,
+            .callable_root = value_info.root,
+            .source = .{ .already_erased = .{
+                .sig_key = erased.sig_key,
+                .capture_shape_key = erased.capture_shape_key,
+                .result_ty = exec_ty_key,
+                .capture = .none,
+                .provenance = &.{},
+            } },
+            .emission_plan = emission,
+            .construction_plan = null,
+        };
+    }
+
+    fn valueHasFunctionType(
+        self: *const BodySolver,
+        ty: Type.TypeVarId,
+    ) bool {
+        const root = self.type_importer.output.unlinkConst(ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn appendExecutableSyntheticErasureRequirements(
+        self: *BodySolver,
+        synthetic: ids.ExecutableSyntheticProc,
+        param_values: []const repr.ValueInfoId,
+        ret: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        const erased = switch (synthetic.body) {
+            .erased_promoted_wrapper => |erased| erased,
+        };
+        const exec_signature = erased.executable_signature;
+        if (exec_signature.wrapper_params.len != param_values.len) {
+            lambdaInvariant("lambda-solved executable synthetic erased wrapper param arity differs from bodyless signature");
+        }
+        const provenance = repr.BoxErasureProvenance{ .promoted_wrapper = synthetic.source_proc };
+        for (exec_signature.wrapper_params, param_values) |param, value| {
+            if (!self.executableSyntheticPayloadIsErasedFn(synthetic, param.exec_ty)) continue;
+            _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                .payload_root = self.valueRoot(value),
+                .provenance = provenance,
+            } });
+        }
+        if (self.executableSyntheticPayloadIsErasedFn(synthetic, exec_signature.wrapper_ret)) {
+            _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                .payload_root = self.valueRoot(ret),
+                .provenance = provenance,
+            } });
+        }
+    }
+
+    fn appendExecutableDependencyRequirements(
+        self: *BodySolver,
+        owner: ProcedureInstanceOwner,
+        roots: repr.ProcPublicValueRoots,
+    ) Allocator.Error!void {
+        switch (owner) {
+            .executable_erased_adapter_member => |member| {
+                const synthetic = self.registry.input.executable_synthetic_procs.items[member.synthetic_index];
+                const erased = switch (synthetic.body) {
+                    .erased_promoted_wrapper => |erased| erased,
+                };
+                if (member.member_index >= erased.finite_adapter_member_targets.len) {
+                    lambdaInvariant("lambda-solved executable adapter member requirement index is out of range");
+                }
+                const target_key = erased.finite_adapter_member_targets[member.member_index];
+                const params = self.value_store.sliceValueSpan(roots.params);
+                if (params.len != target_key.exec_arg_tys.len) {
+                    lambdaInvariant("lambda-solved executable adapter member target key arity differs from public roots");
+                }
+                const provenance = repr.BoxErasureProvenance{ .promoted_wrapper = synthetic.source_proc };
+                for (params, target_key.exec_arg_tys) |param, exec_key| {
+                    if (!self.executableTypeKeyIsErasedFn(synthetic, exec_key)) continue;
+                    _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                        .payload_root = self.valueRoot(param),
+                        .provenance = provenance,
+                    } });
+                }
+                if (self.executableTypeKeyIsErasedFn(synthetic, target_key.exec_ret_ty)) {
+                    _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                        .payload_root = self.valueRoot(roots.ret),
+                        .provenance = provenance,
+                    } });
+                }
+            },
+            .root,
+            .direct_call,
+            .proc_value,
+            .recursive_group_member,
+            => {},
+        }
+    }
+
+    fn executableTypeKeyIsErasedFn(
+        self: *BodySolver,
+        synthetic: ids.ExecutableSyntheticProc,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) bool {
+        _ = self;
+        const ref = synthetic.executable_type_payloads.refForKey(.{ .bytes = synthetic.artifact.bytes }, key) orelse {
+            lambdaInvariant("lambda-solved executable adapter member target key has no executable payload");
+        };
+        return switch (synthetic.executable_type_payloads.get(ref.payload)) {
+            .erased_fn => true,
+            else => false,
+        };
+    }
+
+    fn executableSyntheticPayloadIsErasedFn(
+        self: *BodySolver,
+        synthetic: ids.ExecutableSyntheticProc,
+        ref: checked_artifact.ExecutableTypePayloadRef,
+    ) bool {
+        _ = self;
+        const payload = synthetic.executable_type_payloads.get(ref.payload);
+        return switch (payload) {
+            .erased_fn => true,
+            else => false,
+        };
+    }
+
     fn expectedProcedureReturn(
         self: *BodySolver,
         proc: canonical.MirProcedureRef,
@@ -5106,6 +6864,7 @@ const BodySolver = struct {
             .to = .{ .local = self.valueRoot(public_ret) },
             .kind = .function_return,
         });
+        try self.propagatePendingLocalRootOrigin(value, public_ret);
         return try self.value_store.addReturn(.{
             .value = value,
         });
@@ -5163,10 +6922,32 @@ const BodySolver = struct {
         return try self.value_store.addValueSpan(values);
     }
 
-    fn lowerExpr(self: *BodySolver, expr_id: Lifted.Ast.ExprId) Allocator.Error!Ast.ExprId {
-        if (self.expr_map.get(expr_id)) |existing| return existing;
+    fn exprCanUseExprMap(expr: Lifted.Ast.Expr) bool {
+        return switch (expr.data) {
+            .capture_ref,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .bool_lit,
+            .str_lit,
+            .const_instance,
+            .const_ref,
+            .pending_local_root,
+            .unit,
+            => true,
 
+            else => false,
+        };
+    }
+
+    fn lowerExpr(self: *BodySolver, expr_id: Lifted.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
+        const can_use_expr_map = exprCanUseExprMap(expr);
+        if (can_use_expr_map) {
+            if (self.expr_map.get(expr_id)) |existing| return existing;
+        }
+
         const ty = try self.type_importer.importType(expr.ty);
         switch (expr.data) {
             .var_ => |symbol| {
@@ -5184,7 +6965,9 @@ const BodySolver = struct {
                     .symbol = symbol,
                     .binding_info = binding_info,
                 } });
-                try self.expr_map.put(expr_id, lowered);
+                if (can_use_expr_map) {
+                    try self.expr_map.put(expr_id, lowered);
+                }
                 return lowered;
             },
             .capture_ref => |slot| {
@@ -5196,7 +6979,9 @@ const BodySolver = struct {
                 const value = try self.newValue(ty, expr.source_ty);
                 try self.publishValueAlias(source, value);
                 const lowered = try self.output.addExpr(ty, expr.source_ty, value, .{ .capture_ref = slot });
-                try self.expr_map.put(expr_id, lowered);
+                if (can_use_expr_map) {
+                    try self.expr_map.put(expr_id, lowered);
+                }
                 return lowered;
             },
             else => {},
@@ -5229,7 +7014,9 @@ const BodySolver = struct {
                     .body = body,
                     .rest = rest,
                 } });
-                try self.expr_map.put(expr_id, lowered);
+                if (can_use_expr_map) {
+                    try self.expr_map.put(expr_id, lowered);
+                }
                 return lowered;
             },
             .block => |block| {
@@ -5239,7 +7026,9 @@ const BodySolver = struct {
                     .stmts = stmts,
                     .final_expr = final_expr,
                 } });
-                try self.expr_map.put(expr_id, lowered);
+                if (can_use_expr_map) {
+                    try self.expr_map.put(expr_id, lowered);
+                }
                 return lowered;
             },
             else => {},
@@ -5264,7 +7053,9 @@ const BodySolver = struct {
                         .field = access.field,
                         .projection_info = projection,
                     } });
-                    try self.expr_map.put(expr_id, lowered);
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
                     return lowered;
                 }
             },
@@ -5287,7 +7078,9 @@ const BodySolver = struct {
                         .elem_index = access.elem_index,
                         .projection_info = projection,
                     } });
-                    try self.expr_map.put(expr_id, lowered);
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
                     return lowered;
                 }
             },
@@ -5310,7 +7103,9 @@ const BodySolver = struct {
                         .payload = payload.payload,
                         .projection_info = projection,
                     } });
-                    try self.expr_map.put(expr_id, lowered);
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
                     return lowered;
                 }
             },
@@ -5330,10 +7125,14 @@ const BodySolver = struct {
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_local_root => |root| blk: {
+                self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                break :blk .{ .pending_local_root = root };
+            },
             .tag => |tag| blk: {
                 const eval_order = try self.lowerTagPayloadEvalSpan(tag.eval_order);
                 const assembly_order = try self.lowerTagPayloadAssemblySpan(tag.assembly_order);
-                try self.publishTagAggregate(value, tag.union_shape, tag.tag, assembly_order);
+                try self.publishTagAggregate(value, tag.union_shape, tag.tag, eval_order, assembly_order);
                 break :blk .{ .tag = .{
                     .union_shape = tag.union_shape,
                     .tag = tag.tag,
@@ -5345,7 +7144,7 @@ const BodySolver = struct {
             .record => |record| blk: {
                 const eval_order = try self.lowerRecordFieldEvalSpan(record.eval_order);
                 const assembly_order = try self.lowerRecordFieldAssemblySpan(record.assembly_order);
-                try self.publishRecordAggregate(value, record.shape, assembly_order);
+                try self.publishRecordAggregate(value, record.shape, eval_order, assembly_order);
                 break :blk .{ .record = .{
                     .shape = record.shape,
                     .eval_order = eval_order,
@@ -5385,14 +7184,20 @@ const BodySolver = struct {
                     .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
                     .dispatch = null,
+                    .source_match_branch = self.active_source_match_branch,
                 });
-                try self.publishCallValueRequestedFunctionEdges(
-                    call_site,
-                    callee_value,
-                    lowered_args.values,
-                    value,
-                    requested_fn_root,
-                );
+                if (self.value_store.values.items[@intFromEnum(callee_value)].pending_local_root_origin) {
+                    self.value_store.call_sites.items[@intFromEnum(call_site)].dispatch = .pending_local_root_call;
+                    self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                } else {
+                    try self.publishCallValueRequestedFunctionEdges(
+                        call_site,
+                        callee_value,
+                        lowered_args.values,
+                        value,
+                        requested_fn_root,
+                    );
+                }
                 break :blk .{ .call_value = .{
                     .func = func,
                     .args = lowered_args.exprs,
@@ -5412,6 +7217,7 @@ const BodySolver = struct {
                     .requested_fn_root = requested_fn_root,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
                     .dispatch = null,
+                    .source_match_branch = self.active_source_match_branch,
                 });
                 const target_instance = try self.registry.reserveDirectCall(self.instance, call_site, call.proc);
                 self.refreshValueStore();
@@ -5502,7 +7308,8 @@ const BodySolver = struct {
             .match_ => |match_| blk: {
                 const match_id = self.freshSourceMatchId();
                 const cond = try self.lowerExpr(match_.cond);
-                const lowered_branches = try self.lowerBranchSpan(match_.branches);
+                const lowered_branches = try self.lowerSourceMatchBranchSpan(match_id, match_.branches);
+                try self.publishSourceMatchPatternRepresentationEdges(self.exprValue(cond), lowered_branches);
                 const branch_inputs = try self.joinInputsForBranches(match_id, lowered_branches);
                 const join_info = try self.value_store.addJoin(.{
                     .result = value,
@@ -5561,13 +7368,21 @@ const BodySolver = struct {
             },
             .for_ => |for_| try self.lowerForExpr(value, for_),
         });
-        try self.expr_map.put(expr_id, lowered);
+        if (can_use_expr_map) {
+            try self.expr_map.put(expr_id, lowered);
+        }
         return lowered;
     }
 
     const SavedBinding = struct {
         symbol: Ast.Symbol,
         previous: ?repr.BindingInfoId,
+    };
+
+    const LoweredFor = struct {
+        patt: Ast.PatId,
+        iterable: Ast.ExprId,
+        body: Ast.ExprId,
     };
 
     fn lowerPatScoped(
@@ -5697,8 +7512,17 @@ const BodySolver = struct {
         }
     }
 
-    fn lowerBranch(self: *BodySolver, branch_id: Lifted.Ast.BranchId) Allocator.Error!Ast.BranchId {
+    fn lowerSourceMatchBranch(
+        self: *BodySolver,
+        branch_id: Lifted.Ast.BranchId,
+        branch_ref: repr.SourceMatchBranchRef,
+    ) Allocator.Error!Ast.BranchId {
         const branch = self.input.getBranch(branch_id);
+        _ = try self.value_store.addSourceMatchBranchReachability(branch_ref);
+        const previous_source_match_branch = self.active_source_match_branch;
+        self.active_source_match_branch = branch_ref;
+        defer self.active_source_match_branch = previous_source_match_branch;
+
         var saved = std.ArrayList(SavedBinding).empty;
         defer saved.deinit(self.allocator);
         const pat = try self.lowerPatScoped(branch.pat, &saved);
@@ -5710,20 +7534,41 @@ const BodySolver = struct {
             .guard = guard,
             .body = body,
             .degenerate = branch.degenerate,
+            .source_match_branch = branch_ref,
         });
     }
 
     fn lowerForExpr(self: *BodySolver, value: repr.ValueInfoId, for_: anytype) Allocator.Error!Ast.Expr.Data {
         _ = value;
+        const lowered = try self.lowerForParts(for_);
+        return .{ .for_ = .{
+            .patt = lowered.patt,
+            .iterable = lowered.iterable,
+            .body = lowered.body,
+        } };
+    }
+
+    fn lowerForParts(self: *BodySolver, for_: anytype) Allocator.Error!LoweredFor {
+        const iterable = try self.lowerExpr(for_.iterable);
+        const iterable_value = self.exprValue(iterable);
+        const iterable_info = self.value_store.values.items[@intFromEnum(iterable_value)];
+        const iterable_parent_root = self.patternProjectionParentRoot(
+            self.valueRoot(iterable_value),
+            iterable_info.logical_ty,
+        );
+        const elem_root = self.structuralChildRoot(iterable_parent_root, .list_elem);
+
         var saved = std.ArrayList(SavedBinding).empty;
         defer saved.deinit(self.allocator);
         const patt = try self.lowerPatScoped(for_.patt, &saved);
+        try self.publishPatternRepresentationEdges(elem_root, patt);
         defer self.restoreBindings(&saved, 0);
-        return .{ .for_ = .{
+
+        return .{
             .patt = patt,
-            .iterable = try self.lowerExpr(for_.iterable),
+            .iterable = iterable,
             .body = try self.lowerExpr(for_.body),
-        } };
+        };
     }
 
     fn lowerStmt(self: *BodySolver, stmt_id: Lifted.Ast.StmtId) Allocator.Error!Ast.StmtId {
@@ -5790,14 +7635,11 @@ const BodySolver = struct {
             },
             .break_ => .break_,
             .for_ => |for_| blk: {
-                var saved = std.ArrayList(SavedBinding).empty;
-                defer saved.deinit(self.allocator);
-                const patt = try self.lowerPatScoped(for_.patt, &saved);
-                defer self.restoreBindings(&saved, 0);
+                const lowered = try self.lowerForParts(for_);
                 break :blk .{ .for_ = .{
-                    .patt = patt,
-                    .iterable = try self.lowerExpr(for_.iterable),
-                    .body = try self.lowerExpr(for_.body),
+                    .patt = lowered.patt,
+                    .iterable = lowered.iterable,
+                    .body = lowered.body,
                 } };
             },
             .while_ => |while_| .{ .while_ = .{
@@ -5918,7 +7760,10 @@ const BodySolver = struct {
                     .payload_plan = .unchanged,
                 });
                 box_boundary = boundary;
-                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
+                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                    .payload_root = payload_root,
+                    .provenance = .{ .local_box_boundary = boundary },
+                } });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = result_root },
                     .to = .{ .local = payload_root },
@@ -5954,7 +7799,10 @@ const BodySolver = struct {
                     .payload_plan = .unchanged,
                 });
                 box_boundary = boundary;
-                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = boundary });
+                _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                    .payload_root = self.valueRoot(result_value),
+                    .provenance = .{ .local_box_boundary = boundary },
+                } });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(boxed_value) },
                     .to = .{ .local = self.valueRoot(result_value) },
@@ -6150,15 +7998,125 @@ const BodySolver = struct {
         return try self.output.addStmtSpan(output_items);
     }
 
-    fn lowerBranchSpan(self: *BodySolver, span: Lifted.Ast.Span(Lifted.Ast.BranchId)) Allocator.Error!Ast.Span(Ast.BranchId) {
+    fn lowerSourceMatchBranchSpan(
+        self: *BodySolver,
+        match_id: repr.SourceMatchId,
+        span: Lifted.Ast.Span(Lifted.Ast.BranchId),
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
         const input_items = self.input.sliceBranchSpan(span);
         if (input_items.len == 0) return Ast.Span(Ast.BranchId).empty();
         const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
         defer self.allocator.free(output_items);
         for (input_items, 0..) |branch, i| {
-            output_items[i] = try self.lowerBranch(branch);
+            const branch_ref: repr.SourceMatchBranchRef = .{
+                .match = match_id,
+                .branch = @enumFromInt(@as(u32, @intCast(i))),
+                .alternative = @enumFromInt(@as(u32, @intCast(i))),
+            };
+            output_items[i] = try self.lowerSourceMatchBranch(branch, branch_ref);
         }
         return try self.output.addBranchSpan(output_items);
+    }
+
+    fn publishSourceMatchPatternRepresentationEdges(
+        self: *BodySolver,
+        scrutinee: repr.ValueInfoId,
+        branches: Ast.Span(Ast.BranchId),
+    ) Allocator.Error!void {
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        const scrutinee_root = self.valueRoot(scrutinee);
+        for (branch_ids) |branch_id| {
+            const branch = self.output.branches.items[@intFromEnum(branch_id)];
+            try self.publishPatternRepresentationEdges(scrutinee_root, branch.pat);
+        }
+    }
+
+    fn publishPatternRepresentationEdges(
+        self: *BodySolver,
+        source_root: repr.RepRootId,
+        pat_id: Ast.PatId,
+    ) Allocator.Error!void {
+        const pat = self.output.pats.items[@intFromEnum(pat_id)];
+        const pat_root = self.valueRoot(pat.value_info);
+        try self.publishRootAlias(source_root, pat_root);
+
+        switch (pat.data) {
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .wildcard,
+            .var_,
+            => {},
+            .as => |as| try self.publishPatternRepresentationEdges(source_root, as.pattern),
+            .nominal => |child| {
+                const backing_root = self.patternProjectionParentRoot(pat_root, pat.ty);
+                try self.publishPatternRepresentationEdges(backing_root, child);
+            },
+            .tuple => |items| {
+                const parent_root = self.patternProjectionParentRoot(pat_root, pat.ty);
+                const child_ids = self.output.pat_ids.items[items.start..][0..items.len];
+                for (child_ids, 0..) |child_id, i| {
+                    const child_root = self.structuralChildRoot(parent_root, .{ .tuple_elem = @intCast(i) });
+                    try self.publishPatternRepresentationEdges(child_root, child_id);
+                }
+            },
+            .record => |record| {
+                const parent_root = self.patternProjectionParentRoot(pat_root, pat.ty);
+                const fields = self.output.record_field_patterns.items[record.fields.start..][0..record.fields.len];
+                for (fields) |field| {
+                    const child_root = self.structuralChildRoot(parent_root, .{ .record_field = field.field });
+                    try self.publishPatternRepresentationEdges(child_root, field.pattern);
+                }
+                if (record.rest) |rest| {
+                    try self.publishRecordRestPatternRepresentationEdges(parent_root, record.shape, rest);
+                }
+            },
+            .tag => |tag| {
+                const parent_root = self.patternProjectionParentRoot(pat_root, pat.ty);
+                const payloads = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
+                for (payloads) |payload| {
+                    const child_root = self.structuralChildRoot(parent_root, .{ .tag_payload = payload.payload });
+                    try self.publishPatternRepresentationEdges(child_root, payload.pattern);
+                }
+            },
+            .list => |list| {
+                const parent_root = self.patternProjectionParentRoot(pat_root, pat.ty);
+                const elem_root = self.structuralChildRoot(parent_root, .list_elem);
+                const items = self.output.pat_ids.items[list.items.start..][0..list.items.len];
+                for (items) |item| {
+                    try self.publishPatternRepresentationEdges(elem_root, item);
+                }
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pat| {
+                        try self.publishPatternRepresentationEdges(parent_root, rest_pat);
+                    }
+                }
+            },
+        }
+    }
+
+    fn publishRecordRestPatternRepresentationEdges(
+        self: *BodySolver,
+        source_record_root: repr.RepRootId,
+        source_shape: MonoRow.RecordShapeId,
+        rest_pat_id: Ast.PatId,
+    ) Allocator.Error!void {
+        const rest_pat = self.output.pats.items[@intFromEnum(rest_pat_id)];
+        const rest_root = self.valueRoot(rest_pat.value_info);
+        const rest_parent_root = self.patternProjectionParentRoot(rest_root, rest_pat.ty);
+        const rest_fields = try self.logicalRecordFields(rest_pat.ty);
+        const rest_shape = try self.recordShapeForTypeFields(rest_fields);
+        for (rest_fields) |field| {
+            const source_field = self.recordShapeFieldByLabel(source_shape, field.name);
+            const source_field_root = self.structuralChildRoot(source_record_root, .{ .record_field = source_field });
+            const rest_field = self.recordShapeFieldByLabel(rest_shape, field.name);
+            const rest_field_root = self.structuralChildRoot(rest_parent_root, .{ .record_field = rest_field });
+            try self.publishRootAlias(source_field_root, rest_field_root);
+        }
+        try self.publishPatternRepresentationEdges(rest_root, rest_pat_id);
     }
 
     fn joinInputsForBranches(
@@ -6212,6 +8170,10 @@ const BodySolver = struct {
             if (existing != join_info) lambdaInvariant("lambda-solved join result already points at a different join");
         } else {
             value_info.join_info = join_info;
+        }
+        const join = self.value_store.joins.items[@intFromEnum(join_info)];
+        for (self.value_store.sliceJoinInputSpan(join.inputs)) |input| {
+            try self.propagatePendingLocalRootOrigin(input.value, result);
         }
     }
 
@@ -6335,7 +8297,7 @@ const BodySolver = struct {
         for (input_items, 0..) |field, i| {
             output_items[i] = .{
                 .field = field.field,
-                .value = try self.lowerExpr(field.value),
+                .eval_index = field.eval_index,
             };
         }
         return try self.output.addRecordFieldAssemblySpan(output_items);
@@ -6363,7 +8325,7 @@ const BodySolver = struct {
         for (input_items, 0..) |payload, i| {
             output_items[i] = .{
                 .payload = payload.payload,
-                .value = try self.lowerExpr(payload.value),
+                .eval_index = payload.eval_index,
             };
         }
         return try self.output.addTagPayloadAssemblySpan(output_items);
@@ -6393,20 +8355,51 @@ const BodySolver = struct {
         lambdaInvariant("lambda-solved tag aggregate projection referenced a missing payload");
     }
 
+    fn recordAssemblyEval(
+        evals: []const Ast.RecordFieldEval,
+        assembly: Ast.RecordFieldAssembly,
+    ) Ast.RecordFieldEval {
+        if (assembly.eval_index >= evals.len) {
+            lambdaInvariant("lambda-solved record assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.field != assembly.field) {
+            lambdaInvariant("lambda-solved record assembly field disagreed with eval-order field");
+        }
+        return evaluated;
+    }
+
+    fn tagAssemblyEval(
+        evals: []const Ast.TagPayloadEval,
+        assembly: Ast.TagPayloadAssembly,
+    ) Ast.TagPayloadEval {
+        if (assembly.eval_index >= evals.len) {
+            lambdaInvariant("lambda-solved tag assembly referenced eval index outside eval order");
+        }
+        const evaluated = evals[assembly.eval_index];
+        if (evaluated.payload != assembly.payload) {
+            lambdaInvariant("lambda-solved tag assembly payload disagreed with eval-order payload");
+        }
+        return evaluated;
+    }
+
     fn publishRecordAggregate(
         self: *BodySolver,
         value: repr.ValueInfoId,
         shape: MonoRow.RecordShapeId,
+        eval_order: Ast.Span(Ast.RecordFieldEval),
         assembly_order: Ast.Span(Ast.RecordFieldAssembly),
     ) Allocator.Error!void {
+        const evals = self.output.record_field_evals.items[eval_order.start..][0..eval_order.len];
         const assemblies = self.output.record_field_assemblies.items[assembly_order.start..][0..assembly_order.len];
         const fields = try self.allocator.alloc(repr.FieldValueInfo, assemblies.len);
         errdefer if (fields.len > 0) self.allocator.free(fields);
 
         for (assemblies, 0..) |field, i| {
+            const evaluated = recordAssemblyEval(evals, field);
             fields[i] = .{
                 .field = field.field,
-                .value = self.exprValue(field.value),
+                .value = self.exprValue(evaluated.value),
             };
         }
         try self.publishAggregate(value, .{ .record = .{
@@ -6438,16 +8431,19 @@ const BodySolver = struct {
         value: repr.ValueInfoId,
         union_shape: MonoRow.TagUnionShapeId,
         tag_id: MonoRow.TagId,
+        eval_order: Ast.Span(Ast.TagPayloadEval),
         assembly_order: Ast.Span(Ast.TagPayloadAssembly),
     ) Allocator.Error!void {
+        const evals = self.output.tag_payload_evals.items[eval_order.start..][0..eval_order.len];
         const assemblies = self.output.tag_payload_assemblies.items[assembly_order.start..][0..assembly_order.len];
         const payloads = try self.allocator.alloc(repr.TagPayloadValueInfo, assemblies.len);
         errdefer if (payloads.len > 0) self.allocator.free(payloads);
 
         for (assemblies, 0..) |payload, i| {
+            const evaluated = tagAssemblyEval(evals, payload);
             payloads[i] = .{
                 .payload = payload.payload,
-                .value = self.exprValue(payload.value),
+                .value = self.exprValue(evaluated.value),
             };
         }
         var payload_root_count: usize = 0;
@@ -6636,6 +8632,120 @@ const BodySolver = struct {
         lambdaInvariant("lambda-solved aggregate nominal value has no published nominal backing root");
     }
 
+    fn patternProjectionParentRoot(
+        self: *BodySolver,
+        parent: repr.RepRootId,
+        logical_ty: Type.TypeVarId,
+    ) repr.RepRootId {
+        const root_ty = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root_ty)) {
+            .nominal => |nominal| self.structuralChildRoot(parent, .{ .nominal_backing = nominal.nominal }),
+            else => parent,
+        };
+    }
+
+    fn structuralChildRoot(
+        self: *BodySolver,
+        parent: repr.RepRootId,
+        kind: repr.RepresentationEdgeKind,
+    ) repr.RepRootId {
+        for (self.representation_store.representation_edges.items) |edge| {
+            const from = switch (edge.from) {
+                .local => |local| local,
+                .procedure_public,
+                .procedure_function_root,
+                => continue,
+            };
+            if (from != parent) continue;
+            if (!self.representationEdgeKindMatches(edge.kind, kind)) continue;
+            return switch (edge.to) {
+                .local => |local| local,
+                .procedure_public,
+                .procedure_function_root,
+                => lambdaInvariant("lambda-solved structural child edge targets procedure-public root"),
+            };
+        }
+        lambdaInvariant("lambda-solved structural child root is missing");
+    }
+
+    fn representationEdgeKindMatches(
+        self: *BodySolver,
+        left: repr.RepresentationEdgeKind,
+        right: repr.RepresentationEdgeKind,
+    ) bool {
+        _ = self;
+        return switch (left) {
+            .value_alias => switch (right) {
+                .value_alias => true,
+                else => false,
+            },
+            .value_move => switch (right) {
+                .value_move => true,
+                else => false,
+            },
+            .function_arg => |a| switch (right) {
+                .function_arg => |b| a == b,
+                else => false,
+            },
+            .function_return => switch (right) {
+                .function_return => true,
+                else => false,
+            },
+            .function_callable => switch (right) {
+                .function_callable => true,
+                else => false,
+            },
+            .record_field => |a| switch (right) {
+                .record_field => |b| a == b,
+                else => false,
+            },
+            .tuple_elem => |a| switch (right) {
+                .tuple_elem => |b| a == b,
+                else => false,
+            },
+            .tag_payload => |a| switch (right) {
+                .tag_payload => |b| a == b,
+                else => false,
+            },
+            .list_elem => switch (right) {
+                .list_elem => true,
+                else => false,
+            },
+            .box_payload => switch (right) {
+                .box_payload => true,
+                else => false,
+            },
+            .nominal_backing => |a| switch (right) {
+                .nominal_backing => |b| a.module_name == b.module_name and a.type_name == b.type_name,
+                else => false,
+            },
+            .branch_join => switch (right) {
+                .branch_join => true,
+                else => false,
+            },
+            .loop_phi => switch (right) {
+                .loop_phi => true,
+                else => false,
+            },
+            .mutable_version => switch (right) {
+                .mutable_version => true,
+                else => false,
+            },
+        };
+    }
+
+    fn publishRootAlias(
+        self: *BodySolver,
+        source_root: repr.RepRootId,
+        target_root: repr.RepRootId,
+    ) Allocator.Error!void {
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = source_root },
+            .to = .{ .local = target_root },
+            .kind = .value_alias,
+        });
+    }
+
     fn publishValueAlias(
         self: *BodySolver,
         source: repr.ValueInfoId,
@@ -6647,11 +8757,21 @@ const BodySolver = struct {
         } else {
             result_info.value_alias_source = source;
         }
+        try self.propagatePendingLocalRootOrigin(source, result);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(source) },
             .to = .{ .local = self.valueRoot(result) },
             .kind = .value_alias,
         });
+    }
+
+    fn propagatePendingLocalRootOrigin(
+        self: *BodySolver,
+        source: repr.ValueInfoId,
+        result: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        if (!self.value_store.values.items[@intFromEnum(source)].pending_local_root_origin) return;
+        self.value_store.values.items[@intFromEnum(result)].pending_local_root_origin = true;
     }
 
     fn publishProjectionRepresentationEdge(
@@ -6678,14 +8798,9 @@ const BodySolver = struct {
         source: repr.ValueInfoId,
         kind: repr.ProjectionKind,
     ) repr.RepRootId {
+        _ = kind;
         const source_info = self.value_store.values.items[@intFromEnum(source)];
         const source_root = self.valueRoot(source);
-        switch (kind) {
-            .record_field => {},
-            .tuple_elem,
-            .tag_payload,
-            => return source_root,
-        }
         const root_ty = self.type_importer.output.unlinkConst(source_info.logical_ty);
         return switch (self.type_importer.output.getNode(root_ty)) {
             .nominal => |nominal| self.structuralNominalBackingRoot(source_root, nominal.nominal),
@@ -6740,6 +8855,7 @@ const BodySolver = struct {
         } else {
             result_info.projection_info = projection;
         }
+        try self.propagatePendingLocalRootOrigin(source, result);
         try self.publishProjectionRepresentationEdge(source, result, kind);
         return projection;
     }
@@ -6773,6 +8889,7 @@ const BodySolver = struct {
             .source_ty = source_ty,
             .source_ty_payload = self.sourcePayloadForKey(source_ty),
             .root = root,
+            .source_match_branch = self.active_source_match_branch,
         });
         try self.representation_store.publishRootKind(root, .{ .local_value = .{
             .instance = self.instance,
@@ -6917,6 +9034,17 @@ const BodySolver = struct {
         return try self.row_shapes.internRecordShapeFromLabels(labels);
     }
 
+    fn recordShapeFieldByLabel(
+        self: *BodySolver,
+        shape: MonoRow.RecordShapeId,
+        label: canonical.RecordFieldLabelId,
+    ) MonoRow.RecordFieldId {
+        for (self.row_shapes.recordShapeFields(shape)) |field| {
+            if (self.row_shapes.recordField(field).label == label) return field;
+        }
+        lambdaInvariant("lambda-solved record shape does not contain requested field label");
+    }
+
     fn tagUnionShapeForTypeTags(
         self: *BodySolver,
         tags: []const Type.Tag,
@@ -6942,6 +9070,18 @@ const BodySolver = struct {
                 else => lambdaInvariant("lambda-solved list structural root attached to non-list type"),
             },
             else => lambdaInvariant("lambda-solved list structural root attached to unresolved type"),
+        };
+    }
+
+    fn logicalRecordFields(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error![]const Type.Field {
+        const root = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .nominal => |nominal| try self.logicalRecordFields(nominal.backing),
+            .content => |content| switch (content) {
+                .record => |record| self.type_importer.output.sliceFields(record.fields),
+                else => lambdaInvariant("lambda-solved record pattern root attached to non-record type"),
+            },
+            else => lambdaInvariant("lambda-solved record pattern root attached to unresolved type"),
         };
     }
 
