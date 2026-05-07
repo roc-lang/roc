@@ -1000,6 +1000,43 @@ test "roc test with nested list chunks does not panic on layout upgrade (dev)" {
     return error.SkipZigTest;
 }
 
+fn testRocTestDoesNotPanicOnMissingMethod(opt: []const u8) !void {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Regression test for issue #9389: calling a non-existent method
+    // (here, `list.reverse()` on a `List(U8)`) used to SIGSEGV in release
+    // and panic in debug because `roc test` ignored the type-checker's
+    // "MISSING METHOD" diagnostic and proceeded into monomorphization.
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache", opt }, "test/cli/MissingMethodDoesNotPanic.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // 1. Command exited cleanly with code 1 (compile error), not a crash signal.
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // 2. Stderr surfaces the type-checker's diagnostic.
+    const has_missing_method = std.mem.indexOf(u8, result.stderr, "MISSING METHOD") != null;
+    try testing.expect(has_missing_method);
+
+    // 3. Stderr surfaces the bail-out message that prevents monomorphization
+    //    from running on broken input.
+    const has_bailout = std.mem.indexOf(u8, result.stderr, "Compilation errors prevent tests from running") != null;
+    try testing.expect(has_bailout);
+
+    // 4. Stderr must not contain "panic" — that would mean the compiler crashed.
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic);
+}
+
+test "roc test does not panic on missing method (interpreter)" {
+    try testRocTestDoesNotPanicOnMissingMethod("--opt=interpreter");
+}
+
+test "roc test does not panic on missing method (dev)" {
+    try testRocTestDoesNotPanicOnMissingMethod("--opt=dev");
+}
+
 fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
     const testing = std.testing;
     const gpa = testing.allocator;

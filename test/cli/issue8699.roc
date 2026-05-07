@@ -1,3 +1,5 @@
+main! = |_| {}
+
 chunks = |arr, n| {
 	var $res = []
 	var $chunk = []

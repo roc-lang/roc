@@ -5489,6 +5489,15 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         }
     }
 
+    // Compilation errors leave the CIR in a state the downstream passes
+    // (monomorphization, dispatch resolution) don't handle gracefully — they
+    // panic in debug and become UB (SIGSEGV) in release. Bail here with the
+    // diagnostics already rendered, matching `roc check` behavior.
+    if (has_compilation_errors) {
+        try stderr.print("\nCompilation errors prevent tests from running.\n", .{});
+        return error.TestsFailed;
+    }
+
     // Collect all module environments for the interpreter
     // This includes all modules from all packages (imports from other modules)
     var other_modules_list = std.array_list.Managed(*const ModuleEnv).init(ctx.gpa);
