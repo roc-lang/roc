@@ -1318,7 +1318,7 @@ lowering the explicit executable type payloads in
 `ErasedPromotedProcedureExecutableSignature`, materializing the explicit capture,
 applying the argument value transforms, issuing `call_erased`, and applying
 the result value transform. No runtime thunk, runtime initializer procedure,
-runtime top-level erased callable object, runtime closure object,
+runtime top-level erased callable allocation, runtime closure allocation,
 source-shape recovery, or bare canonical-key-to-TypeId recovery is allowed.
 The ordinary executable type lowering intern table may be used only when the
 lowering request also carries the explicit executable type payload ref whose
@@ -2794,10 +2794,10 @@ For an erased promoted procedure:
 - `hidden_capture` is the materialized capture plan for this promoted erased
   callable value. It is not part of `call_sig` and must not affect the erased
   callable slot type. Ordinary Roc boxed-erased ABI always passes one opaque
-  capture-handle argument; `hidden_capture` decides whether that handle is the
-  canonical empty/null handle, a zero-sized typed payload, or a boxed materialized
-  capture value. Runtime pointer nullness, runtime capture byte size, and backend
-  ABI behavior must not decide the semantic capture case.
+  capture-handle argument; `hidden_capture` decides whether the inline capture
+  region has no materialized capture, a zero-sized typed capture, or a
+  materialized runtime capture payload. Runtime pointer nullness, runtime capture
+  byte size, and backend ABI behavior must not decide the semantic capture case.
 
 All mismatches are compiler invariant violations: debug builds assert at the
 first boundary that observes the mismatch and release builds use `unreachable`.
@@ -3330,11 +3330,11 @@ these cases it has by looking at arity, type shape, capture byte size, code-ref
 variant, or runtime data.
 
 `ErasedHiddenCaptureArgPlan` must say exactly which materialized capture value
-backs the opaque capture handle passed to erased code, or state that the
-canonical empty/null handle is used. The decision comes from the materialization
-plan above, never from `ErasedCallSigKey`. It must not be inferred from runtime
-byte size, pointer nullness, source syntax, backend layout, or whether a
-particular procedure happens to need a non-empty capture record after
+backs the inline capture region whose pointer is passed to erased code, or state
+that there is no materialized capture. The decision comes from the
+materialization plan above, never from `ErasedCallSigKey`. It must not be
+inferred from runtime byte size, pointer nullness, source syntax, backend layout,
+or whether a particular procedure happens to need a non-empty capture record after
 optimization. These plans are executable inputs, not verifier hints.
 
 #### Resolved Value References Before Mono MIR
@@ -5396,7 +5396,8 @@ const CallableValueSource = union(enum) {
 
 const AlreadyErasedCapturePlan = union(enum) {
     // There is no materialized capture value. The ordinary boxed-erased ABI
-    // still passes the canonical empty/null opaque capture handle.
+    // still passes the trailing opaque capture pointer, and the erased code
+    // must ignore it.
     none,
 
     // The materialized capture exists but its runtime value is zero-sized. The
@@ -7729,11 +7730,13 @@ by the named `Box(T)` boundary.
 
 When executable MIR consumes `ProcValueErasePlan`, the erased ABI always has the
 same opaque capture-handle argument for ordinary Roc boxed-erased callables. A
-no-capture procedure value packs the canonical empty/null handle. A zero-sized
-capture uses explicit zero-sized typed materialization metadata. A runtime
-capture record packs `ErasedCapture.boxed` with the exact `capture_shape_key`
-after applying each published capture transform. Runtime byte size, pointer
-nullness, and backend behavior must not decide the semantic capture case.
+no-capture procedure value allocates the normal erased-callable payload header
+with no materialized capture bytes, and its erased code ignores the trailing
+capture pointer. A zero-sized capture uses explicit zero-sized typed
+materialization metadata. A runtime capture record packs the capture bytes inline
+after applying each published capture transform and records the exact
+`capture_shape_key`. Runtime byte size, pointer nullness, and backend behavior
+must not decide the semantic capture case.
 
 For unboxing, executable MIR performs the low-level unbox and gives the payload
 the explicit `payload_boundary_ty` representation. There is no
@@ -8001,13 +8004,224 @@ and the source function type arity must all equal `fixed_arity`.
 
 For ordinary Roc boxed erased callables, `capture_arg` is always one opaque
 capture-handle argument appended after all fixed-arity Roc source arguments. The
-handle is a runtime pointer-sized value. A no-capture callable passes the
-canonical null/empty handle and its erased entry procedure ignores it. A
-capturing callable passes a handle to the compiler-materialized capture payload,
-and the erased entry procedure or adapter body consumes that handle according to
-its explicit `MaterializedErasedCallableValue.capture` or `ErasedAdapterKey`
-metadata. The call-site ABI is therefore independent of the concrete capture
-schema of the value currently stored in the erased slot.
+handle is a runtime pointer-sized value. For ordinary boxed-erased calls, the
+handle is the pointer returned by `erasedCallableCapturePtr(payload)` below,
+even when the callable has no captures. A no-capture callable's erased procedure
+or adapter body ignores that trailing pointer. A capturing callable consumes that
+pointer according to its explicit `MaterializedErasedCallableValue.capture` or
+`ErasedAdapterKey` metadata. The call-site ABI is therefore independent of the
+concrete capture schema of the value currently stored in the erased slot.
+
+This capture-handle argument is a call ABI parameter. It is not a second runtime
+field next to the function pointer, not a descriptor pointer, not a closure
+header, and not a layout-discovery mechanism.
+
+The runtime representation of an ordinary Roc boxed erased callable is exactly
+one refcounted Roc allocation. The value stored in `Box(T)` is the ordinary
+Roc box pointer to that allocation's payload bytes. Those payload bytes begin
+with a fixed erased-callable header and then store the capture bytes inline.
+
+The concrete runtime data structures are:
+
+```zig
+const std = @import("std");
+const builtins = @import("builtins");
+
+pub const RocOps = builtins.utils.RocOps;
+
+/// Ordinary Roc Box payload pointer. Null is valid only for Box(ZST).
+/// A boxed erased callable is never null.
+pub const RocBox = ?*anyopaque;
+
+/// Header at the start of the Box payload for an ordinary Roc boxed erased
+/// callable. This is runtime data, not semantic ABI identity. The semantic
+/// erased-call ABI remains `ErasedCallSigKey` / `ErasedFnAbiKey`.
+pub const ErasedCallablePayload = extern struct {
+    /// The function pointer to call for this erased callable value.
+    /// Codegen casts this to the statically known erased-call function type
+    /// named by the call site's `ErasedFnAbiKey`.
+    callable_fn_ptr: *const anyopaque,
+
+    /// Runs exactly once when the enclosing Roc allocation's outer refcount
+    /// reaches zero, before that allocation is freed.
+    ///
+    /// The pointer passed to this function is the inline capture byte region
+    /// immediately after the `ErasedCallablePayload` header and padding. The
+    /// callback may decref or release values referenced by the capture, but it
+    /// must not free the inline capture bytes themselves; those bytes are part
+    /// of the enclosing Roc allocation.
+    on_drop: ?*const fn (capture: *anyopaque, roc_ops: *RocOps) callconv(.c) void,
+};
+
+pub const erased_callable_capture_alignment: usize = 16;
+
+pub const erased_callable_capture_offset: usize =
+    std.mem.alignForward(usize, @sizeOf(ErasedCallablePayload), erased_callable_capture_alignment);
+
+pub fn erasedCallableCapturePtr(payload: *ErasedCallablePayload) *anyopaque {
+    const base: [*]u8 = @ptrCast(payload);
+    return @ptrCast(base + erased_callable_capture_offset);
+}
+```
+
+The physical bytes are:
+
+```text
+Roc allocation header
+data pointer / RocBox value points here
+|
+v
+ErasedCallablePayload {
+    callable_fn_ptr,
+    on_drop,
+}
+padding to erased_callable_capture_alignment
+inline capture bytes
+```
+
+There is no runtime discriminant. There is no `abi` pointer in the runtime
+payload. There is no `capture_offset` field; the capture starts at the fixed
+aligned offset above. There are no flags. There is no separate descriptor
+allocation. There is no second pointer chase from the boxed erased callable to a
+capture allocation created only for erased dispatch.
+
+The erased function pointer uses the call site's statically known erased-call
+ABI. The ordinary fixed-arity Roc arguments come first. The hidden capture
+pointer is last, so the capture is naturally ignorable by no-capture procedures.
+`roc_ops` is runtime context, not a Roc source argument; it may be passed before
+the source arguments according to the backend's ordinary runtime ABI convention.
+For example, the ordinary boxed-erased call ABI for `I64 -> I64` can be
+represented as:
+
+```zig
+pub const ErasedI64ToI64Fn =
+    *const fn (roc_ops: *RocOps, arg0: i64, capture: *anyopaque) callconv(.c) i64;
+
+pub fn callErasedI64ToI64(boxed: RocBox, roc_ops: *RocOps, arg0: i64) i64 {
+    const raw_payload = boxed orelse unreachable;
+    const payload: *ErasedCallablePayload = @ptrCast(@alignCast(raw_payload));
+    const capture = erasedCallableCapturePtr(payload);
+    const callable_fn: ErasedI64ToI64Fn = @ptrCast(payload.callable_fn_ptr);
+    return callable_fn(roc_ops, arg0, capture);
+}
+```
+
+A no-capture function still uses the uniform erased-call function type and
+ignores the trailing capture pointer:
+
+```zig
+fn plus_one_erased(roc_ops: *RocOps, arg0: i64, capture: *anyopaque) callconv(.c) i64 {
+    _ = roc_ops;
+    _ = capture;
+    return arg0 + 1;
+}
+```
+
+Reference counting is ordinary Roc box reference counting:
+
+1. Creating the boxed erased callable allocates one Roc allocation and writes the
+   header plus inline capture bytes.
+2. If the capture bytes contain refcounted Roc values, construction must retain
+   those values when the bytes are copied into the allocation, exactly like
+   `Box.box({ field: some_str })` retains `some_str` for the boxed copy.
+3. Copying the boxed erased callable increments only the outer Roc allocation
+   refcount.
+4. Dropping a non-final reference decrements only the outer Roc allocation
+   refcount.
+5. When the outer allocation reaches zero, the runtime calls `on_drop(capture,
+   roc_ops)` if it is non-null, then frees the enclosing Roc allocation.
+
+There is deliberately no `capture_rc(+1/-1)` function pointer. Captures are not
+copied independently after construction; the enclosing Roc allocation is what is
+shared. Capture-specific logic is needed only at final drop.
+
+LIR ARC must model a boxed erased callable as an ordinary refcounted boxed value.
+The ARC inserter emits `incref` and `decref` for the value exactly as it does for
+other refcounted values. It must not inspect the erased callable's capture
+layout to decide whether ordinary copies need recursive retains. The generated
+decref/free helper for the boxed-erased layout owns the final-drop behavior:
+when the outer allocation is about to be freed, it reads the
+`ErasedCallablePayload` header, computes the inline capture pointer, calls
+`on_drop` if non-null, and then frees the enclosing Roc allocation. Backends
+still do not reason about this; they follow the explicit LIR RC statements and
+call the selected helper.
+
+For Roc-created captures, `on_drop` is compiler-generated from the explicit
+capture executable type. It recursively decrefs the capture fields that contain
+refcounted data. For example:
+
+```roc
+make_boxed_adder : I64 -> Box(I64 -> I64)
+make_boxed_adder = |n|
+    Box.box(|x| x + n)
+
+add_one : I64 -> I64
+add_one = Box.unbox(make_boxed_adder(1))
+
+main : I64
+main = add_one(41)
+```
+
+The boxed erased callable created by `Box.box(|x| x + n)` stores:
+
+- `callable_fn_ptr`: the compiler-generated erased adapter for the lambda
+- `on_drop`: a compiler-generated cleanup function for the lambda capture
+- inline capture bytes: the captured `n`
+
+If the capture contains a refcounted Roc value, the same rule applies:
+
+```roc
+make_boxed_adder : I64 -> Box(I64 -> I64)
+make_boxed_adder = |n| {
+    boxed_n = Box.box(n)
+
+    Box.box(|x| x + Box.unbox(boxed_n))
+}
+
+add_one : I64 -> I64
+add_one = Box.unbox(make_boxed_adder(1))
+
+main : I64
+main = add_one(41)
+```
+
+The inline capture bytes contain the captured `boxed_n` value. Construction of
+the erased callable retains the `boxed_n` box for the boxed callable's copy.
+Copies of the erased callable retain only the erased callable's outer allocation.
+When the erased callable allocation is finally dropped, `on_drop` decrefs
+`boxed_n`; if that was the last reference, the normal `Box(I64)` final-drop path
+then frees its payload.
+
+Host-provided erased callables use the same runtime shape. A host value shaped
+as "function pointer plus host context pointer" is imported by allocating one
+Roc erased-callable payload and storing the host context in the inline capture
+bytes:
+
+```zig
+pub const HostI64ToI64Fn =
+    *const fn (roc_ops: *RocOps, arg0: i64, capture: *anyopaque) callconv(.c) i64;
+
+pub const HostCapture = extern struct {
+    context: *anyopaque,
+    release_context: ?*const fn (context: *anyopaque) callconv(.c) void,
+};
+
+fn hostCaptureOnDrop(capture: *anyopaque, roc_ops: *RocOps) callconv(.c) void {
+    _ = roc_ops;
+    const host_capture: *HostCapture = @ptrCast(@alignCast(capture));
+    if (host_capture.release_context) |release| {
+        release(host_capture.context);
+    }
+}
+```
+
+The construction/import boundary is responsible for any host retain operation
+needed to give Roc ownership of the host context. After construction, ordinary
+Roc copies of the boxed erased callable only update the outer Roc refcount. When
+the outer Roc allocation reaches zero, `hostCaptureOnDrop` releases the host
+context exactly once. If the host context is immortal or needs no release,
+`on_drop` may be null or may point to a no-op cleanup function; the choice is a
+runtime implementation detail and not part of semantic slot identity.
 
 `hosted_owner` is set only for hosted, platform, or intrinsic ABI shapes whose
 ABI is defined outside ordinary Roc boxed-erased calling.
@@ -8058,7 +8272,8 @@ one opaque capture-handle argument is passed after all fixed-arity Roc arguments
 
 That final opaque capture-handle ABI slot is present even when the particular
 erased callable value has no materialized captures. In that case executable MIR
-passes the canonical empty/null capture handle. The presence of the ABI slot is
+still passes the trailing capture pointer computed from the boxed erased-callable
+payload, and the erased code ignores it. The presence of the ABI slot is
 therefore a property of the ordinary Roc boxed-erased calling convention, not of
 the value's concrete capture shape. This is why a finite adapter for
 `|x| x + 1` and a bodyless promoted-wrapper parameter of type `I64 -> I64` must
@@ -11049,8 +11264,8 @@ capture. The concrete erased code may be known before interpretation, or it may
 be selected by the LIR interpreter result when the callable result is already an
 erased function value from `Box.unbox`. In both cases the published promoted
 procedure body stores a concrete `ErasedCallableCodeRef`. It must not publish a
-top-level packed erased callable object, runtime closure object, global callable
-object, or runtime thunk.
+top-level packed erased callable allocation, runtime closure allocation, global
+callable allocation, or runtime thunk.
 
 For example:
 
@@ -11067,7 +11282,7 @@ promote it to a closed procedure that calls the erased callable selected by
 evaluating `make_boxed({})` through LIR. The erased callable is valid only
 because the erased representation came from the explicit `Box(I64 -> I64)`
 boundary. The implementation must not leave a runtime top-level erased callable
-object behind.
+allocation behind.
 
 Callable promotion turns each `ComptimeCallable` that is the result of a
 top-level binding into a closed top-level procedure value before artifact
@@ -11103,13 +11318,14 @@ read is `ErasedCallableResultCodePlan.read_from_interpreted_erased_value`: in
 that case the plan already states that the root result is an already-erased
 function value with a fixed `ErasedCallSigKey`, fixed source function type, fixed
 `BoxErasureProvenance`, and fixed capture reification plan. Finalization reads
-field 0 of that erased function value, decodes the interpreter's `LirProcSpecId`,
-looks it up in the explicit `LoweredErasedCallableCodeMap`, validates the decoded
-code against the result plan, and then publishes the concrete
-`ErasedCallableCodeRef`. Missing map entries, signature mismatches, source
-function type mismatches, capture-shape mismatches, or non-erased closure layouts
-are compiler invariant violations: debug builds assert immediately and release
-builds use `unreachable`.
+the `callable_fn_ptr` from the interpreted erased callable payload header,
+decodes the interpreter's `LirProcSpecId` through the explicit
+`LoweredErasedCallableCodeMap`, validates the decoded code against the result
+plan, and then publishes the concrete `ErasedCallableCodeRef`. Missing map
+entries, signature mismatches, source function type mismatches,
+capture-shape mismatches, or non-erased callable payload layouts are compiler
+invariant violations: debug builds assert immediately and release builds use
+`unreachable`.
 
 Conceptual shape:
 
@@ -11267,10 +11483,12 @@ This is independent of whether the eventual code ref is a direct proc value or a
 finite-set adapter.
 
 Compile-time finalization also needs a target-local physical layout for every
-non-null erased hidden capture payload that may be read from an interpreted
-erased function value. The runtime erased callable representation is deliberately
-uniform: field 0 is the erased code pointer and field 1 is one opaque capture
-handle. Field 1 never carries the concrete payload layout. Therefore, when
+non-empty inline capture payload that may be read from an interpreted erased
+function value. The runtime boxed-erased callable representation is deliberately
+uniform: the `Box(T)` payload starts with `ErasedCallablePayload { callable_fn_ptr,
+on_drop }`, and the capture bytes begin at the fixed
+`erased_callable_capture_offset`. The header never carries the concrete capture
+layout. Therefore, when
 `ErasedCallableResultCodePlan.read_from_interpreted_erased_value` is present and
 `ErasedPromotedProcedureExecutableSignaturePayloads.hidden_capture` is non-null,
 the checked-artifact-to-LIR pipeline must publish an explicit layout request for
@@ -11279,16 +11497,18 @@ lowering must commit that request through the same layout path used for ordinary
 executable values and return a target-local
 `LoweredCompileTimeRequestedLayout { exec_ty_key, layout_idx }` alongside the
 lowered LIR. Finalization uses that published `layout_idx` to interpret the
-opaque capture handle as the payload of the box allocated by `packed_erased_fn`.
-It must not infer the layout from the erased closure field, from source syntax,
-from the selected erased code, from a callable-set descriptor alone, or from the
-runtime pointer value.
+inline capture bytes after `erased_callable_capture_offset` in the boxed
+erased-callable allocation produced by `packed_erased_fn`. It must not infer the
+layout from the erased callable header, from source syntax, from the selected
+erased code, from a callable-set descriptor alone, or from the runtime pointer
+value.
 
 This is not a checked-artifact cache and not a second semantic store. It is
 per-lowering target metadata, scoped to the LIR program that the interpreter is
 about to run. It exists only because physical layouts are target-specific and
-because the long-term erased callable ABI intentionally erases the capture field
-to an opaque handle. The semantic source of truth remains the checked
+because the long-term erased callable ABI intentionally passes the inline
+capture bytes to erased code as an opaque capture pointer. The semantic source
+of truth remains the checked
 `ExecutableHiddenCapturePayload`; the target-local layout request is the
 mechanical commitment of that explicit payload through the normal IR/LIR layout
 pipeline.
@@ -11309,15 +11529,16 @@ add_one = Box.unbox(make_boxed_adder(1))
 main = add_one(41)
 ```
 
-The LIR interpreter result for `add_one` is an erased callable value. Its field
-1 is only an opaque capture handle, but the capture is not semantically empty:
-it points at the finite callable-set value for `|x| x + Box.unbox(boxed_n)`,
-whose selected member captures the boxed `1`. The result plan already names the
+The LIR interpreter result for `add_one` is an erased callable value. Its
+`Box(T)` payload header contains the selected `callable_fn_ptr`, and the capture
+bytes after `erased_callable_capture_offset` are not semantically empty: they
+contain the finite callable-set value for `|x| x + Box.unbox(boxed_n)`, whose
+selected member captures the boxed `1`. The result plan already names the
 hidden capture executable payload. The lowering pipeline must request and return
 the physical layout for that payload, and finalization must use it to reify the
-finite callable-set capture into the promoted wrapper body. Treating a non-null
-opaque handle as a thunk, global closure object, runtime top-level value, or
-layout-discovery opportunity is forbidden.
+finite callable-set capture into the promoted wrapper body. Treating non-empty
+inline capture bytes as a thunk, global closure allocation, runtime top-level
+value, or layout-discovery opportunity is forbidden.
 
 Promotion consumes a precomputed promotion plan:
 
@@ -19160,7 +19381,8 @@ payload. Boxed runtime capture payloads must carry value handle, capture type
 key, layout, and size explicitly. `ErasedCallSigKey` deliberately does not
 distinguish captures. For ordinary Roc boxed-erased calls, one opaque capture
 handle is appended after all fixed-arity Roc source arguments regardless of the
-concrete captured value; no-capture values pass the canonical empty/null handle.
+concrete captured value; no-capture values still pass the trailing capture
+pointer and ignore it.
 
 Make `callable_match` a whole-call result-join node. It must own one
 `result_ty` and one `result_tmp`. Every returning branch must produce a
@@ -19478,8 +19700,8 @@ Commit when executable MIR verification proves:
   capture, and boxed runtime capture payload
 - erased call signatures do not distinguish capture shapes or capture types
 - ordinary Roc boxed-erased calls pass one opaque capture handle after all
-  fixed-arity source arguments; no-capture values use the canonical empty/null
-  handle
+  fixed-arity source arguments; no-capture values still pass the trailing
+  capture pointer and ignore it
 - erased function signature keys contain an explicit `ErasedFnAbiKey`
 - erased callable slot equality requires exact `ErasedCallSigKey` equality:
   source function type plus `ErasedFnAbiKey`
@@ -19993,9 +20215,9 @@ identity whose body is owned by executable MIR and performs the exact erased cal
 from the sealed `ErasedPromotedWrapperBodyPlan`. Mono, row-finalized mono,
 lifted MIR, and lambda-solved MIR carry that procedure identity opaquely at its
 source function type; they must not lower the erased body or read the erased ABI
-fields. It must not publish a runtime packed erased callable object, runtime
-top-level closure object, runtime global callable-value object, or runtime
-thunk.
+fields. It must not publish a runtime packed erased callable allocation, runtime
+top-level closure allocation, runtime global callable-value allocation, or
+runtime thunk.
 
 Promotion consumes `CallablePromotionPlan` records produced before evaluation.
 The plan names the root, source function type, dependency summary, and
@@ -20888,7 +21110,8 @@ Executable MIR:
 - packed erased functions distinguish no capture from typed zero-sized captures
 - ordinary Roc boxed-erased calls append one opaque capture handle after
   fixed-arity source arguments; materialized capture metadata decides whether the
-  value behind that handle is empty/null, zero-sized typed, or boxed runtime data
+  inline capture region has no materialized capture, zero-sized typed capture,
+  or materialized runtime capture data
 - finite callable-set values crossing erased `Box(T)` boundaries synthesize
   erased adapters
 - finite callable-set values crossing erased representation at a branch join,
@@ -21721,7 +21944,7 @@ Compile-time constants:
   mono, lifted MIR, and lambda-solved MIR must carry only the opaque procedure
   identity/source function type for `add1`; they must not lower the erased body,
   build a runtime thunk, allocate a runtime top-level closure object, publish a
-  runtime erased callable object, or use a canonical executable key as a
+  runtime top-level erased callable allocation, or use a canonical executable key as a
   substitute for an explicit executable type payload.
 - top-level function-valued declarations that evaluate to erased callable values
   must include the captured finite-callable adapter case:
@@ -21792,8 +22015,8 @@ Compile-time constants:
   must prove that finalization selects the concrete erased code from the
   interpreted LIR value through `LoweredErasedCallableCodeMap`, publishes `add`
   as an ordinary procedure binding, and leaves no runtime top-level thunk,
-  runtime global initializer, runtime closure object, or top-level erased
-  callable object. Debug verifier tests must corrupt the map by removing the
+  runtime global initializer, runtime closure allocation, or top-level erased
+  callable allocation. Debug verifier tests must corrupt the map by removing the
   selected `LirProcSpecId`, changing the decoded code ref's source function type,
   changing the erased signature, or changing the capture shape; each corruption
   must panic in debug builds and be `unreachable` in release builds.
