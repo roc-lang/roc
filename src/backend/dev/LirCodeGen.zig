@@ -3288,6 +3288,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
                     }
                 },
+                .erased_capture_load => {
+                    const elem_layout_idx = ll.ret_layout;
+                    const elem_layout_data = self.layout_store.getLayout(elem_layout_idx);
+                    const elem_size: u32 = self.layout_store.layoutSize(elem_layout_data);
+
+                    if (elem_size == 0) {
+                        _ = try self.emitValueLocal(args[0]);
+                        return .{ .immediate_i64 = 0 };
+                    }
+
+                    const capture_ptr_loc = try self.emitValueLocal(args[0]);
+                    const capture_ptr_reg = try self.ensureInGeneralReg(capture_ptr_loc);
+
+                    const result_offset = self.codegen.allocStackSlot(elem_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, capture_ptr_reg, 0, frame_ptr, result_offset, elem_size);
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(capture_ptr_reg);
+
+                    if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
+                        return .{ .stack_i128 = result_offset };
+                    } else if (elem_layout_idx == .str) {
+                        return .{ .stack_str = result_offset };
+                    } else if (elem_layout_data.tag == .list or elem_layout_data.tag == .list_of_zst) {
+                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                    } else {
+                        return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
+                    }
+                },
                 .crash => {
                     // Runtime crash: call roc_crashed via RocOps.
                     // TODO: Implement forwarding the user's crash message string from args.
@@ -9157,6 +9186,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
             capture_layout: ?layout.Idx,
         ) Allocator.Error!ValueLocation {
+            _ = capture_layout;
             const closure_layout = self.localLayout(closure_local);
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
@@ -9174,10 +9204,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitStore(.w64, frame_ptr, closure_ptr_slot, closure_ptr_reg);
                 self.codegen.freeGeneral(closure_ptr_reg);
             }
-            const has_capture_arg = capture_layout != null;
 
             const arg_refs = self.store.getLocalSpan(call_args);
-            const extra_args: usize = if (has_capture_arg) 1 else 0;
+            const extra_args: usize = 1;
             var arg_infos = try self.allocator.alloc(ArgInfo, arg_refs.len + extra_args);
             defer self.allocator.free(arg_infos);
 
@@ -9192,43 +9221,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
             }
 
-            if (has_capture_arg) {
-                const capture_layout_idx = capture_layout.?;
-                const capture_size = self.getLayoutSize(capture_layout_idx);
-                if (capture_layout_idx == .opaque_ptr or capture_size == 0) {
-                    const capture_ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
-                    try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
-                    const capture_stack_offset = self.codegen.allocStackSlot(8);
-                    try self.emitStore(.w64, frame_ptr, capture_stack_offset, capture_ptr_reg);
-                    self.codegen.freeGeneral(capture_ptr_reg);
-                    const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, 0, capture_layout_idx);
-                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
-                    arg_infos[arg_refs.len] = .{
-                        .loc = capture_arg,
-                        .layout_idx = capture_layout_idx,
-                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
-                    };
-                } else {
-                    const capture_ptr_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
-                    try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
-
-                    const capture_stack_offset = self.codegen.allocStackSlot(capture_size);
-                    const temp_reg = try self.allocTempGeneral();
-                    try self.copyChunked(temp_reg, capture_ptr_reg, 0, frame_ptr, capture_stack_offset, capture_size);
-                    self.codegen.freeGeneral(temp_reg);
-                    self.codegen.freeGeneral(capture_ptr_reg);
-
-                    const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, capture_size, capture_layout_idx);
-                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "erased_call.capture");
-                    arg_infos[arg_refs.len] = .{
-                        .loc = capture_arg,
-                        .layout_idx = capture_layout_idx,
-                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
-                    };
-                }
-            }
+            const capture_ptr_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
+            try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
+            const capture_stack_offset = self.codegen.allocStackSlot(8);
+            try self.emitStore(.w64, frame_ptr, capture_stack_offset, capture_ptr_reg);
+            self.codegen.freeGeneral(capture_ptr_reg);
+            const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, 0, .opaque_ptr);
+            const capture_arg = self.requireExactValueLocationToLayout(capture_loc, .opaque_ptr, .opaque_ptr, "erased_call.capture_ptr");
+            arg_infos[arg_refs.len] = .{
+                .loc = capture_arg,
+                .layout_idx = .opaque_ptr,
+                .num_regs = self.calcArgRegCount(capture_arg, .opaque_ptr),
+            };
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
             const ret_buffer_offset = if (needs_ret_ptr) blk: {

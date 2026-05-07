@@ -2862,21 +2862,19 @@ fn erasedClosureCodeProc(
 ) lir.LIR.LirProcSpecId {
     const layouts = &lowered.lir_result.layouts;
     const layout = layouts.getLayout(layout_idx);
-    if (layout.tag != .struct_) {
-        compileTimeFinalizationInvariant("erased callable result did not lower to a struct layout");
+    if (layout.tag != .erased_callable) {
+        compileTimeFinalizationInvariant("erased callable result did not lower to an erased_callable layout");
     }
-    const fn_field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, 0);
-    if (fn_field_layout_idx != .opaque_ptr) {
-        compileTimeFinalizationInvariant("erased callable result code field was not an opaque pointer");
-    }
-    const fn_field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, 0);
+    const payload_ptr = value.read(?[*]u8) orelse {
+        compileTimeFinalizationInvariant("erased callable result payload pointer was null");
+    };
     const encoded: usize = switch (lowered.target_usize.size()) {
-        4 => value.offset(fn_field_offset).read(u32),
-        8 => value.offset(fn_field_offset).read(usize),
+        4 => @as(*const u32, @ptrCast(@alignCast(payload_ptr))).*,
+        8 => @as(*const usize, @ptrCast(@alignCast(payload_ptr))).*,
         else => unreachable,
     };
     if (encoded == 0) {
-        compileTimeFinalizationInvariant("erased callable result code field was null");
+        compileTimeFinalizationInvariant("erased callable result code pointer was null");
     }
     return @enumFromInt(@as(u32, @intCast(encoded - 1)));
 }
@@ -2907,49 +2905,21 @@ fn erasedClosureHiddenCapturePhysical(
     value: Value,
 ) ?PhysicalValue {
     const layout = layouts.getLayout(layout_idx);
-    if (layout.tag != .struct_) {
-        compileTimeFinalizationInvariant("erased callable result did not lower to a struct layout");
+    if (layout.tag != .erased_callable) {
+        compileTimeFinalizationInvariant("erased callable result did not lower to an erased_callable layout");
     }
-    const capture_field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, 1);
-    const capture_field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, 1);
-    const capture_field_value = value.offset(capture_field_offset);
-    if (capture_field_layout_idx == .opaque_ptr) {
-        const payload = capture_field_value.read(?[*]u8) orelse {
-            if (!layouts.isZeroSized(layouts.getLayout(expected_capture_layout_idx))) {
-                compileTimeFinalizationInvariant("erased callable result hidden capture handle was null for non-zero-sized payload layout");
-            }
-            return .{
-                .layout_idx = .zst,
-                .value = Value.zst,
-            };
-        };
+    const payload = value.read(?[*]u8) orelse {
+        compileTimeFinalizationInvariant("erased callable result payload pointer was null");
+    };
+    if (layouts.isZeroSized(layouts.getLayout(expected_capture_layout_idx))) {
         return .{
-            .layout_idx = expected_capture_layout_idx,
-            .value = .{ .ptr = payload },
+            .layout_idx = .zst,
+            .value = Value.zst,
         };
     }
-    const capture_field_layout = layouts.getLayout(capture_field_layout_idx);
-    return switch (capture_field_layout.tag) {
-        .box => blk: {
-            const payload = capture_field_value.read(?[*]u8) orelse compileTimeFinalizationInvariant("erased callable result hidden capture box was null");
-            if (capture_field_layout.data.box != expected_capture_layout_idx) {
-                compileTimeFinalizationInvariant("erased callable result hidden capture box layout differs from published payload layout");
-            }
-            break :blk .{
-                .layout_idx = capture_field_layout.data.box,
-                .value = .{ .ptr = payload },
-            };
-        },
-        .box_of_zst => blk: {
-            if (!layouts.isZeroSized(layouts.getLayout(expected_capture_layout_idx))) {
-                compileTimeFinalizationInvariant("erased callable result hidden capture box-of-zst differed from published payload layout");
-            }
-            break :blk .{
-                .layout_idx = .zst,
-                .value = Value.zst,
-            };
-        },
-        else => compileTimeFinalizationInvariant("erased callable result hidden capture field was not a Box(T) layout"),
+    return .{
+        .layout_idx = expected_capture_layout_idx,
+        .value = .{ .ptr = builtins.erased_callable.capturePtr(payload) },
     };
 }
 

@@ -423,6 +423,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+    .{
+        .roc_file = "test/fx/host_boxed_fn_boundary.roc",
+        .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>drops primitive=1 nested_record=1 recursive_tree=1",
+        .description = "Regression test: host-provided Boxed functions with primitive, nested-record, and recursive-tag captures",
+    },
 
     // File import tests
     .{

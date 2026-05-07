@@ -956,14 +956,200 @@ fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *co
     ret.* = RocStr.fromSlice(result_str, ops);
 }
 
+const BoxedHostDropCounts = struct {
+    primitive: usize = 0,
+    nested_record: usize = 0,
+    recursive_tree: usize = 0,
+};
+
+var boxed_host_drop_counts: BoxedHostDropCounts = .{};
+
+const AddCapture = extern struct {
+    amount: i64,
+};
+
+const NestedRecordCapture = extern struct {
+    inner: extern struct {
+        label: RocStr,
+        base: i64,
+    },
+    adjustment: i64,
+};
+
+const HostTreeNode = extern struct {
+    left: ?[*]u8,
+    right: ?[*]u8,
+};
+
+const HostTree = extern struct {
+    payload: extern union {
+        leaf: i64,
+        node: HostTreeNode,
+    },
+    discriminant: u8,
+    padding: [7]u8,
+};
+
+const TreeCapture = extern struct {
+    tree: HostTree,
+};
+
+fn capturePtrAs(comptime T: type, capture_ptr: ?[*]u8) *T {
+    return @ptrCast(@alignCast(capture_ptr orelse unreachable));
+}
+
+fn writeErasedCallable(
+    comptime Capture: type,
+    ret: *?[*]u8,
+    callable_fn_ptr: builtins.erased_callable.CallableFnPtr,
+    on_drop: ?builtins.erased_callable.OnDropFn,
+    capture: Capture,
+    ops: *builtins.host_abi.RocOps,
+) void {
+    const payload = builtins.erased_callable.allocate(callable_fn_ptr, on_drop, @sizeOf(Capture), ops);
+    capturePtrAs(Capture, builtins.erased_callable.capturePtr(payload)).* = capture;
+    ret.* = payload;
+}
+
+fn hostAddCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+    const capture = capturePtrAs(AddCapture, capture_ptr);
+    return x + capture.amount;
+}
+
+fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    boxed_host_drop_counts.primitive += 1;
+}
+
+fn hostedHostBoxedAdd(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { amount: i64 }) callconv(.c) void {
+    writeErasedCallable(
+        AddCapture,
+        ret,
+        @ptrCast(&hostAddCallable),
+        &hostAddCaptureOnDrop,
+        .{ .amount = args.amount },
+        ops,
+    );
+}
+
+fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+    const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
+    return x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len));
+}
+
+fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+    const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
+    capture.inner.label.decref(ops);
+    boxed_host_drop_counts.nested_record += 1;
+}
+
+fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { label: RocStr }) callconv(.c) void {
+    const capture_label = args.label;
+    capture_label.incref(1, ops);
+    writeErasedCallable(
+        NestedRecordCapture,
+        ret,
+        @ptrCast(&hostNestedRecordCallable),
+        &hostNestedRecordCaptureOnDrop,
+        .{
+            .inner = .{
+                .label = capture_label,
+                .base = 20,
+            },
+            .adjustment = 3,
+        },
+        ops,
+    );
+}
+
+fn hostTreeIncrefPayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) void {
+    switch (tree.discriminant) {
+        0 => {},
+        1 => {
+            builtins.utils.increfDataPtrC(tree.payload.node.left, 1, ops);
+            builtins.utils.increfDataPtrC(tree.payload.node.right, 1, ops);
+        },
+        else => ops.crash("host boxed recursive tree capture had invalid discriminant"),
+    }
+}
+
+fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+    const tree = capturePtrAs(HostTree, tree_ptr);
+    switch (tree.discriminant) {
+        0 => {},
+        1 => {
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayload, ops);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayload, ops);
+        },
+        else => ops.crash("host boxed recursive tree drop had invalid discriminant"),
+    }
+}
+
+fn hostTreeSum(tree: *const HostTree) i64 {
+    return switch (tree.discriminant) {
+        0 => tree.payload.leaf,
+        1 => blk: {
+            const left = capturePtrAs(HostTree, tree.payload.node.left);
+            const right = capturePtrAs(HostTree, tree.payload.node.right);
+            break :blk hostTreeSum(left) + hostTreeSum(right);
+        },
+        else => 0,
+    };
+}
+
+fn hostTreeCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+    const capture = capturePtrAs(TreeCapture, capture_ptr);
+    return x + hostTreeSum(&capture.tree);
+}
+
+fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+    const capture = capturePtrAs(TreeCapture, capture_ptr);
+    hostTreeDropPayload(@ptrCast(&capture.tree), ops);
+    boxed_host_drop_counts.recursive_tree += 1;
+}
+
+fn hostedHostBoxedRecursiveTree(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { tree: HostTree }) callconv(.c) void {
+    hostTreeIncrefPayload(&args.tree, ops);
+    writeErasedCallable(
+        TreeCapture,
+        ret,
+        @ptrCast(&hostTreeCallable),
+        &hostTreeCaptureOnDrop,
+        .{ .tree = args.tree },
+        ops,
+    );
+}
+
+fn hostedHostBoxedDropReport(ops: *builtins.host_abi.RocOps, ret: *RocStr, _: *anyopaque) callconv(.c) void {
+    var buf: [128]u8 = undefined;
+    const report = std.fmt.bufPrint(
+        &buf,
+        "drops primitive={d} nested_record={d} recursive_tree={d}",
+        .{
+            boxed_host_drop_counts.primitive,
+            boxed_host_drop_counts.nested_record,
+            boxed_host_drop_counts.recursive_tree,
+        },
+    ) catch "drops unavailable";
+    ret.* = RocStr.fromSlice(report, ops);
+}
+
+fn hostedHostResetBoxedDropReport(_: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+    boxed_host_drop_counts = .{};
+}
+
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
 /// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, Builder, and Host Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     builtins.host_abi.hostedFn(&hostedBuilderPrintValue), // Builder.print_value! (index 0)
-    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 1)
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 2)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 3)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 4)
+    builtins.host_abi.hostedFn(&hostedHostBoxedAdd), // Host.boxed_add! (index 1)
+    builtins.host_abi.hostedFn(&hostedHostBoxedDropReport), // Host.boxed_drop_report! (index 2)
+    builtins.host_abi.hostedFn(&hostedHostBoxedNestedRecord), // Host.boxed_nested_record! (index 3)
+    builtins.host_abi.hostedFn(&hostedHostBoxedRecursiveTree), // Host.boxed_recursive_tree! (index 4)
+    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 5)
+    builtins.host_abi.hostedFn(&hostedHostResetBoxedDropReport), // Host.reset_boxed_drop_report! (index 6)
+    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 7)
+    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 8)
+    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 9)
 };
 
 /// Platform host entrypoint

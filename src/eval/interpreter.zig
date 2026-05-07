@@ -2084,6 +2084,7 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         capture_layout: ?layout_mod.Idx,
     ) Error!ErasedCallResult {
+        _ = capture_layout;
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
         const closure_layout_val = self.layout_store.getLayout(closure_layout);
@@ -2104,40 +2105,19 @@ pub const Interpreter = struct {
         const proc_id = self.decodeProcRef(.{ .ptr = closure_ptr });
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_args = self.store.getLocalSpan(proc_spec.args);
-        const has_capture_arg = capture_layout != null;
-
-        if (!has_capture_arg and proc_args.len == args.len) {
-            return .{
-                .value = try self.evalProcById(proc_id, args, arg_layouts),
-                .layout = proc_spec.ret_layout,
-            };
-        }
-
-        if (!has_capture_arg or proc_args.len != args.len + 1) {
+        if (proc_args.len != args.len + 1) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased callee {d} expects {d} args, but call site provided {d} or {d} with captures",
-                .{ @intFromEnum(proc_id), proc_args.len, args.len, args.len + 1 },
+                "LIR/interpreter invariant violated: erased callee {d} expects {d} args, but erased call site provided {d} explicit args plus one capture pointer",
+                .{ @intFromEnum(proc_id), proc_args.len, args.len },
             );
         }
 
-        const capture_layout_idx = capture_layout.?;
-        const capture_value = blk: {
-            const capture_ptr = builtins.erased_callable.capturePtr(closure_ptr);
-            if (capture_layout_idx == .opaque_ptr) break :blk Value{ .ptr = capture_ptr };
-            if (capture_layout_idx == .zst) break :blk Value.zst;
-
-            const materialized = try self.alloc(capture_layout_idx);
-            const size = self.helper.sizeOf(capture_layout_idx);
-            if (size > 0) materialized.copyFrom(.{ .ptr = capture_ptr }, size);
-            break :blk materialized;
-        };
-
         const all_args = try self.arena.allocator().alloc(Value, args.len + 1);
         @memcpy(all_args[0..args.len], args);
-        all_args[args.len] = capture_value;
+        all_args[args.len] = .{ .ptr = builtins.erased_callable.capturePtr(closure_ptr) };
         const all_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, arg_layouts.len + 1);
         @memcpy(all_arg_layouts[0..arg_layouts.len], arg_layouts);
-        all_arg_layouts[arg_layouts.len] = capture_layout_idx;
+        all_arg_layouts[arg_layouts.len] = .opaque_ptr;
         return .{
             .value = try self.evalProcById(proc_id, all_args, all_arg_layouts),
             .layout = proc_spec.ret_layout,
@@ -3941,6 +3921,7 @@ pub const Interpreter = struct {
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
             .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
+            .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
 
             // ── Crash ──
             .crash => return error.Crash,
@@ -5284,6 +5265,18 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
+        }
+
+        return result;
+    }
+
+    fn evalErasedCaptureLoad(self: *LirInterpreter, capture_ptr: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (ret_layout == .zst) return Value.zst;
+
+        const result = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) {
+            result.copyFrom(capture_ptr, size);
         }
 
         return result;
