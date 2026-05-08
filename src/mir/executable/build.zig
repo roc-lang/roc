@@ -279,6 +279,8 @@ pub const ErasedAdapterProcReservation = struct {
     payload_artifact_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     member_targets: []const repr.ExecutableSpecializationKey = &.{},
+    branches: []const repr.FiniteSetEraseAdapterBranchPlan = &.{},
+    published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan = &.{},
     executable_proc: Ast.ExecutableProcId,
 };
 
@@ -287,6 +289,9 @@ pub const ErasedDirectProcAdapterReservation = struct {
     code: canonical.ErasedDirectProcCodeRef,
     sig_key: repr.ErasedFnSigKey,
     target_specialization: repr.ExecutableSpecializationKey,
+    target_instance: repr.ProcRepresentationInstanceId,
+    solve_session: repr.RepresentationSolveSessionId,
+    arg_transforms: []const repr.ValueTransformBoundaryId = &.{},
     executable_proc: Ast.ExecutableProcId,
 };
 
@@ -296,12 +301,17 @@ const ErasedAdapterRequirement = struct {
     payload_artifact_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey = null,
     member_targets: []const repr.ExecutableSpecializationKey = &.{},
+    branches: []const repr.FiniteSetEraseAdapterBranchPlan = &.{},
+    published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan = &.{},
 };
 
 const ErasedDirectProcAdapterRequirement = struct {
     code: canonical.ErasedDirectProcCodeRef,
     sig_key: repr.ErasedFnSigKey,
     target_specialization: repr.ExecutableSpecializationKey,
+    target_instance: repr.ProcRepresentationInstanceId,
+    solve_session: repr.RepresentationSolveSessionId,
+    arg_transforms: []const repr.ValueTransformBoundaryId = &.{},
 };
 
 const ConstInstanceAdapterVisitKey = struct {
@@ -431,6 +441,9 @@ pub fn run(
             .code = requirement.code,
             .sig_key = requirement.sig_key,
             .target_specialization = target_specialization,
+            .target_instance = requirement.target_instance,
+            .solve_session = requirement.solve_session,
+            .arg_transforms = requirement.arg_transforms,
             .executable_proc = executable_proc,
         });
     }
@@ -441,12 +454,18 @@ pub fn run(
         const executable_proc: Ast.ExecutableProcId = @enumFromInt(@as(u32, @intCast(proc_offset)));
         const member_targets = try cloneExecutableSpecializationKeySlice(allocator, requirement.member_targets);
         errdefer deinitExecutableSpecializationKeySlice(allocator, member_targets);
+        const branches = try repr.cloneFiniteSetEraseAdapterBranches(allocator, requirement.branches);
+        errdefer repr.deinitFiniteSetEraseAdapterBranches(allocator, branches);
+        const published_branches = try clonePublishedFiniteSetEraseAdapterBranches(allocator, requirement.published_branches);
+        errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, published_branches);
         program.erased_adapter_procs.appendAssumeCapacity(.{
             .key = requirement.key,
             .payload_solve_session = requirement.payload_solve_session,
             .payload_artifact_owner = requirement.payload_artifact_owner,
             .artifact_descriptor_owner = requirement.artifact_descriptor_owner,
             .member_targets = member_targets,
+            .branches = branches,
+            .published_branches = published_branches,
             .executable_proc = executable_proc,
         });
     }
@@ -503,7 +522,7 @@ pub fn run(
         program.procs.appendAssumeCapacity(.{
             .executable_proc = adapter.executable_proc,
             .origin = .{ .erased_direct_proc_adapter = adapter.code },
-            .body = try lowerErasedDirectProcAdapterProc(allocator, &program, &type_lowerer, adapter, adapter.executable_proc),
+            .body = try lowerErasedDirectProcAdapterProc(allocator, &program, &input, &type_lowerer, &proc_exec_map, adapter, adapter.executable_proc),
         });
     }
     for (program.erased_adapter_procs.items) |adapter| {
@@ -553,11 +572,14 @@ pub fn ensurePublishedExecutableTypeRequests(
                 &program.canonical_names,
                 &program.types,
                 &program.row_shapes,
+                &program.lowered_session_types_by_key,
             );
             defer published_types.deinit();
             break :blk try published_types.lower(request.ty, request.key);
         };
-        try program.lowered_session_types_by_key.put(request.key, ty);
+        if (program.lowered_session_types_by_key.get(request.key) != ty) {
+            executableInvariant("executable published type request did not intern by canonical key");
+        }
     }
 }
 
@@ -656,10 +678,15 @@ fn collectErasedDirectProcAdapterRequirements(
         adapters.deinit(allocator);
     }
 
-    for (input.solve_sessions.items) |*session| {
+    for (input.solve_sessions.items, 0..) |*session, session_index| {
         for (session.representation_store.callable_emission_plans) |plan| {
             switch (plan) {
-                .erase_proc_value => |erase| try appendErasedDirectProcAdapterRequirement(allocator, &adapters, erase),
+                .erase_proc_value => |erase| try appendErasedDirectProcAdapterRequirement(
+                    allocator,
+                    &adapters,
+                    .{ .solve_session = @enumFromInt(@as(u32, @intCast(session_index))) },
+                    erase,
+                ),
                 .already_erased,
                 .finite,
                 .erase_finite_set,
@@ -692,7 +719,8 @@ fn collectErasedAdapterRequirements(
                 .erase_finite_set => |erase| try appendErasedAdapterRequirement(allocator, &adapters, .{
                     .key = erase.adapter,
                     .payload_solve_session = payload_solve_session,
-                    .member_targets = try executableKeysForCallableSet(allocator, input, session, erase.adapter.callable_set_key),
+                    .member_targets = try cloneExecutableSpecializationKeySlice(allocator, erase.member_targets),
+                    .branches = try repr.cloneFiniteSetEraseAdapterBranches(allocator, erase.branches),
                 }),
                 .already_erased,
                 .finite,
@@ -706,7 +734,8 @@ fn collectErasedAdapterRequirements(
                 allocator,
                 &adapters,
                 artifact_views,
-                &session.representation_store,
+                input,
+                session,
                 payload_solve_session,
                 plan,
             );
@@ -737,6 +766,7 @@ fn collectErasedAdapterRequirements(
                     erased.code,
                     synthetic.artifact,
                     try cloneExecutableSpecializationKeySlice(allocator, erased.finite_adapter_member_targets),
+                    try clonePublishedFiniteSetEraseAdapterBranches(allocator, erased.finite_adapter_branches),
                 );
                 try collectErasedCaptureMaterializationAdapters(
                     allocator,
@@ -770,19 +800,25 @@ fn collectErasedCodeRefAdapter(
     code: canonical.ErasedCallableCodeRef,
     artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey,
     member_targets: []const repr.ExecutableSpecializationKey,
+    published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
 ) Allocator.Error!void {
     switch (code) {
         .direct_proc_value => {
             if (member_targets.len != 0) {
                 executableInvariant("direct erased callable code carried finite adapter member targets");
             }
+            if (published_branches.len != 0) {
+                executableInvariant("direct erased callable code carried finite adapter branches");
+            }
             deinitExecutableSpecializationKeySlice(allocator, member_targets);
+            deinitPublishedFiniteSetEraseAdapterBranches(allocator, published_branches);
         },
         .finite_set_adapter => |adapter| try appendErasedAdapterRequirement(allocator, adapters, .{
             .key = adapter,
             .payload_artifact_owner = artifact_descriptor_owner,
             .artifact_descriptor_owner = artifact_descriptor_owner,
             .member_targets = member_targets,
+            .published_branches = published_branches,
         }),
     }
 }
@@ -791,7 +827,8 @@ fn collectSessionValueTransformAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
-    store: *const repr.RepresentationStore,
+    input: *const LambdaSolved.Solve.Program,
+    session: *const repr.RepresentationSolveSession,
     payload_solve_session: repr.RepresentationSolveSessionId,
     plan: repr.SessionExecutableValueTransformPlan,
 ) Allocator.Error!void {
@@ -803,24 +840,26 @@ fn collectSessionValueTransformAdapters(
             .finite_value => |finite| try appendErasedAdapterRequirement(allocator, adapters, .{
                 .key = finite.adapter,
                 .payload_solve_session = payload_solve_session,
+                .member_targets = try cloneExecutableSpecializationKeySlice(allocator, finite.member_targets),
+                .branches = try repr.cloneFiniteSetEraseAdapterBranches(allocator, finite.branches),
             }),
             .proc_value => {},
         },
         .record => |fields| for (fields) |field| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, field.transform);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, field.transform);
         },
         .tuple => |items| for (items) |item| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, item.transform);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, item.transform);
         },
         .tag_union => |cases| for (cases) |case| {
             for (case.payloads) |payload| {
-                try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, payload.transform);
+                try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, payload.transform);
             }
         },
-        .nominal => |nominal| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, nominal.backing),
-        .list => |list| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, list.elem),
-        .box_payload => |box| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, box.payload),
-        .structural_bridge => |bridge| try collectSessionStructuralBridgeAdapters(allocator, adapters, artifact_views, store, payload_solve_session, bridge),
+        .nominal => |nominal| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, nominal.backing),
+        .list => |list| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, list.elem),
+        .box_payload => |box| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, box.payload),
+        .structural_bridge => |bridge| try collectSessionStructuralBridgeAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, bridge),
     }
 }
 
@@ -828,16 +867,19 @@ fn collectExecutableValueTransformRefAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
-    store: *const repr.RepresentationStore,
+    input: *const LambdaSolved.Solve.Program,
+    session: *const repr.RepresentationSolveSession,
     payload_solve_session: repr.RepresentationSolveSessionId,
     transform: checked_artifact.ExecutableValueTransformRef,
 ) Allocator.Error!void {
+    const store = &session.representation_store;
     switch (transform) {
         .session => |id| try collectSessionValueTransformAdapters(
             allocator,
             adapters,
             artifact_views,
-            store,
+            input,
+            session,
             payload_solve_session,
             store.sessionExecutableValueTransform(id),
         ),
@@ -859,7 +901,8 @@ fn collectSessionStructuralBridgeAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
-    store: *const repr.RepresentationStore,
+    input: *const LambdaSolved.Solve.Program,
+    session: *const repr.RepresentationSolveSession,
     payload_solve_session: repr.RepresentationSolveSessionId,
     bridge: repr.SessionExecutableStructuralBridgePlan,
 ) Allocator.Error!void {
@@ -869,13 +912,13 @@ fn collectSessionStructuralBridgeAdapters(
         .list_reinterpret,
         .nominal_reinterpret,
         => {},
-        .box_unbox => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child),
-        .box_box => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child),
+        .box_unbox => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, child),
+        .box_box => |child| try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, child),
         .singleton_to_tag_union => |singleton| if (singleton.value_transform) |child| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, child);
         },
         .tag_union_to_singleton => |singleton| if (singleton.value_transform) |child| {
-            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, store, payload_solve_session, child);
+            try collectExecutableValueTransformRefAdapters(allocator, adapters, artifact_views, input, session, payload_solve_session, child);
         },
     }
 }
@@ -897,6 +940,8 @@ fn collectPublishedValueTransformAdapters(
             .finite_value => |finite| try appendErasedAdapterRequirement(allocator, adapters, .{
                 .key = finite.adapter_key,
                 .payload_artifact_owner = owner_artifact,
+                .artifact_descriptor_owner = owner_artifact,
+                .published_branches = try clonePublishedFiniteSetEraseAdapterBranches(allocator, finite.adapter_branches),
             }),
             .proc_value => {},
         },
@@ -1007,6 +1052,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 // path. The owner is unused for direct code and empty-target
                 // session descriptors.
                 null,
+                &.{},
                 &.{},
             );
             try collectErasedCaptureMaterializationAdapters(
@@ -1220,7 +1266,7 @@ fn collectComptimeCallableLeafAdapters(
     switch (leaf) {
         .finite => {},
         .erased_boxed => |erased| {
-            try collectErasedCodeRefAdapter(allocator, adapters, erased.code, null, &.{});
+            try collectErasedCodeRefAdapter(allocator, adapters, erased.code, null, &.{}, &.{});
             try collectErasedCaptureMaterializationAdapters(
                 allocator,
                 adapters,
@@ -1236,6 +1282,9 @@ fn collectComptimeCallableLeafAdapters(
 fn appendErasedDirectProcAdapterRequirement(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedDirectProcAdapterRequirement),
+    context: struct {
+        solve_session: repr.RepresentationSolveSessionId,
+    },
     erase: repr.ProcValueErasePlan,
 ) Allocator.Error!void {
     const code = canonical.ErasedDirectProcCodeRef{
@@ -1250,6 +1299,9 @@ fn appendErasedDirectProcAdapterRequirement(
         if (!repr.executableSpecializationKeyEql(existing.target_specialization, erase.executable_specialization_key)) {
             executableInvariant("direct erased proc adapter requirement had conflicting target specializations");
         }
+        if (existing.target_instance != erase.target_instance) {
+            executableInvariant("direct erased proc adapter requirement had conflicting target instances");
+        }
         return;
     }
 
@@ -1259,6 +1311,9 @@ fn appendErasedDirectProcAdapterRequirement(
         .code = code,
         .sig_key = erase.erased_fn_sig_key,
         .target_specialization = target_specialization,
+        .target_instance = erase.target_instance,
+        .solve_session = context.solve_session,
+        .arg_transforms = erase.adapter_arg_transforms,
     });
 }
 
@@ -1274,6 +1329,52 @@ fn deinitErasedDirectProcAdapterReservation(
     reservation: *ErasedDirectProcAdapterReservation,
 ) void {
     repr.deinitExecutableSpecializationKey(allocator, &reservation.target_specialization);
+}
+
+fn verifyErasedDirectProcAdapterArgBoundary(
+    boundary: repr.ValueTransformBoundary,
+    reservation: ErasedDirectProcAdapterReservation,
+    target_instance: *const repr.ProcRepresentationInstance,
+    index: u32,
+) void {
+    const kind = switch (boundary.kind) {
+        .erased_proc_value_adapter_arg => |arg| arg,
+        else => executableInvariant("direct erased proc adapter argument transform has wrong boundary kind"),
+    };
+    if (!canonical.procedureCallableRefEql(kind.proc_value, reservation.code.proc_value) or
+        !repr.erasedFnSigKeyEql(kind.erased_fn_sig_key, reservation.sig_key) or
+        kind.index != index)
+    {
+        executableInvariant("direct erased proc adapter argument transform points at a different erased proc-value occurrence");
+    }
+
+    const from = switch (boundary.from_endpoint.owner) {
+        .erased_proc_value_adapter_arg => |arg| arg,
+        else => executableInvariant("direct erased proc adapter argument transform source endpoint has wrong owner"),
+    };
+    if (from.emission_plan != kind.emission_plan or
+        from.source_value != kind.source_value or
+        !canonical.procedureCallableRefEql(from.proc_value, kind.proc_value) or
+        !repr.erasedFnSigKeyEql(from.erased_fn_sig_key, kind.erased_fn_sig_key) or
+        from.index != kind.index)
+    {
+        executableInvariant("direct erased proc adapter argument transform source endpoint differs from boundary owner");
+    }
+
+    const to = switch (boundary.to_endpoint.owner) {
+        .procedure_param => |param| param,
+        else => executableInvariant("direct erased proc adapter argument transform target endpoint is not a procedure parameter"),
+    };
+    if (to.instance != reservation.target_instance or to.index != index) {
+        executableInvariant("direct erased proc adapter argument transform target endpoint differs from target procedure");
+    }
+    const arg_index: usize = @intCast(index);
+    if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
+        executableInvariant("direct erased proc adapter argument transform index exceeds target arity");
+    }
+    if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+        executableInvariant("direct erased proc adapter argument transform target key differs from specialization");
+    }
 }
 
 fn appendErasedAdapterRequirement(
@@ -1308,26 +1409,52 @@ fn appendErasedAdapterRequirement(
         }
         if (existing.member_targets.len == 0 and owned_requirement.member_targets.len != 0) {
             existing.member_targets = owned_requirement.member_targets;
+            existing.branches = owned_requirement.branches;
+            existing.published_branches = owned_requirement.published_branches;
             owned_requirement.member_targets = &.{};
+            owned_requirement.branches = &.{};
+            owned_requirement.published_branches = &.{};
             return;
         }
         if (owned_requirement.member_targets.len != 0 and !executableSpecializationKeySlicesEql(existing.member_targets, owned_requirement.member_targets)) {
             executableInvariant("executable erased adapter requirement had conflicting member target keys");
         }
+        if (existing.branches.len == 0 and owned_requirement.branches.len != 0) {
+            existing.branches = owned_requirement.branches;
+            owned_requirement.branches = &.{};
+        } else if (owned_requirement.branches.len != 0 and existing.branches.len != owned_requirement.branches.len) {
+            executableInvariant("executable erased adapter requirement had conflicting branch plans");
+        }
+        if (existing.published_branches.len == 0 and owned_requirement.published_branches.len != 0) {
+            existing.published_branches = owned_requirement.published_branches;
+            owned_requirement.published_branches = &.{};
+        } else if (owned_requirement.published_branches.len != 0 and existing.published_branches.len != owned_requirement.published_branches.len) {
+            executableInvariant("executable erased adapter requirement had conflicting published branch plans");
+        }
         return;
     }
     try adapters.append(allocator, owned_requirement);
     owned_requirement.member_targets = &.{};
+    owned_requirement.branches = &.{};
+    owned_requirement.published_branches = &.{};
 }
 
 fn deinitErasedAdapterRequirement(allocator: Allocator, requirement: *ErasedAdapterRequirement) void {
     deinitExecutableSpecializationKeySlice(allocator, requirement.member_targets);
+    repr.deinitFiniteSetEraseAdapterBranches(allocator, requirement.branches);
+    deinitPublishedFiniteSetEraseAdapterBranches(allocator, requirement.published_branches);
     requirement.member_targets = &.{};
+    requirement.branches = &.{};
+    requirement.published_branches = &.{};
 }
 
 fn deinitErasedAdapterProcReservation(allocator: Allocator, reservation: *ErasedAdapterProcReservation) void {
     deinitExecutableSpecializationKeySlice(allocator, reservation.member_targets);
+    repr.deinitFiniteSetEraseAdapterBranches(allocator, reservation.branches);
+    deinitPublishedFiniteSetEraseAdapterBranches(allocator, reservation.published_branches);
     reservation.member_targets = &.{};
+    reservation.branches = &.{};
+    reservation.published_branches = &.{};
 }
 
 fn cloneExecutableSpecializationKeySlice(
@@ -1346,6 +1473,64 @@ fn cloneExecutableSpecializationKeySlice(
         initialized += 1;
     }
     return out;
+}
+
+fn clonePublishedFiniteSetEraseAdapterBranches(
+    allocator: Allocator,
+    branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+) Allocator.Error![]const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan {
+    if (branches.len == 0) return &.{};
+    const out = try allocator.alloc(checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan, branches.len);
+    @memset(out, .{
+        .member = .{
+            .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
+            .member_index = @enumFromInt(0),
+        },
+        .target_key = .{
+            .base = @enumFromInt(0),
+            .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .exec_arg_tys = &.{},
+            .exec_ret_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .callable_repr_mode = .direct,
+            .capture_shape_key = .{ .bytes = [_]u8{0} ** 32 },
+        },
+        .arg_transforms = &.{},
+        .capture_transforms = &.{},
+        .result_transform = .{
+            .artifact = .{ .bytes = [_]u8{0} ** 32 },
+            .transform = @enumFromInt(0),
+        },
+    });
+    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, out);
+    for (branches, 0..) |branch, i| {
+        out[i] = .{
+            .member = branch.member,
+            .target_key = try repr.cloneExecutableSpecializationKey(allocator, branch.target_key),
+            .arg_transforms = if (branch.arg_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, branch.arg_transforms),
+            .capture_transforms = if (branch.capture_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, branch.capture_transforms),
+            .result_transform = branch.result_transform,
+        };
+    }
+    return out;
+}
+
+fn deinitPublishedFiniteSetEraseAdapterBranches(
+    allocator: Allocator,
+    branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+) void {
+    for (branches) |branch| {
+        var target_key = branch.target_key;
+        repr.deinitExecutableSpecializationKey(allocator, &target_key);
+        if (branch.arg_transforms.len > 0) allocator.free(branch.arg_transforms);
+        if (branch.capture_transforms.len > 0) allocator.free(branch.capture_transforms);
+    }
+    if (branches.len > 0) allocator.free(branches);
 }
 
 fn deinitExecutableSpecializationKeySlice(
@@ -1387,44 +1572,60 @@ const AdapterDescriptorView = struct {
     owned_members: []repr.CanonicalCallableSetMember = &.{},
 };
 
-fn artifactCallableSetDescriptorForErasedAdapterReservation(
+fn callableSetDescriptorForErasedAdapterReservation(
     allocator: Allocator,
     program: *const Program,
     input: *const LambdaSolved.Solve.Program,
     reservation: ErasedAdapterProcReservation,
 ) Allocator.Error!AdapterDescriptorView {
-    if (reservation.member_targets.len == 0) return .{};
-    const owner = reservation.artifact_descriptor_owner orelse {
-        executableInvariant("persisted erased finite-set adapter member targets have no artifact descriptor owner");
-    };
-    const descriptors = callableSetDescriptorsForArtifactInViews(program.artifact_views, owner) orelse {
-        executableInvariant("persisted erased finite-set adapter referenced unavailable artifact descriptors");
-    };
-    const artifact_descriptor = descriptors.descriptorFor(reservation.key.callable_set_key) orelse {
-        executableInvariant("persisted erased finite-set adapter referenced missing artifact callable-set descriptor");
-    };
-    if (artifact_descriptor.members.len != reservation.member_targets.len) {
-        executableInvariant("persisted erased finite-set adapter member target count differs from artifact descriptor");
+    if (reservation.member_targets.len == 0) {
+        executableInvariant("erased finite-set adapter reservation has no published member targets");
+    }
+    if (reservation.artifact_descriptor_owner) |owner| {
+        const descriptors = callableSetDescriptorsForArtifactInViews(program.artifact_views, owner) orelse {
+            executableInvariant("persisted erased finite-set adapter referenced unavailable artifact descriptors");
+        };
+        const source_descriptor = descriptors.descriptorFor(reservation.key.callable_set_key) orelse {
+            executableInvariant("persisted erased finite-set adapter referenced missing artifact callable-set descriptor");
+        };
+        return try remapAdapterDescriptorMembers(allocator, input, source_descriptor.key, source_descriptor.members, reservation.member_targets);
     }
 
-    const members = try allocator.alloc(repr.CanonicalCallableSetMember, artifact_descriptor.members.len);
+    const source_descriptor = programCallableSetDescriptor(program, reservation.key.callable_set_key) orelse {
+        executableInvariant("session erased finite-set adapter referenced missing callable-set descriptor");
+    };
+    return try remapAdapterDescriptorMembers(allocator, input, source_descriptor.key, source_descriptor.members, reservation.member_targets);
+}
+
+fn remapAdapterDescriptorMembers(
+    allocator: Allocator,
+    input: *const LambdaSolved.Solve.Program,
+    key: repr.CanonicalCallableSetKey,
+    source_members: anytype,
+    member_targets: []const repr.ExecutableSpecializationKey,
+) Allocator.Error!AdapterDescriptorView {
+    if (source_members.len != member_targets.len) {
+        executableInvariant("erased finite-set adapter member target count differs from descriptor");
+    }
+
+    const members = try allocator.alloc(repr.CanonicalCallableSetMember, source_members.len);
     errdefer allocator.free(members);
-    for (artifact_descriptor.members, reservation.member_targets, 0..) |artifact_member, target_key, i| {
+    for (source_members, member_targets, 0..) |source_member, target_key, i| {
         const target_instance = procInstanceForExecutableSpecializationKey(input, target_key) orelse {
-            executableInvariant("persisted erased finite-set adapter member target was not reserved in current solve session");
+            executableInvariant("erased finite-set adapter member target was not reserved in current solve session");
         };
         members[i] = .{
-            .member = artifact_member.member,
-            .proc_value = artifact_member.proc_value,
-            .source_proc = artifact_member.source_proc,
+            .member = source_member.member,
+            .proc_value = source_member.proc_value,
+            .source_proc = source_member.source_proc,
             .target_instance = target_instance,
-            .capture_slots = artifact_member.capture_slots,
-            .capture_shape_key = artifact_member.capture_shape_key,
+            .capture_slots = source_member.capture_slots,
+            .capture_shape_key = source_member.capture_shape_key,
         };
     }
     return .{
         .descriptor = .{
-            .key = artifact_descriptor.key,
+            .key = key,
             .members = members,
         },
         .owned_members = members,
@@ -1436,43 +1637,12 @@ fn procInstanceForExecutableSpecializationKey(
     key: repr.ExecutableSpecializationKey,
 ) ?repr.ProcRepresentationInstanceId {
     for (input.proc_instances.items, 0..) |instance, raw| {
+        if (!instance.materialized) continue;
         if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
             return @enumFromInt(@as(u32, @intCast(raw)));
         }
     }
     return null;
-}
-
-fn executableKeysForCallableSet(
-    allocator: Allocator,
-    input: *const LambdaSolved.Solve.Program,
-    session: *const repr.RepresentationSolveSession,
-    key: repr.CanonicalCallableSetKey,
-) Allocator.Error![]const repr.ExecutableSpecializationKey {
-    const descriptor = session.representation_store.callableSetDescriptor(key) orelse {
-        executableInvariant("executable erased adapter requirement has no callable-set descriptor");
-    };
-    if (descriptor.members.len == 0) {
-        executableInvariant("executable erased adapter requirement descriptor has no members");
-    }
-    const out = try allocator.alloc(repr.ExecutableSpecializationKey, descriptor.members.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (out[0..initialized]) |*item| repr.deinitExecutableSpecializationKey(allocator, item);
-        allocator.free(out);
-    }
-    for (descriptor.members, 0..) |member, i| {
-        const instance_index = @intFromEnum(member.target_instance);
-        if (instance_index >= input.proc_instances.items.len) {
-            executableInvariant("executable erased adapter requirement member target is out of range");
-        }
-        out[i] = try repr.cloneExecutableSpecializationKey(
-            allocator,
-            input.proc_instances.items[instance_index].executable_specialization_key,
-        );
-        initialized += 1;
-    }
-    return out;
 }
 
 fn lowerExecutableSyntheticProc(
@@ -1495,12 +1665,34 @@ fn lowerExecutableSyntheticProc(
 fn lowerErasedDirectProcAdapterProc(
     allocator: Allocator,
     program: *Program,
+    input: *const LambdaSolved.Solve.Program,
     type_lowerer: *TypeLowerer,
+    proc_exec_map: *const std.AutoHashMap(repr.ProcRepresentationInstanceId, Ast.ExecutableProcId),
     reservation: ErasedDirectProcAdapterReservation,
     executable_proc: Ast.ExecutableProcId,
 ) Allocator.Error!Ast.DefId {
-    _ = type_lowerer;
-    const target_proc = executableProcForCallable(program, reservation.code.proc_value);
+    const target_instance_index = @intFromEnum(reservation.target_instance);
+    if (target_instance_index >= input.proc_instances.items.len) {
+        executableInvariant("direct erased proc adapter target instance is out of range");
+    }
+    const target_instance = &input.proc_instances.items[target_instance_index];
+    if (!repr.executableSpecializationKeyEql(target_instance.executable_specialization_key, reservation.target_specialization)) {
+        executableInvariant("direct erased proc adapter target instance key differs from reservation");
+    }
+    const solve_session_index = @intFromEnum(reservation.solve_session);
+    if (solve_session_index >= input.solve_sessions.items.len) {
+        executableInvariant("direct erased proc adapter solve session is out of range");
+    }
+    const representation_store = &input.solve_sessions.items[solve_session_index].representation_store;
+    const value_store_index = @intFromEnum(target_instance.value_store);
+    if (value_store_index >= input.value_stores.items.len) {
+        executableInvariant("direct erased proc adapter target value store is out of range");
+    }
+    const value_store = &input.value_stores.items[value_store_index];
+
+    const target_proc = proc_exec_map.get(reservation.target_instance) orelse {
+        executableInvariant("direct erased proc adapter target instance was not reserved as an executable procedure");
+    };
     const target_record = executableProcRecord(program, target_proc);
     const target_def = program.ast.defs.items[@intFromEnum(target_record.body)];
     const target_source = switch (target_record.origin) {
@@ -1519,14 +1711,44 @@ fn lowerErasedDirectProcAdapterProc(
         executableInvariant("direct erased proc adapter target has capture payload but no target capture argument");
     }
     const explicit_arg_count = if (has_capture_payload) target_args.len - 1 else target_args.len;
+    if (reservation.arg_transforms.len != explicit_arg_count) {
+        executableInvariant("direct erased proc adapter argument transform count differs from source arity");
+    }
+
+    var builder = BodyBuilder{
+        .allocator = allocator,
+        .program = program,
+        .input = &input.ast,
+        .output = &program.ast,
+        .canonical_names = &program.canonical_names,
+        .type_lowerer = type_lowerer,
+        .session_type_lowerer = SessionTypeLowerer.init(allocator, &representation_store.session_executable_type_payloads, &program.types, &program.lowered_session_types_by_key),
+        .value_store = value_store,
+        .representation_store = representation_store,
+        .callable_set_descriptors = program.callable_set_descriptors,
+        .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
+        .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
+        .executable_proc = executable_proc,
+        .source_proc = target_source,
+        .representation_instance = reservation.target_instance,
+        .proc_instance = target_instance,
+        .proc_instances = input.proc_instances.items,
+        .solve_sessions = input.solve_sessions.items,
+        .value_stores = input.value_stores.items,
+        .proc_exec_map = proc_exec_map,
+        .erased_adapter_procs = program.erased_adapter_procs.items,
+    };
+    defer builder.deinit();
 
     const hidden_capture_arg_ty = try program.types.addType(.{ .primitive = .erased });
     const wrapper_arg_count = explicit_arg_count + 1;
     const wrapper_args = try allocator.alloc(Ast.TypedValue, wrapper_arg_count);
     defer allocator.free(wrapper_args);
-    for (target_args[0..explicit_arg_count], 0..) |target_arg, i| {
+    for (reservation.arg_transforms, 0..) |boundary_id, i| {
+        const boundary = representation_store.valueTransformBoundary(boundary_id);
+        verifyErasedDirectProcAdapterArgBoundary(boundary, reservation, target_instance, @intCast(i));
         wrapper_args[i] = .{
-            .ty = target_arg.ty,
+            .ty = try builder.lowerSessionExecutableEndpointType(boundary.from_endpoint),
             .value = program.ast.freshValueRef(),
         };
     }
@@ -1542,15 +1764,17 @@ fn lowerErasedDirectProcAdapterProc(
         allocator,
         program,
         target_source,
-        target_def.specialization_key,
+        reservation.target_specialization,
         target_proc,
         wrapper_args[0..explicit_arg_count],
+        reservation.arg_transforms,
+        &builder,
         hidden_capture_value,
         if (has_capture_payload) target_args[explicit_arg_count].ty else null,
         result_ty,
     );
 
-    var specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_def.specialization_key);
+    var specialization_key = try repr.cloneExecutableSpecializationKey(allocator, reservation.target_specialization);
     specialization_key.callable_repr_mode = .erased_callable;
     specialization_key.capture_shape_key = reservation.code.capture_shape_key;
     return try program.ast.addDef(.{
@@ -1571,12 +1795,17 @@ fn lowerErasedDirectProcAdapterBody(
     target_specialization: repr.ExecutableSpecializationKey,
     target_proc: Ast.ExecutableProcId,
     explicit_args: []const Ast.TypedValue,
+    arg_transforms: []const repr.ValueTransformBoundaryId,
+    builder: *BodyBuilder,
     hidden_capture_handle: Ast.ExecutableValueRef,
     hidden_capture_payload_ty: ?Type.TypeId,
     result_ty: Type.TypeId,
 ) Allocator.Error!Ast.ExprId {
     var stmt_ids = std.ArrayList(Ast.StmtId).empty;
     defer stmt_ids.deinit(allocator);
+    if (explicit_args.len != arg_transforms.len) {
+        executableInvariant("direct erased proc adapter body argument transform count differs from arity");
+    }
 
     const capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_payload_ty) |payload_ty| blk: {
         const handle_ty = try program.types.addType(.{ .primitive = .erased });
@@ -1597,8 +1826,11 @@ fn lowerErasedDirectProcAdapterBody(
     const direct_arg_count = explicit_args.len + if (capture_value == null) @as(usize, 0) else 1;
     const direct_args = try allocator.alloc(Ast.DirectCallArg, direct_arg_count);
     defer allocator.free(direct_args);
-    for (explicit_args, 0..) |arg, i| {
-        direct_args[i] = .{ .value = arg.value };
+    for (explicit_args, arg_transforms, 0..) |arg, boundary_id, i| {
+        const boundary = builder.representation_store.valueTransformBoundary(boundary_id);
+        direct_args[i] = .{
+            .value = try builder.applyValueTransformBoundary(&stmt_ids, boundary, arg.value),
+        };
     }
     if (capture_value) |payload| {
         direct_args[explicit_args.len] = .{ .value = payload };
@@ -1633,19 +1865,31 @@ fn lowerErasedFiniteSetAdapterProc(
     executable_proc: Ast.ExecutableProcId,
 ) Allocator.Error!Ast.DefId {
     const adapter = reservation.key;
-    var fallback_descriptor: AdapterDescriptorView = .{};
-    defer if (fallback_descriptor.owned_members.len > 0) allocator.free(fallback_descriptor.owned_members);
-    const descriptor = programCallableSetDescriptor(program, adapter.callable_set_key) orelse blk: {
-        fallback_descriptor = try artifactCallableSetDescriptorForErasedAdapterReservation(allocator, program, input, reservation);
-        if (fallback_descriptor.descriptor) |*descriptor| break :blk descriptor;
-        executableInvariant("executable erased finite-set adapter has no callable-set descriptor or persisted member targets");
-    };
+    var descriptor_view = try callableSetDescriptorForErasedAdapterReservation(allocator, program, input, reservation);
+    defer if (descriptor_view.owned_members.len > 0) allocator.free(descriptor_view.owned_members);
+    const descriptor = if (descriptor_view.descriptor) |*view_descriptor|
+        view_descriptor
+    else
+        executableInvariant("executable erased finite-set adapter has no descriptor");
     if (descriptor.members.len == 0) {
         executableInvariant("executable erased finite-set adapter descriptor has no members");
     }
+    const has_session_branches = reservation.branches.len != 0;
+    const has_published_branches = reservation.published_branches.len != 0;
+    if (has_session_branches == has_published_branches) {
+        executableInvariant("executable erased finite-set adapter must have exactly one branch transform plan source");
+    }
+    if (has_session_branches and reservation.branches.len != descriptor.members.len) {
+        executableInvariant("executable erased finite-set adapter has no finalized branch transform plan");
+    }
+    if (has_published_branches and reservation.published_branches.len != descriptor.members.len) {
+        executableInvariant("executable erased finite-set adapter has no finalized published branch transform plan");
+    }
 
-    const first_member = descriptor.members[0];
-    const first_instance_id = first_member.target_instance;
+    const first_instance_id = if (has_session_branches)
+        reservation.branches[0].target_instance
+    else
+        descriptor.members[0].target_instance;
     const first_instance = &input.proc_instances.items[@intFromEnum(first_instance_id)];
     if (!repr.canonicalTypeKeyEql(first_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
         executableInvariant("executable erased finite-set adapter source function type differs from first member specialization");
@@ -1662,10 +1906,12 @@ fn lowerErasedFiniteSetAdapterProc(
     } else member_representation_store;
     var published_adapter_payloads_storage: PublishedTypeLowerer = undefined;
     var published_adapter_payloads: ?*PublishedTypeLowerer = null;
+    var published_adapter_context: ?PublishedTransformContext = null;
     var published_adapter_artifact = canonical.ArtifactRef{};
     if (reservation.payload_solve_session == null) {
         if (reservation.payload_artifact_owner) |owner| {
             const context = resolvePublishedTransformContextInArtifactViews(program.artifact_views, owner);
+            published_adapter_context = context;
             published_adapter_payloads_storage = PublishedTypeLowerer.init(
                 allocator,
                 context.executable_type_payloads,
@@ -1673,6 +1919,7 @@ fn lowerErasedFiniteSetAdapterProc(
                 &program.canonical_names,
                 &program.types,
                 &program.row_shapes,
+                &program.lowered_session_types_by_key,
             );
             published_adapter_payloads = &published_adapter_payloads_storage;
             published_adapter_artifact = .{ .bytes = owner.bytes };
@@ -1695,7 +1942,7 @@ fn lowerErasedFiniteSetAdapterProc(
         .env = std.AutoHashMap(repr.BindingInfoId, Ast.ExecutableValueRef).init(allocator),
         .expr_map = std.AutoHashMap(LambdaSolved.Ast.ExprId, Ast.ExprId).init(allocator),
         .executable_proc = executable_proc,
-        .source_proc = first_member.source_proc,
+        .source_proc = first_instance.proc,
         .representation_instance = first_instance_id,
         .proc_instance = first_instance,
         .proc_instances = input.proc_instances.items,
@@ -1706,45 +1953,72 @@ fn lowerErasedFiniteSetAdapterProc(
     };
     defer builder.deinit();
 
-    const public_params = value_store.sliceValueSpan(first_instance.public_roots.params);
-    const hidden_capture_payload_ty = try builder.lowerFiniteSetAdapterCaptureType(adapter);
+    const hidden_capture_payload_ty = try builder.lowerFiniteSetAdapterCaptureType(adapter, descriptor);
     if (hidden_capture_payload_ty == null and descriptor.members.len != 1) {
         executableInvariant("executable erased finite-set adapter without hidden capture cannot dispatch a multi-member callable set");
     }
+    const result_ty = if (has_session_branches) blk: {
+        const first_branch = reservation.branches[0];
+        if (first_branch.result_transform == null) {
+            executableInvariant("executable erased finite-set adapter first branch has no result transform");
+        }
+        const first_result_boundary = payload_representation_store.valueTransformBoundary(first_branch.result_transform.?);
+        break :blk try builder.lowerSessionExecutableEndpointType(first_result_boundary.to_endpoint);
+    } else blk: {
+        const context = published_adapter_context orelse executableInvariant("published erased finite-set adapter has no artifact transform context");
+        const published = published_adapter_payloads orelse executableInvariant("published erased finite-set adapter has no published payload lowerer");
+        const transform_id = publishedExecutableValueTransformId(context.artifact, reservation.published_branches[0].result_transform);
+        const transform = context.executable_value_transforms.get(transform_id);
+        break :blk try published.lower(transform.to.ty, transform.to.key);
+    };
 
     const hidden_capture_arg_ty = try program.types.addType(.{ .primitive = .erased });
-    const typed_arg_count = public_params.len + 1;
+    const explicit_arg_len = if (has_session_branches)
+        reservation.branches[0].arg_transforms.len
+    else
+        reservation.published_branches[0].arg_transforms.len;
+    const typed_arg_count = explicit_arg_len + 1;
     const typed_args = try allocator.alloc(Ast.TypedValue, typed_arg_count);
     defer allocator.free(typed_args);
-    for (public_params, 0..) |param, i| {
-        const param_info = value_store.values.items[@intFromEnum(param)];
-        typed_args[i] = .{
-            .ty = try builder.lowerExecutableValueTypeInStore(param_info.logical_ty, param, value_store, member_representation_store),
-            .value = program.ast.freshValueRef(),
-        };
+    if (has_session_branches) {
+        for (reservation.branches[0].arg_transforms, 0..) |boundary_id, i| {
+            const boundary = payload_representation_store.valueTransformBoundary(boundary_id);
+            typed_args[i] = .{
+                .ty = try builder.lowerSessionExecutableEndpointType(boundary.from_endpoint),
+                .value = program.ast.freshValueRef(),
+            };
+        }
+    } else {
+        const context = published_adapter_context orelse executableInvariant("published erased finite-set adapter has no artifact transform context");
+        const published = published_adapter_payloads orelse executableInvariant("published erased finite-set adapter has no published payload lowerer");
+        for (reservation.published_branches[0].arg_transforms, 0..) |transform_ref, i| {
+            const transform_id = publishedExecutableValueTransformId(context.artifact, transform_ref);
+            const transform = context.executable_value_transforms.get(transform_id);
+            typed_args[i] = .{
+                .ty = try published.lower(transform.from.ty, transform.from.key),
+                .value = program.ast.freshValueRef(),
+            };
+        }
     }
 
     const hidden_capture_value = program.ast.freshValueRef();
-    typed_args[public_params.len] = .{
+    typed_args[explicit_arg_len] = .{
         .ty = hidden_capture_arg_ty,
         .value = hidden_capture_value,
     };
 
     const args = try program.ast.addTypedValueSpan(typed_args);
-    const ret_info = value_store.values.items[@intFromEnum(first_instance.public_roots.ret)];
-    const result_ty = try builder.lowerExecutableValueTypeInStore(
-        ret_info.logical_ty,
-        first_instance.public_roots.ret,
-        value_store,
-        member_representation_store,
-    );
     const body = try lowerErasedFiniteSetAdapterBody(
         allocator,
         program,
         &builder,
         adapter,
         descriptor,
-        typed_args[0..public_params.len],
+        reservation.branches,
+        reservation.published_branches,
+        published_adapter_context,
+        published_adapter_payloads,
+        typed_args[0..explicit_arg_len],
         hidden_capture_value,
         hidden_capture_payload_ty,
         result_ty,
@@ -1770,6 +2044,10 @@ fn lowerErasedFiniteSetAdapterBody(
     builder: *BodyBuilder,
     adapter: repr.ErasedAdapterKey,
     descriptor: *const repr.CanonicalCallableSetDescriptor,
+    branch_plans: []const repr.FiniteSetEraseAdapterBranchPlan,
+    published_branch_plans: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+    published_context: ?PublishedTransformContext,
+    published_types: ?*PublishedTypeLowerer,
     explicit_args: []const Ast.TypedValue,
     hidden_capture_handle: Ast.ExecutableValueRef,
     hidden_capture_payload_ty: ?Type.TypeId,
@@ -1784,7 +2062,7 @@ fn lowerErasedFiniteSetAdapterBody(
         stmt: Ast.StmtId,
     };
     const callee_value: CalleeValue = if (hidden_capture_payload_ty) |payload_ty| blk: {
-        const handle_ty = try program.types.addType(.{ .primitive = .erased });
+        const handle_ty = program.ast.requireValueType(hidden_capture_handle);
         const handle_expr = try program.ast.addValueRefExpr(handle_ty, hidden_capture_handle);
         const value = program.ast.freshValueRef();
         const payload_expr = try program.ast.addExpr(payload_ty, value, .{ .low_level = .{
@@ -1832,6 +2110,10 @@ fn lowerErasedFiniteSetAdapterBody(
         builder,
         adapter,
         descriptor,
+        branch_plans,
+        published_branch_plans,
+        published_context,
+        published_types,
         explicit_args,
         callee_value.value,
         result_ty,
@@ -1848,6 +2130,10 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
     builder: *BodyBuilder,
     adapter: repr.ErasedAdapterKey,
     descriptor: *const repr.CanonicalCallableSetDescriptor,
+    branch_plans: []const repr.FiniteSetEraseAdapterBranchPlan,
+    published_branch_plans: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+    published_context: ?PublishedTransformContext,
+    published_types: ?*PublishedTypeLowerer,
     explicit_args: []const Ast.TypedValue,
     callee_value: Ast.ExecutableValueRef,
     result_ty: Type.TypeId,
@@ -1863,53 +2149,132 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
 
     const branches = try allocator.alloc(Ast.CallableMatchBranch, descriptor.members.len);
     defer allocator.free(branches);
-    for (descriptor.members, 0..) |member, i| {
-        if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, adapter.source_fn_ty)) {
-            executableInvariant("executable erased finite-set adapter member source type differs from adapter key");
+    if (branch_plans.len != 0) {
+        if (branch_plans.len != descriptor.members.len) {
+            executableInvariant("executable erased finite-set adapter branch plan count differs from descriptor");
         }
-        const target_instance_id = member.target_instance;
-        const executable_proc = builder.proc_exec_map.get(target_instance_id) orelse {
-            executableInvariant("executable erased finite-set adapter member target was not reserved");
-        };
-        const target_instance = builder.proc_instances[@intFromEnum(target_instance_id)];
-        if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
-            executableInvariant("executable erased finite-set adapter member target instance differs from descriptor source procedure");
-        }
-        if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
-            executableInvariant("executable erased finite-set adapter member target specialization source type differs from adapter key");
-        }
-
-        const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(adapter.callable_set_key, member);
-        const capture_payload = if (capture_payload_ty != null) program.ast.freshValueRef() else null;
-        const lowered_branch = try builder.lowerCallableMatchBranchBody(
-            member.source_proc,
-            target_instance,
-            target_instance_id,
-            executable_proc,
-            arg_values,
-            null,
-            null,
-            null,
-            null,
-            capture_payload,
-            result_ty,
-            null,
-        );
-
-        branches[i] = .{
-            .member = .{
+        for (descriptor.members, branch_plans, 0..) |member, branch_plan, i| {
+            if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, adapter.source_fn_ty)) {
+                executableInvariant("executable erased finite-set adapter member source type differs from adapter key");
+            }
+            const expected_member_ref: repr.CallableSetMemberRef = .{
                 .callable_set_key = adapter.callable_set_key,
                 .member_index = member.member,
-            },
-            .source_fn_ty = member.proc_value.source_fn_ty,
-            .capture_payload = capture_payload,
-            .capture_payload_ty = capture_payload_ty,
-            .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
-            .executable_proc = executable_proc,
-            .arg_transforms = lowered_branch.arg_transforms,
-            .direct_args = lowered_branch.direct_args,
-            .body = lowered_branch.body,
-        };
+            };
+            if (!repr.callableSetKeyEql(branch_plan.member.callable_set_key, expected_member_ref.callable_set_key) or
+                branch_plan.member.member_index != expected_member_ref.member_index)
+            {
+                executableInvariant("executable erased finite-set adapter branch plan member differs from descriptor");
+            }
+            const target_instance_id = branch_plan.target_instance;
+            const executable_proc = builder.proc_exec_map.get(target_instance_id) orelse {
+                executableInvariant("executable erased finite-set adapter member target was not reserved");
+            };
+            const target_instance = builder.proc_instances[@intFromEnum(target_instance_id)];
+            if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+                executableInvariant("executable erased finite-set adapter member target instance differs from descriptor source procedure");
+            }
+            if (!repr.canonicalTypeKeyEql(target_instance.executable_specialization_key.requested_fn_ty, adapter.source_fn_ty)) {
+                executableInvariant("executable erased finite-set adapter member target specialization source type differs from adapter key");
+            }
+
+            const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(adapter.callable_set_key, member);
+            const capture_payload = if (capture_payload_ty) |payload_ty| try program.ast.freshTypedValueRef(payload_ty) else null;
+            const result_transform_id = branch_plan.result_transform orelse {
+                executableInvariant("executable erased finite-set adapter branch has no result transform");
+            };
+            const result_boundary = builder.representation_store.valueTransformBoundary(result_transform_id);
+            builder.verifyErasedFiniteAdapterBranchResultBoundary(
+                result_boundary,
+                adapter,
+                expected_member_ref,
+                target_instance_id,
+                target_instance,
+            );
+            const lowered_branch = try builder.lowerCallableMatchBranchBody(
+                member.source_proc,
+                target_instance,
+                target_instance_id,
+                executable_proc,
+                arg_values,
+                branch_plan.arg_transforms,
+                null,
+                null,
+                expected_member_ref,
+                capture_payload,
+                capture_payload_ty,
+                branch_plan.capture_transforms,
+                result_ty,
+                result_boundary,
+            );
+
+            branches[i] = .{
+                .member = expected_member_ref,
+                .source_fn_ty = member.proc_value.source_fn_ty,
+                .capture_payload = capture_payload,
+                .capture_payload_ty = capture_payload_ty,
+                .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
+                .executable_proc = executable_proc,
+                .arg_transforms = lowered_branch.arg_transforms,
+                .direct_args = lowered_branch.direct_args,
+                .body = lowered_branch.body,
+            };
+        }
+    } else {
+        const context = published_context orelse executableInvariant("published erased finite-set adapter has no transform context");
+        const published = published_types orelse executableInvariant("published erased finite-set adapter has no type lowerer");
+        if (published_branch_plans.len != descriptor.members.len) {
+            executableInvariant("executable erased finite-set adapter published branch plan count differs from descriptor");
+        }
+        for (descriptor.members, published_branch_plans, 0..) |member, branch_plan, i| {
+            const expected_member_ref: repr.CallableSetMemberRef = .{
+                .callable_set_key = adapter.callable_set_key,
+                .member_index = member.member,
+            };
+            if (!repr.callableSetKeyEql(branch_plan.member.callable_set_key, expected_member_ref.callable_set_key) or
+                branch_plan.member.member_index != expected_member_ref.member_index)
+            {
+                executableInvariant("executable erased finite-set adapter published branch member differs from descriptor");
+            }
+            const target_instance_id = member.target_instance;
+            const executable_proc = builder.proc_exec_map.get(target_instance_id) orelse {
+                executableInvariant("executable erased finite-set adapter published member target was not reserved");
+            };
+            const target_instance = builder.proc_instances[@intFromEnum(target_instance_id)];
+            if (!repr.executableSpecializationKeyEql(target_instance.executable_specialization_key, branch_plan.target_key)) {
+                executableInvariant("executable erased finite-set adapter published branch target key differs from target instance");
+            }
+            const capture_payload_ty = try builder.lowerCallableSetMemberPayloadType(adapter.callable_set_key, member);
+            const capture_payload = if (capture_payload_ty) |payload_ty| try program.ast.freshTypedValueRef(payload_ty) else null;
+            const lowered_branch = try lowerPublishedErasedFiniteSetAdapterBranchBody(
+                allocator,
+                program,
+                context,
+                published,
+                context.executable_value_transforms,
+                member.source_proc,
+                target_instance,
+                executable_proc,
+                arg_values,
+                branch_plan.arg_transforms,
+                capture_payload,
+                capture_payload_ty,
+                branch_plan.capture_transforms,
+                result_ty,
+                branch_plan.result_transform,
+            );
+            branches[i] = .{
+                .member = expected_member_ref,
+                .source_fn_ty = member.proc_value.source_fn_ty,
+                .capture_payload = capture_payload,
+                .capture_payload_ty = capture_payload_ty,
+                .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
+                .executable_proc = executable_proc,
+                .arg_transforms = lowered_branch.arg_transforms,
+                .direct_args = lowered_branch.direct_args,
+                .body = lowered_branch.body,
+            };
+        }
     }
 
     const result_value = program.ast.freshValueRef();
@@ -1922,6 +2287,197 @@ fn lowerErasedFiniteSetAdapterCallableMatch(
         .result_ty = result_ty,
         .result_value = result_value,
     } });
+}
+
+const PublishedLoweredCallableMatchBranch = struct {
+    arg_transforms: Ast.Span(checked_artifact.ExecutableValueTransformRef),
+    direct_args: Ast.Span(Ast.DirectCallArg),
+    body: Ast.ExprId,
+};
+
+fn lowerPublishedErasedFiniteSetAdapterBranchBody(
+    allocator: Allocator,
+    program: *Program,
+    materialization: PublishedTransformContext,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    source_proc: canonical.MirProcedureRef,
+    target_instance: repr.ProcRepresentationInstance,
+    executable_proc: Ast.ExecutableProcId,
+    arg_values: []const Ast.ExecutableValueRef,
+    arg_transforms: []const checked_artifact.PublishedExecutableValueTransformRef,
+    capture_payload: ?Ast.ExecutableValueRef,
+    capture_payload_ty: ?Type.TypeId,
+    capture_transforms: []const checked_artifact.PublishedExecutableValueTransformRef,
+    result_ty: Type.TypeId,
+    result_transform: checked_artifact.PublishedExecutableValueTransformRef,
+) Allocator.Error!PublishedLoweredCallableMatchBranch {
+    var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+    defer stmt_ids.deinit(allocator);
+
+    if (arg_values.len != arg_transforms.len) {
+        executableInvariant("published erased finite-set adapter branch argument transform count differs from arity");
+    }
+    const capture_arg_len: usize = if (capture_payload == null) 0 else 1;
+    const direct_args = try allocator.alloc(Ast.DirectCallArg, arg_values.len + capture_arg_len);
+    defer allocator.free(direct_args);
+    const transform_refs = try allocator.alloc(checked_artifact.ExecutableValueTransformRef, arg_transforms.len);
+    defer allocator.free(transform_refs);
+
+    for (arg_values, arg_transforms, 0..) |arg_value, transform_ref, i| {
+        const transform_id = publishedExecutableValueTransformId(materialization.artifact, transform_ref);
+        const transform = transforms.get(transform_id);
+        if (!repr.canonicalExecValueTypeKeyEql(transform.to.key, target_instance.executable_specialization_key.exec_arg_tys[i])) {
+            executableInvariant("published erased finite-set adapter branch argument target key differs from specialization");
+        }
+        transform_refs[i] = .{ .published = transform_ref };
+        direct_args[i] = .{
+            .value = try applyPublishedExecutableValueTransform(
+                program,
+                materialization.materialization,
+                published_types,
+                transforms,
+                &stmt_ids,
+                transform_id,
+                arg_value,
+            ),
+        };
+    }
+
+    if (capture_payload) |payload| {
+        if (capture_transforms.len > 0) {
+            direct_args[arg_values.len] = .{
+                .value = try lowerPublishedErasedFiniteAdapterBranchCaptureArg(
+                    allocator,
+                    program,
+                    materialization,
+                    published_types,
+                    transforms,
+                    &stmt_ids,
+                    payload,
+                    capture_payload_ty orelse executableInvariant("published erased finite-set adapter capture transform has no payload type"),
+                    capture_transforms,
+                    target_instance,
+                ),
+            };
+        } else {
+            direct_args[arg_values.len] = .{ .value = payload };
+        }
+    } else if (capture_transforms.len != 0) {
+        executableInvariant("published erased finite-set adapter branch has capture transforms without capture payload");
+    }
+    const direct_args_span = try program.ast.addDirectCallArgSpan(direct_args);
+    const arg_transforms_span = try program.ast.addExecutableValueTransformRefSpan(transform_refs);
+    const result_transform_id = publishedExecutableValueTransformId(materialization.artifact, result_transform);
+    const result_plan = transforms.get(result_transform_id);
+    if (!repr.canonicalExecValueTypeKeyEql(result_plan.from.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+        executableInvariant("published erased finite-set adapter branch result source key differs from specialization");
+    }
+    const raw_result_ty = try published_types.lower(result_plan.from.ty, result_plan.from.key);
+    const raw_result_value = program.ast.freshValueRef();
+    const direct_call = try program.ast.addExpr(raw_result_ty, raw_result_value, .{ .call_direct = .{
+        .source = source_proc.proc,
+        .executable_specialization_key = try repr.cloneExecutableSpecializationKey(allocator, target_instance.executable_specialization_key),
+        .executable_proc = executable_proc,
+        .direct_args = direct_args_span,
+    } });
+    try stmt_ids.append(allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = raw_result_value,
+        .body = direct_call,
+    } }));
+
+    const result_value = try applyPublishedExecutableValueTransform(
+        program,
+        materialization.materialization,
+        published_types,
+        transforms,
+        &stmt_ids,
+        result_transform_id,
+        raw_result_value,
+    );
+    const final_expr = try program.ast.addValueRefExpr(result_ty, result_value);
+    const body = try program.ast.addExpr(result_ty, result_value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmt_ids.items),
+        .final_expr = final_expr,
+    } });
+    return .{
+        .arg_transforms = arg_transforms_span,
+        .direct_args = direct_args_span,
+        .body = body,
+    };
+}
+
+fn lowerPublishedErasedFiniteAdapterBranchCaptureArg(
+    allocator: Allocator,
+    program: *Program,
+    materialization: PublishedTransformContext,
+    published_types: *PublishedTypeLowerer,
+    transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    stmt_ids: *std.ArrayList(Ast.StmtId),
+    capture_payload: Ast.ExecutableValueRef,
+    capture_payload_ty: Type.TypeId,
+    capture_transforms: []const checked_artifact.PublishedExecutableValueTransformRef,
+    target_instance: repr.ProcRepresentationInstance,
+) Allocator.Error!Ast.ExecutableValueRef {
+    _ = target_instance;
+    const source_items = switch (program.types.getType(capture_payload_ty)) {
+        .tuple => |items| items,
+        else => executableInvariant("published erased finite-set adapter branch capture payload type is not a tuple"),
+    };
+    if (source_items.len != capture_transforms.len) {
+        executableInvariant("published erased finite-set adapter branch capture transform count differs from payload arity");
+    }
+    const payload_expr = try program.ast.addValueRefExpr(capture_payload_ty, capture_payload);
+    const output_items = try allocator.alloc(Ast.ExprId, capture_transforms.len);
+    defer allocator.free(output_items);
+    const target_item_tys = try allocator.alloc(Type.TypeId, capture_transforms.len);
+    defer allocator.free(target_item_tys);
+
+    for (capture_transforms, 0..) |transform_ref, slot_i| {
+        const transform_id = publishedExecutableValueTransformId(materialization.artifact, transform_ref);
+        const transform = transforms.get(transform_id);
+        const source_ty = try published_types.lower(transform.from.ty, transform.from.key);
+        if (source_ty != source_items[slot_i]) {
+            executableInvariant("published erased finite-set adapter branch capture source type differs from member payload slot");
+        }
+        const access_value = program.ast.freshValueRef();
+        const access_expr = try program.ast.addExpr(source_ty, access_value, .{ .tuple_access = .{
+            .tuple = payload_expr,
+            .elem_index = @intCast(slot_i),
+        } });
+        try stmt_ids.append(allocator, try program.ast.addStmt(.{ .decl = .{
+            .value = access_value,
+            .body = access_expr,
+        } }));
+        const transformed = try applyPublishedExecutableValueTransform(
+            program,
+            materialization.materialization,
+            published_types,
+            transforms,
+            stmt_ids,
+            transform_id,
+            access_value,
+        );
+        const target_ty = try published_types.lower(transform.to.ty, transform.to.key);
+        target_item_tys[slot_i] = target_ty;
+        output_items[slot_i] = try program.ast.addValueRefExpr(target_ty, transformed);
+    }
+
+    const tuple_tys = if (target_item_tys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(Type.TypeId, target_item_tys);
+    errdefer if (tuple_tys.len > 0) allocator.free(tuple_tys);
+    const capture_arg_ty = try program.types.addType(.{ .tuple = tuple_tys });
+    const capture_arg_value = program.ast.freshValueRef();
+    const capture_arg_expr = try program.ast.addExpr(capture_arg_ty, capture_arg_value, .{
+        .tuple = try addTupleItemExprSpanForConstruction(allocator, program, &program.ast, output_items, target_item_tys),
+    });
+    try stmt_ids.append(allocator, try program.ast.addStmt(.{ .decl = .{
+        .value = capture_arg_value,
+        .body = capture_arg_expr,
+    } }));
+    return capture_arg_value;
 }
 
 fn lowerErasedPromotedWrapperProc(
@@ -1938,6 +2494,7 @@ fn lowerErasedPromotedWrapperProc(
         &program.canonical_names,
         &program.types,
         &program.row_shapes,
+        &program.lowered_session_types_by_key,
     );
     defer published_types.deinit();
 
@@ -2618,6 +3175,7 @@ fn applyTagUnionValueTransform(
     const transformed_value = program.ast.freshValueRef();
     const transformed_expr = try program.ast.addExpr(to_ty, transformed_value, .{ .value_transform_tag_union = .{
         .source = value,
+        .source_union_shape = source.shape,
         .branches = try program.ast.addValueTransformTagBranchSpan(branches),
     } });
     try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
@@ -4590,21 +5148,6 @@ fn executableProcForErasedCode(
     };
 }
 
-fn executableProcForCallable(
-    program: *const Program,
-    callable: canonical.ProcedureCallableRef,
-) Ast.ExecutableProcId {
-    for (program.procs.items) |proc| {
-        const source = switch (proc.origin) {
-            .source => |source| source,
-            .erased_direct_proc_adapter,
-            .erased_adapter => continue,
-        };
-        if (canonical.procedureCallableRefEql(source.callable, callable)) return proc.executable_proc;
-    }
-    executableInvariant("executable erased promoted wrapper referenced an unreserved callable procedure");
-}
-
 fn executableProcRecord(
     program: *const Program,
     executable_proc: Ast.ExecutableProcId,
@@ -4653,6 +5196,7 @@ const PublishedTypeLowerer = struct {
     lowering_names: *canonical.CanonicalNameStore,
     output: *Type.Store,
     row_shapes: *MonoRow.Store,
+    lowered_by_key: *std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     active: std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId),
 
     fn init(
@@ -4662,6 +5206,7 @@ const PublishedTypeLowerer = struct {
         lowering_names: *canonical.CanonicalNameStore,
         output: *Type.Store,
         row_shapes: *MonoRow.Store,
+        lowered_by_key: *std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     ) PublishedTypeLowerer {
         return .{
             .allocator = allocator,
@@ -4670,6 +5215,7 @@ const PublishedTypeLowerer = struct {
             .lowering_names = lowering_names,
             .output = output,
             .row_shapes = row_shapes,
+            .lowered_by_key = lowered_by_key,
             .active = std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId).init(allocator),
         };
     }
@@ -4690,18 +5236,30 @@ const PublishedTypeLowerer = struct {
         if (!repr.canonicalExecValueTypeKeyEql(actual_key, expected_key)) {
             executableInvariant("executable published type payload key differs from endpoint key");
         }
-        return try self.lowerPayload(ref.payload);
+        if (self.lowered_by_key.get(expected_key)) |existing| return existing;
+        return try self.lowerPayloadWithKey(ref.payload, expected_key);
     }
 
     fn lowerPayload(
         self: *PublishedTypeLowerer,
         id: checked_artifact.ExecutableTypePayloadId,
     ) Allocator.Error!Type.TypeId {
+        return try self.lowerPayloadWithKey(id, self.payloads.keyFor(id));
+    }
+
+    fn lowerPayloadWithKey(
+        self: *PublishedTypeLowerer,
+        id: checked_artifact.ExecutableTypePayloadId,
+        key: repr.CanonicalExecValueTypeKey,
+    ) Allocator.Error!Type.TypeId {
+        if (self.lowered_by_key.get(key)) |existing| return existing;
         if (self.active.get(id)) |existing| return existing;
 
         const ty = try self.output.addType(.placeholder);
         try self.active.put(id, ty);
         errdefer _ = self.active.remove(id);
+        try self.lowered_by_key.put(key, ty);
+        errdefer _ = self.lowered_by_key.remove(key);
 
         const lowered = try self.lowerPayloadContent(self.payloads.get(id));
         self.output.types.items[@intFromEnum(ty)] = lowered;
@@ -4748,8 +5306,7 @@ const PublishedTypeLowerer = struct {
         defer self.allocator.free(labels);
         for (fields, 0..) |field, i| labels[i] = try self.remapRecordFieldLabel(field.field);
         const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
-        const shape_fields = self.row_shapes.recordShapeFields(shape);
-        if (shape_fields.len != fields.len) {
+        if (self.row_shapes.recordShapeFields(shape).len != fields.len) {
             executableInvariant("executable published record payload shape arity mismatch");
         }
 
@@ -4757,7 +5314,7 @@ const PublishedTypeLowerer = struct {
         errdefer self.allocator.free(out);
         for (fields, 0..) |field, i| {
             out[i] = .{
-                .field = shape_fields[i],
+                .field = self.recordFieldInShape(shape, labels[i]),
                 .ty = try self.lower(field.ty, field.key),
             };
         }
@@ -4803,8 +5360,7 @@ const PublishedTypeLowerer = struct {
             };
         }
         const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
-        const shape_tags = self.row_shapes.tagUnionTags(shape);
-        if (shape_tags.len != variants.len) executableInvariant("executable published tag payload shape arity mismatch");
+        if (self.row_shapes.tagUnionTags(shape).len != variants.len) executableInvariant("executable published tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(Type.TagType, variants.len);
         for (out) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
@@ -4813,9 +5369,10 @@ const PublishedTypeLowerer = struct {
             self.allocator.free(out);
         }
         for (variants, 0..) |variant, i| {
-            const payloads = try self.lowerTagPayloads(shape_tags[i], variant.payloads);
+            const shape_tag = self.tagInShape(shape, descriptors[i].name);
+            const payloads = try self.lowerTagPayloads(shape_tag, variant.payloads);
             out[i] = .{
-                .tag = shape_tags[i],
+                .tag = shape_tag,
                 .payloads = payloads,
             };
         }
@@ -4843,6 +5400,28 @@ const PublishedTypeLowerer = struct {
             };
         }
         return out;
+    }
+
+    fn recordFieldInShape(
+        self: *PublishedTypeLowerer,
+        shape: MonoRow.RecordShapeId,
+        label: canonical.RecordFieldLabelId,
+    ) MonoRow.RecordFieldId {
+        for (self.row_shapes.recordShapeFields(shape)) |field_id| {
+            if (self.row_shapes.recordField(field_id).label == label) return field_id;
+        }
+        executableInvariant("executable published record payload label missing from interned shape");
+    }
+
+    fn tagInShape(
+        self: *PublishedTypeLowerer,
+        shape: MonoRow.TagUnionShapeId,
+        label: canonical.TagLabelId,
+    ) MonoRow.TagId {
+        for (self.row_shapes.tagUnionTags(shape)) |tag_id| {
+            if (self.row_shapes.tag(tag_id).label == label) return tag_id;
+        }
+        executableInvariant("executable published tag payload label missing from interned shape");
     }
 
     fn lowerCallableSetPayload(
@@ -5208,14 +5787,13 @@ const TypeLowerer = struct {
         }
 
         const shape = try self.row_shapes.internRecordShapeFromLabels(labels);
-        const shape_fields = self.row_shapes.recordShapeFields(shape);
-        if (shape_fields.len != source_fields.len) executableInvariant("executable type lowering record shape arity mismatch");
+        if (self.row_shapes.recordShapeFields(shape).len != source_fields.len) executableInvariant("executable type lowering record shape arity mismatch");
 
         const fields = try self.allocator.alloc(Type.RecordFieldType, source_fields.len);
         errdefer self.allocator.free(fields);
         for (source_fields, 0..) |field, i| {
             fields[i] = .{
-                .field = shape_fields[i],
+                .field = self.recordFieldInShape(shape, labels[i]),
                 .ty = try self.lowerType(field.ty),
             };
         }
@@ -5238,8 +5816,7 @@ const TypeLowerer = struct {
         }
 
         const shape = try self.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
-        const shape_tags = self.row_shapes.tagUnionTags(shape);
-        if (shape_tags.len != source_tags.len) executableInvariant("executable type lowering tag-union shape arity mismatch");
+        if (self.row_shapes.tagUnionTags(shape).len != source_tags.len) executableInvariant("executable type lowering tag-union shape arity mismatch");
 
         const tags = try self.allocator.alloc(Type.TagType, source_tags.len);
         for (tags) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
@@ -5250,8 +5827,9 @@ const TypeLowerer = struct {
             self.allocator.free(tags);
         }
         for (source_tags, 0..) |source_tag, i| {
+            const shape_tag = self.tagInShape(shape, source_tag.name);
             const source_payload_tys = self.input.sliceTypeVarSpan(source_tag.args);
-            const shape_payloads = self.row_shapes.tagPayloads(shape_tags[i]);
+            const shape_payloads = self.row_shapes.tagPayloads(shape_tag);
             if (shape_payloads.len != source_payload_tys.len) executableInvariant("executable type lowering tag payload arity mismatch");
 
             const payloads = try self.allocator.alloc(Type.TagPayloadType, source_payload_tys.len);
@@ -5264,7 +5842,7 @@ const TypeLowerer = struct {
             }
 
             tags[i] = .{
-                .tag = shape_tags[i],
+                .tag = shape_tag,
                 .payloads = payloads,
             };
         }
@@ -5273,6 +5851,28 @@ const TypeLowerer = struct {
             .shape = shape,
             .tags = tags,
         } };
+    }
+
+    fn recordFieldInShape(
+        self: *TypeLowerer,
+        shape: MonoRow.RecordShapeId,
+        label: canonical.RecordFieldLabelId,
+    ) MonoRow.RecordFieldId {
+        for (self.row_shapes.recordShapeFields(shape)) |field_id| {
+            if (self.row_shapes.recordField(field_id).label == label) return field_id;
+        }
+        executableInvariant("executable type lowering record field label missing from interned shape");
+    }
+
+    fn tagInShape(
+        self: *TypeLowerer,
+        shape: MonoRow.TagUnionShapeId,
+        label: canonical.TagLabelId,
+    ) MonoRow.TagId {
+        for (self.row_shapes.tagUnionTags(shape)) |tag_id| {
+            if (self.row_shapes.tag(tag_id).label == label) return tag_id;
+        }
+        executableInvariant("executable type lowering tag label missing from interned shape");
     }
 };
 
@@ -5379,6 +5979,7 @@ const BodyBuilder = struct {
         key: repr.ExecutableSpecializationKey,
     ) Ast.ExecutableProcId {
         for (self.proc_instances, 0..) |instance, i| {
+            if (!instance.materialized) continue;
             if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
                 const instance_id: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(i)));
                 return self.proc_exec_map.get(instance_id) orelse executableInvariant("executable specialization key matched an unreserved proc instance");
@@ -5567,15 +6168,12 @@ const BodyBuilder = struct {
     fn lowerFiniteSetAdapterCaptureType(
         self: *BodyBuilder,
         adapter: repr.ErasedAdapterKey,
+        descriptor: *const repr.CanonicalCallableSetDescriptor,
     ) Allocator.Error!?Type.TypeId {
-        const capture_key = adapter.erased_fn_sig_key.capture_ty orelse return null;
-        if (self.published_adapter_payloads) |published| {
-            const ref = published.payloads.refForKey(self.published_adapter_artifact, capture_key) orelse {
-                executableInvariant("executable finite-set adapter published capture key has no payload");
-            };
-            return try published.lower(ref, capture_key);
+        if (descriptor.members.len == 1 and descriptor.members[0].capture_slots.len == 0) {
+            return null;
         }
-        return try self.lowerSessionExecutableTypeKey(capture_key);
+        return try self.lowerCallableSetType(adapter.callable_set_key);
     }
 
     fn lowerCallableSetType(
@@ -5682,10 +6280,26 @@ const BodyBuilder = struct {
             .var_ => |var_| blk: {
                 const value = self.env.get(var_.binding_info) orelse executableInvariant("executable variable occurrence has no lowered binding value");
                 const binding = self.value_store.bindings.items[@intFromEnum(var_.binding_info)];
-                break :blk try self.output.addValueRefExpr(
-                    try self.lowerExecutableValueType(expr.ty, binding.value),
-                    value,
-                );
+                const occurrence_info = self.value_store.values.items[@intFromEnum(expr.value_info)];
+                if (!occurrence_info.value_alias_needs_executable_transform) {
+                    executableInvariant("executable variable occurrence was not published as a materialized alias");
+                }
+                const alias_source = occurrence_info.value_alias_source orelse executableInvariant("executable variable occurrence has no published alias source");
+                if (alias_source != binding.value) {
+                    executableInvariant("executable variable occurrence alias source differs from binding value");
+                }
+                const alias_transform = occurrence_info.value_alias_transform orelse executableInvariant("executable variable occurrence has no published alias transform");
+                const boundary = self.representation_store.valueTransformBoundary(alias_transform);
+                const expected_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
+                var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+                defer stmt_ids.deinit(self.allocator);
+                const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, value);
+                const final_expr = try self.output.addValueRefExpr(expected_ty, transformed);
+                if (stmt_ids.items.len == 0) break :blk final_expr;
+                break :blk try self.output.addExpr(expected_ty, self.output.getExpr(final_expr).value, .{ .block = .{
+                    .stmts = try self.output.addStmtSpan(stmt_ids.items),
+                    .final_expr = final_expr,
+                } });
             },
             .int_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .int_lit = literal }),
             .frac_f32_lit => |literal| try self.addValueExpr(expr.ty, expr.value_info, .{ .frac_f32_lit = literal }),
@@ -5762,7 +6376,7 @@ const BodyBuilder = struct {
             },
             .let_ => |let_| blk: {
                 const body = try self.lowerExpr(let_.body);
-                const bind_value = self.output.freshValueRef();
+                const bind_value = try self.output.freshTypedValueRef(self.output.getExpr(body).ty);
                 const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
@@ -5891,7 +6505,8 @@ const BodyBuilder = struct {
                 const scrutinee_exprs = [_]Ast.ExprId{cond};
                 const scrutinees = [_]Ast.ExecutableValueRef{self.exprValue(cond)};
                 const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
-                const transformed_branches = try self.lowerBranchSpanAtType(match_.branches, match_.join_info, self.output.getExpr(cond).ty, result_ty);
+                const lowered_branches = try self.lowerBranchSpanProducer(match_.branches, self.output.getExpr(cond).ty, result_ty);
+                const transformed_branches = try self.wrapSourceMatchBranches(match_.join_info, lowered_branches, result_ty);
                 const scrutinee_expr_span = try self.output.addExprSpan(&scrutinee_exprs);
                 const scrutinee_span = try self.output.addValueRefSpan(&scrutinees);
                 const decision_plan = try self.buildSourceMatchDecisionPlan(scrutinee_span, self.output.getExpr(cond).ty, transformed_branches);
@@ -5993,7 +6608,7 @@ const BodyBuilder = struct {
             },
             .let_ => |let_| blk: {
                 const body = try self.lowerExpr(let_.body);
-                const bind_value = self.output.freshValueRef();
+                const bind_value = try self.output.freshTypedValueRef(self.output.getExpr(body).ty);
                 const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
@@ -6216,6 +6831,51 @@ const BodyBuilder = struct {
             }
         }
         return result;
+    }
+
+    fn wrapSourceMatchBranches(
+        self: *BodyBuilder,
+        join_id: repr.JoinInfoId,
+        branches: Ast.Span(Ast.BranchId),
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
+        const join = self.value_store.joins.items[@intFromEnum(join_id)];
+        const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
+        const transforms = self.value_store.sliceValueTransformBoundarySpan(join.input_transforms);
+        if (inputs.len != transforms.len) {
+            executableInvariant("executable source_match join transform count differs from published join inputs");
+        }
+
+        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
+        var seen = try self.allocator.alloc(bool, branch_ids.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (inputs, transforms) |input, transform_id| {
+            const boundary = self.representation_store.valueTransformBoundary(transform_id);
+            const source = switch (input.source) {
+                .source_match_branch => |source_match| source_match,
+                else => executableInvariant("executable source_match join input has non-match source"),
+            };
+            self.verifyJoinInputBoundary(boundary, input);
+            const branch_index: usize = @intCast(@intFromEnum(source.branch));
+            if (branch_index >= branch_ids.len) {
+                executableInvariant("executable source_match join input referenced branch outside branch span");
+            }
+            if (seen[branch_index]) {
+                executableInvariant("executable source_match join saw duplicate branch input");
+            }
+            seen[branch_index] = true;
+
+            const branch_id = branch_ids[branch_index];
+            const branch = &self.output.branches.items[@intFromEnum(branch_id)];
+            if (!self.executableExprReturnsValue(branch.body)) {
+                executableInvariant("executable source_match join input referenced non-returning branch");
+            }
+            branch.body = try self.wrapJoinInputBody(branch.body, boundary, result_ty);
+        }
+
+        return branches;
     }
 
     fn wrapJoinInputBody(
@@ -6782,7 +7442,7 @@ const BodyBuilder = struct {
         _ = self;
         return switch (a) {
             .tag => |left| switch (b) {
-                .tag => |right| left == right,
+                .tag => |right| left.union_shape == right.union_shape and left.tag == right.tag,
                 else => false,
             },
             .int_literal => |left| switch (b) {
@@ -7068,7 +7728,10 @@ const BodyBuilder = struct {
                 }
             },
             .tag => |tag| {
-                try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .tag = tag.tag } });
+                try tests.append(self.allocator, .{ .path_value = path_value, .pattern_test = .{ .tag = .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                } } });
                 const payload_patterns = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_patterns.len == 0) return;
 
@@ -7270,8 +7933,6 @@ const BodyBuilder = struct {
         target_ty: Type.TypeId,
         mode: ValueBridgeMode,
     ) Allocator.Error!Ast.BridgeId {
-        if (mode == .pattern_binding and source_ty == target_ty) return try self.output.addBridgePlan(.direct);
-
         const source = self.program.types.getType(source_ty);
         const target = self.program.types.getType(target_ty);
         const plan: Ast.BridgePlan = switch (source) {
@@ -7601,7 +8262,7 @@ const BodyBuilder = struct {
                 break :blk .{ .tag = .{
                     .union_shape = resolved_tag.union_shape,
                     .tag = resolved_tag.tag,
-                    .payloads = try self.lowerTagPayloadPatternSpanForTag(resolved_tag.tag, tag.payloads, saved),
+                    .payloads = try self.lowerTagPayloadPatternSpanForTag(ty, resolved_tag.tag, tag.payloads, saved),
                 } };
             },
         } });
@@ -7665,6 +8326,58 @@ const BodyBuilder = struct {
         }
     }
 
+    fn lowerBranchProducer(
+        self: *BodyBuilder,
+        branch_id: LambdaSolved.Ast.BranchId,
+        scrutinee_ty: Type.TypeId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.BranchId {
+        const branch = self.input.branches.items[@intFromEnum(branch_id)];
+        var saved = std.ArrayList(SavedBinding).empty;
+        defer saved.deinit(self.allocator);
+        if (branch.source_match_branch) |branch_ref| {
+            if (!self.value_store.sourceMatchBranchReachable(branch_ref)) {
+                const pat = try self.lowerUnreachableDecisionPat(branch.pat, scrutinee_ty);
+                const body = try self.output.addExpr(
+                    result_ty,
+                    self.output.freshValueRef(),
+                    .@"unreachable",
+                );
+                return try self.output.addBranch(.{
+                    .pat = pat,
+                    .guard = null,
+                    .body = body,
+                    .degenerate = branch.degenerate,
+                });
+            }
+        }
+        const pat = try self.lowerPatScopedWithType(branch.pat, scrutinee_ty, &saved);
+        defer self.restoreBindings(&saved, 0);
+        const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
+        return try self.output.addBranch(.{
+            .pat = pat,
+            .guard = guard,
+            .body = try self.lowerExpr(branch.body),
+            .degenerate = branch.degenerate,
+        });
+    }
+
+    fn lowerBranchSpanProducer(
+        self: *BodyBuilder,
+        span: LambdaSolved.Ast.Span(LambdaSolved.Ast.BranchId),
+        scrutinee_ty: Type.TypeId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.BranchId) {
+        if (span.len == 0) return Ast.Span(Ast.BranchId).empty();
+        const input_items = self.input.branch_ids.items[span.start..][0..span.len];
+        const output_items = try self.allocator.alloc(Ast.BranchId, input_items.len);
+        defer self.allocator.free(output_items);
+        for (input_items, 0..) |item, i| {
+            output_items[i] = try self.lowerBranchProducer(item, scrutinee_ty, result_ty);
+        }
+        return try self.output.addBranchSpan(output_items);
+    }
+
     fn lowerBranchAtType(
         self: *BodyBuilder,
         branch_id: LambdaSolved.Ast.BranchId,
@@ -7692,7 +8405,7 @@ const BodyBuilder = struct {
                 });
             }
         }
-        const pat = try self.lowerPatScoped(branch.pat, &saved);
+        const pat = try self.lowerPatScopedWithType(branch.pat, scrutinee_ty, &saved);
         defer self.restoreBindings(&saved, 0);
         const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
         const body = if (self.lambdaExprCanCompleteNormally(branch.body)) blk: {
@@ -8014,6 +8727,7 @@ const BodyBuilder = struct {
 
     fn lowerTagPayloadPatternSpanForTag(
         self: *BodyBuilder,
+        parent_ty: Type.TypeId,
         target_tag: MonoRow.TagId,
         span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TagPayloadPattern),
         saved: *std.ArrayList(SavedBinding),
@@ -8041,9 +8755,10 @@ const BodyBuilder = struct {
                 executableInvariant("executable tag pattern row re-keying duplicated payload");
             }
             seen[payload_index] = true;
+            const child_ty = self.tagPayloadTypeForPattern(parent_ty, target_payload);
             payloads[i] = .{
                 .payload = target_payload,
-                .pattern = try self.lowerPatScoped(payload.pattern, saved),
+                .pattern = try self.lowerPatScopedWithType(payload.pattern, child_ty, saved),
             };
         }
         verifyAllSeen(seen, "executable tag pattern row re-keying omitted payload");
@@ -8417,10 +9132,6 @@ const BodyBuilder = struct {
             executableInvariant("executable call_proc target specialization source type differs from call site");
         }
 
-        const arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.arg_transforms);
-        if (arg_transform_ids.len != arg_items.len) {
-            executableInvariant("executable call_proc argument transform count differs from call arity");
-        }
         const arg_consumer_use_ids = self.value_store.sliceConsumerUsePlanSpan(call_site.arg_consumer_uses);
         if (arg_consumer_use_ids.len != arg_items.len) {
             executableInvariant("executable call_proc argument consumer-use count differs from call arity");
@@ -8437,9 +9148,7 @@ const BodyBuilder = struct {
         defer stmt_ids.deinit(self.allocator);
 
         for (arg_items, 0..) |arg, i| {
-            const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
-            self.verifyCallProcArgBoundary(boundary, call.call_site, target_instance_id, target_instance, @intCast(i));
-            self.verifyCallArgConsumerUse(arg_consumer_use_ids[i], arg, boundary, call.call_site, @intCast(i));
+            self.verifyCallProcArgConsumerUse(arg_consumer_use_ids[i], arg, call.call_site, target_instance_id, target_instance, @intCast(i));
             const lowered = try self.lowerExprAtConsumerUse(arg, arg_consumer_use_ids[i]);
             const value = try self.materializeExprValue(&stmt_ids, lowered);
             direct_args[i] = .{ .value = value };
@@ -8467,48 +9176,13 @@ const BodyBuilder = struct {
         } });
     }
 
-    fn verifyCallProcArgBoundary(
-        self: *BodyBuilder,
-        boundary: repr.ValueTransformBoundary,
-        call_site_id: repr.CallSiteInfoId,
-        target_instance_id: repr.ProcRepresentationInstanceId,
-        target_instance: repr.ProcRepresentationInstance,
-        index: u32,
-    ) void {
-        _ = self;
-        const kind = switch (boundary.kind) {
-            .call_arg => |call_arg| call_arg,
-            else => executableInvariant("executable call_proc argument transform has non-call-arg boundary kind"),
-        };
-        if (kind.call != call_site_id or kind.arg_index != index) {
-            executableInvariant("executable call_proc argument transform boundary kind differs from call site");
-        }
-        switch (boundary.from_endpoint.owner) {
-            .local_value => {},
-            else => executableInvariant("executable call_proc argument transform source is not a local value"),
-        }
-        const to = switch (boundary.to_endpoint.owner) {
-            .procedure_param => |param| param,
-            else => executableInvariant("executable call_proc argument transform target is not a procedure parameter"),
-        };
-        if (to.instance != target_instance_id or to.index != index) {
-            executableInvariant("executable call_proc argument transform target differs from target procedure");
-        }
-        const arg_index: usize = @intCast(index);
-        if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
-            executableInvariant("executable call_proc argument transform index exceeds target arity");
-        }
-        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
-            executableInvariant("executable call_proc argument endpoint key differs from target specialization");
-        }
-    }
-
-    fn verifyCallArgConsumerUse(
+    fn verifyCallProcArgConsumerUse(
         self: *BodyBuilder,
         use_id: repr.ConsumerUsePlanId,
         arg_expr: LambdaSolved.Ast.ExprId,
-        boundary: repr.ValueTransformBoundary,
         call_site_id: repr.CallSiteInfoId,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
         index: u32,
     ) void {
         const plan = self.representation_store.consumerUsePlan(use_id);
@@ -8523,11 +9197,19 @@ const BodyBuilder = struct {
         if (source_expr.value_info != plan.child_value) {
             executableInvariant("executable call argument consumer-use child value differs from argument expression");
         }
-        if (boundary.from_value != plan.child_value) {
-            executableInvariant("executable call argument boundary source value differs from consumer-use child");
+        const to = switch (plan.expected_endpoint.owner) {
+            .procedure_param => |param| param,
+            else => executableInvariant("executable call_proc argument consumer-use endpoint is not a procedure parameter"),
+        };
+        if (to.instance != target_instance_id or to.index != index) {
+            executableInvariant("executable call_proc argument consumer-use endpoint differs from target procedure");
         }
-        if (!sessionExecutableValueEndpointEql(boundary.to_endpoint, plan.expected_endpoint)) {
-            executableInvariant("executable call argument consumer-use endpoint differs from call boundary");
+        const arg_index: usize = @intCast(index);
+        if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
+            executableInvariant("executable call_proc argument consumer-use index exceeds target arity");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(plan.expected_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+            executableInvariant("executable call_proc argument consumer-use endpoint key differs from target specialization");
         }
     }
 
@@ -8704,7 +9386,7 @@ const BodyBuilder = struct {
         }
 
         const result_ty = try self.lowerExecutableValueType(source_ty, value_info_id);
-        const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(erase.adapter);
+        const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(erase.adapter, descriptor);
         if (hidden_capture_ty == null and (descriptor.members.len != 1 or capture_items.len != 0)) {
             executableInvariant("executable finite-set erase without hidden capture cannot preserve callable-set value");
         }
@@ -8988,7 +9670,7 @@ const BodyBuilder = struct {
                 executableInvariant("executable call_value member target specialization source type differs from call site");
             }
             const capture_payload_ty = try self.lowerCallableSetMemberPayloadType(callable_set_key, member);
-            const capture_payload = if (capture_payload_ty != null) self.output.freshValueRef() else null;
+            const capture_payload = if (capture_payload_ty) |payload_ty| try self.output.freshTypedValueRef(payload_ty) else null;
             const member_ref: repr.CallableSetMemberRef = .{
                 .callable_set_key = callable_set_key,
                 .member_index = member.member,
@@ -9017,6 +9699,8 @@ const BodyBuilder = struct {
                 call.call_site,
                 member_ref,
                 capture_payload,
+                capture_payload_ty,
+                null,
                 result_ty,
                 result_boundary,
             );
@@ -9085,10 +9769,6 @@ const BodyBuilder = struct {
         const capture_ty = self.erasedFnCaptureType(self.output.getExpr(func).ty, sig_key);
 
         const arg_items = self.input.expr_ids.items[call.args.start..][0..call.args.len];
-        const arg_transform_ids = self.value_store.sliceValueTransformBoundarySpan(call_site.arg_transforms);
-        if (arg_transform_ids.len != arg_items.len) {
-            executableInvariant("executable erased call_value argument transform count differs from call arity");
-        }
         const arg_consumer_use_ids = self.value_store.sliceConsumerUsePlanSpan(call_site.arg_consumer_uses);
         if (arg_consumer_use_ids.len != arg_items.len) {
             executableInvariant("executable erased call_value argument consumer-use count differs from call arity");
@@ -9109,9 +9789,7 @@ const BodyBuilder = struct {
             .body = func,
         } }));
         for (arg_items, 0..) |arg, i| {
-            const boundary = self.representation_store.valueTransformBoundary(arg_transform_ids[i]);
-            self.verifyErasedCallRawArgBoundary(boundary, call_site_id, @intCast(i), sig_key);
-            self.verifyCallArgConsumerUse(arg_consumer_use_ids[i], arg, boundary, call_site_id, @intCast(i));
+            self.verifyErasedCallRawArgConsumerUse(arg_consumer_use_ids[i], arg, call_site_id, @intCast(i), sig_key);
             const lowered = try self.lowerExprAtConsumerUse(arg, arg_consumer_use_ids[i]);
             const value = try self.materializeExprValue(&stmt_ids, lowered);
             arg_values[i] = value;
@@ -9157,6 +9835,8 @@ const BodyBuilder = struct {
         branch_call_site_id: ?repr.CallSiteInfoId,
         branch_member_ref: ?repr.CallableSetMemberRef,
         capture_payload: ?Ast.ExecutableValueRef,
+        capture_payload_ty: ?Type.TypeId,
+        branch_capture_transform_ids: ?[]const repr.ValueTransformBoundaryId,
         result_ty: Ast.TypeId,
         result_boundary: ?repr.ValueTransformBoundary,
     ) Allocator.Error!LoweredCallableMatchBranch {
@@ -9172,25 +9852,48 @@ const BodyBuilder = struct {
         defer self.allocator.free(arg_transform_refs);
 
         if (branch_arg_transform_ids) |boundary_ids| {
-            const infos = call_arg_infos orelse executableInvariant("executable callable_match branch argument transforms require call argument metadata");
-            if (boundary_ids.len != arg_values.len or infos.len != arg_values.len) {
+            if (boundary_ids.len != arg_values.len) {
                 executableInvariant("executable callable_match branch argument transform count differs from call arity");
             }
-            for (arg_values, boundary_ids, infos, 0..) |arg_value, boundary_id, source_arg_info, arg_i| {
-                const boundary = self.representation_store.valueTransformBoundary(boundary_id);
-                self.verifyCallableMatchBranchArgBoundary(
-                    boundary,
-                    branch_call_site_id orelse executableInvariant("executable callable_match branch argument transforms require call-site id"),
-                    branch_member_ref orelse executableInvariant("executable callable_match branch argument transforms require member ref"),
-                    source_arg_info,
-                    target_instance_id,
-                    target_instance,
-                    @intCast(arg_i),
-                );
-                arg_transform_refs[arg_i] = boundary.transform;
-                direct_args[arg_i] = .{
-                    .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, arg_value),
-                };
+            if (call_arg_infos) |infos| {
+                if (infos.len != arg_values.len) {
+                    executableInvariant("executable callable_match branch call argument metadata differs from call arity");
+                }
+                for (arg_values, boundary_ids, infos, 0..) |arg_value, boundary_id, source_arg_info, arg_i| {
+                    const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+                    self.verifyCallableMatchBranchArgBoundary(
+                        boundary,
+                        branch_call_site_id orelse executableInvariant("executable callable_match branch argument transforms require call-site id"),
+                        branch_member_ref orelse executableInvariant("executable callable_match branch argument transforms require member ref"),
+                        source_arg_info,
+                        target_instance_id,
+                        target_instance,
+                        @intCast(arg_i),
+                    );
+                    arg_transform_refs[arg_i] = boundary.transform;
+                    direct_args[arg_i] = .{
+                        .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, arg_value),
+                    };
+                }
+            } else {
+                if (branch_call_site_id != null) {
+                    executableInvariant("executable callable_match adapter branch argument transforms received unexpected call-site id");
+                }
+                const member_ref = branch_member_ref orelse executableInvariant("executable callable_match adapter branch argument transforms require member ref");
+                for (arg_values, boundary_ids, 0..) |arg_value, boundary_id, arg_i| {
+                    const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+                    self.verifyErasedFiniteAdapterBranchArgBoundary(
+                        boundary,
+                        member_ref,
+                        target_instance_id,
+                        target_instance,
+                        @intCast(arg_i),
+                    );
+                    arg_transform_refs[arg_i] = boundary.transform;
+                    direct_args[arg_i] = .{
+                        .value = try self.applyValueTransformBoundary(&stmt_ids, boundary, arg_value),
+                    };
+                }
             }
         } else {
             if (call_arg_infos != null) {
@@ -9202,7 +9905,25 @@ const BodyBuilder = struct {
         }
 
         if (capture_payload) |payload| {
-            direct_args[arg_values.len] = .{ .value = payload };
+            if (branch_capture_transform_ids) |capture_boundary_ids| {
+                direct_args[arg_values.len] = .{
+                    .value = try self.lowerErasedFiniteAdapterBranchCaptureArg(
+                        &stmt_ids,
+                        payload,
+                        capture_payload_ty orelse executableInvariant("executable erased finite adapter branch capture transform has no payload type"),
+                        capture_boundary_ids,
+                        branch_member_ref orelse executableInvariant("executable erased finite adapter branch capture transforms require member ref"),
+                        target_instance_id,
+                        target_instance,
+                    ),
+                };
+            } else {
+                direct_args[arg_values.len] = .{ .value = payload };
+            }
+        } else if (branch_capture_transform_ids) |capture_boundary_ids| {
+            if (capture_boundary_ids.len != 0) {
+                executableInvariant("executable erased finite adapter branch has capture transforms without capture payload");
+            }
         }
         const direct_args_span = try self.output.addDirectCallArgSpan(direct_args);
         const arg_transforms_span = try self.output.addExecutableValueTransformRefSpan(arg_transform_refs);
@@ -9237,6 +9958,75 @@ const BodyBuilder = struct {
             .direct_args = direct_args_span,
             .body = body,
         };
+    }
+
+    fn lowerErasedFiniteAdapterBranchCaptureArg(
+        self: *BodyBuilder,
+        stmt_ids: *std.ArrayList(Ast.StmtId),
+        capture_payload: Ast.ExecutableValueRef,
+        capture_payload_ty: Type.TypeId,
+        capture_boundary_ids: []const repr.ValueTransformBoundaryId,
+        member_ref: repr.CallableSetMemberRef,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+    ) Allocator.Error!Ast.ExecutableValueRef {
+        const source_items = switch (self.program.types.getType(capture_payload_ty)) {
+            .tuple => |items| items,
+            else => executableInvariant("executable erased finite adapter branch capture payload type is not a tuple"),
+        };
+        if (source_items.len != capture_boundary_ids.len) {
+            executableInvariant("executable erased finite adapter branch capture transform count differs from payload arity");
+        }
+        const payload_expr = try self.output.addValueRefExpr(capture_payload_ty, capture_payload);
+        const output_items = try self.allocator.alloc(Ast.ExprId, capture_boundary_ids.len);
+        defer self.allocator.free(output_items);
+        const target_item_tys = try self.allocator.alloc(Type.TypeId, capture_boundary_ids.len);
+        defer self.allocator.free(target_item_tys);
+
+        for (capture_boundary_ids, 0..) |boundary_id, slot_i| {
+            const slot: u32 = @intCast(slot_i);
+            const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+            self.verifyErasedFiniteAdapterBranchCaptureBoundary(
+                boundary,
+                member_ref,
+                target_instance_id,
+                target_instance,
+                slot,
+            );
+            const source_ty = try self.lowerSessionExecutableEndpointType(boundary.from_endpoint);
+            if (source_ty != source_items[slot_i]) {
+                executableInvariant("executable erased finite adapter branch capture source type differs from member payload slot");
+            }
+            const access_value = self.output.freshValueRef();
+            const access_expr = try self.output.addExpr(source_ty, access_value, .{ .tuple_access = .{
+                .tuple = payload_expr,
+                .elem_index = slot,
+            } });
+            try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                .value = access_value,
+                .body = access_expr,
+            } }));
+            const transformed = try self.applyValueTransformBoundary(stmt_ids, boundary, access_value);
+            const target_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
+            target_item_tys[slot_i] = target_ty;
+            output_items[slot_i] = try self.output.addValueRefExpr(target_ty, transformed);
+        }
+
+        const tuple_tys = if (target_item_tys.len == 0)
+            &.{}
+        else
+            try self.allocator.dupe(Type.TypeId, target_item_tys);
+        errdefer if (tuple_tys.len > 0) self.allocator.free(tuple_tys);
+        const capture_arg_ty = try self.program.types.addType(.{ .tuple = tuple_tys });
+        const capture_arg_value = self.output.freshValueRef();
+        const capture_arg_expr = try self.output.addExpr(capture_arg_ty, capture_arg_value, .{
+            .tuple = try addTupleItemExprSpanForConstruction(self.allocator, self.program, self.output, output_items, target_item_tys),
+        });
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = capture_arg_value,
+            .body = capture_arg_expr,
+        } }));
+        return capture_arg_value;
     }
 
     fn verifyCallableMatchBranchArgBoundary(
@@ -9323,6 +10113,137 @@ const BodyBuilder = struct {
             executableInvariant("executable callable_match result boundary source key differs from branch specialization");
         }
         _ = self;
+    }
+
+    fn verifyErasedFiniteAdapterBranchArgBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        member_ref: repr.CallableSetMemberRef,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+        index: u32,
+    ) void {
+        _ = self;
+        const kind = switch (boundary.kind) {
+            .erased_finite_adapter_arg => |branch_arg| branch_arg,
+            else => executableInvariant("executable erased finite adapter argument boundary has non-adapter-arg kind"),
+        };
+        if (!repr.callableSetKeyEql(kind.member.callable_set_key, member_ref.callable_set_key) or
+            kind.member.member_index != member_ref.member_index or
+            kind.index != index)
+        {
+            executableInvariant("executable erased finite adapter argument boundary points at a different branch");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .erased_finite_adapter_arg => |arg| arg,
+            else => executableInvariant("executable erased finite adapter argument boundary source has wrong owner"),
+        };
+        if (!repr.erasedAdapterKeyEql(from.adapter, kind.adapter) or
+            !repr.callableSetKeyEql(from.member.callable_set_key, kind.member.callable_set_key) or
+            from.member.member_index != kind.member.member_index or
+            from.index != kind.index)
+        {
+            executableInvariant("executable erased finite adapter argument boundary source differs from boundary owner");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_param => |param| param,
+            else => executableInvariant("executable erased finite adapter argument boundary target is not procedure_param"),
+        };
+        if (to.instance != target_instance_id or to.index != index) {
+            executableInvariant("executable erased finite adapter argument boundary target differs from branch target");
+        }
+        const arg_index: usize = @intCast(index);
+        if (arg_index >= target_instance.executable_specialization_key.exec_arg_tys.len) {
+            executableInvariant("executable erased finite adapter argument boundary index exceeds branch target arity");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_arg_tys[arg_index])) {
+            executableInvariant("executable erased finite adapter argument boundary target key differs from branch specialization");
+        }
+    }
+
+    fn verifyErasedFiniteAdapterBranchCaptureBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        member_ref: repr.CallableSetMemberRef,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+        slot: u32,
+    ) void {
+        const kind = switch (boundary.kind) {
+            .erased_finite_adapter_capture => |capture| capture,
+            else => executableInvariant("executable erased finite adapter capture boundary has non-adapter-capture kind"),
+        };
+        if (!repr.callableSetKeyEql(kind.member.callable_set_key, member_ref.callable_set_key) or
+            kind.member.member_index != member_ref.member_index or
+            kind.slot != slot)
+        {
+            executableInvariant("executable erased finite adapter capture boundary points at a different branch");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .erased_finite_adapter_capture => |capture| capture,
+            else => executableInvariant("executable erased finite adapter capture boundary source has wrong owner"),
+        };
+        if (!repr.erasedAdapterKeyEql(from.adapter, kind.adapter) or
+            !repr.callableSetKeyEql(from.member.callable_set_key, kind.member.callable_set_key) or
+            from.member.member_index != kind.member.member_index or
+            from.slot != kind.slot)
+        {
+            executableInvariant("executable erased finite adapter capture boundary source differs from boundary owner");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .procedure_capture => |capture| capture,
+            else => executableInvariant("executable erased finite adapter capture boundary target is not procedure_capture"),
+        };
+        if (to.instance != target_instance_id or to.slot != slot) {
+            executableInvariant("executable erased finite adapter capture boundary target differs from branch target");
+        }
+        const target_value_store = self.value_stores[@intFromEnum(target_instance.value_store)];
+        const target_captures = target_value_store.sliceValueSpan(target_instance.public_roots.captures);
+        const slot_index: usize = @intCast(slot);
+        if (slot_index >= target_captures.len) {
+            executableInvariant("executable erased finite adapter capture boundary slot exceeds branch target capture count");
+        }
+    }
+
+    fn verifyErasedFiniteAdapterBranchResultBoundary(
+        self: *BodyBuilder,
+        boundary: repr.ValueTransformBoundary,
+        adapter: repr.ErasedAdapterKey,
+        member_ref: repr.CallableSetMemberRef,
+        target_instance_id: repr.ProcRepresentationInstanceId,
+        target_instance: repr.ProcRepresentationInstance,
+    ) void {
+        _ = self;
+        const kind = switch (boundary.kind) {
+            .erased_finite_adapter_result => |branch_result| branch_result,
+            else => executableInvariant("executable erased finite adapter result boundary has non-adapter-result kind"),
+        };
+        if (!repr.erasedAdapterKeyEql(kind.adapter, adapter) or
+            !repr.callableSetKeyEql(kind.member.callable_set_key, member_ref.callable_set_key) or
+            kind.member.member_index != member_ref.member_index)
+        {
+            executableInvariant("executable erased finite adapter result boundary points at a different branch");
+        }
+        const from = switch (boundary.from_endpoint.owner) {
+            .procedure_return => |proc| proc,
+            else => executableInvariant("executable erased finite adapter result boundary source is not procedure_return"),
+        };
+        if (from != target_instance_id) {
+            executableInvariant("executable erased finite adapter result boundary source differs from branch target");
+        }
+        const to = switch (boundary.to_endpoint.owner) {
+            .erased_finite_adapter_result => |result| result,
+            else => executableInvariant("executable erased finite adapter result boundary target has wrong owner"),
+        };
+        if (!repr.erasedAdapterKeyEql(to.adapter, adapter) or
+            !repr.callableSetKeyEql(to.member.callable_set_key, member_ref.callable_set_key) or
+            to.member.member_index != member_ref.member_index)
+        {
+            executableInvariant("executable erased finite adapter result boundary target differs from branch");
+        }
+        if (!repr.canonicalExecValueTypeKeyEql(boundary.from_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
+            executableInvariant("executable erased finite adapter result boundary source key differs from branch specialization");
+        }
     }
 
     fn verifyCallableConstructionCaptureBoundary(
@@ -9443,26 +10364,39 @@ const BodyBuilder = struct {
         }
     }
 
-    fn verifyErasedCallRawArgBoundary(
+    fn verifyErasedCallRawArgConsumerUse(
         self: *BodyBuilder,
-        boundary: repr.ValueTransformBoundary,
+        use_id: repr.ConsumerUsePlanId,
+        arg_expr: LambdaSolved.Ast.ExprId,
         call_site_id: repr.CallSiteInfoId,
         index: u32,
         sig_key: repr.ErasedFnSigKey,
     ) void {
+        const plan = self.representation_store.consumerUsePlan(use_id);
+        const owner = switch (plan.owner) {
+            .call_arg => |call_arg| call_arg,
+            else => executableInvariant("executable erased call argument consumer-use has non-call-arg owner"),
+        };
+        if (owner.call != call_site_id or owner.arg_index != index) {
+            executableInvariant("executable erased call argument consumer-use owner differs from call site");
+        }
+        const source_expr = self.input.exprs.items[@intFromEnum(arg_expr)];
+        if (source_expr.value_info != plan.child_value) {
+            executableInvariant("executable erased call argument consumer-use child value differs from argument expression");
+        }
         const abi = self.representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
             executableInvariant("executable erased call argument transform references missing ABI payload");
         };
         if (index >= abi.arg_exec_keys.len) executableInvariant("executable erased call argument transform index exceeds ABI arity");
-        const to = switch (boundary.to_endpoint.owner) {
+        const to = switch (plan.expected_endpoint.owner) {
             .call_raw_arg => |raw| raw,
-            else => executableInvariant("executable erased call argument transform target is not call_raw_arg"),
+            else => executableInvariant("executable erased call argument consumer-use endpoint is not call_raw_arg"),
         };
         if (to.call != call_site_id or to.index != index) {
-            executableInvariant("executable erased call argument transform target differs from call site");
+            executableInvariant("executable erased call argument consumer-use endpoint differs from call site");
         }
-        if (!repr.canonicalExecValueTypeKeyEql(boundary.to_endpoint.exec_ty.key, abi.arg_exec_keys[index])) {
-            executableInvariant("executable erased call argument endpoint key differs from ABI payload");
+        if (!repr.canonicalExecValueTypeKeyEql(plan.expected_endpoint.exec_ty.key, abi.arg_exec_keys[index])) {
+            executableInvariant("executable erased call argument consumer-use endpoint key differs from ABI payload");
         }
     }
 
@@ -9522,6 +10456,7 @@ const BodyBuilder = struct {
             &self.program.canonical_names,
             &self.program.types,
             &self.program.row_shapes,
+            &self.program.lowered_session_types_by_key,
         );
         defer published_types.deinit();
         return try applyPublishedExecutableValueTransformRef(
@@ -9788,7 +10723,7 @@ const BodyBuilder = struct {
         const source_elem_ty = listElementTypeForTransform(self.program, from_ty, "source");
         const target_elem_ty = listElementTypeForTransform(self.program, to_ty, "target");
 
-        const source_elem = self.output.freshValueRef();
+        const source_elem = try self.output.freshTypedValueRef(source_elem_ty);
         var body_stmts = std.ArrayList(Ast.StmtId).empty;
         defer body_stmts.deinit(self.allocator);
 
@@ -9903,6 +10838,7 @@ const BodyBuilder = struct {
         const transformed_value = self.output.freshValueRef();
         const transformed_expr = try self.output.addExpr(to_ty, transformed_value, .{ .value_transform_tag_union = .{
             .source = value,
+            .source_union_shape = source.shape,
             .branches = try self.output.addValueTransformTagBranchSpan(branches),
         } });
         try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
@@ -10012,6 +10948,7 @@ const BodyBuilder = struct {
                     &self.program.canonical_names,
                     &self.program.types,
                     &self.program.row_shapes,
+                    &self.program.lowered_session_types_by_key,
                 );
                 defer published_types.deinit();
                 break :blk try lowerExecutableValueChildBridge(
@@ -10098,8 +11035,10 @@ const BodyBuilder = struct {
                 if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, finite.adapter.erased_fn_sig_key)) {
                     executableInvariant("finite session callable erasure target signature differs from adapter key");
                 }
-                _ = erased_ty.capture_ty;
-                const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(finite.adapter);
+                const descriptor = callableSetDescriptorFromSlice(self.callable_set_descriptors, finite.adapter.callable_set_key) orelse {
+                    executableInvariant("executable finite session callable erasure adapter has no callable-set descriptor");
+                };
+                const hidden_capture_ty = try self.lowerFiniteSetAdapterCaptureType(finite.adapter, descriptor);
                 const hidden_capture = if (hidden_capture_ty == null) null else value;
                 const packed_value = self.output.freshValueRef();
                 const packed_expr = try self.output.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
@@ -10239,6 +11178,34 @@ fn sessionExecutableValueEndpointOwnerEql(
         },
         .call_raw_arg => |arg| switch (b) {
             .call_raw_arg => |other| arg.call == other.call and arg.index == other.index,
+            else => false,
+        },
+        .erased_proc_value_adapter_arg => |arg| switch (b) {
+            .erased_proc_value_adapter_arg => |other| arg.emission_plan == other.emission_plan and
+                arg.source_value == other.source_value and
+                canonical.procedureCallableRefEql(arg.proc_value, other.proc_value) and
+                repr.erasedFnSigKeyEql(arg.erased_fn_sig_key, other.erased_fn_sig_key) and
+                arg.index == other.index,
+            else => false,
+        },
+        .erased_finite_adapter_arg => |arg| switch (b) {
+            .erased_finite_adapter_arg => |other| repr.erasedAdapterKeyEql(arg.adapter, other.adapter) and
+                repr.callableSetKeyEql(arg.member.callable_set_key, other.member.callable_set_key) and
+                arg.member.member_index == other.member.member_index and
+                arg.index == other.index,
+            else => false,
+        },
+        .erased_finite_adapter_capture => |capture| switch (b) {
+            .erased_finite_adapter_capture => |other| repr.erasedAdapterKeyEql(capture.adapter, other.adapter) and
+                repr.callableSetKeyEql(capture.member.callable_set_key, other.member.callable_set_key) and
+                capture.member.member_index == other.member.member_index and
+                capture.slot == other.slot,
+            else => false,
+        },
+        .erased_finite_adapter_result => |result| switch (b) {
+            .erased_finite_adapter_result => |other| repr.erasedAdapterKeyEql(result.adapter, other.adapter) and
+                repr.callableSetKeyEql(result.member.callable_set_key, other.member.callable_set_key) and
+                result.member.member_index == other.member.member_index,
             else => false,
         },
         .call_raw_result => |call| switch (b) {

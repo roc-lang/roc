@@ -1712,7 +1712,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "problem and crash: polymorphic erroneous match branch",
+        .name = "problem: polymorphic erroneous match branch",
         .source =
         \\{
         \\    get_err : [Ok(a), Err(e)] -> e
@@ -1726,10 +1726,10 @@ const core_tests = [_]TestCase{
         \\    get_err(val)
         \\}
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "problem and crash: polymorphic erroneous if else branch",
+        .name = "problem: polymorphic erroneous if else branch",
         .source =
         \\{
         \\    get_val : Bool, e -> e
@@ -1738,10 +1738,10 @@ const core_tests = [_]TestCase{
         \\    get_val(Bool.true, 42)
         \\}
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "problem and crash: polymorphic erroneous match in block",
+        .name = "problem: polymorphic erroneous match in block",
         .source =
         \\{
         \\    get_err : [Ok(a), Err(e)] -> e
@@ -1758,7 +1758,7 @@ const core_tests = [_]TestCase{
         \\    get_err(val)
         \\}
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "inspect: polymorphic tag payload substitution wrap and unwrap",

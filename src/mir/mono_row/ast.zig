@@ -225,6 +225,7 @@ pub const Expr = struct {
             proc: canonical.MirProcedureRef,
             captures: Span(CaptureArg),
             fn_ty: TypeId,
+            forced_target: ?mir_ids.ProcValueExecutableTarget = null,
         },
         low_level: struct {
             op: base.LowLevel,

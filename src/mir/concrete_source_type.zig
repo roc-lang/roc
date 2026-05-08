@@ -85,6 +85,7 @@ pub const Store = struct {
             .roots = self.local_roots.items,
             .schemes = &.{},
             .payloads = self.local_payloads.items,
+            .nominal_declarations = &.{},
         };
     }
 
@@ -107,7 +108,7 @@ pub const Store = struct {
                     .ty = checked_root,
                 } },
             },
-            !try checkedTypeContainsIdentityVariables(self.allocator, checked_types.payloads, checked_root),
+            false,
         );
     }
 
@@ -125,7 +126,7 @@ pub const Store = struct {
                 .key = self.local_roots.items[raw].key,
                 .source = .{ .local = checked_root },
             },
-            !try checkedTypeContainsIdentityVariables(self.allocator, self.local_payloads.items, checked_root),
+            false,
         );
     }
 
@@ -172,7 +173,15 @@ pub const Store = struct {
             invariantViolation("concrete source type store seal referenced an unknown local root");
         }
         self.local_roots.items[raw].key = type_key;
-        return try self.registerLocalRoot(checked_root);
+        const ref = try self.registerRoot(
+            .{
+                .key = type_key,
+                .source = .{ .local = checked_root },
+            },
+            false,
+        );
+        try self.rememberKeyOwner(type_key, ref);
+        return ref;
     }
 
     pub fn root(self: *const Store, ref: ConcreteSourceTypeRef) ConcreteSourceTypeRoot {
@@ -216,6 +225,21 @@ pub const Store = struct {
         if (owned_key) |key_bytes| try self.by_key.put(key_bytes, id);
         return id;
     }
+
+    fn rememberKeyOwner(
+        self: *Store,
+        type_key: canonical.CanonicalTypeKey,
+        ref: ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        if (self.by_key.getEntry(type_key.bytes[0..])) |entry| {
+            entry.value_ptr.* = ref;
+            return;
+        }
+
+        const owned_key = try self.allocator.dupe(u8, type_key.bytes[0..]);
+        errdefer self.allocator.free(owned_key);
+        try self.by_key.put(owned_key, ref);
+    }
 };
 
 fn sourceKey(source: ConcreteSourceTypeSource) SourceKey {
@@ -228,84 +252,6 @@ fn sourceKey(source: ConcreteSourceTypeSource) SourceKey {
         .local => |local| .{
             .kind = .local,
             .ty = @intFromEnum(local),
-        },
-    };
-}
-
-fn checkedTypeContainsIdentityVariables(
-    allocator: Allocator,
-    payloads: []const checked_artifact.CheckedTypePayload,
-    root: checked_artifact.CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeContainsIdentityVariablesHelp(payloads, root, &active);
-}
-
-fn checkedTypeContainsIdentityVariablesHelp(
-    payloads: []const checked_artifact.CheckedTypePayload,
-    root: checked_artifact.CheckedTypeId,
-    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
-) Allocator.Error!bool {
-    const raw = @intFromEnum(root);
-    if (raw >= payloads.len) invariantViolation("concrete source type identity scan referenced missing payload");
-    if (active.contains(root)) return false;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    return switch (payloads[raw]) {
-        .pending,
-        .flex,
-        .rigid,
-        => true,
-        .alias => |alias| blk: {
-            if (try checkedTypeContainsIdentityVariablesHelp(payloads, alias.backing, active)) break :blk true;
-            for (alias.args) |arg| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
-            }
-            break :blk false;
-        },
-        .record => |record| blk: {
-            for (record.fields) |field| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, field.ty, active)) break :blk true;
-            }
-            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, record.ext, active);
-        },
-        .record_unbound => |fields| blk: {
-            for (fields) |field| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, field.ty, active)) break :blk true;
-            }
-            break :blk false;
-        },
-        .tuple => |items| blk: {
-            for (items) |item| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, item, active)) break :blk true;
-            }
-            break :blk false;
-        },
-        .nominal => |nominal| blk: {
-            if (try checkedTypeContainsIdentityVariablesHelp(payloads, nominal.backing, active)) break :blk true;
-            for (nominal.args) |arg| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
-            }
-            break :blk false;
-        },
-        .function => |function| blk: {
-            for (function.args) |arg| {
-                if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
-            }
-            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, function.ret, active);
-        },
-        .empty_record,
-        .empty_tag_union,
-        => false,
-        .tag_union => |tag_union| blk: {
-            for (tag_union.tags) |tag| {
-                for (tag.args) |arg| {
-                    if (try checkedTypeContainsIdentityVariablesHelp(payloads, arg, active)) break :blk true;
-                }
-            }
-            break :blk try checkedTypeContainsIdentityVariablesHelp(payloads, tag_union.ext, active);
         },
     };
 }
@@ -402,15 +348,14 @@ pub const PayloadKeyBuilder = struct {
                 self.writeBytes(self.names.typeNameText(nominal.name));
                 self.writeBytes(self.names.moduleNameText(nominal.origin_module));
                 self.writeBool(nominal.is_opaque);
-                try self.writeType(nominal.backing);
                 self.writeU32(@intCast(nominal.args.len));
                 for (nominal.args) |arg| try self.writeType(arg);
             },
             .function => |func| {
-                switch (func.kind) {
+                switch (checked_artifact.finalizedFunctionKind(func.kind)) {
                     .pure => self.writeTag("fn_pure"),
                     .effectful => self.writeTag("fn_effectful"),
-                    .unbound => self.writeTag("fn_unbound"),
+                    .unbound => unreachable,
                 }
                 self.writeBool(func.needs_instantiation);
                 self.writeU32(@intCast(func.args.len));

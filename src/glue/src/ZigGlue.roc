@@ -78,7 +78,11 @@ type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
-		RocBox(inner_id) => "*${type_id_to_zig(type_table, inner_id)}"
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "RocErasedCallable"
+				_ => "*${type_id_to_zig(type_table, inner_id)}"
+			}
 		RocStr => "RocStr"
 		RocUnit => "void"
 		RocU8 => "u8"
@@ -869,6 +873,62 @@ generate_host_abi_types =
 	\\    hosted_fns: HostedFunctions,
 	\\};
 	\\
+	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
+	\\pub const RocErasedCallableFn = *const fn (*RocOps, ?[*]u8, ?[*]const u8, ?[*]u8) callconv(.c) void;
+	\\
+	\\/// Final-drop callback for inline erased-callable captures.
+	\\pub const RocErasedCallableOnDrop = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+	\\
+	\\/// Payload header for `Box(function)`.
+	\\pub const RocErasedCallablePayload = extern struct {
+	\\    callable_fn_ptr: RocErasedCallableFn,
+	\\    on_drop: ?RocErasedCallableOnDrop,
+	\\};
+	\\
+	\\/// Runtime representation of `Box(function)`.
+	\\pub const RocErasedCallable = ?[*]u8;
+	\\
+	\\pub const roc_erased_callable_capture_alignment: usize = 16;
+	\\pub const roc_erased_callable_payload_alignment: usize = 16;
+	\\pub const roc_erased_callable_capture_offset: usize = std.mem.alignForward(usize, @sizeOf(RocErasedCallablePayload), roc_erased_callable_capture_alignment);
+	\\
+	\\pub fn rocErasedCallablePayloadSize(capture_size: usize) usize {
+	\\    return roc_erased_callable_capture_offset + capture_size;
+	\\}
+	\\
+	\\pub fn rocErasedCallablePayloadPtr(callable: RocErasedCallable) *RocErasedCallablePayload {
+	\\    return @ptrCast(@alignCast(callable orelse unreachable));
+	\\}
+	\\
+	\\pub fn rocErasedCallableCapturePtr(callable: RocErasedCallable) ?[*]u8 {
+	\\    const data = callable orelse return null;
+	\\    return data + roc_erased_callable_capture_offset;
+	\\}
+	\\
+	\\pub fn rocErasedCallableAllocate(
+	\\    roc_ops: *RocOps,
+	\\    callable_fn_ptr: RocErasedCallableFn,
+	\\    on_drop: ?RocErasedCallableOnDrop,
+	\\    capture_size: usize,
+	\\) RocErasedCallable {
+	\\    const ptr_width = @sizeOf(usize);
+	\\    const alignment = @max(ptr_width, roc_erased_callable_payload_alignment);
+	\\    const extra_bytes = @max(ptr_width, roc_erased_callable_payload_alignment);
+	\\    var alloc_args: RocAlloc = .{
+	\\        .alignment = alignment,
+	\\        .length = extra_bytes + rocErasedCallablePayloadSize(capture_size),
+	\\        .answer = undefined,
+	\\    };
+	\\    roc_ops.roc_alloc(&alloc_args, roc_ops.env);
+	\\    const base: [*]u8 = @ptrCast(alloc_args.answer);
+	\\    const data = base + extra_bytes;
+	\\    const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
+	\\    rc.* = 1;
+	\\    const payload: *RocErasedCallablePayload = @ptrCast(@alignCast(data));
+	\\    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop };
+	\\    return data;
+	\\}
+	\\
 	\\/// Type-erase a hosted function pointer to `HostedFn`.
 	\\///
 	\\/// Hosted functions are typically written with concrete parameter types for clarity
@@ -1478,5 +1538,3 @@ generate_entrypoint_externs = |provides_list, type_table| {
 
 	$result
 }
-
-

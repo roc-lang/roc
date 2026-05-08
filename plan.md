@@ -416,6 +416,11 @@ identity and source-specialization identity separate:
 - The projected value's source type key/ref comes from the corresponding
   concrete source child, and is used to reserve or look up the nested
   `Builtin.Str.inspect` specialization for `U -> Str`.
+- If the concrete source child is a nominal, the source type key/ref is the
+  canonical nominal representative for that nominal identity. It is not a fresh
+  key for the child occurrence's unfolded backing graph. Recursive payloads that
+  refer back to the same nominal, such as both payloads of `And(Logic, Logic)`,
+  must therefore target the already-reserved `Logic -> Str` inspect helper.
 - The helper must not call source-type lowering again to decide the projected
   value's mono layout type once the owning aggregate has already been lowered.
   Re-lowering a recursive source child can allocate a distinct recursive mono
@@ -659,6 +664,930 @@ const MonoSpecializationKey = struct {
 // row-extension chains, sorted by canonical label identity, and verified for
 // duplicate labels before hashing. The key must not preserve source order,
 // checker storage order, or row-extension chunking.
+//
+// Nominal type keys are nominal identity keys. They must hash:
+//
+// - the nominal type name
+// - the nominal origin module
+// - the opacity bit, as an invariant check that one nominal declaration is being
+//   viewed consistently
+// - the canonical keys of the instantiated nominal arguments
+//
+// They must not hash the nominal backing graph. The backing checked type root is
+// still stored explicitly in the checked payload and in the concrete source type
+// root, and later lowering uses that payload when it must reinterpret or inspect
+// the backing representation. The backing is not part of the source type's
+// identity.
+//
+// This distinction is mandatory for recursive nominals. In:
+//
+// ```roc
+// Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+//
+// main =
+//     Str.inspect(Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False)))
+// ```
+//
+// every recursive `Logic` payload occurrence has the same source type identity:
+// the nominal `Logic` with no arguments. The left payload of `And`, the right
+// payload of `And`, the payloads of `Or`, and the payload of `Not` must all
+// reserve/look up the same `Builtin.Str.inspect : Logic -> Str` specialization.
+// If the key hashed the backing graph, each recursive occurrence could receive a
+// different cycle numbering and therefore a different key, which would make mono
+// lowering allocate unrelated inspect specializations for the same recursive
+// nominal runtime value.
+//
+// For parameterized nominals, the arguments still participate in identity:
+//
+// ```roc
+// Tree(a) := [Leaf(a), Branch(Tree(a), Tree(a))]
+// ```
+//
+// `Tree(I64)` and `Tree(Str)` are distinct source type identities because their
+// instantiated argument keys differ. The recursive payloads inside
+// `Branch(Tree(I64), Tree(I64))` are still the same nominal identity as the
+// enclosing `Tree(I64)`.
+//
+// This matches type checking: nominal equality is defined by origin/name/args,
+// and lowering substitutes the instantiated nominal arguments into the explicit
+// backing payload when it needs the representation. It also matches the Cor/LSS
+// readback behavior: Cor recursively reads the active runtime payload, but it
+// does not create a new type identity every time it crosses a recursive nominal
+// edge.
+
+// Concrete source type materialization must preserve that separation. When mono
+// materializes a non-builtin nominal occurrence such as:
+//
+// ```roc
+// W(a) := { f : {} -> [V(a)] }.{
+//     run : W(a) -> [V(a)]
+//     run = |w| (w.f)({})
+//
+//     mk : a -> W(a)
+//     mk = |val| { f: |_| V(val) }
+// }
+//
+// main = W.run(W.mk("x")) == V("x")
+// ```
+//
+// the source identity of `W(Str)` is only `W` plus the instantiated argument
+// `Str`. Mono must not recursively materialize the template backing
+// `{ f : {} -> [V(a)] }` while building the source identity payload, because
+// that would reintroduce the formal `a` from the nominal definition as an
+// unmapped rigid variable. Instead, the defining checked artifact must publish
+// the nominal declaration template as explicit semantic data:
+//
+// ```zig
+// const CheckedNominalDeclaration = struct {
+//     nominal: NominalTypeKey,
+//     declaration_root: CheckedTypeId,
+//     backing: CheckedTypeId,
+//     formal_args: []const CheckedTypeId,
+// };
+// ```
+//
+// Mono resolves the backing through `(defining artifact, nominal origin/name,
+// instantiated arg keys)`. If the defining checked type view publishes the
+// nominal declaration, mono instantiates that declaration template in an
+// isolated nominal-declaration context by substituting the concrete argument
+// roots for `formal_args`. The current procedure body's expression
+// specialization substitutions must not be applied while cloning the declaration
+// backing. For `W(Str)`, that instantiated backing is
+// `{ f : {} -> [V(Str)] }`.
+//
+// Exported nominal-representation capabilities are boundary views. They are
+// used when the declaration template is not available to the consumer, or as a
+// prepublished exact instantiated backing that can be copied in an isolated
+// context. They must not take precedence over a declaration that is available in
+// the same checked type view, and they must never be materialized through the
+// active expression specialization substitutions.
+//
+// The incorrect shape is:
+//
+// ```zig
+// fn published_nominal_backing(current_body: *TypeInstantiator, capability: Cap)
+//     CheckedTypeId
+// {
+//     const ref = register_artifact_root(capability.backing_ty);
+//
+//     // Wrong: this walks a declaration backing while applying substitutions
+//     // that came from the current expression being lowered. In a constructor
+//     // such as `Tree.Branch(...)`, the source singleton tag argument can bind
+//     // the `Branch` payload to a temporary flex and corrupt the published
+//     // `Tree` declaration backing into `Branch(flex)`.
+//     return current_body.materialize_concrete_ref(ref);
+// }
+// ```
+//
+// The required shape is:
+//
+// ```zig
+// fn published_nominal_backing(
+//     nominal: NominalTypeKey,
+//     arg_refs: []const ConcreteSourceTypeRef,
+//     arg_keys: []const CanonicalTypeKey,
+// ) CheckedTypeId {
+//     if (checked_types.nominal_declaration(nominal)) |declaration| {
+//         return instantiate_declaration_backing_without_body_substitutions(
+//             declaration,
+//             arg_refs,
+//             arg_keys,
+//         );
+//     }
+//
+//     if (interface_capabilities.exact_nominal_representation(nominal, arg_keys)) |cap| {
+//         return copy_published_backing_without_body_substitutions(cap.backing_ty);
+//     }
+//
+//     compiler_bug("missing published nominal backing");
+// }
+// ```
+//
+// This distinction matters for mutually recursive associated nominals:
+//
+// ```roc
+// Tree := [Leaf, Branch(Tree.Forest)].{
+//     Forest := [Empty, More(Tree, Forest)]
+// }
+//
+// main = Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+// ```
+//
+// Lowering the `Tree.Branch(...)` nominal expression creates temporary
+// expression-local constraints for the source singleton `Branch(...)` value. If
+// those constraints are allowed to participate while cloning the published
+// `Tree` declaration backing, the `Branch(Tree.Forest)` payload can be rewritten
+// to the actual child producer's flex/backing record instead of staying the
+// declared `Tree.Forest` nominal. The declaration backing is already explicit
+// checked-artifact data, so mono must clone it through the declaration
+// instantiation path, not through the current body substitution table.
+//
+// Concrete source type registration must preserve explicit root provenance. A
+// `CanonicalTypeKey` is an identity key, not a payload pointer. Registering an
+// explicit artifact/local checked root for mono specialization must retain that
+// exact `(artifact, CheckedTypeId)` or local checked root as the concrete source
+// payload owner. The concrete source type store may dedupe the same explicit
+// source root by `(source_kind, artifact, checked_root)`, but it must not replace
+// that explicit source root with a different root merely because both roots have
+// the same canonical key.
+//
+// The incorrect shape is:
+//
+// ```zig
+// fn register_artifact_root(artifact: ArtifactKey, checked_root: CheckedTypeId)
+//     ConcreteSourceTypeRef
+// {
+//     const key = checked_types.roots[checked_root].key;
+//
+//     if (by_key.get(key)) |existing| {
+//         // Wrong: this loses the explicit checked payload graph. The existing
+//         // root might have the same nominal identity key but a different
+//         // payload owner such as an empty row tail, a declaration placeholder,
+//         // or a previously materialized backing node.
+//         return existing;
+//     }
+//
+//     return insert(.{ .artifact = .{ artifact, checked_root } }, key);
+// }
+// ```
+//
+// The required shape is:
+//
+// ```zig
+// fn register_artifact_root(artifact: ArtifactKey, checked_root: CheckedTypeId)
+//     ConcreteSourceTypeRef
+// {
+//     const source = ConcreteSourceTypeSource{
+//         .artifact = .{ .artifact = artifact, .ty = checked_root },
+//     };
+//
+//     if (by_source.get(source_key(source))) |existing| return existing;
+//
+//     const key = checked_types.roots[checked_root].key;
+//     return insert_without_key_dedupe(.{ .source = source, .key = key });
+// }
+// ```
+//
+// This is mandatory for recursive nominal families:
+//
+// ```roc
+// Tree := [Leaf, Branch(Tree.Forest)].{
+//     Forest := [Empty, More(Tree, Forest)]
+// }
+//
+// main = Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+// ```
+//
+// The `Branch` payload root in the published `Tree` backing is the explicit
+// checked root for the nominal `Tree.Forest`. Even if some other root has the
+// same canonical identity key, or if a declaration placeholder/type-module
+// helper root has been registered earlier, mono must not use that other root
+// while walking the `Tree` backing payload. If concrete source registration
+// replaces the `Tree.Forest` root with an `empty_record` or any other payload
+// owner, mono will lower `Tree.Forest.More(...)` under the wrong payload endpoint
+// and lambda-solved will receive a corrupted representation graph.
+//
+// The only allowed key lookup in the concrete source type store is an explicit
+// lookup whose caller is asking for a canonical singleton owned by that store,
+// such as the store-created builtin `Bool` source root. Normal artifact/local
+// root registration is source-preserving and does not consult `by_key`. This is
+// not an optimization toggle; it is a correctness invariant for the
+// checked-artifact to mono boundary.
+//
+// Checked artifact publication must build `CheckedNominalDeclaration` from the
+// explicit nominal declaration statement, not by assuming that the statement
+// node's checked type root is itself always a nominal payload. The declaration
+// statement already contains the exact source of truth:
+//
+// - `s_nominal_decl.header` gives the nominal's relative type name and formal
+//   type parameters.
+// - `s_nominal_decl.anno` gives the declared representation template.
+// - the enclosing checked module identity gives the origin module.
+// - the declaration's opacity bit gives the nominal opacity.
+//
+// Nominal declaration publication must also canonicalize any already-published
+// root for the same nominal identity. Nominal `CanonicalTypeKey`s intentionally
+// hash nominal origin/name/arguments and not the backing graph. During checking,
+// an expression-local nominal root for `Tree` may be published before the
+// declaration root, and that expression-local root may temporarily carry a
+// backing derived from a singleton constructor such as `Branch(flex)`. That
+// backing is not the declaration backing.
+//
+// Therefore, when publishing the declaration payload:
+//
+// ```zig
+// const declaration_payload = CheckedTypePayload{ .nominal = .{
+//     .origin_module = current_module,
+//     .name = header.relative_name,
+//     .args = formals,
+//     .backing = declaration_backing,
+//     .is_opaque = stmt.is_opaque,
+// } };
+//
+// const key = key_for_nominal_identity(declaration_payload);
+//
+// if (find_root_by_key(key)) |existing| {
+//     if (existing.payload is same nominal identity and same args) {
+//         // Required: replace the expression-local/placeholder backing with the
+//         // declaration backing. Reusing the old payload would preserve
+//         // `Branch(flex)` as the definition of `Tree`.
+//         existing.payload = declaration_payload;
+//         return existing;
+//     }
+//
+//     compiler_bug("nominal declaration key collided with a non-matching root");
+// }
+//
+// append_new_root(key, declaration_payload);
+// ```
+//
+// This replacement is not mutation after checking and not heuristic repair. It
+// is part of checked artifact publication, while the declaration statement and
+// its canonical annotation are still present. After artifact publication, every
+// root for a nominal identity must expose the declaration backing for that
+// nominal identity. MIR must never see expression-local nominal backings as the
+// authoritative declaration backing.
+//
+// The `s_nominal_decl.anno` template must be copied structurally from the
+// canonical checked-CIR type annotation tree during checked artifact
+// publication. It is not enough to call `ModuleEnv.varFrom(s_nominal_decl.anno)`
+// and copy the type-store variable at that annotation node. The type-store
+// variable is useful for named leaves, solved static-dispatch constraints,
+// builtin lookup metadata, and ordinary expression typing, but it is not the
+// owner of the declaration template. In associated type modules and mutually
+// recursive nested declarations, that variable may be a placeholder, a flex
+// variable, or a module-record value used by other checking machinery. The
+// declaration template still has an unambiguous canonical annotation, and that
+// annotation is the data that publication must preserve.
+//
+// The required shape is:
+//
+// ```zig
+// fn publish_nominal_declaration(stmt: SNominalDecl) CheckedNominalDeclaration {
+//     const header = checked_cir.typeHeader(stmt.header);
+//     const formals = publishHeaderFormals(header.args);
+//     const backing = publishDeclarationAnnotationTemplate(stmt.anno);
+//
+//     const declaration_root = publishExplicitCheckedPayload(.{ .nominal = .{
+//         .origin_module = current_module,
+//         .name = header.relative_name,
+//         .args = formals,
+//         .backing = backing,
+//         .is_opaque = stmt.is_opaque,
+//     } });
+//
+//     return .{
+//         .nominal = .{ .module_name = current_module, .type_name = header.relative_name },
+//         .declaration_root = declaration_root,
+//         .backing = backing,
+//         .formal_args = formals,
+//     };
+// }
+// ```
+//
+// `publishDeclarationAnnotationTemplate` walks only the declaration annotation
+// tree for structural annotation forms:
+//
+// ```zig
+// fn publishDeclarationAnnotationTemplate(anno: TypeAnno.Idx) CheckedTypeId {
+//     return switch (checked_cir.typeAnno(anno)) {
+//         .tag_union => |tag_union| publishExplicitCheckedPayload(.{ .tag_union = .{
+//             .tags = publishTagAnnotationTemplates(tag_union.tags),
+//             .ext = if (tag_union.ext) |ext|
+//                 publishDeclarationAnnotationTemplate(ext)
+//             else
+//                 publishExplicitCheckedPayload(.empty_tag_union),
+//         } }),
+//
+//         .record => |record| publishExplicitCheckedPayload(.{ .record = .{
+//             .fields = publishRecordFieldAnnotationTemplates(record.fields),
+//             .ext = if (record.ext) |ext|
+//                 publishDeclarationAnnotationTemplate(ext)
+//             else
+//                 publishExplicitCheckedPayload(.empty_record),
+//         } }),
+//
+//         .tuple => |tuple| publishExplicitCheckedPayload(.{
+//             .tuple = publishAnnotationTemplates(tuple.elems),
+//         }),
+//
+//         .@"fn" => |func| publishExplicitCheckedPayload(.{ .function = .{
+//             .kind = if (func.effectful) .effectful else .pure,
+//             .args = publishAnnotationTemplates(func.args),
+//             .ret = publishDeclarationAnnotationTemplate(func.ret),
+//         } }),
+//
+//         .parens => |parens| publishDeclarationAnnotationTemplate(parens.anno),
+//
+//         // Named declaration references are not recovered from the annotation
+//         // node's type variable. They are published from the resolved
+//         // declaration identity carried by the canonical annotation itself.
+//         .lookup => |lookup| switch (lookup.base) {
+//             .builtin => publishCheckedTypeRoot(typeVarFor(anno)),
+//             .local => |local| publishDeclarationReference(local.decl_idx, &.{}),
+//             .external => |external| publishImportedDeclarationReference(external, &.{}),
+//             .pending => compilerBug("checked declaration template still contains pending lookup"),
+//         },
+//
+//         .apply => |apply| switch (apply.base) {
+//             .builtin => publishCheckedTypeRoot(typeVarFor(anno)),
+//             .local => |local| publishDeclarationReference(
+//                 local.decl_idx,
+//                 publishAnnotationTemplates(apply.args),
+//             ),
+//             .external => |external| publishImportedDeclarationReference(
+//                 external,
+//                 publishAnnotationTemplates(apply.args),
+//             ),
+//             .pending => compilerBug("checked declaration template still contains pending type application"),
+//         },
+//
+//         .rigid_var,
+//         .rigid_var_lookup,
+//         .underscore,
+//         => publishCheckedTypeRoot(typeVarFor(anno)),
+//
+//         .tag,
+//         .malformed,
+//         => compilerBug("nominal declaration annotation was not a valid checked template"),
+//     };
+// }
+// ```
+//
+// A declaration reference is a checked semantic edge, not a textual lookup. The
+// canonical annotation tells publication whether a named type came from a
+// builtin, local declaration, imported declaration, or unresolved pending name.
+// For local/imported declarations, publication must use that declaration
+// identity directly instead of asking the annotation node's type variable what
+// shape it currently has.
+//
+// This distinction is required for associated type modules and mutually
+// recursive nested declarations:
+//
+// ```roc
+// Tree := [Leaf, Branch(Tree.Forest)].{
+//     Forest := [Empty, More(Tree, Forest)]
+// }
+//
+// main =
+//     Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+// ```
+//
+// While publishing `Tree`, the annotation leaf `Tree.Forest` names the local
+// `Forest` nominal declaration. The annotation-node type variable for that leaf
+// may still be a flex variable because the associated declaration's own
+// statement is published later. The checked artifact must nevertheless publish
+// the `Branch` payload as the `Tree.Forest` nominal, not as `flex`, because the
+// canonical annotation already contains the resolved declaration identity.
+// If canonicalization created an associated-type placeholder statement and
+// later published the finalized declaration at a different statement index,
+// checked artifact publication must canonicalize the reference through an exact
+// finalized-declaration index built from canonical relative type names. This is
+// not a heuristic and not a source scan: it is a checking-finalization index over
+// canonical checked-CIR type declaration statements. The index is built once per
+// module before type-store publication:
+//
+// ```zig
+// const FinalizedLocalTypeDeclarations = struct {
+//     by_relative_name: HashMap(Ident.Idx, Statement.Idx),
+// };
+//
+// fn buildFinalizedLocalTypeDeclarations(module: TypedCIR.Module)
+//     FinalizedLocalTypeDeclarations
+// {
+//     var index = FinalizedLocalTypeDeclarations.init();
+//
+//     for (module.checked_statements()) |stmt_idx| {
+//         switch (module.statement(stmt_idx)) {
+//             .s_nominal_decl => |decl| {
+//                 if (decl.anno == .placeholder) continue;
+//                 const header = module.typeHeader(decl.header);
+//                 index.insertUnique(header.relative_name, stmt_idx);
+//             },
+//             .s_alias_decl => |decl| {
+//                 if (decl.anno == .placeholder) continue;
+//                 const header = module.typeHeader(decl.header);
+//                 index.insertUnique(header.relative_name, stmt_idx);
+//             },
+//             else => {},
+//         }
+//     }
+//
+//     return index;
+// }
+// ```
+//
+// `publishDeclarationReference` must first ask whether the referenced statement
+// is already finalized. If it is still a placeholder, publication must look up
+// the placeholder header's canonical `relative_name` in
+// `FinalizedLocalTypeDeclarations` and use that finalized statement. It is a
+// compiler bug if there is no finalized declaration or if two finalized
+// declarations use the same relative name after successful type checking.
+//
+// The required local-reference helper is:
+//
+// ```zig
+// fn publishDeclarationReference(
+//     decl_idx: Statement.Idx,
+//     actual_args: []const CheckedTypeId,
+// ) CheckedTypeId {
+//     return switch (checked_cir.statement(decl_idx)) {
+//         .s_nominal_decl => |nominal| if (nominal.anno == .placeholder)
+//             publishDeclarationReference(finalizedDeclForPlaceholder(decl_idx), actual_args)
+//         else
+//             publishNominalReference(decl_idx, nominal.header, actual_args),
+//
+//         .s_alias_decl => |alias| if (alias.anno == .placeholder)
+//             publishDeclarationReference(finalizedDeclForPlaceholder(decl_idx), actual_args)
+//         else
+//             publishAliasReference(decl_idx, alias.header, actual_args),
+//
+//         else => compilerBug("type annotation declaration reference did not target a type declaration"),
+//     };
+// }
+// ```
+//
+// The resolved helper intentionally treats placeholder resolution as part of
+// checked artifact publication. Later MIR stages never see placeholder statement
+// identities, flex stand-ins for known associated nominals, or any need to map
+// `Tree.Forest` by name.
+//
+// The final local-reference helper is therefore:
+//
+// ```zig
+// fn publishFinalizedDeclarationReference(
+//     decl_idx: Statement.Idx,
+//     actual_args: []const CheckedTypeId,
+// ) CheckedTypeId {
+//     return switch (checked_cir.statement(decl_idx)) {
+//         .s_nominal_decl => |nominal| publishNominalReference(
+//             decl_idx,
+//             nominal.header,
+//             actual_args,
+//         ),
+//         .s_alias_decl => |alias| publishAliasReference(
+//             decl_idx,
+//             alias.header,
+//             actual_args,
+//         ),
+//         else => compilerBug("type annotation declaration reference did not target a type declaration"),
+//     };
+// }
+// ```
+//
+// For a zero-argument nominal lookup such as `Tree.Forest`,
+// `publishNominalReference` may publish the checked root for the declaration
+// statement itself, because that root carries the nominal identity after
+// checking. It must not publish the checked root for the annotation leaf. For a
+// generic nominal application such as `Result(Str, I64)`, publication must
+// instantiate the declaration template by substituting the declaration formals
+// with the published `actual_args`. It may reuse the same substitution machinery
+// mono uses for imported generic nominal backings, but the instantiated
+// reference must still be an explicit checked-artifact payload, not a later
+// best-effort lookup.
+//
+// Imported declaration references follow the same rule. `TypeAnno.lookup.base`
+// and `TypeAnno.apply.base` for an imported type already carry the imported
+// module and target node identity. Publication must project that imported
+// declaration into the current artifact's canonical-name space and publish a
+// checked reference to the imported nominal/alias. If the imported artifact did
+// not publish the declaration, that is a checked-artifact publication bug. Later
+// MIR stages must not scan source modules to recover it.
+//
+// This is still checked-artifact publication, not post-check reconstruction.
+// The canonical annotation tree is produced before checking, checked during type
+// checking, and consumed exactly once while publishing the immutable checked
+// artifact. All later stages consume only the published
+// `CheckedNominalDeclaration`.
+//
+// Canonicalization may leave first-pass associated-block placeholder
+// declarations in node storage while it later writes the finalized declaration
+// statement with a real annotation. A placeholder declaration whose
+// `s_nominal_decl.anno == .placeholder` is not a declaration template and must
+// not be published. Checked artifact publication must ignore such placeholders
+// and publish the finalized declaration statement. If no finalized declaration
+// is ever published for a nominal identity that later lowering needs, that is a
+// checked-artifact publication bug, not a reason for post-check recovery.
+//
+// Publication may also publish the statement variable's checked root, because
+// other checking data may point at it, but the nominal declaration template must
+// not depend on that root having a particular payload shape. Nested type modules
+// make this distinction observable:
+//
+// ```roc
+// Tree := [Leaf, Branch(Tree.Forest)].{
+//     Forest := [Empty, More(Tree, Forest)]
+// }
+//
+// main =
+//     Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+// ```
+//
+// The artifact must publish two declarations:
+//
+// - `Tree`, whose representation template is `[Leaf, Branch(Tree.Forest)]`
+// - `Tree.Forest`, whose representation template is `[Empty, More(Tree, Forest)]`
+//
+// It is a compiler bug if publication loses either template merely because the
+// checked root for one of the declaration statement nodes is not the nominal
+// payload itself. The statement header and annotation are explicit checked-CIR
+// data available during checking finalization, so using them is still explicit
+// semantic publication. It is not post-check source reconstruction.
+//
+// For this example, the `Forest` declaration annotation is the tag union
+// `[Empty, More(Tree, Forest)]`. Even if the type-store variable associated with
+// the annotation node is still a placeholder/flex variable after checking, or
+// the declaration statement's checked root is tied to type-module associated-item
+// metadata, the checked artifact must publish the `Forest` backing as that tag
+// union. References inside the annotation, such as the `Tree` and `Forest`
+// payloads of `More`, remain named checked type roots; mono later resolves their
+// nominal backings through the published declaration table.
+//
+// Publication may encounter the same declaration statement identity more than
+// once while walking checked-CIR node storage. That must be idempotent only when
+// the published template is identical: same nominal origin/name, same backing
+// checked root, and same formal argument roots. If the same nominal identity is
+// encountered with different backing or formal roots, publication must fail as a
+// compiler bug during checking finalization. Later stages must never choose
+// between competing nominal declaration templates.
+//
+// This on-demand instantiation is mandatory for imported generic nominals. The
+// defining artifact for:
+//
+// ```roc
+// Try(ok, err) := [Ok(ok), Err(err)]
+// ```
+//
+// can publish the declaration template `Try(ok, err)`, but it cannot enumerate
+// every future downstream instantiation. A later module may call:
+//
+// ```roc
+// main =
+//     first = List.first([10, 20, 30])
+//     first
+// ```
+//
+// `List.first` returns `Try(F64, [ListWasEmpty])` in that specialization. The
+// Builtin artifact must not have to prepublish that exact `Try` backing during
+// Builtin checking. Mono must derive it from the explicit published `Try`
+// declaration template and the already-known concrete argument roots. This is
+// still explicit-data lowering; it is not source reconstruction, shape repair,
+// or a fallback.
+//
+// This is not a fallback and not a key-to-layout reconstruction. The backing
+// payload is explicit checked-artifact data selected by nominal identity plus
+// instantiated argument keys, either as a prepublished exact capability or as a
+// run-local instantiation of the defining artifact's published declaration
+// template. If mono needs a nominal backing and the defining artifact has neither
+// an exact capability nor a declaration template for that nominal, that is a
+// compiler invariant violation: debug assertion in debug builds, `unreachable`
+// in release builds.
+//
+// Compile-time root concreteness checks follow the same rule. A nominal
+// occurrence is concrete when its instantiated nominal arguments are concrete.
+// The check must not recurse into the nominal backing to decide whether the root
+// should be selected for compile-time evaluation. For:
+//
+// ```roc
+// Tree := [Leaf, Branch(Tree.Forest)].{
+//     Forest := [Empty, More(Tree, Forest)]
+// }
+//
+// main =
+//     Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+// ```
+//
+// `main` has the concrete type `Tree`. Root selection must schedule `main` for
+// compile-time evaluation even though `Tree` and `Tree.Forest` are recursively
+// defined in terms of one another. Walking into the backing while answering the
+// concreteness question can mistake declaration-template variables or recursive
+// edges for unresolved user type variables and incorrectly skip the root. Later
+// representation lowering still consumes the backing, but root selection only
+// needs nominal identity plus concrete arguments.
+//
+// Mono type lowering must also preserve this boundary. An artifact checked type
+// reference whose root is nominal must be materialized into the run-local
+// concrete source type store before it is lowered to mono `Type`. That
+// materialization step is where the published nominal declaration template is
+// instantiated and recursive nominal backing roots are reserved. A generic
+// lower-type helper must not lower an imported or artifact nominal payload by
+// recursively following `nominal.backing` directly, because that can expose the
+// definition template's formal variables or recursive declaration placeholders
+// as if they were concrete post-check types.
+//
+// Once mono materializes an artifact checked type into a run-local concrete
+// source type root, that local root becomes the canonical payload for the
+// corresponding `CanonicalTypeKey` inside the current lowering run. The
+// `ConcreteSourceTypeStore` may keep the original artifact-source ref for
+// provenance and source-key lookups, but `refForKey(key)` must return the sealed
+// local root after materialization. Otherwise later stages such as
+// lambda-solved MIR can look up the same canonical key and accidentally re-import
+// the unmaterialized artifact payload, bypassing nominal declaration
+// instantiation.
+//
+// Every `MonoSpecializationRequest.requested_fn_ty` must be materialized before
+// the mono procedure body is considered lowered. This includes entry-wrapper and
+// compile-time wrapper requests whose function type root was registered from the
+// checked artifact. The materialized local function root is what later
+// lambda-solved representation import uses when it resolves the procedure's
+// `source_fn_ty` key.
+//
+// Specialization reservation must use that materialized concrete source ref when
+// computing `MonoSpecializationKey.requested_mono_fn_ty`. It is not enough to
+// materialize the type later during body lowering, because the specialization key
+// is copied into `MirProcedureRef.callable.source_fn_ty` and becomes the lookup
+// key used by lambda-solved MIR. If the queue used the original artifact root key
+// and materialization produced a different canonical concrete function key, later
+// stages would be forced to rediscover or repair the payload. That is forbidden.
+//
+// The on-demand instantiation cache is run-local mono state, not an artifact
+// cache and not a target/layout cache. Its key is:
+//
+// ```zig
+// const NominalBackingInstantiationKey = struct {
+//     defining_artifact: CheckedModuleArtifactKey,
+//     nominal: NominalTypeKey,
+//     instantiated_arg_keys: []const CanonicalTypeKey,
+// };
+// ```
+//
+// The cache value is the local checked type root for the instantiated backing.
+// Mono must reserve this local root before filling it, store that reservation in
+// the cache, then materialize the backing payload. This reserve-before-fill
+// lifecycle is required for recursive and mutually recursive nominals:
+//
+// ```roc
+// Tree(a) := [Leaf(a), Branch(Tree(a), Tree(a))]
+// ```
+//
+// Instantiating `Tree(I64)` reserves the backing root for
+// `(Tree, [I64])` before lowering `[Leaf(I64), Branch(Tree(I64), Tree(I64))]`.
+// When the `Branch` payload reaches `Tree(I64)` again, it reuses the pending
+// cache root instead of recursively starting a second instantiation. After the
+// root is filled, mono seals every reachable local root with canonical checked
+// type keys.
+//
+// The checked roots created for those instantiated backing payloads must use the
+// same canonical type keys that type checking would have produced if the
+// instantiated backing appeared directly in source. They must not use synthetic
+// placeholder keys such as "substituted backing #17". In the `W(Str)` example
+// above, the backing field `f` has the canonical function source type
+// `{} -> [V(Str)]` (spelled with Roc's zero-field record syntax in the
+// argument position). That key is later compared against callable-set member
+// source function types. If publication assigned a private synthetic key to the
+// cloned field type, executable lowering would see two different source
+// function types for the same callable:
+//
+// - the call site would request the synthetic field key from the instantiated
+//   backing record
+// - the callable-set member would carry the canonical key from the procedure
+//   specialization
+//
+// That mismatch is a compiler bug. The publication algorithm must therefore
+// build instantiated backing roots by substituting declaration formal roots with
+// actual argument roots and then hashing the resulting checked payload with the
+// ordinary canonical checked-type-key algorithm:
+//
+// - record and tag rows are flattened, sorted by canonical label identity, and
+//   duplicate-checked before hashing
+// - nominal keys hash only origin/name/opacity/instantiated args, never the
+//   backing graph
+// - function keys recompute `needs_instantiation` from the substituted argument
+//   and return roots instead of copying the declaration template bit
+// - remaining identity variables, if any, are keyed by explicit checked root
+//   identity slots, not by names or source text
+//
+// This canonical substituted-key requirement applies both to checked-artifact
+// publication and to mono's run-local nominal-declaration instantiation cache.
+// Mono, lambda-solved MIR, executable MIR, IR, LIR, and backends must consume the
+// resulting root/key pairs. They must not repair mismatched keys by comparing
+// function shapes, display names, procedure symbols, source syntax, or layout
+// compatibility.
+
+// `call_value` source function types have one more mono rule: if the callee
+// expression is a local value, parameter, pattern binder, mutable version, or
+// other lookup whose concrete function type is already present in mono's explicit
+// binder environment, mono must unify the call's checked
+// `source_fn_ty_payload` with that concrete callee function type before deriving
+// `call_value.requested_source_fn_ty`.
+//
+// This is not source recovery. The binder environment is explicit mono state
+// populated while lowering procedure parameters, pattern binders, and prior
+// declarations. A `call_value` consumes that published type because the callee
+// value is the value being called. Argument and return constraints are still
+// applied afterwards, but they are not the sole source of the requested function
+// type when the callee already carries the exact type.
+//
+// This matters for higher-order polymorphic code where not every argument
+// expression independently publishes a closed concrete type. For example:
+//
+// ```roc
+// {
+//     append_one = |acc, x| List.append(acc, x)
+//     clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+//
+//     _first_len = clone_via_fold([1.I64, 2.I64]).len()
+//     clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+// }
+// ```
+//
+// In the second specialization, the callback value passed into `List.fold` has
+// the concrete function type:
+//
+// ```roc
+// List(List(I64)), List(I64) -> List(List(I64))
+// ```
+//
+// Inside the specialized `List.fold` body, the callback call is conceptually:
+//
+// ```roc
+// step(acc, elem)
+// ```
+//
+// If mono computes `call_value.requested_source_fn_ty` only from `acc`, `elem`,
+// and the expected result, an argument whose expression does not independently
+// publish a closed concrete type can leave the call type less concrete than the
+// callback value's own function type. Lambda-solved MIR would then reserve the
+// finite callable-set member and target procedure under the concrete callback
+// type, while executable MIR would see a different call-site type. That mismatch
+// is a compiler bug and must be impossible by construction.
+//
+// Correct mono lowering is:
+//
+// ```zig
+// fn instantiate_call_value(call: CheckedCall) CallInstantiation {
+//     if (known_concrete_result_type_for_expr(call.func)) |callee_fn| {
+//         // Explicit binder/lookup information; not syntax recovery.
+//         unify_template_with_concrete(call.source_fn_ty_payload, callee_fn.source_ref);
+//     }
+//
+//     bind_known_call_argument_types(call.source_fn_ty_payload, call.args);
+//     unify_function_return_with_expected(call.source_fn_ty_payload, call.expected_ret);
+//
+//     const concrete_fn = concrete_ref_for_template_type(call.source_fn_ty_payload);
+//     return .{
+//         .requested_source_fn_ty = concrete_source_types.key(concrete_fn),
+//         .concrete_fn = concrete_fn,
+//     };
+// }
+// ```
+//
+// Incorrect mono lowering is:
+//
+// ```zig
+// fn instantiate_call_value(call: CheckedCall) CallInstantiation {
+//     bind_known_call_argument_types(call.source_fn_ty_payload, call.args);
+//     unify_function_return_with_expected(call.source_fn_ty_payload, call.expected_ret);
+//
+//     // BUG: ignores the callee value's already-published concrete function type.
+//     const concrete_fn = concrete_ref_for_template_type(call.source_fn_ty_payload);
+//     return .{ .requested_source_fn_ty = concrete_source_types.key(concrete_fn) };
+// }
+// ```
+//
+// After lambda-solved MIR finalizes a finite `call_value`, all three source
+// function keys must be identical:
+//
+// ```zig
+// call_site.requested_source_fn_ty
+// descriptor_member.proc_value.source_fn_ty
+// target_instance.executable_specialization_key.requested_fn_ty
+// ```
+//
+// Executable MIR may debug-assert that equality and use `unreachable` in release.
+// It must not repair a mismatch by choosing the target key, comparing compatible
+// shapes, looking up a procedure by name, or inspecting source syntax.
+
+// Checked-artifact publication also finalizes function effect kind for concrete
+// source type identity. The type checker may contain an internal "unbound
+// function kind" while it is still solving whether a function is effectful. That
+// internal state is not a distinct Roc source function type after checking has
+// succeeded. During checking, an unbound function kind is non-effectful unless it
+// is forced to be effectful; after checking, any remaining unbound function kind
+// must therefore be finalized to pure.
+//
+// The canonical post-check rule is:
+//
+// ```zig
+// fn finalized_function_kind(kind: CheckedFunctionKind) CheckedFunctionKind {
+//     return switch (kind) {
+//         .pure, .unbound => .pure,
+//         .effectful => .effectful,
+//     };
+// }
+// ```
+//
+// This finalization happens at checked-artifact/source-type publication:
+//
+// - checked-artifact function payloads store `finalized_function_kind(kind)`
+// - checked-artifact canonical type keys hash the finalized kind
+// - concrete source type keys hash the finalized kind
+// - mono materialization and row-equation cloning preserve the finalized kind
+// - lambda-solved and executable MIR consume only finalized keys and payloads
+//
+// This is not executable repair and not shape compatibility. It is part of the
+// "type checking is complete" boundary. Post-check stages must not observe
+// `.unbound` as a distinct function key. If they do, checked-artifact publication
+// or mono materialization failed to finalize the type data.
+//
+// This matters for polymorphic higher-order code such as:
+//
+// ```roc
+// {
+//     append_one = |acc, x| List.append(acc, x)
+//     clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+//
+//     _first_len = clone_via_fold([1.I64, 2.I64]).len()
+//     clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+// }
+// ```
+//
+// In one specialization, the callable-set member for `append_one` can be copied
+// from a checked function type whose kind was still unbound in the checker. The
+// call site inside `List.fold` treats that same function type as pure, because an
+// unbound function kind is non-effectful unless forced otherwise. If canonical
+// source type keys distinguish `unbound` from `pure`, lambda-solved MIR can
+// reserve the finite callable member under a different key from the executable
+// `call_value` site, even though both name the same fixed-arity Roc function
+// type:
+//
+// ```roc
+// List(List(I64)), List(I64) -> List(List(I64))
+// ```
+//
+// Correct publication hashes both forms as the same finalized pure function
+// type. Incorrect publication keeps an internal checker state alive:
+//
+// ```zig
+// // BUG: exposes checker-only state after checking has finished.
+// switch (function.kind) {
+//     .pure => write_tag("fn_pure"),
+//     .effectful => write_tag("fn_effectful"),
+//     .unbound => write_tag("fn_unbound"),
+// }
+// ```
+//
+// Correct publication is:
+//
+// ```zig
+// switch (finalized_function_kind(function.kind)) {
+//     .pure => write_tag("fn_pure"),
+//     .effectful => write_tag("fn_effectful"),
+//     .unbound => unreachable,
+// }
+// ```
+//
+// Executable MIR still keeps the exact equality invariant:
+//
+// ```zig
+// descriptor_member.proc_value.source_fn_ty
+//     == call_site.requested_source_fn_ty
+//     == target_instance.executable_specialization_key.requested_fn_ty
+// ```
+//
+// If that invariant fails, it is a compiler bug. Executable MIR must not treat
+// `unbound` and `pure` as compatible there; the unbound state should already be
+// gone.
 
 const ConcreteSourceTypeRef = enum(u32) { _ };
 
@@ -768,6 +1697,8 @@ const FinitePromotedWrapperBodyPlan = struct {
     source_fn_ty: CanonicalTypeKey,
     callable_set_key: CanonicalCallableSetKey,
     member: CallableSetMemberId,
+    member_target: ExecutableSpecializationKey,
+    member_target_promoted_wrapper: ?MirProcedureRef,
     captures: Span(PrivateCaptureRef),
     params: Span(PromotedWrapperParam),
     call_args: Span(PromotedWrapperArg),
@@ -1028,7 +1959,7 @@ const SessionValueTransformTagCase = struct {
 };
 
 const SessionBoxPayloadTransformPlan = struct {
-    boundary: BoxBoundaryId,
+    boundary: ?BoxBoundaryId,
     kind: BoxPayloadTransformKind,
     payload: ExecutableValueTransformRef,
 };
@@ -1116,7 +2047,7 @@ const BoxPayloadTransformKind = enum {
 };
 
 const BoxPayloadTransformPlan = struct {
-    boundary: BoxBoundaryId,
+    boundary: ?BoxBoundaryId,
     kind: BoxPayloadTransformKind,
     payload: ExecutableValueTransformPlanId,
 };
@@ -1336,11 +2267,81 @@ recursive requests reuse the reserved `MonoSpecializedProcRef` for the same
 separately from the specialization key. `requested_fn_ty` is a
 `ConcreteSourceTypeRef` into the current MIR-family lowering run's
 `ConcreteSourceTypeStore`; `MonoSpecializationKey.requested_mono_fn_ty` is the
-canonical identity key read from that payload. The queue may deduplicate by
-`MonoSpecializationKey`, but it must retain one canonical payload ref for that
-key. If a later request presents the same key with a non-equivalent payload, the
-artifact is invalid: debug builds assert immediately and release builds use
-`unreachable`.
+canonical identity key read from that payload. The queue deduplicates by
+`MonoSpecializationKey`, not by `ConcreteSourceTypeRef` identity. It retains the
+first `ConcreteSourceTypeRef` as the canonical body-lowering payload for that
+specialization key, and all later requests with the same key reuse the existing
+reserved procedure.
+
+The same canonical key may legitimately be carried by more than one concrete
+payload ref in one lowering run. That is a consequence of the source-preserving
+root registration rule: an artifact root, a local materialized function root,
+and another local materialized function root may all be distinct payload owners
+while still naming the same source type identity. The queue must not treat ref
+inequality as a semantic mismatch.
+
+For example, nested `Str.inspect` generation can request the same inspect helper
+from more than one recursive payload occurrence:
+
+```roc
+Tree := [Leaf, Branch(Tree.Forest)].{
+    Forest := [Empty, More(Tree, Forest)]
+}
+
+main = Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+```
+
+When lowering the generated inspect helper for `Tree`, the payload projection for
+`Branch(Tree.Forest)` may synthesize a local requested function payload for
+`Builtin.Str.inspect : Tree.Forest -> Str`. Later, while lowering the generated
+inspect helper for `Tree.Forest`, the recursive `More(Tree, Forest)` payload may
+synthesize another local requested function payload for the same helper shape.
+Those local roots can have different `ConcreteSourceTypeRef` values because they
+were materialized at different call sites, but their
+`MonoSpecializationKey { template = Builtin.Str.inspect, requested_mono_fn_ty =
+Tree.Forest -> Str }` is identical. The correct behavior is one reserved
+specialization and one output procedure.
+
+The incorrect queue shape is:
+
+```zig
+if (requested.get(key)) |existing| {
+    if (existing.requested_fn_ty != request.requested_fn_ty) {
+        compilerBug("same key registered with different payload ref");
+    }
+
+    return existing;
+}
+```
+
+That rejects legal duplicate requests and confuses payload ownership with source
+identity. The required shape is:
+
+```zig
+if (requested.getPtr(key)) |existing| {
+    debug_assert(concrete_source_types.key(request.requested_fn_ty) ==
+        existing.key.requested_mono_fn_ty);
+
+    // Keep the first payload ref as the canonical clone-instantiation input for
+    // this specialization. Later refs with the same key only prove that another
+    // call site needs the same already-reserved procedure.
+    return existing.*;
+}
+```
+
+This rule is not a fallback and does not recover anything from a hash. The
+caller still had to provide an explicit `ConcreteSourceTypeRef`, and the queue
+read the canonical key from that payload before computing
+`MonoSpecializationKey`. If the key does not match the queue entry, that is a
+compiler invariant violation. If the key matches, the already-retained canonical
+payload ref is the only body-lowering input for that specialization.
+
+Debug verifiers may walk both payload refs and assert stronger shape equivalence
+for structural source types. Release builds must not allocate alternate-ref
+lists, run structural comparison, or add any per-request cost beyond computing
+the key that is already required for the queue lookup. The final body is always
+clone-instantiated from the queue entry's retained payload ref, never from a
+later duplicate request payload.
 
 `ConcreteSourceTypeStore` stores target-independent checked source type payloads
 using the same checked type node shape as `CheckedTypeStore`. It is a
@@ -1526,6 +2527,94 @@ requested by `List.concat([1, 2], [3, 4])`, the entry binders for `left` and
 arguments, the local lookups must read `List(I64)` from the concrete binder
 environment. They must not lower the lookup nodes from stale generic roots, and
 they must not infer list element types from syntax or layouts.
+
+Ordinary declaration destructuring has the same explicit-data requirement as
+procedure parameter destructuring and reassignment destructuring. A checked
+declaration statement whose pattern is not a simple binder must not lower to one
+synthetic whole-pattern declaration and leave the nested pattern binders to be
+discovered later. Mono owns the checked pattern structure and the concrete
+source type at this boundary, so mono must lower the declaration into explicit
+single-evaluation binder actions before row finalization, lifting, or
+lambda-solved MIR.
+
+For every checked declaration:
+
+```roc
+pattern = rhs
+```
+
+mono must:
+
+1. compute the concrete result type of `rhs`, using the declaration pattern's
+   checked type as the expected result when needed;
+2. lower `rhs` exactly once;
+3. bind the lowered `rhs` to a synthetic temporary if the source pattern is not
+   a simple binder;
+4. walk the checked pattern with the concrete source type and emit explicit
+   declarations for every binder introduced by the pattern; and
+5. record each binder's concrete `TypeId`, canonical source type key, and
+   concrete source-type ref in the mono binder environment before any following
+   statement or final expression can use that binder.
+
+This must use the checked pattern's explicit binder identities. It must not
+decide declaration vs. reassignment by looking at whether a symbol was already
+interned for the same binder, because symbol interning is only an implementation
+cache. For declaration patterns, every introduced binder is an ordinary `decl`.
+For reassignment patterns, canonicalization/checking publish which binders are
+fresh and which mutable binders are being reassigned; mono consumes that
+published distinction separately.
+
+For example:
+
+```roc
+{
+    update = |boxed| {
+        { count } = Box.unbox(boxed)
+        count + 1
+    }
+
+    initial = Box.box({ count: 0 })
+    update(initial)
+}
+```
+
+The body of `update` must lower as though it were written:
+
+```roc
+{
+    tmp = Box.unbox(boxed)
+    count = tmp.count
+    count + 1
+}
+```
+
+where `tmp.count` is the row-finalized record-field projection produced from
+the concrete `Box({ count: I64 })` payload. The binder `count` is local to the
+lifted `update` procedure body. If mono lowers `{ count } = ...` as one
+synthetic declaration and leaves the final `count` lookup unbound, lifting will
+incorrectly publish `count` as an outer capture of `update`, and lambda-solved
+will correctly fail because no outer binding for that inner pattern binder
+exists. The correct-by-construction architecture makes the `count` declaration
+explicit before lifting, so capture analysis never has to recover it.
+
+The same rule applies to nested irrefutable declaration patterns:
+
+```roc
+{
+    Pair := [Pair({ left: I64, right: I64 })]
+
+    Pair({ left, right }) = Pair({ left: 1, right: 2 })
+    left + right
+}
+```
+
+Mono evaluates the right-hand side once, unwraps the nominal through the
+published backing type, projects the record fields using the concrete
+row-finalized shape, and emits ordinary declarations for `left` and `right`.
+If a declaration pattern can fail at runtime, checking must reject it before
+artifact publication. After checking, a refutable declaration pattern reaching
+mono as though it were irrefutable is a compiler bug: debug assertion in debug
+builds and `unreachable` in release builds.
 
 Checked reassignment statements keep their original checked pattern until mono
 MIR. Mono MIR must not collapse a reassignment pattern to one synthetic
@@ -1911,6 +3000,176 @@ existing `SessionExecutableTypePayloadRef` and destroys the duplicate payload it
 was given. Reusing an entry by key is legal only because the corresponding
 structural payload was already explicitly published in the same solve session.
 
+Callable-set executable payloads have one additional publication rule. The first
+time lambda-solved sees a finite callable-set key, the descriptor may still be
+incomplete from the perspective of executable payload publication: the final
+member payload types depend on solved callable/capture representation data. The
+owner solve session is therefore allowed to replace a derived callable-set
+payload for the same key before the payload store is sealed. This replacement is
+not a cache and not recovery from a key. It is the same owning stage updating its
+own derived payload from newer explicit descriptor data before publication is
+complete.
+
+The only legal derived replacement is:
+
+```zig
+replace_derived_callable_set_payload(
+    key: CanonicalExecValueTypeKey,
+    old_payload: SessionExecutableTypePayloadRef,
+    new_payload: SessionExecutableTypePayload,
+)
+```
+
+The replacement must satisfy all of these invariants:
+
+- the key is the canonical `finiteCallableSetExecValueTypeKey(callable_set_key)`
+  for the descriptor being finalized
+- both the old and new payloads are owned by the same session or the same checked
+  artifact publication operation
+- the old payload case is `callable_set`
+- the new payload case is `callable_set`
+- the new payload is built only from the explicit final
+  `CanonicalCallableSetDescriptor` and its member capture-slot executable
+  payload refs
+- no downstream stage has consumed the old payload yet
+- no sealed store entry may ever be replaced
+
+This rule exists because callable-set payload publication is descriptor-derived,
+not source-type-derived. For example:
+
+```roc
+make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
+make_boxed_runner = |f| Box.box(|x|
+    boxed = Box.box(f)
+    run = Box.unbox(boxed)
+    run(x)
+)
+```
+
+The finite callable-set value for the returned lambda initially names a member
+capture slot for `f`. After representation solving sees `Box.box(f)` inside the
+lambda body, the selected target procedure's hidden capture slot may require the
+erased callable representation of that same logical function value. The final
+callable-set payload must therefore be the payload derived from the final
+descriptor and explicit capture transforms, not a stale zero-sized or finite-only
+payload published before capture representation finalization. Replacing the
+owning derived payload before sealing is the correct-by-construction way to keep
+the payload store explicit without introducing a separate executable-type cache.
+
+Callable-set descriptors themselves obey the same "mutable until sealed" rule.
+During a representation solve fixed point, the same logical callable member may
+be discovered before all of its capture slots have their final executable
+representation. A later solve iteration may learn that one of those capture
+slots must be erased because it crosses an explicit `Box(T)` boundary. That
+does not create a second callable member. It replaces the member schema for the
+same member identity before sealing.
+
+The member identity is exactly:
+
+```zig
+const CallableSetMemberIdentity = struct {
+    source_proc: MirProcedureRef,
+    proc_value: ProcedureCallableRef,
+    target_instance: ProcRepresentationInstanceId,
+};
+```
+
+`capture_slots`, `capture_shape_key`, and the derived executable payload key are
+not part of identity. They are solved schema for that identity. If a class set
+already contains a member with the same identity, lambda-solved must replace the
+stored capture schema in place:
+
+```zig
+fn add_or_update_member(set: *CallableClassSet, member: CanonicalCallableSetMember) void {
+    if (find_member_with_same_identity(set, member)) |existing| {
+        existing.capture_slots = clone(member.capture_slots);
+        existing.capture_shape_key = member.capture_shape_key;
+        return;
+    }
+
+    set.members.append(clone(member));
+}
+```
+
+Appending a second member for the same identity but with a different capture
+schema is forbidden. It would make callable-set branch tags depend on transient
+solver order and would let executable payload publication lower stale capture
+payloads that no final value can construct.
+
+For example:
+
+```roc
+make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
+make_boxed_runner = |f|
+    Box.box(|x|
+        boxed = Box.box(f)
+        run = Box.unbox(boxed)
+        run(x)
+    )
+
+main : I64
+main =
+    boxed = make_boxed_runner(|n| n + 1)
+    run = Box.unbox(boxed)
+    run(41)
+```
+
+The returned lambda has one logical callable-set member. Early in solving, that
+member may appear to capture `f` as a finite callable-set value. After solving
+the nested `Box.box(f)`, the same member must capture `f` as an erased callable.
+The final descriptor must contain one member with the erased capture schema. It
+must not contain both:
+
+```zig
+// Forbidden stale state:
+members = &.{
+    .{ .identity = returned_lambda_member, .capture_slots = &.{ finite_f } },
+    .{ .identity = returned_lambda_member, .capture_slots = &.{ erased_f } },
+};
+```
+
+Callable class emission plans are also replaceable before sealing. If a class
+emission was published for descriptor key `A` and the class set later receives
+an updated member schema that interns as descriptor key `B`, the owning emission
+slot must be replaced in place. Any callable value that points at that emission
+slot then automatically observes the final descriptor. Lambda-solved must not
+leave the stale emission slot alive and add a second one:
+
+```zig
+fn ensure_class_emission(class: RepresentationClassId, final_key: CallableSetKey) EmissionPlanId {
+    if (class_emission[class]) |existing| {
+        if (emission_matches(existing, final_key)) return existing;
+        replace_emission_plan_in_place(existing, .finite(final_key));
+        return existing;
+    }
+
+    const created = append_emission_plan(.finite(final_key));
+    class_emission[class] = created;
+    return created;
+}
+```
+
+The same replacement rule applies to finite-erased emissions. If the final class
+key or Box-erasure provenance changes before sealing, the existing emission slot
+is replaced with the final `erase_finite_set` plan. Replacement after sealing is
+forbidden.
+
+Executable payload publication must use only live final descriptor references:
+
+- current `callable_class_emissions`
+- current callable values' `CallableValueInfo.emission_plan`
+- current callable construction plans
+- current finite-erased adapter demands
+
+It must not iterate every descriptor ever interned by the solve session as if
+each one were executable. Interned descriptors are owned data, but before
+sealing some are superseded transient values. Publishing payloads for stale
+descriptors is a compiler bug because their member capture schemas can disagree
+with the final target procedure capture endpoints. Debug verification must
+assert that every live descriptor member's capture-slot executable keys exactly
+match the selected target instance's published capture endpoints. Release builds
+use `unreachable` for violations and carry no verifier-only liveness scans.
+
 `ExecutableValueTransformRef` may appear at every child edge inside a session
 transform. Executable MIR must dispatch on the explicit owner:
 
@@ -2011,6 +3270,117 @@ owners directly. It must not synthesize dummy local `ValueInfoId`s for target
 procedure params, returns, captures, or erased-call ABI slots, look up a target
 signature by source procedure name, or infer branch argument/result endpoints
 from direct-call layouts.
+
+A finite callable-set value crossing an erased `Box(T)` boundary lowers through
+an erased adapter whose body is also a `callable_match`. That adapter has a
+third procedure-boundary transform class: branch capture-slot transforms. The
+adapter first matches the hidden finite callable-set payload to select a member.
+For the selected branch, it extracts the stored member capture payload in
+`CaptureSlot.index` order. Each extracted capture slot must then transform from:
+
+```zig
+SessionExecutableValueEndpointOwner.erased_finite_adapter_capture {
+    adapter: ErasedAdapterKey,
+    member: CallableSetMemberRef,
+    slot: u32,
+}
+```
+
+to:
+
+```zig
+SessionExecutableValueEndpointOwner.procedure_capture {
+    instance: ProcRepresentationInstanceId,
+    slot: u32,
+}
+```
+
+The branch then assembles the direct-call hidden capture tuple from the
+transformed target-slot values. It must not pass the raw callable-set member
+payload directly as the target procedure's hidden capture argument.
+
+This is a separate transform class from ordinary finite `callable_match`
+argument transforms because source call arguments and stored member captures
+come from different runtime values. The ordinary arguments are the erased
+adapter's explicit call arguments. The captures are the payload extracted from
+the finite callable-set value stored inside the boxed erased callable. Both
+kinds cross the same target procedure boundary, but they have different endpoint
+owners and different source values.
+
+Example:
+
+```roc
+make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
+make_boxed_runner = |f| Box.box(|x|
+    boxed = Box.box(f)
+    run = Box.unbox(boxed)
+    run(x)
+)
+
+main : I64
+main =
+    boxed = make_boxed_runner(|n| n + 1)
+    run = Box.unbox(boxed)
+    run(41)
+```
+
+The outer returned lambda captures `f`. The callable-set member payload stores
+that capture as a finite callable-set value at the construction site. The lifted
+lambda body stores `f` inside `Box(I64 -> I64)`, so the selected target procedure
+instance's hidden capture slot requires the erased callable representation. The
+erased adapter branch must therefore:
+
+1. extract capture slot `0` from the finite callable-set member payload
+2. apply the branch capture transform from
+   `erased_finite_adapter_capture(adapter, member, slot = 0)` to
+   `procedure_capture(target_instance, slot = 0)`
+3. assemble the transformed slot into the hidden capture tuple
+4. call the selected target procedure with the erased adapter's explicit source
+   arguments plus that transformed hidden capture tuple
+
+Passing the extracted slot directly is a compiler bug even if a ZST payload, a
+finite callable-set payload, or a compatible layout happens to make the direct
+call type check in some case. The explicit branch capture transform is mandatory
+when the target member specialization has a hidden capture slot. Debug builds
+must verify that the branch capture-transform count exactly equals the target
+capture count and the descriptor member capture-slot count; release builds use
+`unreachable` for violations.
+
+The callable-match branch capture payload is a real branch binder. Executable
+MIR must create it as a typed value before lowering the branch body, because the
+branch body may project from that payload to build the target procedure's hidden
+capture tuple. It is not valid to create an untyped fresh value and rely on the
+later callable-match branch table to attach the type after the body has already
+been lowered.
+
+Correct executable-MIR construction:
+
+```zig
+const capture_payload_ty = lowerCallableSetMemberPayloadType(callable_set_key, member);
+const capture_payload = if (capture_payload_ty) |payload_ty|
+    try ast.freshTypedValueRef(payload_ty)
+else
+    null;
+
+const branch_body = try lowerCallableMatchBranchBody(.{
+    .capture_payload = capture_payload,
+    .capture_payload_ty = capture_payload_ty,
+    .capture_transforms = branch_plan.capture_transforms,
+});
+```
+
+Incorrect construction:
+
+```zig
+const capture_payload = if (capture_payload_ty != null)
+    ast.freshValueRef() // BUG: branch body can read it before its type exists.
+else
+    null;
+```
+
+This is the same rule as ordinary procedure params and pattern binders: once a
+stage introduces a value that downstream expressions may reference, that stage
+must publish the value's executable type at the point of introduction.
 
 Recursive existing-value transforms require one more endpoint owner class:
 `transform_child`. A child endpoint is not a source expression, not a binder,
@@ -2379,6 +3749,27 @@ results:
    `ValueTransformBoundaryId` from the existing producer endpoint to the
    selected consumer endpoint.
 
+Box-erasure provenance is part of the selected consumer endpoint context. If a
+root consumer transform was published with non-empty `box_erasure` provenance,
+lambda-solved must propagate that same provenance through every nested direct
+construction child and contextual control-flow result that is being lowered into
+the selected endpoint. It must not propagate that provenance into independent
+subexpressions such as conditions, scrutinees, guards, callee expressions, or
+statements whose values are not being consumed by the contextual endpoint.
+
+This matters for callable values inside aggregates. In a call such as
+`apply_boxed([|x| x + 1])`, where `apply_boxed` expects a promoted-wrapper
+parameter whose element endpoint is an erased function slot, the list element
+lambda may still have an ordinary finite callable-set emission plan as a local
+producer. The contextual list-element consumer-use transform owns the selected
+erased endpoint and the promoted-wrapper `Box(T)` provenance. Lambda-solved must
+therefore publish the finite-callable-to-erased adapter from that transform
+directly, using the explicit finite callable-set key in the source endpoint and
+the explicit erased signature/capture shape in the target endpoint. It must not
+require the lambda's producer-global emission plan to have already been rewritten
+to `erase_finite_set`, and it must not recover the adapter from syntax or from a
+later backend shape comparison.
+
 This is required because the producer endpoint of a nested constructor is not
 the authority when the constructor is being emitted directly into a parent slot.
 For example, in `IntList.Cons(1, IntList.Nil)`, the endpoint that matters for
@@ -2503,6 +3894,89 @@ is a real user-defined nominal endpoint:
    lambda-solved MIR; executable MIR must not compare tag shapes, layout ids, or
    constructor names to discover it.
 
+Mono MIR has the same source-of-truth rule at the earlier checked-expression
+boundary. A checked `.nominal` expression is not permission to lower its backing
+child at the backing child's standalone checked type. The checked expression is
+already being lowered under a concrete expected result type; if that result is a
+nominal, mono must derive the concrete backing type from that expected nominal
+and lower the backing expression under that backing type before emitting
+`nominal_reinterpret`.
+
+The `CIR.Expr.NominalBackingType` carried on the checked expression is only a
+shape hint (`tag`, `record`, `tuple`, or `value`). It is not a complete type and
+it is not the authority for payload endpoints, row shape, recursive nominal
+identity, callable representation, or layout. The authority is the explicit
+checked/concrete nominal result type selected by the consumer.
+
+The mono lowering shape must be:
+
+```zig
+fn lowerCheckedNominalExpr(
+    self: *BodyLowerer,
+    result_info: ConcreteTypeInfo,
+    nominal: checked_artifact.CheckedNominalExpr,
+) !Ast.ExprId {
+    _ = nominal.backing_type; // Shape-only debug/provenance hint.
+
+    const backing_info = try self.concreteNominalBackingInfo(result_info);
+    const backing = try self.lowerExprConcreteExpected(
+        nominal.backing_expr,
+        backing_info,
+    );
+
+    return try self.program.ast.addExpr(result_info.ty, .{
+        .nominal_reinterpret = backing,
+    });
+}
+```
+
+It must not be:
+
+```zig
+fn lowerCheckedNominalExpr(
+    self: *BodyLowerer,
+    result_info: ConcreteTypeInfo,
+    nominal: checked_artifact.CheckedNominalExpr,
+) !Ast.ExprId {
+    _ = result_info;
+    _ = nominal.backing_type;
+
+    // Wrong: this lets the child producer type define the nominal backing
+    // endpoint. In recursive nominal families it can lower a payload tag under
+    // a payload-record endpoint instead of the declared nominal backing union.
+    const backing = try self.lowerExpr(nominal.backing_expr);
+
+    return try self.program.ast.addExpr(result_info.ty, .{
+        .nominal_reinterpret = backing,
+    });
+}
+```
+
+For example:
+
+```roc
+Tree := [Leaf, Branch(Tree.Forest)].{
+    Forest := [Empty, More(Tree, Forest)]
+}
+
+main = Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+```
+
+When mono lowers the checked expression for `Tree.Forest.More(...)`, the result
+type selected by the surrounding `Branch` payload is the nominal `Tree.Forest`.
+Mono must lower the backing `More(...)` tag under the backing tag union of
+`Tree.Forest`, not under a producer-local payload record for the `More` tag and
+not under a type rediscovered from the syntax of `More(...)`. If mono publishes
+the wrong child type here, lambda-solved receives an impossible endpoint graph
+and later stages would have to repair a bug that should never have crossed the
+mono boundary.
+
+This rule also applies to builtin transparent nominals such as `Bool`. `Bool`
+is still an ordinary nominal whose backing is the ordinary zero-payload tag union
+`[False, True]`; lowering `Bool.True` under an expected `Bool` result lowers the
+backing tag under that full backing union. No Bool-only primitive bridge,
+truthiness byte, or lowering special case is allowed.
+
 Structural construction under a nominal endpoint must use the nominal endpoint's
 published backing payload as the authority for child endpoints. This applies to
 records, tuples, lists, and tag unions. For example, `Ok(x?)` is a tag
@@ -2538,6 +4012,162 @@ explicit construction-time backing transform before the nominal wrapper. It must
 not first build a constructor-local tag-union layout and then rely on LIR
 `nominal_reinterpret` or compatible-layout comparison to make it fit.
 
+Recursive endpoint selection must treat `SessionExecutableTypePayload.recursive_ref`
+as a transparent edge in the sealed executable payload graph. A `recursive_ref`
+is not a constructor, not a second representation, and not permission to inspect
+source syntax. It is a compact graph edge saying "this endpoint has the same
+published executable payload as that already-reserved payload id." Whenever
+lambda-solved MIR needs the concrete aggregate shape of a consumer endpoint in
+order to select a record field, tuple element, tag payload, list element, or
+nominal backing endpoint, it must first follow `recursive_ref` edges in the
+current `SessionExecutableTypePayloadStore` until it reaches the concrete
+payload node.
+
+This applies to both the parent endpoint and any nominal backing endpoint reached
+from that parent. For example:
+
+```roc
+Tree := [Leaf, Branch(Tree.Forest)].{
+    Forest := [Empty, More(Tree, Forest)]
+}
+
+main = Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+```
+
+When lambda-solved MIR lowers the `More(Tree, Forest)` payloads under the
+endpoint selected by `Tree.Branch`, the selected `Tree` and `Forest` payload
+slots may be `recursive_ref` edges back to the reserved `Tree` or `Forest`
+payload nodes. The tag payload selector must follow those edges to the ordinary
+nominal/tag-union payload before it asks for the `Leaf`, `Empty`, `Branch`, or
+`More` payload slots. It must not attempt to reconstruct the recursive shape
+from the Roc source declaration, from row labels, from constructor names, or
+from layout compatibility.
+
+Aggregate executable payload publication has one more mandatory source-of-truth
+rule: a parent aggregate slot's executable endpoint is always derived from that
+parent slot's published representation root plus the slot's logical type. It is
+never derived from the selected child expression's standalone producer endpoint.
+
+This distinction is subtle but critical. In the `Tree` example above, the
+`Branch` payload slot is declared as `Tree.Forest`. The selected child expression
+is `Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty)`, whose lowering may pass
+through a nominal backing construction, a tag payload record, and recursive
+payload roots. None of those producer-local endpoints are allowed to replace the
+`Branch` slot endpoint. The `Branch` variant payload must say "slot 0 is
+`Tree.Forest`," and the child construction is lowered into that slot through the
+consumer-use plan for the `Branch` payload.
+
+The same rule applies to records, tuples, lists, tag payloads, and nominal
+backings:
+
+```roc
+Pair := { left : Tree.Forest, right : Tree }
+
+main =
+    {
+        left: Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty),
+        right: Tree.Branch(Tree.Forest.Empty),
+    }
+```
+
+The `left` field endpoint is selected by the `Pair.left` field root and logical
+type `Tree.Forest`; the `right` field endpoint is selected by the `Pair.right`
+field root and logical type `Tree`. The concrete expressions assigned to those
+fields may be direct constructors that are lowered contextually into the selected
+field endpoints, or existing values that need explicit transforms. They do not
+own the field endpoint schema.
+
+Implementation code must make this ownership visible. A payload builder for a
+parent aggregate must follow this shape:
+
+```zig
+fn tagPayloadEndpoint(
+    parent: TagValueInfo,
+    payload_id: TagPayloadId,
+    logical_payload_ty: TypeVarId,
+) SessionExecutableTypePayloadChild {
+    const slot_root = parent.payloadRoot(payload_id);
+    return childForRootType(slot_root, logical_payload_ty);
+}
+```
+
+It must not follow this shape:
+
+```zig
+fn tagPayloadEndpoint(
+    parent: TagValueInfo,
+    payload_id: TagPayloadId,
+    logical_payload_ty: TypeVarId,
+) SessionExecutableTypePayloadChild {
+    const selected_child = parent.selectedPayloadValue(payload_id);
+
+    if (valueRequiresSpecificEndpoint(selected_child)) {
+        // Wrong: this asks the child's producer endpoint to define the parent's
+        // slot schema. It can turn `Tree.Forest` into a backing payload record
+        // and makes later lowering repair a bug it should never have received.
+        return childForValue(selected_child);
+    }
+
+    return childForRootType(parent.payloadRoot(payload_id), logical_payload_ty);
+}
+```
+
+If the selected child contains a function value, a boxed erased boundary, a
+finite callable set, a join, or any other representation-specific value, that
+specificity still flows into the slot through the representation graph:
+lambda-solved has already published the slot root and the child value root into
+the same solved representation class. `childForRootType(slot_root,
+logical_payload_ty)` therefore sees the selected callable representation through
+the slot root's solved class. The payload builder must not bypass that graph by
+asking the selected child value for a producer-global endpoint.
+
+Selected child values are still required, but only for consumer-use publication
+and construction lowering:
+
+- if the child is a direct constructor, executable MIR lowers it directly into
+  the parent slot endpoint selected from `childForRootType(slot_root,
+  logical_slot_ty)`;
+- if the child is control flow, contextual lowering propagates that same slot
+  endpoint into the completing branch result;
+- if the child is an existing runtime value, lambda-solved publishes an explicit
+  transform from the child producer endpoint to the parent slot endpoint.
+
+The canonical executable key for a parent aggregate slot follows the same rule
+as the executable payload: write the key for `(slot_root, logical_slot_ty)`, not
+the key snapshot for the selected child producer. A selected-child key may appear
+only as the source endpoint of an explicit existing-value transform or as the
+producer endpoint of a standalone value. If a session executable payload or key
+for a parent aggregate contains a child endpoint with the selected child's
+backing-record/schema instead of the parent slot's declared nominal/tag/list
+endpoint, that is a lambda-solved compiler bug.
+
+The implementation shape should be explicit and bounded:
+
+```zig
+fn sessionPayloadForSelection(
+    store: *const SessionExecutableTypePayloadStore,
+    ref: SessionExecutableTypePayloadRef,
+) SessionExecutableTypePayload {
+    var current = ref.payload;
+    var remaining = store.entries.len;
+
+    while (remaining != 0) : (remaining -= 1) {
+        switch (store.get(current)) {
+            .recursive_ref => |next| current = next,
+            else => |payload| return payload,
+        }
+    }
+
+    compilerBug("recursive executable payload reference did not reach a concrete payload");
+}
+```
+
+The bounded walk is part of normal lowering because it follows explicit sealed
+graph data. It must allocate no verifier-only state and must not scan bodies or
+source declarations. If a `recursive_ref` chain does not terminate at a concrete
+payload in the same `SessionExecutableTypePayloadStore`, that is a compiler bug:
+debug builds assert immediately, and release builds use `unreachable`.
+
 The rule is direction-sensitive. A `nominal_reinterpret` node is not always
 nominal construction; it may also represent a reinterpretation from a transparent
 nominal to its backing endpoint. Lambda-solved MIR decides this from the
@@ -2547,9 +4177,68 @@ type-store node alone:
 - If the consumer endpoint payload is `nominal`, the node is nominal
   construction. Publish the `nominal_backing` consumer-use plan described above.
 - If the consumer endpoint payload is the nominal's backing payload, the node is
-  a backing reinterpretation. Do not publish a `nominal_backing` consumer-use
-  plan for the result value. Instead, lower/finalize the child expression under
-  the backing endpoint directly.
+  a backing reinterpretation. Lambda-solved MIR must still publish an explicit
+  child consumer-use plan for the `nominal_reinterpret` backing expression; the
+  difference is that the expected child endpoint is the consumer endpoint itself,
+  not `SessionExecutableNominalPayload.backing`.
+
+The second rule is critical. "Lower the child under the backing endpoint" must
+not mean "let executable MIR recurse into the child and hope it has the right
+layout." It means lambda-solved MIR publishes an owned consumer-use edge for the
+backing child before sealing the solve session. The existing
+`nominal_backing` owner is the right owner for this edge because it names the
+same child slot of the same `nominal_reinterpret` node; it is not restricted to
+nominal construction. The endpoint selected for that owner depends on the
+consumer endpoint:
+
+```zig
+const NominalReinterpretBackingUse = struct {
+    owner: ConsumerUseOwner, // .nominal_backing { parent, nominal }
+    child_value: ValueInfoId,
+    expected_endpoint: SessionExecutableValueEndpoint,
+};
+
+// Consumer wants the nominal wrapper.
+// The backing child must be lowered at the nominal endpoint's explicit backing.
+expected_endpoint = nominal_payload.backing;
+
+// Consumer wants the backing directly.
+// The backing child must be lowered at the consumer endpoint itself.
+expected_endpoint = consumer_endpoint;
+```
+
+For example:
+
+```roc
+Id := [Apply(I64 -> I64), Keep(I64)]
+
+use_id : Id -> I64
+use_id = |value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+
+use_backing : [Apply(I64 -> I64), Keep(I64)] -> I64
+use_backing = |value| use_id(@Id value)
+```
+
+If an erased `Box` boundary later requires the `Apply` payload to be represented
+as an erased callable, the call argument to `use_id` may be a
+`nominal_reinterpret` whose backing child is an existing variable. Executable
+MIR cannot recover the required transform from that variable's syntax or from
+layout compatibility. Lambda-solved MIR must publish the `nominal_backing`
+consumer-use edge for the child variable, and executable MIR must lower that
+child through the published consumer-use. If the child is a structural
+construction such as `Apply(|x| x + 1)`, the same edge lets contextual
+construction push the erased payload endpoint only into the selected `Apply`
+payload; inactive variants are not materialized or transformed.
+
+This is still not a nominal-construction wrapper. No later stage may infer a
+nominal backing by inspecting source syntax, aliases, row names, or layouts. The
+only legal data is the explicit `nominal_backing` consumer-use published by
+lambda-solved MIR, and failure to publish it before executable lowering is a
+compiler bug.
 
 This distinction is required for builtin transparent nominals whose lowered
 runtime type is intentionally their ordinary backing representation. For
@@ -2665,7 +4354,9 @@ is only a future optimization through an explicit runtime uniqueness mutation
 site where `refcount == 1`; the required baseline is fresh allocation. The
 presence of a box transform does not itself authorize callable erasure. Callable
 erasure is authorized only when the callable leaf transform has non-empty
-`box_erasure` provenance naming the explicit `BoxBoundaryId`.
+`box_erasure` provenance naming either the explicit local `BoxBoundaryId` or the
+sealed promoted wrapper whose checked artifact already carries the explicit
+`Box(T)` authorization.
 
 Checking finalization and lambda-solved representation solving are responsible
 for publishing executable value transform plans. They must publish a transform
@@ -2894,6 +4585,45 @@ lambda-solved solve session cannot reuse that earlier session's
 `BoxBoundaryId`, because `BoxBoundaryId` is local to one representation store.
 It also must not fabricate a new `BoxBoundaryId`, because the direct call to the
 promoted wrapper is not itself a `Box.box` or `Box.unbox` operation.
+For this reason artifact-published `BoxPayloadTransformPlan.boundary` is
+nullable. It is present only when the published transform was produced from a
+real local `BoxBoundaryId` in the same representation store. It is null for
+promoted-wrapper transforms whose authorization is instead
+`BoxErasureProvenance.promoted_wrapper`. A null boundary is not missing
+semantic data: the mandatory semantic proof is the transform's non-empty
+`box_erasure` provenance naming the sealed promoted wrapper.
+
+Session `SessionBoxPayloadTransformPlan.boundary` is also nullable. It is
+present only when the session transform is attached to a real `Box.box` or
+`Box.unbox` operation in the same `RepresentationStore`. It is null when the
+session transform is a mechanical promoted-wrapper argument/result transform
+whose authorization is the sealed wrapper provenance. Lambda-solved must not
+fabricate a local `BoxBoundaryId` for that case.
+
+This distinction matters for nested boxes. A box transform is a mechanical
+payload transformation:
+
+```zig
+const SessionBoxPayloadTransformPlan = struct {
+    /// Present only for a real local Box.box or Box.unbox boundary in this
+    /// representation store. Null is valid for promoted-wrapper transforms.
+    boundary: ?BoxBoundaryId,
+
+    /// payload_to_box, box_to_payload, or box_to_box.
+    kind: BoxPayloadTransformKind,
+
+    /// The explicit payload transform. This is where callable leaves may carry
+    /// non-empty BoxErasureProvenance.
+    payload: ExecutableValueTransformRef,
+};
+```
+
+`boundary = null` does not authorize erasure by itself. The box transform may
+allocate, unbox, rebox, or map the payload according to `kind`, but any callable
+representation change inside `payload` must still carry non-empty
+`BoxErasureProvenance`. If neither `boundary` nor non-empty inherited
+provenance is present, the transform is malformed: debug builds assert and
+release builds use `unreachable`.
 
 For example:
 
@@ -2907,6 +4637,49 @@ apply_boxed = Box.unbox(make_boxed({}))
 main : I64
 main = apply_boxed(|x| x + 1)
 ```
+
+The same rule is required for this nested-box shape:
+
+```roc
+make_boxed : {} -> Box(({ inner : Box(I64 -> I64) } -> I64))
+make_boxed = |_| Box.box(|record| Box.unbox(record.inner)(1))
+
+apply_record : { inner : Box(I64 -> I64) } -> I64
+apply_record = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_record({ inner: Box.box(|x| x + 1) })
+```
+
+The promoted wrapper's ordinary argument transform may need a `box_to_box`
+transform for the `inner` field because the wrapper boundary expects the field's
+boxed payload to be represented as an erased callable. That nested box transform
+has no current-session local `BoxBoundaryId`; its authorization is the promoted
+wrapper provenance on the enclosing argument transform. The nested box transform
+therefore has `boundary = null`, and its child callable transform carries
+`BoxErasureProvenance.promoted_wrapper(apply_record)` before packing the finite
+callable-set value into an erased callable. This is correct because the nested
+box transform is not the source of erasure authorization; it only applies the
+already-authorized payload transform.
+
+When a session does lower a real `Box.unbox(boxed)` operation, the boxed input
+value must also be marked as a boxed value carrying the new local boundary:
+
+```zig
+value_info(boxed).boxed = BoxedValueInfo{
+    .box_root = root(boxed),
+    .payload_root = root(unboxed_result),
+    .payload_value = unboxed_result,
+    .boundary = box_unbox_boundary,
+};
+```
+
+This is explicit metadata, not recovery. Later value-transform planning can use
+the boxed input endpoint's local boundary when a transform is directly tied to
+that unbox operation. If the boxed input already has a `BoxedValueInfo` from an
+earlier `Box.box`, lambda-solved keeps the existing explicit source boundary
+and still records the `Box.unbox` value-flow edge and representation
+requirement for the unboxed result.
 
 The call `apply_boxed(|x| x + 1)` must convert the finite callable-set value
 for `|x| x + 1` to the erased callable slot expected by `apply_boxed`'s
@@ -2933,12 +4706,66 @@ canonical fixed-arity function type of the promoted callable result.
 `callable_set_key` is the canonical finite callable-set representation chosen by
 lambda-solved MIR. `member` is the selected member inside that set. `captures`
 are the already-reified private capture values in the member's canonical
-capture-slot order. The member procedure and capture-slot schema are derived
-from `callable_set_key + member`; if an implementation caches them in the plan,
-debug builds must assert that they match and release builds must treat a mismatch
-as `unreachable`. A finite promoted wrapper must not store only `entry_proc:
-Symbol`, because that loses the callable-set member context and the capture
-payload shape that Cor/LSS preserves when it builds callable-set tags.
+capture-slot order. `member_target` is the exact executable specialization key
+for the selected member at the moment the compile-time result was solved.
+`member_target_promoted_wrapper` is present only when the selected member target
+is itself a promoted wrapper whose checked artifact owns the executable boundary
+payload graph. The member procedure and capture-slot schema are derived from
+`callable_set_key + member`; if an implementation caches them in the plan, debug
+builds must assert that they match and release builds must treat a mismatch as
+`unreachable`. A finite promoted wrapper must not store only `entry_proc:
+Symbol`, because that loses the callable-set member context, the selected
+member's executable boundary key, and the capture payload shape that Cor/LSS
+preserves when it builds callable-set tags.
+
+The selected member executable key is not optional metadata. It is the public
+lowering target for the promoted wrapper body's internal `proc_value`. Mono MIR
+does not inspect this key and does not inspect executable payloads. Mono lowers
+the promoted wrapper body to ordinary `proc_value` and `call_value`, but the
+generated `proc_value` carries a forced executable target:
+
+```zig
+const ProcValueExecutableTarget = struct {
+    key: ExecutableSpecializationKey,
+    artifact: CheckedModuleArtifactKey,
+    payloads: *const ExecutableTypePayloadStore,
+    promoted_wrapper: ?MirProcedureRef,
+};
+```
+
+Lambda-solved MIR consumes that target when it seals the `proc_value`
+representation instance. It must clone `key` into the reserved instance's
+`executable_specialization_key` and import boundary payloads from
+`artifact + payloads + promoted_wrapper` before consulting any local session
+payload. It must not re-solve the member as an ordinary procedure value, because
+that can lose the compile-time solved erased payload positions.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The finite promoted wrapper for `apply_tag` calls the selected member whose
+argument endpoint is `[Apply(erased_fn), Keep(I64)]`, because that member came
+from a `Box(T)` erased callable boundary. If lambda-solved re-solves the
+selected member from the ordinary source procedure shape, it can instead reserve
+`[Apply(vacant_callable_slot), Keep(I64)]`. That is wrong: the `Apply` payload
+would no longer carry the erased callable representation required by the sealed
+boxed function. The forced `member_target` is the explicit published source of
+the target endpoint, so no later stage has to rediscover or repair it.
 
 A finite promoted wrapper plan is consumed by mono MIR. It is intentionally
 source-level: it names the selected finite callable-set member, ordinary Roc
@@ -3304,6 +5131,32 @@ member exists, every capture list length equals the descriptor member's slot
 list length, and every capture executable type key equals the descriptor slot's
 `exec_value_ty`. Release builds must not retain verifier scanning cost.
 
+The canonical callable-set key must be target-independent and artifact-stable.
+For a singleton callable set, the key must hash the complete semantic member
+identity:
+
+```zig
+const SingletonCallableSetKeyInput = struct {
+    source_proc: MirProcedureRef,
+    proc_value: ProcedureCallableRef,
+    capture_shape_key: CaptureShapeKey,
+    capture_slots: Span(CallableSetCaptureSlot),
+};
+```
+
+It must not hash a session-local `ProcRepresentationInstanceId`,
+`ExecutableProcId`, array index, body index, or lowering-run ordinal. Those ids
+are only valid inside one lambda-solved or executable lowering run. Two
+different sessions may legitimately assign `ProcRepresentationInstanceId(0)` to
+different lifted procedures, so using that id in a published
+`CanonicalCallableSetKey` would make distinct descriptors collide when checking
+finalization appends descriptors from dependency-summary lowering,
+compile-time-root lowering, callable promotion, and runtime lowering. For
+multi-member callable sets, each member contributes the same semantic member
+identity plus the stable `CallableSetMemberId` ordering. Session-local target
+instance ids may be stored in lambda-solved descriptor records only while the
+session is alive; they are never part of the artifact-owned key.
+
 The old ambiguous `values: Span(CaptureSlotReificationPlan)` shape is forbidden
 in sealed erased promoted wrapper bodies. Before interpretation, the producer
 must distinguish at least these recipe shapes:
@@ -3481,6 +5334,107 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
   captures after mono specialization has resolved the binding to the exact
   callable procedure template and monomorphic source function type.
 
+Mono call specialization must distinguish explicit concrete evidence from
+speculative nested-call materialization. When mono instantiates a call, it may
+bind parameter type variables from argument expressions only if the argument
+already has a concrete type published in the current specialization-local
+environment, such as a local parameter, local declaration binder, mutable
+version, pattern binder, capture reference, or another value whose concrete
+source type was explicitly recorded by earlier mono lowering. It must not lower
+or instantiate an argument expression merely to discover its type.
+
+In particular, an argument expression that is itself a call is not automatically
+"known" just because type checking inferred a result type for it. The nested
+call may contain rigid variables that are resolved only by the outer call's
+parameter endpoint, the enclosing return endpoint, or another already-published
+consumer type. Mono must lower that nested call under the concrete parameter type
+selected by the consuming call. It must never materialize the nested call's
+checked result type in isolation, because doing so can manufacture a competing
+source of truth or hit an unmapped rigid variable before the real consumer has
+provided the missing concrete type.
+
+For example:
+
+```roc
+{
+    a = 1
+    f = |x| x + a
+
+    b = 2
+    g = |x| f(x) + b
+
+    g(10)
+}
+```
+
+When lowering the body of `g`, the call `f(x)` is an argument to `Num.add`.
+The concrete type of `x` comes from `g`'s specialized parameter type, and that
+parameter type then lowers `f(x)` at `I64`. Mono must not first instantiate
+`f(x)` as a standalone call result with no expected result and no concrete
+consumer. The standalone checked type can still contain generalized or rigid
+template variables; the consuming parameter endpoint is the authority.
+
+Mono type instantiation has the same separation inside the unifier itself. There
+are two distinct operations:
+
+1. **Constraint-preserving clone-instantiation** copies a checked template type
+   into the specialization-local concrete source type graph while preserving
+   open variable identity. Flex variables, rigid variables, row tails,
+   tag-union tails, delayed numeric variables, and static-dispatch constrained
+   variables remain explicit variable payloads in the local graph. This operation
+   is used while connecting endpoints.
+2. **Final closure/materialization** lowers a fully connected specialization
+   endpoint to a closed concrete source type. Only at this point may mono close
+   a truly unconstrained flex variable to an explicit zero-field payload or apply
+   a delayed numeric default.
+
+The unifier must use the first operation whenever it binds an imported or
+target-side open concrete variable to a non-variable checked template payload.
+It must not use final closure/materialization in that path. Otherwise it can
+manufacture `{}` before all endpoints of the same call have been connected.
+
+For example:
+
+```roc
+main =
+    append_one = |acc, x| List.append(acc, x)
+
+    clone_via_fold = |xs|
+        xs.fold(List.with_capacity(1), append_one)
+
+    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+```
+
+`List.fold` has the shape:
+
+```roc
+List(a).fold : List(a), state, (state, a -> state) -> state
+```
+
+At the call site, `List.with_capacity(1)` tells mono that `state` is `List(b)`,
+but `b` is not known until the callback endpoint
+`append_one : List(a), a -> List(a)` is connected. The correct sequence is:
+
+1. connect the receiver endpoint, establishing `a` from `xs`
+2. bind the target method's `state` variable to a local clone of `List(b)` that
+   still contains the open variable `b`
+3. connect the callback endpoint, unifying `b` with the receiver element type
+4. connect the return endpoint to the enclosing expected result
+5. only then close any flex variables that remain genuinely unconstrained
+
+If step 2 uses final materialization instead of preserving open variables, it
+turns `List(b)` into `List({})`. Step 3 then tries to unify `{}` with `I64` or
+`List(I64)`, which is an implementation bug. The checked program is valid and
+the explicit endpoints contain all information needed to specialize it.
+
+This rule applies to ordinary calls, static-dispatch target unification,
+procedure-value instantiation, local procedure instantiation, const/callable
+instantiation, and any other mono operation that connects a generic checked
+template with a concrete endpoint. Closing unconstrained flex variables is a
+finalization step for a connected endpoint, not a side effect of asking for a
+temporary `ConcreteSourceTypeRef` during unification.
+
 `ConstUseTemplate.requested_source_ty_template` and
 `ProcedureUseTemplate.source_fn_ty_template` are template identities. They are
 not concrete payloads by themselves. In a generic checked procedure body, the
@@ -3488,6 +5442,52 @@ same template may instantiate to different concrete payloads in different mono
 specializations. Mono MIR must store the concrete payload ref produced in the
 current specialization and must not enqueue a const/procedure/callable request
 from only the canonical key.
+
+Because these fields are template identities, mono must not assert that the
+post-clone concrete source type key equals the pre-specialization template key.
+The template key is useful for artifact publication, cache identity, and debug
+tracing of which checked occurrence is being instantiated; it is not the final
+`ConstInstantiationKey` inside a concrete mono specialization. The required
+debug assertion after clone-instantiation is instead:
+
+```zig
+const concrete_ref = cloneInstantiate(
+    const_use.requested_source_ty_payload,
+    current_mono_substitutions,
+);
+const concrete_key = concrete_source_types.key(concrete_ref);
+
+debug_assert(concrete_key == expected_expression_endpoint.source_ty);
+```
+
+Then mono uses `concrete_key`, not `requested_source_ty_template`, as the
+`ConstInstantiationKey.requested_source_ty`. If the concrete key disagrees with
+the current expression endpoint, mono has conflicting explicit data and must
+panic in debug builds / use `unreachable` in release builds.
+
+For example:
+
+```roc
+nth = |l, i| {
+    match List.get(l, i) {
+        Ok(e) => Ok(e)
+        Err(OutOfBounds) => Err(OutOfBounds)
+    }
+}
+
+first = nth(["a", "b", "c"], 2)
+second = nth(["a"], 2)
+main = (first, second)
+```
+
+The checked body of `nth` is generic in the list element type. The
+`OutOfBounds` lookup carries a `ConstUseTemplate` published from that generic
+checked occurrence, but the concrete `first` and `second` specializations must
+instantiate the constant use under the error payload endpoint selected for the
+concrete `List.get` result. Comparing the post-clone payload key with the
+generic template key would reject correct code. Comparing it with the concrete
+expected endpoint verifies that mono consumed the specialization's explicit
+type information.
 
 The paired payload fields are just as mandatory as the keys.
 `ConstUseTemplate.requested_source_ty_payload` and
@@ -4625,6 +6625,498 @@ Builder records may reserve an instance before `executable_specialization_key`
 is available, but that key must be filled from sealed solved representation
 before the instance can be exported or consumed by executable MIR.
 
+Once `executable_specialization_key` is filled, its public boundary keys are the
+single source of truth for procedure parameters and return values:
+
+```zig
+proc_instance.executable_specialization_key.exec_arg_tys[i]
+proc_instance.executable_specialization_key.exec_ret_ty
+```
+
+Lambda-solved payload publication must assign each public parameter
+`ValueInfo.exec_ty` from `exec_arg_tys[i]` and the public return
+`ValueInfo.exec_ty` from `exec_ret_ty`. It may recompute those keys from the
+value graph only as a debug-only assertion for ordinary direct/proc-value
+instances whose boundary is not adapter-owned. It must not make executable MIR
+consume a public parameter type recomputed from source-shaped roots when an
+explicit specialization key exists.
+
+After a value has a published `ValueInfo.exec_ty`, that endpoint is the only
+local endpoint later lambda-solved finalizers may use. This includes
+consumer-use publication for call arguments, return values, aggregate slots,
+box payloads, `match` scrutinees, branch binders, and generated erased-adapter
+wrapper arguments. A helper such as `localEndpoint(value)` must therefore be:
+
+```zig
+fn localEndpoint(value: ValueInfoId) SessionExecutableValueEndpoint {
+    const info = value_store.values[@intFromEnum(value)];
+
+    return .{
+        .owner = .{ .local_value = value },
+        .logical_ty = info.logical_ty,
+        .exec_ty = info.exec_ty orelse compute_endpoint_for_unpublished_local(value),
+    };
+}
+```
+
+The `compute_endpoint_for_unpublished_local` path exists only for local values
+whose executable endpoint has not been published yet. Once `info.exec_ty` is
+non-null, recomputing from the value graph is forbidden as release behavior.
+Debug builds may recompute only as an assertion, and only when the current
+procedure instance is known not to have adapter-owned or externally published
+boundary payloads. This prevents a later finalizer from accidentally replacing
+an explicit boundary endpoint with an ordinary source-shaped endpoint.
+
+This matters for erased finite adapters. The source type of a member may be:
+
+```roc
+[Apply((I64 -> I64)), Keep(I64)] -> I64
+```
+
+but the adapter-boundary member specialization may require:
+
+```zig
+ExecutableSpecializationKey{
+    .exec_arg_tys = &.{ key_for("[Apply(erased_fn), Keep(I64)]") },
+    .exec_ret_ty = key_for("I64"),
+}
+```
+
+If payload publication ignores `exec_arg_tys` and recomputes the parameter from
+the raw source-shaped parameter root, the `Apply` payload can become
+`vacant_callable_slot(I64 -> I64)`. Later source `match` lowering would then try
+to bind that vacant payload to a branch binder whose solved representation is
+`erased_fn`, which is correctly rejected because a vacant callable slot is not a
+runtime callable. The correct architecture is not a bridge:
+
+```zig
+// Forbidden: a vacant callable slot is not a callable value.
+bridge(vacant_callable_slot(I64 -> I64), erased_fn(...))
+```
+
+The correct architecture is for the adapter-member procedure parameter itself
+to be published at the erased-boundary executable key:
+
+```zig
+param.exec_ty = session_endpoint_for_published_key(
+    proc_instance.executable_specialization_key.exec_arg_tys[param_index],
+);
+```
+
+The same rule also applies after the public boundary has been published. For
+example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value| {
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+})
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The erased-callable wrapper receives an executable argument shape in which the
+`Apply` payload has already crossed the explicit `Box(T)` erasure boundary. If a
+call-argument consumer-use later recomputes the wrapper parameter endpoint from
+the raw value graph, it can decide that passing the wrapper parameter into the
+actual lambda body is an identity transform even when the published wrapper
+parameter and target lambda parameter have different executable endpoints. That
+is a source-of-truth bug. The call-argument finalizer must use the wrapper
+parameter's published `ValueInfo.exec_ty` as the `from` endpoint, and the target
+procedure parameter's sealed `exec_arg_tys[i]` as the `to` endpoint. If those
+endpoints differ, lambda-solved must publish the explicit transform. Executable
+MIR, IR, LIR, backends, and the interpreter must never repair this by coercing
+tag-union layouts at the call site.
+
+For adapter-owned procedure boundaries, `session_endpoint_for_published_key`
+must import the explicit published payload graph rather than recomputing from
+the public root value. A sealed procedure instance therefore carries optional
+boundary payload ownership:
+
+```zig
+const ProcBoundaryExecutablePayloads = struct {
+    artifact: CheckedModuleArtifactKey,
+    payloads: *const ExecutableTypePayloadStore,
+    promoted_wrapper: ?MirProcedureRef,
+};
+
+const ProcRepresentationInstance = struct {
+    proc: MirProcedureRef,
+    executable_specialization_key: ExecutableSpecializationKey,
+    solve_session: RepresentationSolveSessionId,
+    value_store: ValueInfoStoreId,
+    public_roots: ProcPublicValueRoots,
+    boundary_payloads: ?ProcBoundaryExecutablePayloads,
+    boundary_provenance: Span(BoxErasureProvenance),
+    materialized: bool,
+};
+```
+
+`boundary_payloads` is present for promoted executable wrappers and for the
+ordinary source procedures that are materialized as members of a promoted
+finite erased adapter. Those instances get their public parameter and return
+keys from the promoted wrapper's artifact-published executable signature, so
+the corresponding structural payloads also come from that same artifact-owned
+`ExecutableTypePayloadStore`. `promoted_wrapper` names the sealed promoted
+wrapper procedure whose checked artifact carries the `Box(T)` erasure
+authorization. Call-boundary transform finalization uses it when a direct call
+targets either the synthetic wrapper itself or one of the ordinary source
+procedures materialized as that wrapper's finite adapter member.
+
+`boundary_provenance` is the sealed Box-erasure authorization for this
+procedure's public boundary. It is empty for ordinary procedure instances. It is
+non-empty for finite erased-adapter members, finite erased-adapter-demand
+members, executable promoted wrappers, and ordinary source procedures forced to
+use a promoted-wrapper executable target. Return-boundary finalization and
+direct-call argument/result finalization must consume this span directly:
+
+```zig
+fn boundary_provenance_for_instance(instance: ProcRepresentationInstance) []const BoxErasureProvenance {
+    return instance.boundary_provenance;
+}
+```
+
+This is required because value-transform finalization runs after procedure
+instances are sealed; the temporary reservation owner that originally knew
+which erased adapter or promoted wrapper produced the instance is no longer the
+public source of truth. Reconstructing provenance from the callee body,
+call-site syntax, executable key shape, or erased ABI is forbidden.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(I64 -> (I64 -> I64))
+make_boxed = |_| Box.box(|n| |x| x + n)
+
+make_adder : I64 -> (I64 -> I64)
+make_adder = Box.unbox(make_boxed({}))
+
+main : I64
+main = make_adder(5)(10)
+```
+
+The finite erased-adapter member for the boxed `|n| ...` procedure returns a
+callable. Its return endpoint is erased because the return crosses the original
+`Box(I64 -> (I64 -> I64))` boundary. When lambda-solved finalizes the target
+procedure's return value, it must transform the finite returned lambda into an
+erased callable using `instance.boundary_provenance`. If the provenance is not
+sealed onto `ProcRepresentationInstance`, finalization would either lose the
+Box authorization or try to rediscover it from the expression body; both are
+compiler bugs.
+
+When `boundary_payloads` is present and the current solve session has no
+`SessionExecutableTypePayloadRef` for the required key, lambda-solved MIR must
+copy the artifact-owned payload graph into the current session's
+`SessionExecutableTypePayloadStore`:
+
+```zig
+fn session_endpoint_for_published_key(
+    session_payloads: *SessionExecutableTypePayloadStore,
+    boundary_payloads: ProcBoundaryExecutablePayloads,
+    key: CanonicalExecValueTypeKey,
+) SessionExecutableTypeEndpoint {
+    if (session_payloads.ref_for_key(key)) |existing| {
+        return .{ .ty = existing, .key = key };
+    }
+
+    const artifact_ref =
+        boundary_payloads.payloads.ref_for_key(boundary_payloads.artifact, key)
+        orelse compiler_bug("adapter boundary key has no published payload");
+
+    const session_ref = import_artifact_payload_graph(
+        boundary_payloads.artifact,
+        boundary_payloads.payloads,
+        artifact_ref,
+        session_payloads,
+    );
+
+    return .{ .ty = session_ref, .key = key };
+}
+```
+
+The import is a structural copy, not semantic recovery. It preserves the exact
+canonical executable keys, translates artifact-local canonical-name ids into
+the lowering-run canonical-name store, interns row-finalized record and tag
+shapes in the current lowering-run `MonoRow.Store`, preserves recursive refs as
+store-local backrefs, and keeps child refs in the current session store. It
+does not inspect source expressions, checked source types, lambda-solved value
+roots, layouts, display names, or backend ABI lowering. Recomputing a public
+adapter-member parameter endpoint from its raw `ValueInfo.root` is forbidden,
+because that recreates the source-shaped type and can turn a required erased
+callable payload back into a vacant callable slot.
+
+When the import interns a record or tag-union shape, the returned shape may
+already exist in the current lowering session with a different stored field/tag
+order than the artifact payload being imported. The importer must therefore
+resolve every imported record field and tag variant by translated label after
+interning the shape. It is forbidden to zip the artifact payload slice with
+`recordShapeFields(shape)` or `tagUnionTags(shape)` by index.
+
+For example, one session may have already interned this shape while lowering a
+`Keep` call argument:
+
+```roc
+[Keep(I64), Apply((I64 -> I64))]
+```
+
+The promoted wrapper artifact may then publish the erased adapter boundary in
+this source order:
+
+```roc
+[Apply((I64 -> I64)), Keep(I64)]
+```
+
+with executable payloads equivalent to:
+
+```zig
+Apply(erased_fn)
+Keep(I64)
+```
+
+If the importer uses `shape_tags[i]` while copying artifact variant `i`, the
+existing `Keep` tag can accidentally receive the `Apply(erased_fn)` payload.
+That creates an impossible transform from `Keep(I64)` to `Keep(erased_fn)` and
+looks downstream like a primitive-to-erased callable bridge. The correct import
+algorithm is:
+
+```zig
+const shape = internTagUnionShapeFromTranslatedDescriptors(descriptors);
+
+for (artifact_variants, descriptors) |variant, descriptor| {
+    const target_tag = tagInShapeByLabel(shape, descriptor.name);
+    out.append(.{
+        .tag = target_tag,
+        .payloads = importPayloadsForTag(target_tag, variant.payloads),
+    });
+}
+```
+
+Records follow the same rule:
+
+```zig
+const shape = internRecordShapeFromTranslatedLabels(labels);
+
+for (artifact_fields, labels) |field, label| {
+    const target_field = recordFieldInShapeByLabel(shape, label);
+    out.append(.{
+        .field = target_field,
+        .ty = importChild(field.ty),
+        .key = field.key,
+    });
+}
+```
+
+This is still structural import, not row-name lookup during lowering. The
+labels are part of the already-published row-finalized executable payload graph,
+and the lookup happens only to translate artifact-local row ids into the current
+session's row-id namespace. Later stages consume the resulting finalized ids and
+must not perform any additional field/tag-name recovery.
+
+The same label-resolution rule applies to every executable payload graph builder
+that interns into a `MonoRow.Store`, including the builder used for erased
+`Box(T)` boundary payloads before they are published to the checked artifact. A
+builder may receive logical type fields/tags in source order while the
+lowering-run row store already contains the same shape in a different order.
+After interning the shape, it must call `recordFieldInShapeByLabel` or
+`tagInShapeByLabel` for each field/variant before attaching child payloads.
+Index-zipping is forbidden in both artifact import and fresh erased-boundary
+payload construction.
+
+The same rule applies one step earlier to executable key construction and
+structural-root publication. A `CanonicalExecValueTypeKey` is a semantic key; it
+must never hash store-local `RecordFieldId`, `TagId`, `TagPayloadId`,
+`RecordShapeId`, or `TagUnionShapeId` numbers as if those ids were portable
+identity. When a key builder needs a record field or tag payload child, it must:
+
+1. iterate the checked/lambda-solved logical type in source order,
+2. use the logical field/tag label to find the finalized row id inside the
+   current `MonoRow.Store`, and
+3. hash only canonical semantic identity: labels, primitive kinds, nominal
+   identities, tuple/payload indexes, callable keys, and child executable keys.
+
+It is forbidden to use `Tag.logical_index` as an index into the source type's tag
+slice. `Tag.logical_index` is only the discriminant/logical order of that
+specific finalized shape. If a value first interns `[Keep(I64),
+Apply((I64 -> I64))]` and a later source type is `[Apply((I64 -> I64)),
+Keep(I64)]`, then the `Keep` tag's shape-local logical index is `0`, but the
+`Keep` source tag is not at source index `0`. The key builder must match
+`Keep` by label and then use `Keep`'s source payload types.
+
+For example, this is forbidden:
+
+```zig
+const source_tags = logicalTagUnionTags(logical_ty);
+for (row_shapes.tagUnionTags(shape)) |shape_tag| {
+    const tag_index = row_shapes.tag(shape_tag).logical_index;
+    const source_tag = source_tags[tag_index]; // BUG: shape order is not source order
+    // ...
+}
+```
+
+The correct version is:
+
+```zig
+const source_tags = logicalTagUnionTags(logical_ty);
+for (source_tags) |source_tag| {
+    const shape_tag = tagInShapeByLabel(shape, source_tag.name);
+    const payloads = row_shapes.tagPayloads(shape_tag);
+    // Hash source_tag.name and child executable keys, not shape_tag's numeric id.
+}
+```
+
+Aggregate values follow the same rule. A tag value's finalized `union_shape`
+owns the row ids needed to find structural child roots, but the key is still
+published in logical source order by label. A selected `Keep(7)` value whose
+source type is `[Apply((I64 -> I64)), Keep(I64)]` must produce a key with:
+
+```text
+Apply(erased_fn)
+Keep(I64)
+```
+
+not:
+
+```text
+Keep(erased_fn)
+Apply(I64)
+```
+
+The latter is a compiler bug caused by using row-shape positions as source-type
+positions. Debug builds must assert immediately when a row label from the
+logical type is missing from the finalized shape, or when a finalized aggregate
+contains a row label absent from the logical type. Release builds use
+`unreachable`.
+
+Checked-artifact publication is a separate canonical-name boundary. A
+lowering-run `CanonicalNameStore` and an artifact `CanonicalNameStore` may assign
+different numeric ids to the same text label. Therefore the builder that copies a
+session `SessionExecutableTypePayload` into an artifact
+`ExecutableTypePayloadStore` must translate every row and nominal name through
+the artifact publication API:
+
+```zig
+const artifact_tag =
+    artifact_name_publisher.tagFromLowering(lowering_names, lowering_tag);
+
+const artifact_field =
+    artifact_name_publisher.recordFieldFromLowering(lowering_names, lowering_field);
+
+const artifact_nominal = NominalTypeKey{
+    .module_name = artifact_names.internModuleName(
+        lowering_names.moduleNameText(lowering_nominal.module_name),
+    ),
+    .type_name = artifact_names.internTypeName(
+        lowering_names.typeNameText(lowering_nominal.type_name),
+    ),
+};
+```
+
+It is forbidden to write `row_shapes.tag(tag_id).label`,
+`row_shapes.recordField(field_id).label`, or a lowering-run `NominalTypeKey`
+directly into `ExecutableTypePayload`. Those ids are only meaningful in the
+lowering run. If they are interpreted in the artifact's name store, a published
+payload can say `Apply(I64), Keep(erased_fn)` even though the session payload was
+`Keep(I64), Apply(erased_fn)`. That corrupts the adapter boundary before import
+has a chance to do the right label translation.
+
+The same rule applies when finalizing value-transform boundaries for a
+`call_proc`. The call-boundary finalizer must build target parameter, target
+return, and target capture endpoints from:
+
+- the explicit target `ProcRepresentationInstanceId`
+- the target `ProcRepresentationInstance.executable_specialization_key`
+- the target `ProcRepresentationInstance.boundary_payloads`, when present
+- the target value root only for ordinary non-adapter instances whose computed
+  session endpoint key equals the explicit specialization key
+
+For adapter-owned targets, the finalizer must import the artifact payload graph
+into the caller session before planning argument/result transforms. It must not
+first compute the target endpoint from the target `ValueInfo` and then try to
+bridge it to the adapter key. That would make this valid Roc program malformed:
+
+This order is mandatory both when publishing procedure boundary values and when
+finalizing a call boundary. If `ProcRepresentationInstance.boundary_payloads` is
+present, `boundary_payloads` is the authoritative owner for public parameter,
+return, and capture executable payload graphs. The implementation must consult
+and import that artifact payload first, before checking whether the current
+session already has an entry for the same `CanonicalExecValueTypeKey`.
+
+The current session may already contain a payload under that key because some
+local value happened to need the same executable representation. If the key and
+payload builders are correct, that existing payload is structurally identical to
+the artifact payload. If they are not identical, the bug is in key/payload
+publication and debug verification must fail loudly; the boundary finalizer must
+not silently prefer the local entry. Preferring the local entry recreates the old
+"recover from local root" architecture under a different name.
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The direct call to `apply_tag` is a call to an ordinary source procedure, but in
+this use context it is also a promoted-wrapper finite-adapter member. The target
+parameter endpoint is therefore `[Apply(erased_fn), Keep(I64)]`, and the
+`Apply` payload transform is a finite-callable-to-erased transform authorized
+by `ProcBoundaryExecutablePayloads.promoted_wrapper`. If the finalizer
+recomputed the parameter endpoint from the raw source root, it could pair
+`Keep(I64)` or `Apply(vacant_callable_slot)` against the erased adapter payload
+and either crash or invent an illegal compatibility bridge. The correct
+implementation consumes the published adapter payload and promoted-wrapper
+provenance up front.
+
+Persisted finite-adapter member target keys must be normalized to the promoted
+wrapper executable signature before they are sealed into
+`ProcRepresentationInstance.executable_specialization_key`. The persisted
+member target still owns the concrete procedure identity fields:
+
+```zig
+const normalized_member_key = ExecutableSpecializationKey{
+    .base = persisted_member_target.base,
+    .requested_fn_ty = persisted_member_target.requested_fn_ty,
+    .exec_arg_tys = promoted_signature.specialization_key.exec_arg_tys,
+    .exec_ret_ty = promoted_signature.specialization_key.exec_ret_ty,
+    .callable_repr_mode = persisted_member_target.callable_repr_mode,
+    .capture_shape_key = persisted_member_target.capture_shape_key,
+};
+```
+
+This is not an optimization and not a compatibility repair. It is required
+because the promoted executable signature is the owner of the adapter boundary
+payload graph. A finite-adapter member target persisted earlier may carry the
+right target procedure identity while its public boundary keys were produced in
+a private compile-time evaluation context. When the promoted wrapper is
+published, the wrapper signature's executable argument and return keys become
+the public boundary keys for every materialized adapter member. Lambda-solved
+must verify arity and source function type agreement, then replace the member
+target's public `exec_arg_tys` and `exec_ret_ty` with the signature keys. It
+must not let a stale private member-target key select a different artifact
+payload, because that can put the erased callable payload under the wrong tag
+constructor, for example `Keep(erased_fn)` instead of `Apply(erased_fn)`.
+
+Every branch pattern binder, pattern-path payload, and call-site endpoint inside
+the body then sees the same erased callable payload by ordinary explicit
+value-flow metadata. Executable MIR must never repair public-boundary type
+drift by comparing compatible shapes or adding a vacant-to-erased bridge.
+
 The `RepresentationSolveSession` owns the `RepresentationStore`. A
 `ProcRepresentationInstance` owns its dense `ValueInfoStore` and stores roots
 into the session's representation store. A solve session is an executable
@@ -4808,6 +7300,375 @@ procedure representation instances, sealed solve sessions, sealed value stores,
 and solved representation classes. If executable MIR sees any unsealed state,
 debug verification must assert immediately; release builds use `unreachable`.
 
+#### Dynamic Solve-Session Membership During Lambda-Solved Building
+
+A `RepresentationSolveSession` is not allowed to publish an immutable member
+slice until the session is sealed. Lambda-solved construction may discover new
+members after an earlier solve attempt:
+
+- direct-call targets discovered while building already-reserved bodies
+- `proc_value` target procedures whose captures connect to the current session
+- finite `callable_match` member bodies selected after callable solving
+- finite erased-adapter member bodies selected after Box-erasure solving
+- recursive direct-call SCC members that must share one recursive-group anchor
+
+Therefore the builder must own a mutable session-member table for the whole
+reservation/fill/solve loop:
+
+```zig
+const SolveSessionBuilder = struct {
+    session: RepresentationSolveSessionId,
+    members: ArrayList(ProcRepresentationInstanceId),
+};
+
+const LambdaSolvedBuilderState = struct {
+    sessions: ArrayList(SolveSessionBuilder),
+    proc_instances: ArrayList(ProcRepresentationInstance),
+    value_stores: ArrayList(ValueInfoStore),
+};
+```
+
+The sealed `RepresentationSolveSession.members` slice is published only after
+the builder has reached a fixed point where no reservation rule can add another
+member. During construction, every solve/finalization step must read the
+builder-owned current members, or the builder must explicitly synchronize the
+published session member view before running that step. Synchronization is a
+builder operation, not a semantic pass:
+
+```zig
+fn reserveInstance(session: RepresentationSolveSessionId, key: ProvisionalProcRepresentationInstanceKey) ProcRepresentationInstanceId {
+    if (registry.existing(session, key)) |existing| return existing;
+
+    const instance = allocateProcRepresentationInstance(session, key);
+    builder.sessions[session].members.append(instance);
+    builder.pending.append(instance);
+    builder.session_members_dirty = true;
+    return instance;
+}
+
+fn beforeSolveOrFinalize() void {
+    if (!builder.session_members_dirty) return;
+    syncPublishedSessionMembersFromBuilder();
+    builder.session_members_dirty = false;
+}
+```
+
+`syncPublishedSessionMembersFromBuilder` is permitted only inside lambda-solved
+construction. It copies the exact mutable member list into the temporary
+`RepresentationSolveSession` view used by the in-progress solver. It must not
+drop previously reserved members, consume the mutable list, or construct a new
+member list by scanning bodies. A stale member view is a compiler bug because it
+lets a late-reserved procedure keep `ValueInfo.solved_class = null` and reach
+value-transform finalization without solved callable metadata.
+
+For example, this Roc code requires a late finite erased-adapter member:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The initial session may solve enough to discover that `make_boxed` needs a
+finite erased adapter. The adapter then reserves a member specialization whose
+argument type is the erased adapter boundary type:
+
+```zig
+ExecutableSpecializationKey{
+    .base = source_proc_base_for_make_boxed_inner_lambda,
+    .requested_fn_ty = canonical_key_for("[Apply((I64 -> I64)), Keep(I64)] -> I64"),
+    .exec_arg_tys = &.{ erased_adapter_arg_key_for("[Apply(erased_fn), Keep(I64)]") },
+    .exec_ret_ty = erased_adapter_ret_key_for("I64"),
+    .callable_repr_mode = .direct,
+    .capture_shape_key = capture_shape_for_member,
+}
+```
+
+That late adapter member must be in the solve session before representation
+solving runs again. Otherwise the `Apply(f)` branch's pattern binder is built
+but never assigned a representation class, and the later `f(1)` call reaches
+finalization with no `CallableValueInfo`. The correct fix is to publish session
+membership from the reservation table before every solve/finalize step. The
+incorrect fixes are all forbidden:
+
+- executable MIR must not synthesize a `vacant_callable_slot -> erased_fn`
+  bridge
+- lambda-solved must not recover the missing callable from source syntax
+- value-transform finalization must not invent callable metadata for `f`
+- executable lowering must not inspect the source `match` to rediscover which
+  branch contains a function payload
+
+The fixed-point loop must also respect a strict invalidation order. Callable
+emission plans are only valid for executable-demand materialization after all
+new Box-erasure requirements discovered from those plans have been solved and
+after all finite erased-adapter member instances required by those plans have
+been reserved and built. If a loop iteration discovers a new erasure requirement
+or reserves a new finite erased-adapter member, the current callable emissions
+are stale for executable-demand purposes. The builder must continue the
+fixed-point loop, rebuild/synchronize the affected sessions when needed, solve
+again, and assign callable emissions again before it materializes any ordinary
+finite `call_value` member targets.
+
+The intended ordering is:
+
+```zig
+while (true) {
+    solve_representation_sessions();
+    assign_callable_emissions();
+
+    const value_transform_adapter_demands_changed =
+        publish_value_transform_adapter_demands_from_solved_flow();
+    if (value_transform_adapter_demands_changed) {
+        continue; // adapter demands change the executable procedure frontier
+    }
+
+    const erasure_requirements_changed =
+        append_proc_value_owner_erasure_requirements() or
+        append_call_boundary_erasure_requirements();
+    if (erasure_requirements_changed) {
+        continue; // current emissions are stale for materialization
+    }
+
+    const finite_adapter_members_changed =
+        reserve_finite_erased_adapter_members();
+    if (finite_adapter_members_changed) {
+        build_pending_instances();
+        sync_published_session_members();
+        append_cross_procedure_edges();
+        continue; // new member requirements must be solved before materialization
+    }
+
+    const executable_demands_changed =
+        materialize_executable_demands_from_stable_emissions();
+    if (executable_demands_changed) {
+        build_pending_instances();
+        sync_published_session_members();
+        append_cross_procedure_edges();
+        continue;
+    }
+
+    if (!append_cross_procedure_edges_incrementally()) break;
+}
+```
+
+This ordering is required by examples like the `make_boxed`/`apply_tag` program
+above. The first emission pass may see the `f(1)` call inside the boxed
+function's ordinary proc-value descriptor target as a finite `call_value`.
+However, the same pass can also discover that the boxed function needs a finite
+erased adapter whose argument type contains an erased callable slot for
+`Apply(f)`. The adapter member must be reserved first, its public parameter root
+must receive the erased-boundary requirement, and representation solving must
+propagate that requirement to the `Apply(f)` binder before executable
+materialization decides whether `f(1)` is a finite `callable_match` or an erased
+call. Materializing the ordinary descriptor target before the adapter-boundary
+member has been solved is a compiler bug. It can force a descriptor-only
+proc-value instance to become executable even though the executable call path
+should use the adapter-boundary member with `f` already marked as erased.
+
+Value-transform finite-erased adapter demands are a first-class lambda-solved
+input to the same fixed-point loop. They are the production equivalent of Cor
+LSS's always-open specialization queue. Cor can call
+`specialize_fn_erased(...)` while lambdamono is lowering `PackedFn` because its
+prototype lowering still owns a mutable specialization queue. Production Roc
+must not discover executable dependencies that late. Instead, lambda-solved
+publishes a demand record before procedure instances are sealed:
+
+```zig
+const FiniteErasedAdapterDemandId = enum(u32) { _ };
+
+const FiniteErasedAdapterDemand = struct {
+    adapter: ErasedAdapterKey,
+    result_ty: CanonicalExecValueTypeKey,
+    member_targets: Span(ExecutableSpecializationKey),
+    provenance: NonEmptySpan(BoxErasureProvenance),
+};
+```
+
+The demand store is not a cache and not backend metadata. It is explicit
+semantic dependency data owned by the current `RepresentationSolveSession`.
+Every demand means:
+
+- the finite callable-set key named by `adapter.callable_set_key` has a
+  published `CanonicalCallableSetDescriptor`
+- every descriptor member has exactly one executable member target in
+  `member_targets`
+- every member target procedure instance is reserved and solved before
+  value-transform finalization
+- adapter argument, capture, and result value-transform boundaries may be
+  finalized later, but finalization consumes only the already-reserved target
+  instances named by this demand
+
+Lambda-solved must publish these demands from solved value flow, not from source
+syntax and not during executable MIR lowering. A demand is required whenever an
+existing-value transform converts a finite callable-set executable endpoint into
+an erased-function executable endpoint, including nested transforms inside
+records, tuples, tag payloads, `List(T)`, nested `Box(T)`, nominal backing
+payloads, finite `callable_match` branch arguments/results, direct call
+arguments/results, returned values, capture slots, and finite erased-adapter
+arguments, captures, and results. It is also required when the source endpoint
+is a transform child rather than a local `ValueInfoId`; transform-child
+endpoints do not necessarily have producer-global `CallableValueEmissionPlan`
+records, so relying only on callable emissions misses valid programs.
+
+For example:
+
+```roc
+make_boxed_runner : (I64 -> I64) -> Box(I64 -> I64)
+make_boxed_runner = |f|
+    Box.box(|x|
+        boxed = Box.box(f)
+        run = Box.unbox(boxed)
+        run(x)
+    )
+
+main : I64
+main =
+    boxed = make_boxed_runner(|n| n + 1)
+    run = Box.unbox(boxed)
+    run(41)
+```
+
+The outer `Box.box` creates a finite erased adapter for the returned closure.
+That adapter's hidden capture contains the closure payload, including the
+captured `f`. Inside the closure body, `f` is itself stored in
+`Box(I64 -> I64)`, so the selected target procedure's capture slot for `f` is
+erased. The erased adapter branch therefore needs a capture-slot value
+transform from:
+
+```zig
+SessionExecutableValueEndpointOwner.erased_finite_adapter_capture {
+    adapter = outer_adapter,
+    member = selected_returned_closure_member,
+    slot = 0,
+}
+```
+
+to:
+
+```zig
+SessionExecutableValueEndpointOwner.procedure_capture {
+    instance = selected_erased_target_instance,
+    slot = 0,
+}
+```
+
+That capture-slot transform converts a finite callable-set value to an erased
+function value. Lambda-solved must publish the nested finite-erased adapter
+demand for `f` before sealing procedure instances. Value-transform finalization
+must not create that demand for the first time, must not materialize a procedure
+instance, and must not mutate sealed representation state. If finalization sees
+a finite-callable-to-erased transform whose adapter demand has not already been
+published and whose member targets have not already been materialized, that is a
+compiler bug.
+
+The demand fixed point is:
+
+```zig
+while (true) {
+    solve_representation_sessions();
+    assign_callable_emissions();
+
+    const demand_changed =
+        publish_value_transform_adapter_demands_from_solved_flow();
+    if (demand_changed) continue;
+
+    const erasure_requirements_changed =
+        append_erasure_requirements_from_proc_values_calls_and_demands();
+    if (erasure_requirements_changed) continue;
+
+    const finite_members_changed =
+        reserve_finite_erased_adapter_members_from_emissions_and_demands();
+    if (finite_members_changed) {
+        build_pending_instances();
+        sync_published_session_members();
+        append_cross_procedure_edges();
+        continue;
+    }
+
+    const executable_demands_changed =
+        materialize_executable_demands_from_stable_emissions_and_demands();
+    if (executable_demands_changed) {
+        build_pending_instances();
+        sync_published_session_members();
+        append_cross_procedure_edges();
+        continue;
+    }
+
+    if (!append_cross_procedure_edges_incrementally()) break;
+}
+```
+
+This is deliberately like Cor/LSS in outcome but not in representation. LSS
+stores lambda sets in mutable type variables and queues erased specializations
+while lowering. Production Roc stores canonical callable-set keys, erased ABI
+keys, capture-shape keys, and explicit adapter demands before lowering. The
+invariant is the same: no erased callable adapter member is discovered after the
+specialization queue is closed.
+
+Promoted-wrapper synthetic procedures follow the same nested-erased-slot rule as
+ordinary finite erased-adapter members. When lambda-solved builds a synthetic
+promoted wrapper or one of its executable erased-adapter member procedures, it
+must ask whether each published executable parameter or return payload
+*contains* any erased function slot, not whether the payload itself is top-level
+`erased_fn`. The query must recurse through records, tuples, tag payloads,
+lists, boxes, nominal backings, callable-set member payloads, and recursive
+payload refs. If the answer is true, the corresponding public value root receives
+the promoted-wrapper `BoxErasureProvenance` requirement. A top-level-only
+predicate is wrong:
+
+```zig
+// Forbidden: misses [Apply(erased_fn), Keep(I64)].
+if (payload == .erased_fn) require_box_erased(param_root);
+```
+
+The correct predicate is structural and consumes only the already-published
+executable payload graph:
+
+```zig
+fn payloadContainsErasedFn(payload: ExecutableTypePayloadRef) bool {
+    return switch (payload.get()) {
+        .erased_fn => true,
+        .record => |record| any(record.fields, |field| payloadContainsErasedFn(field.ty)),
+        .tuple => |items| any(items, |item| payloadContainsErasedFn(item.ty)),
+        .tag_union => |tags| any(tags, |tag|
+            any(tag.payloads, |field| payloadContainsErasedFn(field.ty))),
+        .list => |list| payloadContainsErasedFn(list.ty),
+        .box => |box| payloadContainsErasedFn(box.ty),
+        .nominal => |nominal| payloadContainsErasedFn(nominal.backing),
+        .callable_set => |set| any(set.members, |member|
+            member.payload_ty != null and payloadContainsErasedFn(member.payload_ty.?)),
+        .recursive_ref => |target| payloadContainsErasedFn(target),
+        .primitive, .vacant_callable_slot => false,
+        .pending => compiler_bug(),
+    };
+}
+```
+
+This is not a heuristic traversal over MIR bodies. It is a structural query over
+the explicit executable type payload graph that checked-artifact publication and
+lambda-solved already published. Release lowering may use this query because it
+is required to publish correct erasure requirements; debug builds should assert
+that every payload ref belongs to the artifact or session that owns the synthetic
+procedure. Backends still do not run this logic.
+
+This rule does not introduce a fallback, recovery path, or extra semantic body
+scan. It is simply the builder respecting the dependency order among explicit
+metadata it already owns: requirements first, adapter members second, executable
+demand materialization last. Debug builds may assert that
+`materialize_executable_demands_from_stable_emissions` runs only after the
+requirement and adapter-member steps report no changes in the same iteration.
+Release builds must not retain extra verifier-only state for that assertion.
+
 `reserve_instance(key)` must allocate or return all public identity needed to
 refer to an executable representation instance before its body is lowered:
 
@@ -4875,9 +7736,394 @@ The lambda-solved construction algorithm is:
    record in the current session. Reserve the selected target procedure template
    in the same session with owner `proc_value` so capture roots can connect to
    target public capture roots without inspecting the target body later.
+   This reservation is provisional: it records that this source procedure can be
+   the selected callable member for this exact proc-value occurrence. It is not
+   automatically the final executable ABI for that procedure body. The final ABI
+   is selected only after callable representation solving has decided whether
+   the proc-value occurrence remains finite or crosses an explicit `Box(T)`
+   erased boundary.
+
+   For example:
+
+   ```roc
+   make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+   make_boxed = |_|
+       Box.box(|value|
+           match value {
+               Apply(f) => f(1)
+               Keep(n) => n
+           })
+
+   apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+   apply_tag = Box.unbox(make_boxed({}))
+
+   main : I64
+   main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+   ```
+
+   The inner `|value| ...` lambda is first seen as a normal `proc_value`, but
+   the `Box.box` boundary means its public executable parameter is not the
+   ordinary source type `[Apply((I64 -> I64)), Keep(I64)]`. Its final executable
+   parameter is the erased-boundary version whose `Apply` payload is an erased
+   callable:
+
+   ```roc
+   # Source type, shown as Roc source for readability:
+   [Apply((I64 -> I64)), Keep(I64)]
+
+   # Executable boundary shape after the explicit Box(T) erasure:
+   [Apply(<erased callable for (I64 -> I64)>), Keep(I64)]
+   ```
+
+   Therefore the provisional `proc_value` reservation must not seal its
+   procedure boundary by recomputing an ordinary key from the body. During
+   sealing it consumes the proc-value occurrence's final
+   `CallableValueEmissionPlan`:
+
+   ```zig
+   const ProcValueOwnerSealing = union(enum) {
+       finite,
+       erase_proc_value: ProcValueErasePlan,
+       erase_finite_set: struct {
+           construction: CallableSetConstructionPlan,
+           erase: FiniteSetErasePlan,
+       },
+   };
+   ```
+
+   - `finite` seals with the ordinary executable key computed from solved value
+     flow.
+   - `erase_proc_value` seals with
+     `ProcValueErasePlan.executable_specialization_key`.
+   - `erase_finite_set` finds `construction.selected_member` in the
+     `FiniteSetErasePlan` descriptor and seals with the corresponding
+     `member_targets[i]`.
+
+   This is not optional and is not a compatibility bridge. The sealed
+   `ProcRepresentationInstance.executable_specialization_key.exec_arg_tys` and
+   `.exec_ret_ty` are the only public procedure boundary types executable MIR
+   may consume. If the boxed lambda above sealed the provisional `proc_value`
+   target with the ordinary source key, executable `match` lowering would see
+   the scrutinee path `Apply` payload as `vacant_callable_slot` while the
+   pattern binder `f` had already been solved as an erased callable. Executable
+   MIR must panic in debug builds in that situation; it must never repair it
+   with a `vacant_callable_slot -> erased_fn` bridge.
+
+      The finite erased-adapter member reservation still exists separately. It is
+      the explicit executable dependency used by adapter bodies and
+      `callable_match`. The provisional `proc_value` reservation is **not** that
+      executable dependency. It is a callable-descriptor reservation whose job is
+      to publish the selected member identity, source function type, public
+      params/return/captures, capture schema, and capture value-flow edges for the
+      proc-value occurrence. It does not by itself mean that the target procedure
+      body will be emitted.
+
+      This distinction is required. In the boxed lambda above, the source
+      `proc_value` occurrence is needed to construct the boxed callable value, but
+      the ordinary finite source-shaped body is not necessarily a final executable
+      body. The actual executable body may instead be the erased adapter-member
+      specialization selected by the `Box(T)` boundary. If lambda-solved treats
+      the descriptor reservation as an executable body, it can strict-solve the
+      ordinary source-shaped body and encounter function-typed pattern binders such
+      as `Apply(f)` with no finite callable members. That is not a user error and
+      not an executable MIR bridge problem; it means the descriptor-only instance
+      was materialized too early.
+
+      The semantic split is:
+
+      ```zig
+      const ProcedureInstancePurpose = union(enum) {
+          /// A procedure body that will be strict-solved, sealed with an
+          /// ExecutableSpecializationKey, lowered to executable MIR, and made
+          /// available to IR/LIR/backend code. Every instance with this purpose
+          /// must have an explicit materialization demand.
+          materialized_executable_proc: MaterializedProcedureDemand,
+
+          /// A proc-value member used to describe a callable value and its
+          /// captures. It publishes public roots and capture schema, but its body
+          /// is not strict-solved, not sealed as an executable procedure, and not
+          /// emitted unless a later explicit demand promotes it to
+          /// materialized_executable_proc.
+          callable_descriptor_member: CallableDescriptorMember,
+      };
+
+      const MaterializedProcedureDemand = union(enum) {
+          root_request: RootRequestId,
+          direct_call: CallSiteInfoId,
+          callable_match_member: struct {
+              call: CallSiteInfoId,
+              member: CallableSetMemberRef,
+          },
+          direct_proc_value_erasure: CallableValueEmissionPlanId,
+          finite_erased_adapter_member: struct {
+              emission_plan: CallableValueEmissionPlanId,
+              member: CallableSetMemberId,
+          },
+          promoted_wrapper_member: struct {
+              synthetic_proc: ExecutableSyntheticProcId,
+              member: CallableSetMemberId,
+          },
+          platform_required_root: PlatformRequiredRootId,
+          compile_time_root: CompileTimeRootId,
+          recursive_group_member: RecursiveGroupMemberId,
+      };
+
+      const CallableDescriptorMember = struct {
+          owner_instance: ProcRepresentationInstanceId,
+          proc_value: ValueInfoId,
+          target_proc: CallableProcedureTemplateRef,
+          source_fn_ty: CanonicalTypeKey,
+      };
+      ```
+
+      The exact field names may differ, but the contract is mandatory:
+
+      - descriptor-only instances publish public value roots and capture roots
+        from the procedure signature only
+      - descriptor-only instances do not lower the procedure body, do not scan
+        branch bodies, and do not create local expression values for that body
+      - descriptor-only instances may appear in callable-set descriptors and
+        capture-boundary plans
+      - strict callable-emission assignment, executable payload publication,
+        value-transform finalization for procedure bodies, executable MIR
+        procedure emission, and backend lowering iterate only materialized
+        executable procedure instances
+      - a descriptor-only instance may become materialized only when an explicit
+        demand above names it; this is a state change recorded in lambda-solved
+        builder data, not a body scan or source recovery
+      - if a materialized executable instance has a function-typed value with no
+        finite members and no explicit erased provenance, that is a compiler bug
+        and must assert in debug builds
+      - if a descriptor-only instance has such a function-typed value in its
+        source body, that body must not have been lowered, so the value must not
+        exist in lambda-solved data at all
+
+      For example:
+
+      ```roc
+      make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+      make_boxed = |_|
+          Box.box(|value|
+              match value {
+                  Apply(f) => f(1)
+                  Keep(n) => n
+              })
+
+      apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+      apply_tag = Box.unbox(make_boxed({}))
+
+      main : I64
+      main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+      ```
+
+      The `|value| ...` lambda first creates a descriptor-only proc-value member.
+      That descriptor publishes:
+
+      ```zig
+      CallableDescriptorMember{
+          .source_fn_ty = key_for("[Apply((I64 -> I64)), Keep(I64)] -> I64"),
+          .public_params = &.{ value_param_root },
+          .public_ret = i64_ret_root,
+          .public_captures = &.{},
+      }
+      ```
+
+      The descriptor does **not** lower the `match`, so it never creates the
+      branch binder `f` as an ordinary finite function-typed value. When the
+      `Box.box` boundary later assigns erased callable emission, lambda-solved
+      materializes the explicit finite-erased adapter member instead:
+
+      ```zig
+      MaterializedProcedureDemand{
+          .finite_erased_adapter_member = .{
+              .emission_plan = boxed_callable_emission,
+              .member = selected_member,
+          },
+      }
+      ```
+
+      That materialized member lowers the same source body, but under the
+      erased-boundary `ExecutableSpecializationKey`, so the `Apply` payload and
+      the pattern binder `f` are published as the same erased callable payload by
+      ordinary value-flow metadata. No body recovery, no compatible-shape repair,
+      and no `vacant_callable_slot -> erased_fn` bridge is permitted.
+
+      A finite direct use materializes differently:
+
+      ```roc
+      make_adder = |n| |x| x + n
+      add_one = make_adder(1)
+      main = add_one(41)
+      ```
+
+      The returned lambda is initially a descriptor-only proc-value member while
+      constructing the finite callable value. The `add_one(41)` call is an
+      explicit `callable_match` demand; lambda-solved must then materialize the
+      selected descriptor member as
+      `MaterializedProcedureDemand.callable_match_member`, strict-solve that
+      materialized body, and emit it. If `add_one` were used only during
+      compile-time evaluation and never reached a final-binary root, the cached
+      compile-time materialization could be reused later, but no final executable
+      procedure would be emitted merely because the descriptor existed.
+
+   There is one additional fixed-point rule before sealing. Once callable
+   emission assignment determines that a provisional `proc_value` owner seals
+   through `erase_proc_value` or `erase_finite_set`, lambda-solved must publish
+   `require_box_erased` requirements for that target procedure's public
+   params/return whose executable keys contain erased callable payloads, then
+   solve representation classes again before strict callable-emission
+   assignment succeeds.
+
+   This is required because the erased ABI choice is discovered after the
+   target body was first lowered. In the `Apply(f)` example above, the initial
+   body-lowering pass creates the pattern binder `f` as an ordinary
+   function-typed value. Only after callable emission assignment sees the
+   `Box.box` boundary can it know that the target procedure parameter must be
+   the erased-boundary tag union. At that point the compiler must add an
+   explicit requirement to the target public parameter root:
+
+   ```zig
+   const ProcValueOwnerErasureRequirement = struct {
+       target_instance: ProcRepresentationInstanceId,
+       public_root: RepRootId,
+       executable_key: CanonicalExecValueTypeKey,
+       provenance: BoxErasureProvenance,
+   };
+   ```
+
+   If `executable_key` recursively contains an `erased_fn` payload, the
+   requirement is:
+
+   ```zig
+   RepresentationRequirement{
+       .require_box_erased = .{
+           .payload_root = public_root,
+           .provenance = provenance,
+       },
+   }
+   ```
+
+   `markErasedPayloadRoot` then follows existing explicit representation edges
+   such as `.tag_payload`, `.record_field`, `.tuple_elem`, `.list_elem`,
+   `.nominal_backing`, `.function_arg`, and `.function_return` to mark the
+   nested callable class as erased. The solver must then re-run, so the pattern
+   binder `f` is assigned an already-erased callable emission instead of looking
+   for finite callable members that do not exist at the boundary.
+
+   The compiler must deduplicate these requirements by `(payload_root,
+   provenance)` and treat new requirements as a solve-loop change. This is not a
+   body scan: it iterates the explicit proc-value owner reservations and their
+   final callable emission plans. It must not inspect source syntax, executable
+   pattern nodes, tag names, branch bodies, or layout data to rediscover erased
+   payloads.
 6. When the body reaches `call_value`, create the requested whole-function root
    and explicit value-flow edges from callee, arguments, and result. Do not
    decide finite or erased dispatch from syntax.
+
+   The same erased-boundary requirement rule applies at call boundaries. If a
+   resolved `call_proc`, finite `call_value` branch, or erased `call_value` ABI
+   expects an argument key that recursively contains an `erased_fn` payload,
+   lambda-solved must publish `require_box_erased` for the caller argument root
+   before strict callable-emission assignment. This is how the caller-side value
+   in `apply_tag(Apply(|x| x + 1))` learns that the `Apply` payload must be an
+   erased callable before entering `apply_tag`.
+
+   The required data is already explicit:
+
+   ```zig
+   const CallBoundaryErasureRequirement = struct {
+       call_site: CallSiteInfoId,
+       target_instance: ProcRepresentationInstanceId,
+       arg_index: u32,
+       caller_arg_root: RepRootId,
+       target_exec_arg_ty: CanonicalExecValueTypeKey,
+       provenance: BoxErasureProvenance,
+   };
+   ```
+
+   Construction rules:
+
+   - `target_instance` comes from `CallSiteDispatch.call_proc` or from each
+     `CallValueFiniteDispatchBranch.target_instance`.
+   - `target_exec_arg_ty` comes from the target procedure's final boundary plan:
+     `ProcValueErasePlan.executable_specialization_key`,
+     `FiniteSetErasePlan.member_targets[i]`, or the ordinary finite key when no
+     erased boundary is present.
+   - `caller_arg_root` comes from the already-recorded `CallSiteInfo.args`
+     value id.
+   - `provenance` comes from the same explicit Box-erasure plan that produced
+     the target boundary key.
+
+   For erased `call_value`, there is no finite target procedure branch at the
+   call site. The source of truth is the erased callable ABI:
+
+   ```zig
+   const ErasedCallBoundaryErasureRequirement = struct {
+       call_site: CallSiteInfoId,
+       sig_key: ErasedFnSigKey,
+       arg_index: u32,
+       caller_arg_root: RepRootId,
+       abi_arg_exec_key: CanonicalExecValueTypeKey,
+       provenance: BoxErasureProvenance,
+   };
+   ```
+
+   Construction rules:
+
+   - `sig_key` comes from `CallSiteDispatch.call_value_erased`.
+   - `abi_arg_exec_key` comes from
+     `RepresentationStore.erased_fn_abis[sig_key.abi].arg_exec_keys[index]`.
+   - `provenance` comes from the callee value's explicit erased emission plan:
+     `AlreadyErasedCallablePlan.provenance`,
+     `ProcValueErasePlan.provenance`, or `FiniteSetErasePlan.provenance`.
+   - `caller_arg_root` still comes from `CallSiteInfo.args[index]`.
+
+   A callee with `CallSiteDispatch.call_value_erased` and a non-erased callable
+   emission plan is a compiler bug. The compiler must not infer provenance from
+   the callee's source expression, from the call syntax, or from the presence of
+   a `Box.unbox` in source code.
+
+   Because these requirements must exist before strict callable-emission
+   assignment, erased `call_value` dispatch must be published before
+   value-transform finalization. This early dispatch publication is deliberately
+   narrow:
+
+   ```zig
+   if (callee_emission == .already_erased) {
+       call_site.dispatch = .{ .call_value_erased = already_erased.sig_key };
+   } else if (callee_emission == .erase_finite_set) {
+       call_site.dispatch = .{ .call_value_erased = erase.adapter.erased_fn_sig_key };
+   } else if (callee_emission == .erase_proc_value) {
+       call_site.dispatch = .{ .call_value_erased = erase.erased_fn_sig_key };
+   }
+   ```
+
+   This does not finalize argument/result transforms. It only records the
+   already-solved dispatch kind and erased signature so the representation
+   requirement pass can consume the ABI keys. The later value-transform
+   finalizer still owns `call_raw_arg`, `call_raw_result`, and the concrete
+   `ExecutableValueTransformRef`s.
+
+   If `target_exec_arg_ty` recursively contains `erased_fn`, append:
+
+   ```zig
+   RepresentationRequirement{
+       .require_box_erased = .{
+           .payload_root = caller_arg_root,
+           .provenance = provenance,
+       },
+   }
+   ```
+
+   Then solve again. This requirement is separate from the later
+   `call_arg` value transform boundary. The requirement decides the caller
+   argument's callable representation before callable emission is assigned; the
+   value transform later decides how to move the already-solved caller value
+   into the callee parameter endpoint. The compiler must not wait until
+   value-transform finalization to discover this, because finalization runs
+   after strict callable emission and would be too late for function-typed tag
+   payloads, record fields, list elements, or tuple elements inside the call
+   argument.
 7. Continue building every newly reserved instance in the session. If a
    recursive group member is requested while another member is building,
    `reserve_instance` returns the existing public roots for the same
@@ -5037,12 +8283,25 @@ The lambda-solved construction algorithm is:
       MIR compatible-shape repair
 
     For direct erased proc-value packing, the same finalization rule applies
-    with a different owner:
+    with a different owner and with one additional adapter-argument boundary
+    family:
 
     - the `ProcValueErasePlan` names the exact proc-value occurrence through
       `source_value`, the resolved `proc_value`, the selected `target_instance`,
       and the complete `capture_slots` schema in canonical `CaptureSlot.index`
       order
+    - each fixed-arity erased ABI argument gets one
+      `erased_proc_value_adapter_arg` boundary from the synthetic adapter's raw
+      ABI argument endpoint to `procedure_param { target_instance, index }`
+    - the raw adapter argument endpoint is built from
+      `erased_fn_abi(erased_call_sig_key.abi).arg_exec_keys[index]`, the
+      erased-call signature key, the owning callable emission plan, and the
+      proc-value occurrence; it is not a call-site raw argument endpoint because
+      no source call site owns this synthetic adapter parameter
+    - each adapter-argument boundary stores a mandatory
+      `ExecutableValueTransformRef`, including identity, and executable MIR must
+      apply that transform in the generated erased direct-proc adapter before
+      emitting `call_direct` to the selected target specialization
     - each source capture value gets one `capture_value` boundary from the local
       source endpoint to `procedure_capture { target_instance, slot }`
     - each `CaptureBoundaryInfo` stores `CaptureBoundaryOwner.proc_value_erase`
@@ -5636,6 +8895,216 @@ own value root, and assigns the occurrence a `ValueInfoId`. The occurrence then
 gets all callable, boxed, aggregate, projection, and emission information from
 the value-metadata store and solved representation class.
 
+When lambda-solved MIR seals executable value transforms, every variable
+occurrence that can reach executable MIR as a runtime `var_` value must also
+publish an executable value-transform boundary from the binding value endpoint
+to the occurrence value endpoint. This requirement is deliberately narrower
+than "every value alias in the representation graph." Lambda-solved MIR uses
+`value_alias_source` for several internal value-flow relationships that are not
+runtime variable occurrences: source match binder summaries, vacant callable
+slots, aggregate child summaries, projection bookkeeping, and other solved
+representation edges. Those internal aliases must remain representation
+metadata only unless the alias corresponds to a materialized executable
+expression.
+
+```zig
+const ValueInfo = struct {
+    value_alias_source: ?ValueInfoId,
+
+    // Set by lambda-solved expression lowering exactly when this value belongs
+    // to a source variable occurrence whose LambdaSolved.Ast.Expr payload is
+    // `var_` and therefore can be consumed by executable MIR as a runtime
+    // value. This is explicit stage metadata, not a later body scan.
+    value_alias_needs_executable_transform: bool,
+
+    // Present after transform finalization exactly when
+    // `value_alias_needs_executable_transform` is true. It is absent for
+    // summary-only aliases, aggregate-internal aliases, and vacant callable-slot
+    // aliases that cannot be lowered as runtime `var_` expressions.
+    // This is not verifier-only metadata; executable MIR consumes it when
+    // lowering `var_`.
+    value_alias_transform: ?ValueTransformBoundaryId,
+};
+
+const ValueTransformBoundaryKind = union(enum) {
+    value_alias: struct {
+        source: ValueInfoId,
+        result: ValueInfoId,
+    },
+    // ...
+};
+```
+
+Executable MIR variable lowering must then do exactly this:
+
+```zig
+fn lowerVar(binding_info: BindingInfoId, occurrence: ValueInfoId) ExprId {
+    const source_value = env.get(binding_info);
+    const info = value_store.get(occurrence);
+    assert(info.value_alias_needs_executable_transform);
+
+    const source = info.value_alias_source orelse executableInvariant(
+        "executable var occurrence has no alias source",
+    );
+    assert(source == value_store.binding(binding_info).value);
+
+    const boundary = info.value_alias_transform orelse executableInvariant(
+        "executable materialized var occurrence has no alias transform",
+    );
+    const transformed = applyValueTransformBoundary(boundary, source_value);
+    return addValueRefExpr(transformed);
+}
+```
+
+The exact API names may differ, but the responsibility may not move. Executable
+MIR must not lower a variable occurrence by taking the binding's stored value and
+re-ascribing the occurrence's `TypeId` to it. If the occurrence representation is
+different from the binding representation, the alias transform must allocate a
+fresh executable value. If the two representations are identical, the alias
+transform may be identity, and `addValueRefExpr` still derives the type from the
+single typed value handle.
+
+The source endpoint for a materialized alias is the binding value's published
+executable endpoint, not a recomputation from the binding's bare logical type.
+This matters for procedure boundaries. A parameter can have an executable
+specialization key that is more specific than the root-only representation graph
+would infer by itself. For example, a function stored behind `Box(T)` is called
+through the boxed erased-callable ABI, so its argument type may contain an
+erased callable slot even though the source type says only that the slot is a
+function:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+Inside the boxed function, the parameter `value` is not "just the source tag
+union." Its published executable boundary endpoint is the tag union whose
+`Apply` payload contains the erased callable ABI representation required by the
+`Box` boundary. The `match value` scrutinee occurrence must therefore start from
+that published endpoint. It must not rebuild a tag union from the logical type
+and accidentally turn `Apply(erased_fn)` into `Apply(vacant_callable_slot)`.
+
+The correct data flow is:
+
+1. Procedure instance sealing publishes the executable specialization key for
+   each parameter and return.
+2. Payload publication assigns those boundary keys to the public root
+   `ValueInfoId`s as explicit executable endpoints.
+3. A variable occurrence alias first preserves the binding value's published
+   endpoint.
+4. Any later consumer that needs a different representation receives an explicit
+   value-transform boundary from that preserved endpoint to the consumer
+   endpoint.
+
+This is not a fallback and not shape recovery. The boundary endpoint is explicit
+data already published by the procedure instance; alias lowering must consume
+that data instead of recomputing from syntax or from an under-constrained root.
+
+A `vacant_callable_slot` alias is not a runtime value. Lambda-solved MIR may
+leave `value_alias_transform` absent for vacant/internal aliases because those
+aliases are not runtime variable occurrences and executable MIR must never lower
+them as `var_`. If executable MIR sees a materialized `var_` whose
+`value_alias_needs_executable_transform` flag is false, or whose required
+`value_alias_transform` is absent, that is a compiler bug.
+
+The same rule applies to variable occurrences inside an unreachable source
+`match` branch. Lambda-solved lowers every branch before value-specific
+reachability is finalized, so an unreachable branch can temporarily contain
+ordinary-looking `var_` expressions and bindings. Once the branch has been
+proven unreachable, those occurrences do not reach executable MIR. They must not
+force a value-transform boundary, and they must not force a
+`vacant_callable_slot` into a runtime callable value.
+
+For example:
+
+```roc
+make_tagged : [A(I64), B(I64 -> I64)] -> (I64 -> I64)
+make_tagged = |tagged| |x|
+    match tagged {
+        A(n) => x + n
+        B(f) => f(x)
+    }
+
+add_one : I64 -> I64
+add_one = make_tagged(A(1))
+
+main = add_one(41)
+```
+
+The `B(f)` branch is lowered because the source program contains it, and the
+use `f(x)` is a normal variable occurrence while lambda-solved is building the
+branch body. After reachability finalization, the selected captured tag is known
+to be exactly `A`, so the `B` branch is unreachable in this specialization. The
+`f` binder's payload endpoint is structurally
+`vacant_callable_slot(I64 -> I64)`, but that endpoint belongs only to the
+unreachable branch. It is not a value, not a call target, not an erased callable,
+and not a reason to synthesize a bridge.
+
+The finalization rule is therefore:
+
+```zig
+fn finalizeValueAliases(value: ValueInfo) void {
+    if (!value_store.valueSourceMatchBranchReachable(value)) {
+        assert(value.value_alias_transform == null);
+        return;
+    }
+
+    if (!value.value_alias_needs_executable_transform) {
+        assert(value.value_alias_transform == null);
+        return;
+    }
+
+    const source = value.value_alias_source orelse compilerBug();
+    const from = publishedExecutableEndpoint(source);
+    const to = publishedExecutableEndpoint(value);
+
+    // Vacant callable slots are schemas for absent callable fields. They are
+    // invalid at runtime, so reaching one here is a compiler bug.
+    assert(!endpointIsVacantCallableSlot(from));
+    assert(!endpointIsVacantCallableSlot(to));
+
+    value.value_alias_transform = appendValueTransformBoundary(from, to);
+}
+```
+
+This is not a fallback and not a late body scan. The source-match branch
+reachability bit is explicit lambda-solved metadata published while lowering the
+`match`, and finalized from solved representation classes before executable
+value-transform finalization runs. Executable MIR then consumes only reachable
+branches and only finalized transforms for reachable runtime variable
+occurrences.
+
+This distinction is required for correctness. For example, a `match` over a tag
+payload that contains a boxed erased callable can create internal aliases whose
+child callable slot is intentionally vacant in one branch:
+
+```roc
+apply : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply = |value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+```
+
+The internal value-flow alias that connects the scrutinee summary to a branch
+summary must not be converted into an executable value-transform boundary if it
+would force an erased callable endpoint to transform into a vacant callable
+slot. Only a real source variable occurrence such as `f` inside the `Apply(f)`
+branch needs an executable alias transform. That occurrence is marked while
+lambda-solved MIR is already lowering the `var_` expression, so no later stage
+has to rediscover it by scanning bodies.
+
 This rule is what makes aliases correct by construction. For example:
 
 ```roc
@@ -5674,6 +9143,14 @@ const CallSiteInfo = struct {
     result: ValueInfoId,
     callee: ?ValueInfoId,
     args: Span(ValueInfoId),
+    /// The lowered expression ids for `args`, in the same order.
+    ///
+    /// Implementations may keep this span on the call expression node instead of
+    /// duplicating it here, but the call-argument consumer-use finalizer must
+    /// consume explicit argument expression ids from the call expression that
+    /// owns this `CallSiteInfo`. It must not rediscover the argument expressions
+    /// by scanning the body after the fact.
+    arg_exprs: Span(ExprId),
     requested_fn_root: RepVarId,
     requested_source_fn_ty: CanonicalTypeKey,
     dispatch: CallDispatchInfo,
@@ -5717,37 +9194,96 @@ callable child; executable MIR consumes it directly. A singleton finite callable
 set still produces `call_value_finite`/`callable_match`. The only source-level
 direct-call case is `call_proc`.
 
-`arg_transforms` is populated for call forms whose evaluated arguments must be
-converted before a single executable call instruction, such as `call_proc` and
-`call_value_erased`. Finite `call_value_finite` dispatch does not use the
-call-site `arg_transforms` field because every callable-set member has its own
-target specialization and therefore its own parameter representation. Instead,
-each `CallValueFiniteDispatchBranch` owns exactly one `arg_transform` per
-source argument and exactly one `callable_match_branch_result` transform for
-the returning branch result. `result_transform` is populated for call forms with
-one raw result endpoint, such as `call_proc` and `call_value_erased`. Absence of
-a transform is allowed only for a call form that does not semantically have that
-boundary kind; missing a required transform after lambda-solved finalization is
-a compiler bug.
+`arg_consumer_uses` is the authority for `call_proc` and `call_value_erased`
+arguments. The call expression already owns the explicit lowered argument
+expression ids, so the call-argument consumer-use finalizer must classify each
+argument from that explicit call expression and publish one
+`ConsumerUsePlan` per source argument. If the argument is a constructor or
+contextual control-flow expression, no existing-value transform is created for
+that argument. The argument is lowered directly under the target procedure
+parameter endpoint or erased-call raw argument endpoint. If the argument is an
+already-existing value, the `ConsumerUsePlan.lowering` is
+`existing_value(boundary)`, and that boundary owns the exact `call_arg`
+existing-value transform from the producer endpoint to the consumer endpoint.
 
-`arg_consumer_uses` is populated for call forms whose arguments have one
-known executable consumer endpoint before executable lowering. For `call_proc`,
+The call-site `arg_transforms` field is therefore not the authority for
+`call_proc` or `call_value_erased` construction arguments. It may be empty for
+those call forms; any existing-value argument transform is reached through the
+corresponding `ConsumerUsePlan`. A post-check stage must never create a full
+recursive existing-value transform merely to discover the endpoint for a
+constructor argument.
+
+Finite `call_value_finite` dispatch is different because each callable-set
+member may have a different target specialization and therefore a different
+parameter representation. A finite dispatch branch owns exactly one
+`arg_transform` per source argument and exactly one
+`callable_match_branch_result` transform for the returning branch result. If a
+future implementation proves that every branch endpoint for an argument is
+identical and chooses to lower that argument contextually, that proof and the
+shared consumer-use plan must be published explicitly. Otherwise the argument is
+evaluated once as an existing value before `callable_match`, and each branch
+applies its explicit branch-specific transform. Executable MIR must never
+duplicate evaluation of a call argument to construct it separately for multiple
+callable-match branches.
+
+`result_transform` is populated for call forms with one raw result endpoint,
+such as `call_proc` and `call_value_erased`. Absence of a result transform is
+allowed only for a call form that does not semantically have that boundary kind;
+missing a required transform after lambda-solved finalization is a compiler bug.
+
+`arg_consumer_uses` is populated for call forms whose arguments have one known
+executable consumer endpoint before executable lowering. For `call_proc`,
 argument `i` has exactly one consumer endpoint: target procedure parameter `i`
-from the sealed target `ProcRepresentationInstance`. Lambda-solved finalization
-therefore publishes a `ConsumerUsePlan` owned by `call_arg { call, arg_index }`
-whose expected endpoint exactly equals the `to_endpoint` of the corresponding
-`call_arg` boundary.
+from the sealed target `ProcRepresentationInstance`. For `call_value_erased`,
+argument `i` has exactly one consumer endpoint: the erased ABI raw argument slot
+`i` from the sealed `ErasedFnSigKey`. Lambda-solved finalization therefore
+publishes a `ConsumerUsePlan` owned by `call_arg { call, arg_index }` whose
+expected endpoint exactly equals that target endpoint. Only when the source
+argument is an already-existing value does the consumer-use plan contain a
+`ValueTransformBoundaryId`; constructor and contextual control-flow arguments
+do not have an existing-value boundary.
 
-Executable MIR must lower each `call_proc` argument through that consumer-use
-plan. If the argument is a construction such as `(1, 2)`, `Ok(1)`, `{ x: 1 }`,
-or `[1, 2]`, it is constructed directly in the target parameter endpoint, and
-its children are recursively lowered through the consumer-use metadata already
-published for that construction. If the argument is an existing value, the
-consumer-use plan reuses the call argument's `ValueTransformBoundaryId` and
-applies that explicit transform. Executable MIR must not lower the argument as a
+Executable MIR must lower each `call_proc` and `call_value_erased` argument
+through that consumer-use plan. If the argument is a construction such as
+`(1, 2)`, `Ok(1)`, `{ x: 1 }`, or `[1, 2]`, it is constructed directly in the
+target endpoint, and its children are recursively lowered through the
+consumer-use metadata already published for that construction. If the argument
+is an existing value, the consumer-use plan applies its own explicit
+existing-value transform. Executable MIR must not lower the argument as a
 standalone expression first and then ask the tuple/list/tag/record constructor
 to invent child consumer-use plans for a local endpoint that is not the real
-call parameter endpoint.
+call parameter or erased ABI endpoint.
+
+This distinction is mandatory for function-typed slots inside inactive tag
+variants. For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The call argument `Keep(7)` is a tag construction being consumed by the
+`apply_tag` parameter endpoint. The full union shape contains an inactive
+`Apply(I64 -> I64)` variant, and the source producer payload for that inactive
+variant may contain `vacant_callable_slot`. Lambda-solved MIR must not create a
+full existing-value transform from the standalone `Keep(7)` producer endpoint
+to the erased-call parameter endpoint, because that would attempt to transform
+the inactive `Apply` slot from `vacant_callable_slot` into an erased callable.
+The correct lowering is contextual construction: lower `Keep(7)` directly under
+the parameter endpoint, propagate the endpoint only to the selected `Keep`
+payload, and never materialize or transform the inactive `Apply` payload. The
+same rule applies to `Apply(|x| x + 1)`: the selected payload lambda receives
+the erased endpoint and explicit `Box(T)` provenance; inactive variants do not
+receive callable values.
 
 For `call_value_erased`, the same rule applies when the erased ABI gives one
 raw argument endpoint per source argument. For finite `call_value_finite`, there
@@ -6425,6 +9961,29 @@ release builds.
 `erased_box_payload_type(boundary)` may be called only with a `BoxBoundaryId`
 from this table. It recursively walks that boundary's boxed payload type and
 rewrites every reachable function slot to erased callable representation.
+That walk must carry the checked source type payload in lockstep with the solved
+type. Nested function slots must get their `source_fn_ty` from the exact checked
+source type root for that nested slot, never from a hash of the lambda-solved
+type shape. For example:
+
+```roc
+make_boxed : {} -> Box((List((I64 -> I64)) -> U64))
+make_boxed = |_| Box.box(|fs| List.len(fs))
+
+apply_list : List((I64 -> I64)) -> U64
+apply_list = Box.unbox(make_boxed({}))
+
+main : U64
+main = apply_list([|x| x + 1, |x| x + 10])
+```
+
+The boxed-erased boundary for `apply_list` rewrites the list element function
+slot to an erased callable slot. The erased slot's `ErasedCallSigKey.source_fn_ty`
+is the checked canonical source type for the element function `I64 -> I64`, not
+the source type of the outer function `List((I64 -> I64)) -> U64` and not a
+synthetic key reconstructed from the lambda-solved list element type. The finite
+callable-set adapter produced for each list element must therefore have the same
+`source_fn_ty` as the selected callable-set member specialization.
 
 `require_box_erased(payload_root, provenance)` may be created only from one of
 two explicit sources. A real `Box.box` or `Box.unbox` value-flow operation
@@ -7013,24 +10572,278 @@ published payload store that still contains `pending` entries after
 lambda-solved sealing. Release builds use `unreachable` if executable MIR ever
 encounters a pending payload.
 
-Finite callable-set erased adapters own one additional session-payload
-publication obligation. If `ErasedAdapterKey.erased_fn_sig_key.capture_ty` is
-non-null, lambda-solved must publish exactly one `callable_set` executable
-payload in the owning `SessionExecutableTypePayloadStore` under that exact
-`capture_ty` key, and that payload's `callable_set_key` must equal
-`ErasedAdapterKey.callable_set_key`. This publication happens while
-lambda-solved seals the solve session, by iterating the explicit
-`CallableValueEmissionPlan.erase_finite_set` records that representation solving
-already produced. It must not be recovered by executable MIR from a source
-expression, from a lowered adapter body, from a runtime layout, or from the
-shape of a captured value.
+Finite callable-set erased adapters own one additional explicit hidden-capture
+publication obligation. The erased function signature key names only the
+fixed-arity erased call ABI: source function type, erased argument payload
+shape, and erased result payload shape. It must not name the adapter's capture
+payload. Runtime erased calls always receive an opaque capture pointer; that
+pointer is part of the uniform runtime ABI, not part of the call signature.
 
-This hidden capture payload exists because the erased adapter ABI captures the
-entire finite callable-set value behind the erased callable's ordinary opaque
-capture handle. The adapter key names the ABI; the session executable payload
-store names the structure of the hidden capture value. Both are required. The
-key alone is not enough for executable MIR to lower the adapter argument type,
-and the structure alone is not enough to identify the ABI.
+Therefore `ErasedFnSigKey` must not have a `capture_ty` field in the final
+architecture. During the cutover, any remaining implementation field with that
+name is a deletion target and must not be used as the source of truth for
+finite-set adapter capture materialization. The hidden capture for a finite-set
+adapter is determined solely by the adapter's explicit callable-set descriptor:
+
+- if the descriptor has multiple members, the adapter hidden capture is the full
+  finite callable-set value for `ErasedAdapterKey.callable_set_key`
+- if the descriptor has one member and that member has capture slots, the
+  adapter hidden capture is the full finite callable-set value for
+  `ErasedAdapterKey.callable_set_key`
+- if the descriptor has one member and that member has no capture slots, the
+  adapter hidden capture may be absent or physically ZST
+
+The semantic rule is still that the adapter body dispatches through
+`callable_match`, including singleton sets. The optional absence of physical
+hidden capture storage for a singleton capture-free set is a storage consequence
+of the descriptor; it is not permission to bypass `callable_match`, direct-call
+the member, or infer the capture from the erased signature.
+
+This hidden capture payload exists because the erased adapter receives the
+finite callable-set value behind the erased callable's ordinary opaque capture
+handle. The adapter key names the erased-call ABI and callable-set identity; the
+callable-set descriptor names the structure of the hidden capture value. Both
+are required. The key alone is not enough for executable MIR to lower the
+adapter argument type, and the structure alone is not enough to identify the
+ABI.
+
+Lambda-solved must publish finite adapter requirements from both explicit
+producer-global emission plans and contextual value transforms:
+
+- `CallableValueEmissionPlan.erase_finite_set`
+- `SessionExecutableValueTransformPlan.callable_to_erased.finite_value`
+- published artifact value transforms whose operation is
+  `callable_to_erased.finite_value`
+- compile-time promoted-wrapper plans whose erased code is a finite-set adapter
+
+Each requirement must carry the full `ErasedAdapterKey`, the payload owner, and
+the exact executable member targets for the callable-set descriptor. Executable
+MIR and checked-pipeline origin collection must not recover those member targets
+by walking adapter bodies, inspecting source expressions, scanning declarations,
+or comparing shapes after the fact.
+
+For session-local finite callable sets, lambda-solved MIR publishes those member
+targets at the same moment it publishes the `FiniteSetErasePlan`. The target
+list is not the descriptor member's original `target_instance` list. It is the
+adapter-boundary specialization list: one executable specialization key per
+descriptor member, in descriptor member order, with public argument and return
+keys taken from the erased adapter ABI.
+
+Concretely:
+
+```zig
+const FiniteSetErasePlan = struct {
+    adapter: ErasedAdapterKey,
+    result_ty: CanonicalExecValueTypeKey,
+
+    /// One executable member target per callable-set descriptor member.
+    ///
+    /// These keys are selected by lambda-solved MIR while it still owns the
+    /// solved representation data. They are adapter-boundary keys: their
+    /// `exec_arg_tys` and `exec_ret_ty` come from
+    /// `adapter.erased_fn_sig_key.abi`, not from the descriptor member's
+    /// original `target_instance`.
+    member_targets: NonEmptySpan(ExecutableSpecializationKey),
+
+    /// One branch-lowering plan per callable-set descriptor member.
+    ///
+    /// These are published by lambda-solved MIR at the same time as
+    /// `member_targets`. They connect the raw erased-call ABI endpoints to the
+    /// selected member procedure's public parameter/return endpoints. They are
+    /// not derived by executable MIR from source syntax, from the adapter body,
+    /// from layout compatibility, or from the first member's ordinary
+    /// specialization.
+    branches: NonEmptySpan(FiniteSetEraseAdapterBranchPlan),
+
+    provenance: NonEmptySpan(BoxErasureProvenance),
+};
+
+const FiniteSetEraseAdapterBranchPlan = struct {
+    /// The descriptor member this branch lowers. This must equal descriptor
+    /// member `i` for `branches[i]`.
+    member: CallableSetMemberRef,
+
+    /// The exact procedure representation instance reserved for this branch's
+    /// adapter-boundary executable specialization.
+    target_instance: ProcRepresentationInstanceId,
+
+    /// One transform per fixed-arity erased-call argument. Each transform's
+    /// source endpoint is the raw erased adapter ABI argument slot
+    /// `(adapter, member, arg_index)`, and each transform's destination endpoint
+    /// is the selected member procedure's `procedure_param(arg_index)`.
+    arg_transforms: Span(ValueTransformBoundaryId),
+
+    /// A transform from the selected member procedure's `procedure_return`
+    /// endpoint to the raw erased adapter ABI result slot `(adapter, member)`.
+    /// It is absent only when the raw erased result endpoint and member return
+    /// endpoint are already the exact same executable endpoint.
+    result_transform: ?ValueTransformBoundaryId,
+};
+
+const ValueTransformEndpointOwner = union(enum) {
+    // Existing endpoint owners omitted here.
+
+    /// Raw erased-call argument slot used only while lowering the finite-set
+    /// erased adapter branch for `member`.
+    erased_finite_adapter_arg: struct {
+        adapter: ErasedAdapterKey,
+        member: CallableSetMemberRef,
+        index: u32,
+    },
+
+    /// Raw erased-call result slot used only while lowering the finite-set
+    /// erased adapter branch for `member`.
+    erased_finite_adapter_result: struct {
+        adapter: ErasedAdapterKey,
+        member: CallableSetMemberRef,
+    },
+};
+```
+
+The member target key for descriptor member `i` is:
+
+```zig
+const adapter_member_target = ExecutableSpecializationKey{
+    .base = descriptor.members[i].source_proc.proc.proc_base,
+    .requested_fn_ty = descriptor.members[i].proc_value.source_fn_ty,
+    .exec_arg_tys = erased_abi.arg_exec_keys,
+    .exec_ret_ty = erased_abi.ret_exec_key,
+    .callable_repr_mode = .direct,
+    .capture_shape_key = descriptor.members[i].capture_shape_key,
+};
+```
+
+This is required even when the descriptor member already has a target instance.
+The descriptor member target instance is the specialization that was selected
+for the ordinary finite callable-set value before that value crossed the
+`Box(function)` erasure boundary. The erased adapter is a different executable
+context: its arguments and result have the erased-boundary representation
+published by the adapter ABI. Reusing the descriptor member's original target
+instance is only valid when its executable key already equals the
+adapter-boundary key. That equality is an optimization consequence, not a
+semantic assumption.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+)
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The source argument type of the boxed function is
+`[Apply((I64 -> I64)), Keep(I64)]`. The ordinary callable-set member may have
+originally solved the `Apply` payload's function slot as
+`vacant_callable_slot(I64 -> I64)` if that original specialization did not have
+an inhabited `Apply` function payload flowing through it. The erased adapter,
+however, is callable from outside that original value-flow context, including
+from host-provided erased callables. Its erased ABI argument key must therefore
+represent `Apply`'s payload as an erased callable slot. Lambda-solved MIR must
+reserve a member specialization whose public parameter root is required to use
+that erased-boundary representation. Executable MIR must then call that
+adapter-boundary member target.
+
+Trying to bridge the original member specialization's
+`vacant_callable_slot(I64 -> I64)` to the adapter ABI's erased callable payload
+is forbidden. A vacant callable slot means "there is no callable value here" and
+is only valid for an uninhabited structural payload position. An erased callable
+payload is a real runtime callable. There is no correct bridge between those two
+representations. If executable MIR observes such a bridge request, the bug is
+that lambda-solved MIR failed to publish and reserve the adapter-boundary member
+specialization.
+
+Lambda-solved MIR therefore has two obligations for every session-local
+`FiniteSetErasePlan`:
+
+1. publish the exact `member_targets` listed above
+2. publish the exact `branches` listed above
+3. reserve/build procedure instances for those target keys before sealing
+   `ProcRepresentationInstance` records
+
+The reservation owner must identify the adapter plan and descriptor member
+index, not merely the source procedure. When lowering that reserved member body,
+lambda-solved MIR must append representation requirements from the member target
+key:
+
+- each public parameter root whose corresponding `exec_arg_tys[i]` contains an
+  erased callable payload gets `require_box_erased`
+- the public return root gets `require_box_erased` when `exec_ret_ty` contains an
+  erased callable payload
+- capture roots keep the capture representation described by the descriptor
+  member's `capture_shape_key`
+
+The "contains erased callable payload" test is structural over the published
+session executable payload store. It must recurse through records, tuples, tag
+payloads, lists, boxes, nominals whose backing is visible through an explicit
+capability, callable-set member payloads, erased callable captures, and
+recursive references. It must not inspect source syntax or compare layout
+compatibility.
+
+The branch plans are required even when there is only one descriptor member.
+Singleton finite callable sets still lower through `callable_match`, and the
+raw erased-call argument/result endpoints still belong to the adapter ABI rather
+than to the member's ordinary public procedure signature. Executable MIR must
+not substitute `member_targets[0]` and pass the raw erased arguments straight
+through. It must first apply `branches[0].arg_transforms`, call
+`branches[0].target_instance`, then apply `branches[0].result_transform` when it
+exists.
+
+This matters whenever the erased ABI representation differs from the member's
+ordinary finite-callable specialization. For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The boxed erased ABI argument slot for `apply_tag` carries the full runtime
+argument type `[Apply((I64 -> I64)), Keep(I64)]` with the `Apply` payload's
+callable represented as an erased callable slot. The ordinary finite-set member
+specialization for the lambda body may have been solved in a narrower
+value-flow context where `Apply`'s function payload was structurally
+uninhabited, so its parameter endpoint can have a different executable tag-union
+payload identity. The erased adapter branch is exactly the boundary between
+those endpoints:
+
+```text
+raw erased adapter arg 0
+    --branches[i].arg_transforms[0]-->
+member procedure param 0
+
+member procedure return
+    --branches[i].result_transform-->
+raw erased adapter result
+```
+
+If executable MIR passes the raw erased argument directly to the member target,
+IR/LIR lowering later sees two different aggregate layout ids for the same
+runtime value and would need an aggregate "coercion" path to keep going. That
+path is forbidden. Aggregate coercion at this point means lambda-solved MIR
+failed to publish the exact branch transform data, or executable MIR ignored it.
+Debug builds assert at the branch boundary; release builds use `unreachable`.
+Backends and the LIR interpreter must never repair this by comparing tag shapes,
+copying fields by name, or accepting compatible layouts.
 
 Executable MIR must therefore carry the hidden-capture payload owner alongside
 each finite-set adapter procedure reservation. Conceptually:
@@ -7039,7 +10852,9 @@ each finite-set adapter procedure reservation. Conceptually:
 const ErasedAdapterProcReservation = struct {
     key: ErasedAdapterKey,
     payload_owner: ErasedAdapterPayloadOwner,
+    hidden_capture: ErasedAdapterHiddenCapture,
     member_targets: Span(ExecutableSpecializationKey),
+    branches: Span(FiniteSetEraseAdapterBranchPlan),
     executable_proc: ExecutableProcId,
 };
 
@@ -7047,21 +10862,58 @@ const ErasedAdapterPayloadOwner = union(enum) {
     solve_session: RepresentationSolveSessionId,
     artifact: CheckedModuleArtifactKey,
 };
+
+const ErasedAdapterHiddenCapture = union(enum) {
+    none,
+    callable_set_value: CanonicalCallableSetKey,
+};
 ```
 
 `payload_owner.solve_session` is the solve session that selected the
-`erase_finite_set` emission plan and published the adapter hidden
-`callable_set` payload. `payload_owner.artifact` is used for persisted erased
-adapter code imported from a checked artifact; in that case the artifact's
-published executable type payload store owns the hidden `callable_set` payload,
-and the executable run still resolves `member_targets` to current executable
-specializations. The payload owner is not necessarily the solve session of the
-first adapter member procedure. Adapter procedure lowering uses `payload_owner`
-to lower the hidden capture argument and callable-set match payloads, and uses
-each member's own executable specialization key for direct branch calls. It must
-not choose the hidden-capture payload store by looking at the first member, by
-searching all sessions for a matching key, or by rebuilding the callable-set
-payload from the adapter body.
+`erase_finite_set` emission plan or contextual finite-callable-to-erased value
+transform and published the adapter hidden `callable_set` payload.
+`payload_owner.artifact` is used for persisted erased adapter code imported
+from a checked artifact; in that case the artifact's published executable type
+payload store owns the hidden `callable_set` payload. The executable run still
+uses the explicitly published `member_targets` for current executable
+specializations.
+
+The payload owner is not necessarily the solve session of the first adapter
+member procedure. Adapter procedure lowering uses `payload_owner` and
+`hidden_capture.callable_set_value` to lower the hidden capture argument and
+callable-set match payloads, and uses each member's own executable
+specialization key for direct branch calls. It must not choose the hidden
+capture payload store by looking at the first member, by searching all sessions
+for a matching key, by reading `ErasedFnSigKey`, or by rebuilding the
+callable-set payload from the adapter body.
+
+`member_targets[i]` corresponds exactly to descriptor member `i`. The target key
+is the executable specialization key for that member's selected procedure body.
+The adapter verifier must assert in debug builds that:
+
+- `member_targets.len == descriptor.members.len`
+- `branches.len == descriptor.members.len`
+- every member target key matches the descriptor member's selected
+  representation instance
+- every branch `i` names descriptor member `i`
+- every branch target instance has the same executable specialization key as
+  `member_targets[i]`
+- every branch argument transform starts at
+  `erased_finite_adapter_arg(adapter, descriptor.members[i], arg_index)` and
+  ends at the branch target's corresponding `procedure_param(arg_index)`
+- every branch result transform, when present, starts at the branch target's
+  `procedure_return` endpoint and ends at
+  `erased_finite_adapter_result(adapter, descriptor.members[i])`
+- the adapter body has one `callable_match` branch for each descriptor member,
+  including singleton sets
+- branch `i` calls `member_targets[i]`
+- branch `i` applies exactly `branches[i].arg_transforms` before the call and
+  exactly `branches[i].result_transform` after the call
+
+Release builds do not carry verifier-only metadata or walk bodies for this
+check. If executable MIR ever reaches an adapter reservation without the
+explicit member targets needed by checked-pipeline origin publication, that is a
+compiler bug and release builds use `unreachable`.
 
 For example:
 
@@ -7077,12 +10929,14 @@ main = apply_boxed(|x| x + 1)
 ```
 
 The finite callable-set adapter for `|f| f(41)` has a hidden capture whose
-executable type is the finite callable set selected for that lambda. Even though
-the set has one member and no runtime capture fields, the adapter still needs
-the published `callable_set` payload for its `capture_ty` key so executable MIR
-can lower a real adapter signature and pack a real erased function value. If the
-payload is physically zero-sized, ZST lowering erases the storage later; it does
-not erase the semantic payload publication obligation.
+executable type is the finite callable set selected for that lambda. The erased
+call signature names only the erased argument and result payloads for
+`(I64 -> I64) -> I64`; it does not name this hidden capture. Because the set has
+one member and no runtime capture fields, executable MIR may lower the hidden
+capture storage to `none` or ZST, but the adapter requirement still carries the
+callable-set key and the one explicit member target. The adapter body still
+dispatches through `callable_match`. ZST lowering erases storage later; it does
+not erase the semantic adapter/member publication obligation.
 
 Value endpoint lowering must decide all forwarding cases before reserving a
 payload-store entry. Alias values, join values, and plain function-typed values
@@ -7255,6 +11109,30 @@ after the source operands have been evaluated. It must not emit a runtime tag
 construction with payload storage, field access, or tag-payload access from a ZST
 base. This is a generic physical zero-size rule, not a special case for `Bool`,
 callable sets, singleton tags, closure captures, or any other source construct.
+
+The same rule applies to structural bridges. A logical `tag_union` bridge whose
+source and target endpoints both commit to ZST has no runtime discriminant and no
+runtime payload to transform. LIR must lower that bridge to a zero-field ZST
+assignment, after preserving any already-lowered source evaluation order. It
+must not ask the runtime tag-union bridge path to read variant metadata from a
+ZST layout. If exactly one endpoint is ZST, or if a ZST/ZST logical tag-union
+bridge has more than one logical variant, the layout graph is inconsistent and
+lowering must debug-assert/release-`unreachable`; singleton/full reshaping
+belongs in explicit `singleton_to_tag_union` or `tag_union_to_singleton` bridge
+nodes, not in a generic `tag_union` bridge. This rule is also generic. It covers
+ordinary single-variant zero-payload unions such as:
+
+```roc
+Only = Only
+
+main =
+    value : Only
+    value = Only
+
+    value
+```
+
+and it does not give `Bool` any special representation or lowering rule.
 If a ZST tag construction receives a non-ZST payload value, or if a source
 aggregate has committed ZST layout but the projection target is not ZST, the
 IR/LIR layout graph is inconsistent and lowering must debug-assert/release-
@@ -7262,6 +11140,47 @@ IR/LIR layout graph is inconsistent and lowering must debug-assert/release-
 `assign_struct`, runtime `assign_tag`, runtime field-access, and runtime
 tag-payload-access statements are layout-consistent, because the IR-to-LIR
 boundary has already erased the zero-sized operations.
+
+The same explicit-layout rule applies to discriminant reads. A lowered
+`get_union_id` operation must carry the row-finalized `TagUnionShapeId` for the
+logical source union in addition to the source value. The physical layout alone
+is not enough, because valid singleton tag unions often have no runtime
+discriminant at all:
+
+```roc
+main = Str.inspect(MyTag)
+```
+
+The value `MyTag` has the logical shape `[MyTag]`, but the committed physical
+layout is ZST. LIR must not try to read a runtime tag header from that ZST value.
+Instead, because the explicit `TagUnionShapeId` says the union has exactly one
+row-finalized tag, LIR materializes the known discriminant from that tag's
+`logical_index` as an integer literal. If the physical layout is a real
+`tag_union`, LIR reads the runtime discriminant. If the physical layout is a
+`Box(T)` whose payload is a real `tag_union`, LIR unboxes and reads the payload
+discriminant. If the physical layout is anything else and the explicit logical
+shape has more than one tag, the layout graph is inconsistent and lowering must
+debug-assert/release-`unreachable`.
+
+This is not a `Bool` rule. `Bool` remains an ordinary nominal tag union whose
+backing shape is `[False, True]`. `Bool.True` may be a singleton before it flows
+into the full `Bool` endpoint, and that case uses the same generic
+singleton-to-full row transform and the same generic singleton discriminant rule
+as any other tag union:
+
+```roc
+choose = |flag|
+    match flag {
+        Bool.True => MyTag
+        Bool.False => OtherTag
+    }
+```
+
+No IR, LIR, backend, or interpreter path may introduce a Bool-specific
+tag-to-primitive bridge, truthiness byte, or special Bool layout. A runtime
+predicate used internally to select a control-flow branch is not a first-class
+Roc `Bool` value; whenever a Roc value of type `Bool` is materialized, it is the
+ordinary row-finalized Bool tag union.
 
 The same rule applies to mixed structs whose logical fields include zero-sized
 fields but whose committed physical layout still has non-zero fields. IR may
@@ -7495,6 +11414,7 @@ const ProcValueErasePlan = struct {
     erased_call_sig_key: ErasedCallSigKey,
     capture_shape_key: CaptureShapeKey,
     executable_specialization_key: ExecutableSpecializationKey,
+    adapter_arg_transforms: Span(ValueTransformBoundaryId),
     capture_slots: Span(CallableSetCaptureSlot),
     capture_transforms: Span(ValueTransformBoundaryId),
     provenance: Span(BoxBoundaryId),
@@ -7584,18 +11504,81 @@ The plan must carry non-empty `BoxErasureProvenance`, but the value
 occurrence itself does not have to be syntactically enclosed by a `Box(T)`
 expression.
 
-`ProcValueErasePlan.capture_transforms` is mandatory when the erased
-procedure-value occurrence has captures. It contains one transform in canonical
-capture-slot order from the occurrence site's local source capture value to the
-selected erased specialization's `procedure_capture { target_instance, slot }`
-endpoint. The materialized capture tuple is runtime packaging of those
-transformed procedure-capture values; it is not a separate semantic endpoint and
-must not be used as the target of a `capture_value` boundary. Executable MIR
-lowers each capture expression exactly once, applies the corresponding
-transform, and then assembles the materialized capture tuple from the
-transformed values. It must not place raw source captures directly in the
-materialized capture tuple unless the
-published transform is identity, and even identity must be represented
+`ProcValueErasePlan` has two distinct transform families, and both are
+mandatory before executable MIR can pack or call the erased procedure value:
+
+- `adapter_arg_transforms` converts the uniform erased-call ABI argument payloads
+  received by the generated erased direct-proc adapter into the selected target
+  procedure specialization's public parameter endpoints.
+- `capture_transforms` converts the occurrence site's local source captures into
+  the selected target procedure specialization's public capture endpoints before
+  executable MIR assembles the hidden erased capture payload.
+
+These are deliberately separate. The erased direct-proc adapter is a real
+synthetic executable procedure whose public ABI is the boxed-erased-callable
+ABI, not the target procedure ABI. Its arguments come from the uniform erased
+args struct named by `erased_call_sig_key`. The target procedure may require a
+different executable representation for the same source argument, especially
+when the argument contains a function-typed slot. Therefore the adapter must
+apply `adapter_arg_transforms[i]` before emitting the final `call_direct`.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The call to `apply_tag(Apply(|x| x + 1))` passes an erased-call ABI argument
+whose `Apply` payload contains an erased callable slot, because the argument is
+crossing an explicit `Box(T)` erased boundary. The generated erased direct-proc
+adapter for the boxed lambda then calls the actual lambda body. That lambda body
+is the selected target specialization and may represent its parameter with a
+finite callable payload inside `Apply`. The adapter must therefore perform this
+explicit boundary:
+
+```text
+adapter_arg_transforms[0]:
+    from_endpoint.owner == erased_proc_value_adapter_arg {
+        emission_plan,
+        source_value,
+        proc_value,
+        erased_call_sig_key,
+        index: 0,
+    }
+    from_endpoint.exec_ty.key == erased_fn_abi(erased_call_sig_key.abi).arg_exec_keys[0]
+    to_endpoint.owner == procedure_param { target_instance, index: 0 }
+    to_endpoint.exec_ty.key == executable_specialization_key.exec_arg_tys[0]
+```
+
+Skipping this transform and passing the raw erased ABI argument directly to the
+target procedure is a compiler bug. Interpreters and backends must not repair it
+by aggregate coercion, tag-shape comparison, runtime layout inspection, or
+source-type reconstruction. The only legal fix is for lambda-solved MIR to
+publish the adapter argument boundary and for executable MIR to apply it inside
+the generated adapter before `call_direct`.
+
+`capture_transforms` contains one transform in canonical capture-slot order from
+the occurrence site's local source capture value to the selected erased
+specialization's `procedure_capture { target_instance, slot }` endpoint. The
+materialized capture tuple is runtime packaging of those transformed
+procedure-capture values; it is not a separate semantic endpoint and must not be
+used as the target of a `capture_value` boundary. Executable MIR lowers each
+capture expression exactly once, applies the corresponding transform, and then
+assembles the materialized capture tuple from the transformed values. It must
+not place raw source captures directly in the materialized capture tuple unless
+the published transform is identity, and even identity must be represented
 explicitly.
 
 For example:
@@ -7639,7 +11622,12 @@ capture roots define the target `procedure_capture` endpoints.
 boxed boundary. `capture_shape_key` is the canonical capture record shape for
 this materialized erased procedure value occurrence.
 `executable_specialization_key` is the erased executable specialization that
-must be reserved before the packed value is emitted. `capture_slots` is the
+must be reserved before the packed value is emitted. `adapter_arg_transforms`
+is the mandatory transform list in fixed-arity source argument order. Each
+transform converts one raw erased ABI argument from
+`erased_fn_abi(erased_call_sig_key.abi).arg_exec_keys[index]` into the selected
+target procedure instance's parameter representation from
+`executable_specialization_key.exec_arg_tys[index]`. `capture_slots` is the
 complete target capture-slot schema, in canonical `CaptureSlot.index` order.
 Each slot carries the source capture type and the executable target key required
 by the selected erased specialization. `capture_transforms` is the mandatory
@@ -7647,6 +11635,52 @@ transform list in the same logical slot order. Each transform converts the
 occurrence's local source capture value into the selected target procedure
 instance's capture-slot representation before executable MIR assembles the
 materialized capture tuple.
+
+The generated erased direct-proc adapter must call the executable procedure
+reserved for `target_instance`. It must not rediscover the target by scanning
+procedures for the same `ProcedureCallableRef`, because the same source
+procedure can have multiple executable specializations with the same source
+function type but different nested callable representations. The explicit
+`target_instance` plus `executable_specialization_key` select the only legal
+`ExecutableProcId` for the adapter's `call_direct`.
+
+For every fixed-arity argument in `ProcValueErasePlan`:
+
+```text
+adapter_arg_transforms.len
+    == erased_fn_abi(erased_call_sig_key.abi).fixed_arity
+adapter_arg_transforms.len
+    == erased_fn_abi(erased_call_sig_key.abi).arg_exec_keys.len
+adapter_arg_transforms.len
+    == proc_instance(target_instance).public_roots.params.len
+adapter_arg_transforms.len
+    == executable_specialization_key.exec_arg_tys.len
+
+for every i:
+    adapter_arg_boundary(adapter_arg_transforms[i]).kind
+        == erased_proc_value_adapter_arg {
+               emission_plan: value_info(source_value).callable.emission_plan,
+               source_value,
+               proc_value,
+               erased_call_sig_key,
+               index: i,
+           }
+    adapter_arg_boundary(adapter_arg_transforms[i]).from_endpoint.owner
+        == erased_proc_value_adapter_arg { ... index: i }
+    adapter_arg_boundary(adapter_arg_transforms[i]).from_endpoint.exec_ty.key
+        == erased_fn_abi(erased_call_sig_key.abi).arg_exec_keys[i]
+    adapter_arg_boundary(adapter_arg_transforms[i]).to_endpoint.owner
+        == procedure_param { target_instance, i }
+    adapter_arg_boundary(adapter_arg_transforms[i]).to_endpoint.exec_ty.key
+        == executable_specialization_key.exec_arg_tys[i]
+```
+
+The adapter argument endpoint is not a source value, not a call-site argument,
+and not a capture. It is the synthetic erased direct-proc adapter's fixed-arity
+runtime ABI parameter. Its endpoint owner must say that explicitly. Reusing
+`call_raw_arg`, `call_arg`, `callable_match_branch_arg`, or a dummy local
+`ValueInfoId` for this boundary is forbidden because those owners describe
+different executable obligations.
 
 For every capture slot in `ProcValueErasePlan`:
 
@@ -7702,9 +11736,13 @@ For boxing, executable MIR lowers the payload expression under
 
 - `proc_value -> erased` packs the explicit procedure member and explicit
   capture payloads by consuming `ProcValueErasePlan`, reserving its
-  `executable_specialization_key`, applying every `capture_transforms[i]` before
-  capture materialization, and emitting a materialized erased callable value whose
-  `call_sig` is exactly `erased_call_sig_key`. The capture transforms target
+  `executable_specialization_key`, generating an erased direct-proc adapter
+  whose public ABI is the uniform erased-call ABI, applying every
+  `adapter_arg_transforms[i]` inside that adapter before its `call_direct`,
+  applying every `capture_transforms[i]` before capture materialization, and
+  emitting a materialized erased callable value whose `call_sig` is exactly
+  `erased_call_sig_key`. The adapter argument transforms target
+  `procedure_param { target_instance, i }`. The capture transforms target
   `procedure_capture { target_instance, i }`; executable MIR then packages those
   transformed values behind the erased value's opaque capture handle.
 - `finite callable-set value -> erased` synthesizes an erased adapter procedure
@@ -8033,27 +12071,48 @@ pub const RocOps = builtins.utils.RocOps;
 /// A boxed erased callable is never null.
 pub const RocBox = ?*anyopaque;
 
+/// One runtime calling convention used by every boxed erased callable, whether
+/// the value was created by Roc code, generated glue, a host, the dev backend,
+/// Wasm, LLVM, or the LIR interpreter.
+///
+/// `args` points to the generated fixed-arity argument struct for the erased
+/// function type, or is null for arity 0. `ret` points to caller-owned result
+/// storage, or is null for a zero-sized result. `capture` is the inline capture
+/// byte pointer computed from the boxed allocation payload.
+pub const ErasedCallableFn = *const fn (
+    ops: *RocOps,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+) callconv(.c) void;
+
+/// Runs exactly once when the enclosing Roc allocation's outer refcount reaches
+/// zero, before that allocation is freed.
+///
+/// The pointer passed to this function is the inline capture byte region
+/// immediately after the `ErasedCallablePayload` header and padding. The
+/// callback may decref or release values referenced by the capture, but it must
+/// not free the inline capture bytes themselves; those bytes are part of the
+/// enclosing Roc allocation.
+pub const ErasedCallableOnDrop = *const fn (
+    capture: ?[*]u8,
+    roc_ops: *RocOps,
+) callconv(.c) void;
+
 /// Header at the start of the Box payload for an ordinary Roc boxed erased
 /// callable. This is runtime data, not semantic ABI identity. The semantic
-/// erased-call ABI remains `ErasedCallSigKey` / `ErasedFnAbiKey`.
+/// erased-call ABI remains `ErasedCallSigKey` / `ErasedFnAbiKey`, and it names
+/// the generated args and result storage layouts used with `ErasedCallableFn`.
 pub const ErasedCallablePayload = extern struct {
-    /// The function pointer to call for this erased callable value.
-    /// Codegen casts this to the statically known erased-call function type
-    /// named by the call site's `ErasedFnAbiKey`.
-    callable_fn_ptr: *const anyopaque,
+    /// Uniform erased-call function pointer. This is never null.
+    callable_fn_ptr: ErasedCallableFn,
 
-    /// Runs exactly once when the enclosing Roc allocation's outer refcount
-    /// reaches zero, before that allocation is freed.
-    ///
-    /// The pointer passed to this function is the inline capture byte region
-    /// immediately after the `ErasedCallablePayload` header and padding. The
-    /// callback may decref or release values referenced by the capture, but it
-    /// must not free the inline capture bytes themselves; those bytes are part
-    /// of the enclosing Roc allocation.
-    on_drop: ?*const fn (capture: *anyopaque, roc_ops: *RocOps) callconv(.c) void,
+    /// Optional final-drop callback for the inline capture bytes.
+    on_drop: ?ErasedCallableOnDrop,
 };
 
 pub const erased_callable_capture_alignment: usize = 16;
+pub const erased_callable_payload_alignment: usize = 16;
 
 pub const erased_callable_capture_offset: usize =
     std.mem.alignForward(usize, @sizeOf(ErasedCallablePayload), erased_callable_capture_alignment);
@@ -8093,35 +12152,97 @@ no callback and a nonzero table index for the compiled capture-final-drop
 helper. That is a backend representation of the same runtime fields, not a
 descriptor, not a discriminant, and not a layout lookup path.
 
-The erased function pointer uses the call site's statically known erased-call
-ABI. The ordinary fixed-arity Roc arguments come first. The hidden capture
-pointer is last, so the capture is naturally ignorable by no-capture procedures.
-`roc_ops` is runtime context, not a Roc source argument; it may be passed before
-the source arguments according to the backend's ordinary runtime ABI convention.
-For example, the ordinary boxed-erased call ABI for `I64 -> I64` can be
-represented as:
+The erased function pointer does not use a typed backend-specific function
+signature. Every boxed erased call has the same ABI:
+
+1. allocate caller-owned result storage if the erased result is not zero-sized
+2. allocate and fill an args struct if the erased function arity is not zero
+3. compute `capture = boxed_payload + erased_callable_capture_offset`
+4. call `payload.callable_fn_ptr(roc_ops, ret, args, capture)`
+
+The args struct carries ordinary Roc call arguments with ordinary Roc call
+ownership. Passing an argument through `call_erased` consumes that argument in the
+same sense as passing it to `call_proc`: if the caller needs the argument after
+the call, ARC must retain it before the call; otherwise ownership transfers to
+the erased callable. The erased callable implementation, whether generated by
+Roc or supplied by the host, must consume or drop the owned argument values it
+receives. The boxed callable value being invoked is different: it is the call
+receiver, not one of the fixed-arity Roc arguments, and is borrowed for the
+duration of the call. ARC must keep that receiver alive until
+`callable_fn_ptr` returns, but the erased callable does not own or drop the
+receiver merely because it was called.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(((I64 -> I64) -> I64))
+make_boxed = |_| Box.box(|f| f(41))
+
+apply_boxed : (I64 -> I64) -> I64
+apply_boxed = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_boxed(|x| x + 1)
+```
+
+The call to `apply_boxed` passes the finite callable value `|x| x + 1` through an
+erased-call args struct. The generated erased adapter for `|f| f(41)` receives
+that function argument as an owned Roc value and is responsible for dropping it
+according to the normal procedure-argument ARC rules. The caller must not also
+drop the same transferred argument after `call_erased` unless it retained a
+separate post-call reference before the call. In contrast, the boxed erased
+callable produced by `make_boxed({})` is only the receiver of the erased call; it
+stays alive during the call and is released by the caller's normal lifetime after
+the call. Treating erased-call arguments as borrowed is a compiler bug because it
+double-drops callable arguments once the generated adapter also consumes its
+normal procedure parameters.
+
+The args struct is generated from the erased function type named by
+`ErasedCallSigKey`: fields are the fixed-arity Roc arguments in source order,
+stored at their normal ABI storage size and alignment. Roc functions are not
+curried, so this is one fixed-arity struct per erased function type, not nested
+one-argument calls. The result pointer names storage for exactly the erased
+result type. No backend may cast `callable_fn_ptr` to a signature-specific
+function pointer, and the LIR interpreter must call the same function pointer
+shape as every compiled backend.
+
+For example, the ordinary boxed-erased call ABI for `I64 -> I64` is:
 
 ```zig
-pub const ErasedI64ToI64Fn =
-    *const fn (roc_ops: *RocOps, arg0: i64, capture: *anyopaque) callconv(.c) i64;
+pub const I64ToI64Args = extern struct {
+    arg0: i64,
+};
 
 pub fn callErasedI64ToI64(boxed: RocBox, roc_ops: *RocOps, arg0: i64) i64 {
     const raw_payload = boxed orelse unreachable;
     const payload: *ErasedCallablePayload = @ptrCast(@alignCast(raw_payload));
-    const capture = erasedCallableCapturePtr(payload);
-    const callable_fn: ErasedI64ToI64Fn = @ptrCast(payload.callable_fn_ptr);
-    return callable_fn(roc_ops, arg0, capture);
+    var args = I64ToI64Args{ .arg0 = arg0 };
+    var ret: i64 = undefined;
+    payload.callable_fn_ptr(
+        roc_ops,
+        @ptrCast(&ret),
+        @ptrCast(&args),
+        erasedCallableCapturePtr(payload),
+    );
+    return ret;
 }
 ```
 
 A no-capture function still uses the uniform erased-call function type and
-ignores the trailing capture pointer:
+ignores the capture pointer:
 
 ```zig
-fn plus_one_erased(roc_ops: *RocOps, arg0: i64, capture: *anyopaque) callconv(.c) i64 {
+fn plus_one_erased_adapter(
+    roc_ops: *RocOps,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+) callconv(.c) void {
     _ = roc_ops;
     _ = capture;
-    return arg0 + 1;
+    const typed_args: *const I64ToI64Args = @ptrCast(@alignCast(args orelse unreachable));
+    const typed_ret: *i64 = @ptrCast(@alignCast(ret orelse unreachable));
+    typed_ret.* = typed_args.arg0 + 1;
 }
 ```
 
@@ -9078,6 +13199,55 @@ path plans keyed by `TagPayloadId.payload_index`. It must not emit a separate
 union-payload extraction for every binder. A zero-payload tag has no
 payload-record path plan.
 
+LIR tag tests and tag-payload projections must handle both ordinary logical
+tag-union values and physical recursive slot boxes explicitly. A decision path
+may inspect a payload slot before that slot has been rebound as a normal
+executable value. In a recursive nominal such as:
+
+```roc
+Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+
+main =
+    match Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False)) {
+        Logic.And(left, right) -> Str.inspect(left) ++ " / " ++ Str.inspect(right)
+        _ -> ""
+    }
+```
+
+the selected `And` payload slots may be physically stored as `Box(Logic)` after
+recursive layout commitment. If the pattern decision engine tests or projects
+one of those physical slots directly, LIR must first unbox the slot to the raw
+recursive tag-union payload and then read the discriminant or payload bytes from
+that unboxed tag-union local:
+
+```zig
+// Logical source:
+discriminant = get_union_id(slot)
+
+// Physical lowering when `slot` has layout Box(raw Logic):
+raw_logic = box_unbox(slot)
+discriminant = get_union_id(raw_logic)
+```
+
+and:
+
+```zig
+// Logical source:
+payload = get_union_struct(slot, tag)
+
+// Physical lowering when `slot` has layout Box(raw Logic):
+raw_logic = box_unbox(slot)
+payload = get_union_struct(raw_logic, tag)
+```
+
+It is a compiler bug to compute the boxed payload layout but still issue the
+discriminant or payload read against the box pointer itself. This is the same
+semantic rule Cor/LSS relies on when its lowered IR contains recursive
+`Box(...)` slots: tag operations conceptually operate on the recursive value
+inside the box, not on the pointer word that stores the box. Our implementation
+must make that unbox explicit in LIR so backends only follow concrete LIR
+statements and never special-case recursive tag unions.
+
 Record rest bindings are explicit record-assembly path values. For a pattern
 like:
 
@@ -9121,6 +13291,35 @@ lowered type ids or recursive layout nodes, the transform must still create a
 fresh binder-local value with the binder endpoint's executable type. Direct-call
 argument lowering, guard lowering, and branch body lowering must see the binder
 endpoint, not the path endpoint.
+
+Executable pattern syntax must be lowered under the contextual path endpoint,
+not under the pattern node's standalone producer/local type. For a tag pattern,
+the selected executable tag-union type determines the selected `TagId`, payload
+`TagPayloadId`s, and each nested payload pattern's executable type. The nested
+payload binder type is the payload type projected from that contextual
+tag-union endpoint. It is not the original pattern binder's local producer type
+if the source match is being lowered under an erased-call parameter endpoint, a
+promoted-wrapper return endpoint, or any other contextual representation.
+
+For example:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    })
+```
+
+When the boxed function is lowered at the `Box(T)` erased-call boundary, the
+parameter endpoint for `value` represents `Apply`'s payload as an erased
+callable. The `Apply(f)` pattern binder must therefore be lowered as the erased
+payload type selected by that endpoint. It must not keep a standalone local
+pattern type whose inactive-function-slot payload was `vacant_callable_slot`,
+because that would make `PatternBindingTransform` cross from a vacant callable
+slot to a real erased callable. A vacant callable slot is only an uninhabited
+structural schema position; it is never the type of a reachable pattern binder.
 
 In implementation terms, IR lowering must materialize `PatternBinding.source`,
 apply `PatternBinding.binding_transform` to produce `PatternBinding.temp`, bind
@@ -9514,6 +13713,117 @@ bridge directly contains an arbitrary source expression, a source `match`, a
 call, a box operation, a field projection, a tag payload extraction, or any
 expression with effects or reference-counting behavior. In release builds, the
 equivalent path is `unreachable`.
+
+Executable MIR values are single-typed by construction.
+
+`ExecutableValueRef` is not an untyped temporary name that later expressions may
+reinterpret. The executable MIR store must record exactly one executable
+`TypeId` for every value reference as soon as that value is introduced:
+
+```zig
+const Store = struct {
+    exprs: ArrayList(Expr),
+    typed_values: ArrayList(TypedValue),
+
+    // Required release data, not verifier-only metadata. IR lowering uses this
+    // invariant to lower direct calls, erased calls, bridges, and ARC-visible
+    // values without layout repair.
+    value_types: ArrayList(?TypeId),
+
+    fn freshValueRef(self: *Store) ExecutableValueRef {
+        const value = ExecutableValueRef.fromInt(self.value_types.len);
+        self.value_types.append(null);
+        return value;
+    }
+
+    fn defineValue(self: *Store, value: ExecutableValueRef, ty: TypeId) void {
+        switch (self.value_types[value.index()]) {
+            null => self.value_types[value.index()] = ty,
+            ty => {},
+            else => executableInvariant(
+                "executable MIR tried to define one value ref at two types",
+            ),
+        }
+    }
+
+    fn addExpr(self: *Store, ty: TypeId, value: ExecutableValueRef, data: Expr.Data) ExprId {
+        self.defineValue(value, ty);
+        return self.exprs.append(.{ .ty = ty, .value = value, .data = data });
+    }
+
+    fn addValueRefExpr(self: *Store, value: ExecutableValueRef) ExprId {
+        const ty = self.valueType(value) orelse executableInvariant(
+            "executable MIR referenced an untyped value",
+        );
+        return self.addExpr(ty, self.freshValueRef(), .{ .value_ref = value });
+    }
+};
+```
+
+The exact API names may differ, but the API shape must make the invariant hard
+to violate:
+
+- a procedure parameter value is defined by the procedure parameter list
+- a pattern binder value is defined by the pattern's lowered executable type
+- a declaration target value is defined by that declaration's type
+- an expression result value is defined by the expression type passed to
+  `addExpr`
+- a `value_ref` expression derives its type from the referenced value; it must
+  not accept a caller-supplied replacement type
+- a bridge, boxed-boundary transform, tag-union transform, record transform,
+  tuple transform, list transform, nominal reinterpretation, erased callable
+  packing operation, or callable adapter argument transform that changes
+  representation must allocate and define a fresh `ExecutableValueRef`
+
+For example, this Roc program crosses an erased boxed-callable boundary and the
+argument tag union has a callable payload:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_| Box.box(|value| {
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+})
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The source argument to `apply_tag` may be represented as a finite callable-set
+tag payload, while the erased boxed function's raw ABI argument may represent
+that payload as an erased callable. Those are two distinct executable types. The
+adapter must therefore publish and executable MIR must apply a tag-union value
+transform that produces a fresh value for the raw erased argument before the
+direct call to the erased wrapper body. It is forbidden for executable MIR to
+write:
+
+```zig
+// Wrong: this reuses one value under a different type.
+const raw_arg_expr = ast.addValueRefExpr(raw_erased_tag_union_ty, finite_tag_value);
+```
+
+The correct shape is:
+
+```zig
+const raw_arg_value = applyExecutableValueTransform(
+    finite_tag_value,
+    finite_tag_union_ty,
+    raw_erased_tag_union_ty,
+);
+const raw_arg_expr = ast.addValueRefExpr(raw_arg_value);
+```
+
+IR lowering must treat a type mismatch between an executable `value_ref` and the
+referenced value as an executable MIR bug, never as permission to coerce
+aggregate layouts. The LIR interpreter's old aggregate ref-coercion path is
+therefore not a semantic fallback. If it is reached for records, tuples, tag
+unions, lists, boxes, or erased callables, the upstream executable MIR failed to
+publish or apply an explicit transform.
 
 Callable-set member tag assignment must be deterministic.
 
@@ -10560,6 +14870,338 @@ ordinary mono specializations and participate in the fixed-point summary graph.
 Only top-level value lookup may produce `AvailabilityUse.local_root` for an
 unfilled local root, and only before the checked artifact is published.
 
+When summary-only mono lowering reaches a concrete constant use whose
+`ConstInstanceRef` has not been sealed yet, the lambda-solved/executable summary
+node may be represented as `const_ref: ConstInstantiationKey`. That key is not
+availability-only. It has two simultaneous meanings:
+
+- availability: the owning `ConstRef` template and any local/imported root that
+  fills that template must be available before the current root can be
+  finalized;
+- concrete value: the requesting artifact must reserve/fill the exact
+  `ConstInstantiationKey` before publication.
+
+Therefore the dependency-summary builder must append both:
+
+```zig
+availability.append(.{ .const_template = key.const_ref });
+if (key.const_ref.owner is local top-level root) {
+    availability.append(.{ .local_root = owner_root });
+}
+concrete.append(.{ .const_instance = key });
+```
+
+It is a compiler bug to record only the availability edge. That would
+topologically evaluate the producer root but never instantiate the producer at
+the concrete requested source type, causing runnable post-check lowering to see
+a missing sealed constant instance. It is also a compiler bug to create the
+instance during runnable lowering; the `const_ref` summary node exists
+specifically so checking finalization can create the instance before the
+post-check boundary.
+
+For example, the generic wrapper below uses the concrete `OutOfBounds` constant
+inside a generic procedure specialization:
+
+```roc
+nth = |l, i| {
+    match List.get(l, i) {
+        Ok(e) => Ok(e)
+        Err(OutOfBounds) => Err(OutOfBounds)
+    }
+}
+
+first = nth(["a", "b", "c"], 2)
+second = nth(["a"], 2)
+main = (first, second)
+```
+
+The dependency summary for each concrete `nth` specialization must record that
+the `OutOfBounds` constant template is available and that the exact concrete
+`ConstInstantiationKey` for the `Err` payload endpoint is required. Evaluating
+the `OutOfBounds` top-level root alone is insufficient; finalization must also
+fill the concrete instance row consumed by runnable lowering.
+
+The same rule applies to every concrete root request, not only to roots whose
+ABI is `compile_time`. Checking finalization must run the summary-only
+MIR-family path for runtime, test, platform, REPL, development, and tool roots
+as well as compile-time roots. The runtime-root summary path exists only to
+publish and seal semantic dependencies in the checked artifact. It must not
+produce compile-time payloads, executable MIR retained for the final binary, IR,
+LIR, backend input, runtime root lists, top-level thunks, initializer
+procedures, or interpreted results. It lowers the selected concrete runtime root
+requests in `comptime_dependency_summary` mode, publishes any callable-set
+descriptors and erased-call ABI records that summary lowering discovers, records
+`AvailabilityUse` and `ConcreteValueUse`, and ensures every concrete dependency
+before the artifact can become published. Runtime concrete
+dependency sealing must happen after local compile-time root availability has
+been satisfied. A runtime root summary may contain `AvailabilityUse.local_root`
+for a callable or constant root that must be promoted or reified before a
+runtime `ConstInstantiationRequest` can be lowered. Running the concrete
+dependency lowerer first would force runnable lowering to consume a
+`pending_callable_root`, which is forbidden. Therefore checking finalization
+must collect both compile-time and runtime summaries up front, evaluate local
+compile-time roots in topological availability order, and only then ensure the
+runtime summaries' concrete dependencies.
+
+Conceptual shape:
+
+```zig
+fn finalizeCheckedArtifact(artifact: *CheckedModuleArtifact) void {
+    const compile_time_summaries = summarizeRootDependencies(.{
+        .purpose = .compile_time,
+        .requests = artifact.root_requests,
+        .emit_compile_time_payloads = true,
+    });
+
+    const runtime_summaries = summarizeRootDependencies(.{
+        .purpose = .runtime,
+        .requests = artifact.root_requests,
+        .emit_compile_time_payloads = false,
+    });
+
+    for (orderedCompileTimeRoots(compile_time_summaries)) |root| {
+        ensureConcreteDependencies(root.summary.concrete_values);
+        evaluateRootThroughLirInterpreter(root);
+    }
+
+    for (runtime_summaries) |summary| {
+        ensureAvailability(summary.availability_values);
+        ensureConcreteDependencies(summary.concrete_values);
+    }
+}
+```
+
+`emit_compile_time_payloads = false` is important. A runtime root summary has no
+`CompileTimeEvaluationPayload` because there is no constant graph to reify and
+no callable result to promote as the result of running that root. The root body
+and every transitively reachable procedure body still have concrete constant and
+callable dependencies. Those dependencies must be sealed before publication
+because runnable mono lowering is forbidden from creating constant instances.
+Runnable lowering may only consume `ConstInstanceRef`,
+`CallableBindingInstanceRef`, and `ProcedureCallableRef` rows that checking
+finalization already reserved and filled.
+
+For example:
+
+```roc
+nth = |l, i| {
+    match List.get(l, i) {
+        Ok(e) => Ok(e)
+        Err(OutOfBounds) => Err(OutOfBounds)
+    }
+}
+
+main = nth(["a"], 2)
+```
+
+`main` is a runtime root, but the `nth(List(Str), I64)` specialization still
+uses the `OutOfBounds` constant at the concrete tag payload type needed by the
+`Err` branch. If checking finalization summarizes only `compile_time` roots,
+the artifact can be published with no sealed `ConstInstantiationKey` for that
+`OutOfBounds` use. Later runnable lowering would then have only two bad
+options: create the instance after the post-check boundary, or crash. Creating
+it after the post-check boundary is forbidden because that would let runnable
+lowering mutate semantic artifact state. Crashing is a compiler bug. Therefore
+the runtime root summary must record:
+
+```zig
+availability.append(.{ .const_template = out_of_bounds_const_ref });
+concrete.append(.{ .const_instance = out_of_bounds_at_err_payload_type });
+```
+
+and checking finalization must call `ensureConcreteDependencies` on that summary
+before the artifact is published.
+
+Resolving a `ConcreteValueUse.const_instance` into a
+`ConstInstantiationRequest` requires both the canonical key and a checked type
+payload root. The canonical key is not a type payload. Finalization must resolve
+the payload explicitly before reserving the instance:
+
+```zig
+fn requestForConcreteConstUse(
+    artifact: *CheckedModuleArtifact,
+    imports: []ImportedModuleView,
+    key: ConstInstantiationKey,
+) ConstInstantiationRequest {
+    if (artifact.checked_types.rootForKey(key.requested_source_ty)) |payload| {
+        return .{ .key = key, .requested_source_ty_payload = payload };
+    }
+
+    if (findImportedCheckedType(imports, key.const_ref.artifact, key.requested_source_ty)) |imported_ty| {
+        const payload = projectImportedCheckedTypeIntoArtifact(artifact, imported_ty);
+        return .{ .key = key, .requested_source_ty_payload = payload };
+    }
+
+    invariant("concrete const dependency key has no published checked payload");
+}
+```
+
+Imported projection is a checked-artifact publication operation, not a recovery
+heuristic. If a runtime or compile-time root requests a concrete constant whose
+payload type is defined by an imported artifact, checking finalization must
+project that imported checked type payload into the requesting artifact before
+it reserves the `ConstInstantiationRequest`. The projected payload is then part
+of the immutable checked artifact consumed by later stages. Runnable lowering
+must not project imported type payloads, synthesize payloads from canonical key
+bytes, or ask the const producer to patch in missing payload data.
+
+This matters for ordinary imported constants such as `OutOfBounds` from
+`List.get`:
+
+```roc
+nth = |l, i| {
+    match List.get(l, i) {
+        Ok(e) => Ok(e)
+        Err(OutOfBounds) => Err(OutOfBounds)
+    }
+}
+
+main = nth(["a"], 2)
+```
+
+The requesting module owns the concrete `ConstInstantiationKey` used by the
+`nth(List(Str), I64)` runtime specialization, but the `OutOfBounds` template and
+some checked payload roots may come from the imported List artifact. The
+requesting artifact must project any imported checked payload needed to build
+the concrete request during finalization. After publication, the runnable mono
+specialization sees only a sealed `ConstInstanceRef`.
+
+There is one additional rule for constants whose producer source scheme is
+already concrete. If the producer's checked source scheme contains no type
+variables requiring instantiation, the `ConstInstantiationKey.requested_source_ty`
+must be the producer scheme's concrete root, not the contextual type where the
+constant is mentioned. This applies equally to local and imported constants.
+Using the mention context for a concrete producer is wrong because it can turn a
+fixed constant such as `OutOfBounds` into a narrower tag row demanded by one
+call site, and then the compile-time entry wrapper for the producer no longer
+unifies with its own checked type.
+
+Conceptual lowering:
+
+```zig
+fn constUseKey(const_ref: ConstRef, contextual_key: CanonicalTypeKey) ConstInstantiationKey {
+    const producer_scheme = checkedSchemeForConstRef(const_ref);
+    if (producer_scheme.is_concrete_const_producer()) {
+        return .{
+            .const_ref = const_ref,
+            .requested_source_ty = producer_scheme.root_key,
+        };
+    }
+
+    return .{
+        .const_ref = const_ref,
+        .requested_source_ty = contextual_key,
+    };
+}
+```
+
+For example:
+
+```roc
+main =
+    match List.get(["a"], 2) {
+        Ok(value) => Ok(value)
+        Err(OutOfBounds) => Err(OutOfBounds)
+    }
+```
+
+The `OutOfBounds` value is a concrete producer. Both uses of it must request the
+producer's concrete source type, even though each occurrence appears inside a
+larger contextual expression. If the contextual tag payload type is used
+instead, mono specialization eventually tries to lower the producer's
+compile-time entry wrapper at a type that was invented by the consumer and is
+not the producer's checked type. That is a compiler bug. The explicit checked
+artifact data for a const use must therefore distinguish:
+
+- polymorphic const producers, whose concrete key is selected by the use
+  context after specialization;
+- concrete const producers, whose concrete key is fixed by the producer source
+  scheme and whose payload may need to be projected from an imported artifact.
+
+If a summary-producing stage constructs a concrete const key whose payload does
+not exist in the requesting artifact and cannot be projected from an imported
+artifact, that stage must publish the synthetic checked payload at the point
+where it creates the key and before appending the `ConcreteValueUse`. It is
+forbidden to append a key-only dependency whose payload can only be recovered
+from a run-local MIR type store later. Later stages must never reconstruct a
+checked payload from a `CanonicalTypeKey`.
+
+When the synthetic payload comes from a run-local MIR type store, publishing it
+into the checked artifact must remap every canonical-name id from the run-local
+store into the target artifact's canonical-name store. A checked type payload is
+not portable across canonical-name stores just because its shape is otherwise
+identical. Tag labels, record-field labels, type names, module names, and method
+names are all ids into a particular `CanonicalNameStore`.
+
+For example, a run-local mono store may have these ids:
+
+```zig
+Ok = TagLabelId(1)
+OutOfBounds = TagLabelId(2)
+Err = TagLabelId(3)
+```
+
+while the checked artifact has:
+
+```zig
+Err = TagLabelId(0)
+OutOfBounds = TagLabelId(1)
+Ok = TagLabelId(2)
+```
+
+Copying the run-local payload bytes directly into the checked artifact would
+turn a correct shape into the wrong type. The target artifact might interpret
+the run-local `Ok` id as `OutOfBounds`, and later mono unification would compare
+the wrong tag sets. The publication operation must therefore be shaped like:
+
+```zig
+fn publishRunLocalCheckedPayload(
+    target: *CheckedModuleArtifact,
+    source_names: *CanonicalNameStore,
+    source_payloads: CheckedTypeStoreView,
+    source_root: CheckedTypeId,
+) CheckedTypeId {
+    return projectCheckedTypeViewRootWithNameRemap(
+        target,
+        source_names,
+        source_payloads,
+        source_root,
+    );
+}
+```
+
+The projector must remap:
+
+- `CheckedAliasType.name`
+- `CheckedAliasType.origin_module`
+- `CheckedRecordField.name`
+- `CheckedNominalType.name`
+- `CheckedNominalType.origin_module`
+- `CheckedTag.name`
+- `CheckedStaticDispatchConstraint.fn_name`
+
+It must also preserve recursive structure by reserving the target root before
+projecting child payloads. Release lowering must not carry extra verification
+metadata for this; debug builds may assert that the projected key matches the
+source key and that no run-local canonical ids remain in the target payload.
+
+This is not a root-discovery pass and not a body scan after the fact. The input
+is the already published explicit root request table, and the lowering path is
+the same concrete MIR-family path used for compile-time dependency summaries:
+mono MIR, row-finalized mono MIR, lifted MIR, lambda-solved MIR, and the
+callable-aware summary records derived from lambda-solved/executable plans. The
+only difference between a runtime-root summary and a compile-time-root summary
+is the absence of `CompileTimeEvaluationPayload` publication for the runtime
+root itself. Procedure summaries, direct-call dependencies, finite callable
+members, erased-call code dependencies, constant-instance dependencies, and
+callable-binding-instance dependencies are all collected the same way.
+
+It is a compiler bug if any runnable post-check path observes a `ConstUseTemplate`
+whose exact concrete `ConstInstantiationKey` was not sealed by one of these
+checking-finalization summaries. The correct response is a debug assertion and
+release `unreachable`, not an attempt to reserve or evaluate the constant from
+runnable lowering.
+
 After dependency ordering has evaluated a prerequisite root, real MIR lowering
 for any dependent root may turn `ConstUseTemplate` records into explicit
 `ConstInstantiationRequest` values and `ProcedureUseTemplate` records into
@@ -10618,6 +15260,18 @@ top-level function declaration and every top-level lambda that is already a
 procedure declaration receives a `TopLevelProcedureBindingRef`. A function-valued
 root that still requires compile-time callable evaluation may be temporarily
 represented as `pending_callable_root`, but only inside checking finalization:
+
+The compile-time dependency summary table is sparse over `CompileTimeRootId`.
+It must contain a filled summary for every selected concrete compile-time or
+test root request. It must not require summaries for unselected pending roots,
+such as generic top-level constants that have no concrete request in the current
+artifact publication. Those pending roots may remain in `CompileTimeRootTable`
+for diagnostics, exported templates, or future concrete instantiation, but they
+are not executable roots during this publication. If a selected root has no
+dependency summary, that is a compiler bug. If a non-selected pending root has no
+summary, that is expected and must not be papered over by inserting an empty
+summary, because an empty summary would incorrectly claim that the root has no
+availability or concrete dependencies.
 
 ```zig
 const TopLevelProcedureBindingRef = enum(u32) { _ };
@@ -11381,6 +16035,7 @@ const ErasedCaptureSlotReificationRef = struct {
 
 const CallableResultMemberPlan = struct {
     member: CallableMemberId,
+    target_key: ExecutableSpecializationKey,
     capture_slots: Span(CaptureSlotReificationPlan),
 };
 
@@ -11426,12 +16081,46 @@ callable value. This distinction is required for empty callable-containing
 containers: `[]` at source type `List(I64 -> I64)` has a function-typed element
 schema but no reachable callable value.
 For a finite callable result, `source_fn_ty + callable_set_key + member` is the
-complete selected-member identity. `CallableResultMemberPlan` therefore stores
-only the `member` and its capture-slot reification plans; the member procedure,
-tag index, capture slot schema, and capture shape are derived from
-`callable_set_key + member`. If a later implementation caches those derived
-values, debug builds must assert that the cache matches the canonical callable
-set and release builds must use `unreachable` for a mismatch.
+complete selected-member identity for the finite set itself.
+`CallableResultMemberPlan` also stores `target_key`, the exact executable
+specialization key to use if that member later becomes a procedure value or a
+finite promoted wrapper body target. `target_key` is not derived later from the
+member's source procedure. It is published while the callable result is still in
+the solved compile-time context, after the member endpoint's executable payloads
+are known. The member procedure, tag index, capture slot schema, and capture
+shape are derived from `callable_set_key + member`. If a later implementation
+caches those derived values, debug builds must assert that the cache matches the
+canonical callable set and release builds must use `unreachable` for a
+mismatch.
+
+This matters when a compile-time result contains a finite callable whose member
+expects erased callable payloads in an aggregate argument:
+
+```roc
+make_boxed : {} -> Box(([Apply((I64 -> I64)), Keep(I64)] -> I64))
+make_boxed = |_|
+    Box.box(|value|
+        match value {
+            Apply(f) => f(1)
+            Keep(n) => n
+        })
+
+apply_tag : [Apply((I64 -> I64)), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
+```
+
+The callable result plan for `apply_tag` must publish a member `target_key`
+whose argument executable payload is `[Apply(erased_fn), Keep(I64)]`. The later
+finite promoted wrapper body stores that same key as `member_target`, and mono
+threads it through `proc_value.forced_target` without inspecting it.
+Lambda-solved then seals the selected member proc-value target using this exact
+key. If a stage re-created the target from the source function type
+`[Apply((I64 -> I64)), Keep(I64)] -> I64`, it could create a vacant callable
+slot for `Apply` instead of the erased callable slot required by the boxed
+boundary.
 Records, tuples, tags, lists, boxes, transparent aliases, and nominals describe
 exactly where those leaves live inside a private promoted-capture value. A
 structural capture plan must preserve inactive and uninhabited child schemas
@@ -11947,9 +16636,197 @@ payload plans:
   use that key to order tag variants and record fields for the child schema; it
   must not fall back to checked row source order merely because no child
   `ValueInfo` exists.
+- Tag-union constant graph plans must be indexed by runtime discriminant order.
+  The `ConstTagPlan` array order is not source order and not checked-artifact
+  tag order. If a non-ZST tag union has runtime discriminant `n`, then
+  `ConstTagPlan.variants[n]` must describe the tag whose finalized row shape has
+  logical index `n`.
+//
+// This is mandatory across module boundaries because imported checked tag rows
+// can preserve declaration/source order while row-finalized executable shapes
+// use canonical logical tag indices. For example:
+//
+// ```roc
+// # A.roc
+// module [MyTag]
+//
+// MyTag := [Foo({ x: U64, y: U64 }), Bar, Baz(Str)]
+// ```
+//
+// ```roc
+// # Main.roc
+// module []
+//
+// import A exposing [MyTag]
+//
+// lookup = |items, idx| {
+//     match List.get(items, idx) {
+//         Ok(val) =>
+//             match val {
+//                 Foo(rec) => rec.x
+//                 Baz(_) => 99
+//                 _ => 0
+//             }
+//
+//         Err(_) => 0
+//     }
+// }
+//
+// items = [MyTag.Foo({ x: 42, y: 7 })]
+// inline = match List.get(items, 0) {
+//     Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+//     Err(_) => 0
+// }
+//
+// main = (inline, lookup(items, 0))
+// ```
+//
+// The source declaration order is `Foo, Bar, Baz`, but the executable row shape
+// may use a different canonical logical order, such as `Bar, Baz, Foo`. If
+// compile-time reification stores the plan array in source order and then uses
+// the runtime discriminant as an array index, `Foo({ x: 42, y: 7 })` can select
+// the `Baz(Str)` plan and try to reify the integer `42` as a `Str` pointer. That
+// is a compiler bug caused by mismatched explicit data, not a runtime string
+// issue.
+//
+// Correct constant-plan construction consumes the executable payload variant and
+// places the checked tag plan at the variant's logical row index:
+//
+// ```zig
+// fn tag_variants_for_executable_payload(
+//     checked_tags: []const CheckedTag,
+//     executable_payload: SessionExecutableTagUnionPayload,
+// ) []ConstTagVariantPlan {
+//     var variants = allocate(ConstTagVariantPlan, executable_payload.variants.len);
+//     var seen = allocate(bool, executable_payload.variants.len);
+//
+//     for (checked_tags) |checked_tag| {
+//         const executable_variant =
+//             tag_variant_for_artifact_label(executable_payload, checked_tag.name)
+//                 orelse compiler_bug("missing executable tag variant");
+//
+//         const logical_index =
+//             row_shapes.tag(executable_variant.tag).logical_index;
+//
+//         if (seen[logical_index]) {
+//             compiler_bug("duplicate executable tag logical index");
+//         }
+//
+//         variants[logical_index] = .{
+//             .tag = checked_tag.name,
+//             .payloads = payload_plans_by_payload_logical_index(
+//                 checked_tag,
+//                 executable_variant,
+//             ),
+//         };
+//         seen[logical_index] = true;
+//     }
+//
+//     verify_all_seen(seen);
+//     return variants;
+// }
+// ```
+//
+// Incorrect construction is:
+//
+// ```zig
+// for (checked_tags, 0..) |checked_tag, checked_index| {
+//     const executable_variant =
+//         tag_variant_for_artifact_label(executable_payload, checked_tag.name);
+//
+//     // BUG: `checked_index` is checked/source order, not runtime discriminant
+//     // order. Reification later indexes this array with a runtime
+//     // discriminant.
+//     variants[checked_index] = plan_for(checked_tag, executable_variant);
+// }
+// ```
+//
+// Payload plans inside each variant have the same rule at payload granularity:
+// place each `ConstTagPayloadPlan` by `row_shapes.tagPayload(payload).logical_index`.
+// Reification then consumes only runtime discriminant and payload logical index.
+// It must not compare tag names at runtime, reorder the array during reification,
+// or infer an order from source text.
 
 This row normalization is not source reconstruction and not a heuristic. It is
 just consuming the explicit checked type graph that earlier stages published.
+The same ownership rule applies when mono specialization materializes a concrete
+source type into a local checked-type graph for mono type lowering. A terminal
+`.record_unbound` field chunk is allowed inside the checked artifact and inside
+the concrete-source-type store because checking and row solving may use it to
+represent a row whose fields are known but whose source spelling came from a
+record literal, destructure, or row equation. It is not, however, a legal
+top-level endpoint for mono type lowering. Before calling the mono type lowerer,
+materialization must turn a terminal concrete `.record_unbound` into an explicit
+closed record:
+
+```zig
+.record_unbound => |fields| .{
+    .record = .{
+        .fields = materializeConcreteRecordFields(fields),
+        .ext = materializeSyntheticPayload(.empty_record),
+    },
+}
+```
+
+This conversion is not guessing and it is not a compatibility repair. The
+absence of an extension on `.record_unbound` is the explicit checked-artifact
+statement that the row chunk has no remaining tail in that position. The
+materializer is only making that terminal fact visible in the representation
+shape required by `mono/lower_type.zig`. Nested record extensions remain
+extension chains and are normalized by the lowerer; only an endpoint being
+lowered as a first-class concrete type must be sealed this way.
+
+For example:
+
+```roc
+update = |boxed| {
+    { count } = Box.unbox(boxed)
+    count + 1
+}
+
+initial = Box.box({ count: 0 })
+result = update(initial)
+```
+
+The call to `Box.box` specializes `Box(T)` with `T = { count: I64 }`. The
+checked source graph for the record literal may publish that `T` as a terminal
+`.record_unbound` field chunk because it came from row solving around a record
+literal. When mono later lowers the concrete `Box({ count: I64 })` argument type
+for `Box.unbox`, the `Box` payload must be materialized as the closed record
+`{ count: I64 }` with an explicit `.empty_record` tail. Passing the terminal
+`.record_unbound` directly to mono type lowering is a compiler bug: the lowerer
+would correctly reject it as an unfinalized open-record endpoint.
+
+The same rule applies when lambda-solved builds executable erased-boundary
+payloads for `Box(function)` arguments and results. If an erased boxed boundary
+contains a record field or tag payload whose callable representation changes,
+the source cursor must walk the checked row-extension chain before matching the
+field or tag. It must not look only at the row head, and it must not recover the
+missing tail from the lambda-solved logical type.
+
+For example:
+
+```roc
+make_boxed : {} -> Box([Apply(I64 -> I64), Keep(I64)] -> I64)
+make_boxed = |_| Box.box(|value|
+    match value {
+        Apply(f) => f(1)
+        Keep(n) => n
+    }
+)
+
+apply_tag : [Apply(I64 -> I64), Keep(I64)] -> I64
+apply_tag = Box.unbox(make_boxed({}))
+```
+
+The checked source type for the function argument may be represented as a
+tag-union head containing `Apply` with an extension containing `Keep`.
+Executable erased-boundary construction must normalize that published checked
+row before building the argument payload, so the `Apply` payload can be
+transformed from finite callable representation to erased callable
+representation while `Keep(I64)` remains ordinary. Seeing only the `Apply` head
+and then failing to find `Keep` is a compiler bug in erased-boundary lowering.
+
 For example, a checked type for `List(MyTag)` may contain `MyTag` as a nominal
 whose backing row is physically split into a head `[Foo(...)]` and an extension
 `[Bar, Baz(Str)]`:
@@ -12764,14 +17641,16 @@ producer type. Roc differs from Cor by storing compile-time constants as
 `ConstRef`/`ConstInstanceRef` data instead of runtime top-level thunks, but the
 type-flow invariant is the same.
 
-Compile-time constant reification must follow the same published nominal-backing
-edge as mono MIR. `ConstGraphReificationPlan` construction must never read a
-user-defined nominal occurrence's local `backing` field unless that field is the
-checked-artifact-published instantiated declaration representation for that
-exact nominal occurrence. Imported nominals are especially important: a consumer
-artifact may contain an occurrence-local backing that was affected by consumer
-pattern demands, but the constant graph for a producer value must use the
-defining artifact's exported nominal representation.
+Compile-time constant reification must follow the same published
+nominal-declaration edge as mono MIR. `ConstGraphReificationPlan` construction
+must never read a user-defined nominal occurrence's local `backing` field unless
+that field is the checked-artifact-published instantiated declaration
+representation for that exact nominal occurrence. Imported nominals are
+especially important: a consumer artifact may contain an occurrence-local backing
+that was affected by consumer pattern demands, but the constant graph for a
+producer value must use the defining artifact's exported nominal representation
+or an instantiation of the defining artifact's published nominal declaration
+template.
 
 For the cross-module example above, the importing module's checked type store
 may contain an occurrence of `A.MyTag` whose local backing was constrained while
@@ -12787,6 +17666,30 @@ The reification plan for `items` therefore stores the `Foo` payload schema as
 nominal endpoint, it finds both fields. If a narrower consumer endpoint such as
 `{ x: U64 }` is needed, materialization projects from the stored wider graph by
 field label. The stored graph is not rebuilt from the consumer endpoint.
+
+The same rule applies when no exact instantiated exported nominal
+representation exists yet. For example, `Builtin` can publish:
+
+```roc
+Try(ok, err) := [Ok(ok), Err(err)]
+```
+
+but it cannot prepublish every downstream instantiation such as
+`Try(F64, [ListWasEmpty])`. If compile-time constant planning for a consumer
+needs that backing, the consumer's `CheckedTypeProjector` must:
+
+1. select the imported `Try` declaration template by canonical nominal
+   origin/name
+2. project the declaration formal roots and backing root into the consuming
+   artifact's checked type store
+3. substitute the consuming occurrence's concrete arg roots for those projected
+   formals
+4. publish the instantiated backing root with canonical checked type keys
+
+That projected instantiation is semantic checked-artifact publication work. It is
+not a target cache, layout cache, source reconstruction, or compatibility repair.
+After the const/capture plan is sealed, executable MIR, IR, LIR, ARC, backends,
+and interpreters consume only the resulting local checked root ids.
 
 Because checked type ids are artifact-local, a consuming artifact must not store
 an imported `CheckedTypeId` directly in its `ConstGraphReificationPlan` or
@@ -12942,6 +17845,82 @@ is mandatory. If a compile-time tag value reaches reification without an
 executable tag-union endpoint, that is a compiler bug surfaced by a debug
 assertion and release `unreachable`.
 
+Const-graph reification must also handle singleton tag unions and singleton
+nominal/alias wrappers whose committed physical layout is ZST. A
+`ConstGraphReificationPlan.tag_union` is a logical source-level tag-union plan;
+it does not imply that the runtime result contains a discriminant. If the
+committed layout for that endpoint is `.zst`, the plan must have exactly one
+variant, and that variant is selected without reading runtime bytes. Each active
+payload is then reified at `.zst` with `Value.zst`. If any payload plan cannot
+reify from ZST, that exposes an invalid endpoint/plan mismatch and is a compiler
+bug.
+
+For example:
+
+```roc
+Iter(s) :: [It(s)].{
+    identity : Iter(s) -> Iter(s)
+    identity = |It(s_)| It(s_)
+}
+
+count : Iter({})
+count = It({})
+
+main = count.identity() == It({})
+```
+
+`Iter({})` is a transparent nominal over the singleton tag union `[It({})]`.
+The logical constant schema still needs to preserve `Iter` and `It` so imports,
+debug output, equality, and reification agree with the source program. The
+runtime value, however, is zero-sized: there is only one possible tag and its
+payload is `{}`. The compile-time finalizer must therefore reify this as the
+single `It({})` variant from the explicit const graph plan. It must not demand a
+runtime tag-union layout, synthesize a discriminant, special-case Bool, or infer
+anything from source syntax.
+
+The required shape is:
+
+```zig
+fn reifyTagUnion(plan: TagUnionPlan, layout: Layout, value: Value) Reified {
+    if (layout == .zst) {
+        assert(plan.variants.len == 1);
+        return reifySingletonVariantFromZst(plan.variants[0]);
+    }
+
+    assert(layout == .tag_union);
+    const discriminant = readDiscriminant(value, layout);
+    return reifyVariantByFinalizedDiscriminant(plan, layout, value, discriminant);
+}
+```
+
+This is the same rule used by LIR bridge lowering: physical ZST elision removes
+storage, not logical source identity.
+
+Const-graph reification must likewise respect physical erasure of one-field
+records, one-element tuples, and newtype-like wrappers. If a logical record or
+tuple plan has exactly one child and the committed physical layout is not
+`.struct_`, the whole physical value belongs to that one child. Reification must
+wrap the reified child back in the logical record/tuple schema. It must not
+demand a runtime struct wrapper merely because the source graph contains a
+record node.
+
+For example:
+
+```roc
+ValueCombinationMethod := [Divide, Modulo, Add, Subtract]
+Value := [CombinedValue({ combination_method: ValueCombinationMethod })]
+
+main = Value.CombinedValue({ combination_method: ValueCombinationMethod.Add })
+```
+
+The source-level payload of `CombinedValue` is a record with one field. The
+committed physical payload may be exactly the `ValueCombinationMethod` tag-union
+layout, with no record wrapper bytes. The const graph still reifies
+`{ combination_method: Add }` as a record node under `CombinedValue`; it reads
+the child from the whole payload value and then rebuilds the logical record
+schema. This is representation erasure of a wrapper, not a special case for any
+particular tag union.
+
 `ConstInstanceRef` identifies a concrete instantiated logical node owned by a
 `ConstInstantiationStore`. The store owner is the checked artifact that requested
 the concrete instance, not necessarily the artifact that owns the `ConstRef`.
@@ -12971,6 +17950,62 @@ Recursive instance requests reuse the reserved instance. Cycles that are invalid
 under Roc's top-level constant rules are reported before artifact publication;
 cycles that reach post-check lowering are compiler invariant violations handled
 by debug-only assertion in debug builds and `unreachable` in release builds.
+
+`ConstInstantiationStore` entries are single-assignment cells. A concrete
+`ConstInstantiationKey` may be reserved many times, because dependency summaries,
+runtime-root summaries, compile-time root evaluation, and imported consumers may
+all name the same semantic request. It may be filled exactly once. If dependency
+materialization evaluates a local compile-time root's concrete instance before
+the topological root loop reaches that root, the root loop must reuse the sealed
+instance. It must publish the already-produced schema/value into the root's
+`CompileTimeValueStore` binding and attach the already-produced root
+reification plan to `CompileTimeRootTable`; it must not run MIR/LIR lowering or
+the LIR interpreter a second time for the same `ConstInstantiationKey`.
+
+This is required even when the root appears to be "the selected root" rather
+than merely a dependency. Selection decides which roots must be available in the
+published artifact; it does not create a second semantic identity for the same
+constant. The semantic identity of a concrete non-function compile-time value is
+only:
+
+```zig
+const ConstInstantiationKey = struct {
+    const_ref: ConstRef,
+    requested_source_ty: CanonicalTypeKey,
+};
+```
+
+For example:
+
+```roc
+Id : [Id(I64)]
+
+value : Id
+value = Id(41)
+
+as_text : Str
+as_text =
+    match value is
+        Id(n) -> Num.to_str(n)
+
+main = as_text
+```
+
+`value` and `as_text` are both local compile-time constants. While preparing the
+runtime root for `main`, dependency-summary lowering may discover that `as_text`
+needs the concrete instance of `value` at source type `Id`. Checking
+finalization must reserve and evaluate:
+
+```text
+ConstInstantiationKey { const_ref: value, requested_source_ty: Id }
+```
+
+If the topological root loop later reaches the `value` root, it must see that
+the exact key is already evaluated and publish the existing result into the
+root tables. Re-evaluating `value` would violate single assignment, duplicate
+promoted procedures and private capture constants, and make dependency summaries
+depend on traversal order. Silently replacing the instance would be a fallback,
+so it is forbidden.
 
 A published checked artifact may contain sealed local instances in its own
 `ConstInstantiationStore`. A consuming module may create additional concrete
@@ -14133,6 +19168,89 @@ deliberately defaults to a concrete type, such as a numeral-origin flex that
 publishes as `Dec`; after defaulting, the published graph is concrete and normal
 concrete deduplication applies.
 
+Because open checked type roots are not deduplicated by canonical key, artifact
+publication must also keep a temporary, publication-only source type root index:
+
+```zig
+const CheckedSourceTypeRoot = struct {
+    source_var: CheckerTypeVar,
+    checked_root: CheckedTypeId,
+};
+
+const CheckedTypePublication = struct {
+    store: CheckedTypeStore,
+
+    // This is used only while publishing the checked artifact. It is not stored
+    // in the final artifact, not serialized, and not consumed by MIR. Every
+    // later stage receives the CheckedTypeId already written into the checked
+    // body, root request, static-dispatch plan, procedure template, const root,
+    // or resolved-value table.
+    source_type_roots: Span(CheckedSourceTypeRoot),
+};
+```
+
+The exact names may differ, but the boundary is mandatory. During checked
+artifact publication, any code that starts from a checker type variable must
+look up the `CheckedTypeId` through this source type root index. It must not
+compute a `CanonicalTypeKey` from the checker variable and then call
+`CheckedTypeStore.rootForKey(key)` unless the publication code has first proven
+that the checked graph is fully concrete. A canonical key for an open graph
+names equality *inside that graph*; it is not a unique handle for every source
+variable in the module.
+
+This is especially important for static dispatch and polymorphic local
+functions. For example:
+
+```roc
+main =
+    append_one = |acc, x| List.append(acc, x)
+
+    clone_via_fold = |xs|
+        xs.fold(List.with_capacity(1), append_one)
+
+    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+```
+
+The checked body contains several open function types that can have the same
+canonical structural key shape even though they are different source type
+variables: the static-dispatch callable for `xs.fold(...)`, the local
+procedure type for `append_one`, and intermediate call-result slots. If
+publication resolves `StaticDispatchCallPlan.callable_ty` by asking for “the
+first checked root with this canonical key,” it can attach the `fold` plan to a
+different open root. Mono then receives an apparently explicit plan, but the
+plan's slots are already wrong: the fold state can be connected to `{}` from
+one expression and later to `List(I64)` or `List(List(I64))` from the actual
+specialization. That is not a mono unification problem; it is a checked-artifact
+publication bug.
+
+The correct rule is:
+
+1. `CheckedTypeStore` construction records the artifact-owned `CheckedTypeId`
+   selected for every resolved checker type variable it copies.
+2. Fully concrete payloads may share one checked root by canonical key. When
+   that happens, every source variable that resolved to that concrete payload
+   still gets an index entry pointing to the shared root.
+3. Open payloads, generalized variables, row tails, tag-union tails, and
+   static-dispatch constrained variables keep distinct checked roots even when
+   their canonical keys match.
+4. Checked body copying, checked pattern copying, checked call
+   `source_fn_ty_payload` publication, procedure-template root publication,
+   root request publication, compile-time root publication, resolved value-ref
+   publication, method registry publication, and `StaticDispatchCallPlan`
+   publication all use the source type root index when they start from a
+   checker type variable.
+5. After all checked-artifact tables have written explicit `CheckedTypeId`
+   fields, the source type root index is discarded. MIR never receives raw
+   checker type variables and never has to repeat this lookup.
+
+Debug builds must verify during publication that every source type variable
+used by a checked body, root request, static-dispatch plan, procedure template,
+resolved value reference, platform-required binding, or compile-time root is
+present in the index. If it is missing, publication has failed to copy a
+lowering-visible type root; that is a compiler bug. Release builds use
+`unreachable` for the same path.
+
 Post-check stages must treat this as already-published semantic data. Mono MIR
 and later stages may instantiate, clone, compare, or lower the checked graph
 they were given, but they must not repair collapsed variables by looking at
@@ -14408,8 +19526,9 @@ until the static-dispatch graph edges for that call are connected:
    concrete source type from current specialization state, such as a parameter,
    local binder, pattern binder, previously resolved call, or previously
    resolved static-dispatch result. Context-dependent literals, empty
-   containers, records, tags, and lambdas do not invent their own type here;
-   they are lowered later under the finalized argument slot.
+   containers, records, tags, lambdas, and nested dispatch expressions do not
+   invent their own type here; they are lowered later under the finalized
+   argument slot.
 4. Resolve the method owner from the concrete dispatcher source type and look up
    the checked method target.
 5. If there is a checked method target, connect the target callable type to the
@@ -14424,6 +19543,37 @@ static-dispatch expression owns a fresh dispatch-site instantiation of that
 target callable graph. Target callable variables must not be stored in the
 enclosing procedure instantiation and must not be shared between sibling
 dispatch expressions. For example:
+
+Fresh means fresh. The dispatch-site instantiator must be initialized from the
+owning checked artifact/type view, not forked from the enclosing body's current
+`TypeInstantiator`. It receives the current specialization only through explicit
+edges:
+
+```zig
+var dispatch = TypeInstantiator.init(
+    allocator,
+    input,
+    program,
+    owner_checked_type_view,
+    name_resolver,
+    owner_artifact,
+);
+
+dispatch.unifyTemplateWithConcrete(plan.callable_ret, expected_ret);
+dispatch.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_ref);
+for (known_arg_edges) |edge| {
+    dispatch.unifyTemplateWithConcrete(edge.param_template, edge.arg_ref);
+}
+dispatch.unifyTemplateWithConcrete(plan.callable_ty, method_target_callable);
+```
+
+It must not copy the enclosing instantiator's substitution map, concrete
+variable substitutions, materialized template roots, lowered template type ids,
+or concrete-template refs. Those caches are expression-local implementation
+state. Copying them lets a previous query such as an unconstrained
+`List.with_capacity(1)` materialize `List({})` and then contaminate a later
+`List.fold` dispatch that should have received `state = List(I64)` from its
+expected result.
 
 ```roc
 main = {
@@ -14456,6 +19606,78 @@ sites would incorrectly force `List(Str)` to unify with the prior `List(I64)`
 target instantiation. The same rule applies inside the generic `dedup` local
 procedure: `contains` and `append` target instantiations are per concrete local
 procedure instance and per dispatch expression.
+
+Nested dispatch arguments are especially important. In:
+
+```roc
+main = {
+    append_one = |acc, x| List.append(acc, x)
+    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+
+    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+}
+```
+
+the `fold` dispatch owns the graph that connects:
+
+```text
+receiver xs                    -> List(item)
+expected result                -> state
+callback append_one            -> state, item -> state
+init List.with_capacity(1)     -> state
+```
+
+`List.with_capacity(1)` is a nested dispatch expression whose result type is
+context-dependent. It must not be treated as a known argument while the outer
+`fold` dispatch graph is still being connected. If mono materializes
+`List.with_capacity(1)` by itself, the element type has no explicit source and
+can collapse to an empty structural placeholder such as `List({})`. That bogus
+placeholder then conflicts with the callback's real state type when the same
+local procedure is specialized for `List(I64)` and later for `List(List(I64))`.
+
+The required implementation rule is:
+
+```zig
+fn knownConcreteResultTypeForStaticDispatchArgument(arg: CheckedExprId)
+    ?ConcreteTypeInfo
+{
+    if (concreteTypeForLookupExpr(arg)) |binder_type| return binder_type;
+
+    if (expressionPublishesClosedConcreteType(arg)) {
+        return checkedResultType(arg);
+    }
+
+    // Do not otherwise recurse into calls or dispatches here. A nested call
+    // result whose checked type still contains flex/rigid variables, open row
+    // tails, open tag tails, or mono-specialization numeric defaults is not
+    // known. It must be lowered later under the finalized expected slot.
+    return null;
+}
+```
+
+`expressionPublishesClosedConcreteType` is an explicit checked-artifact
+predicate, not a lowering heuristic. It recursively rejects `flex`, `rigid`,
+`pending`, open record tails, open tag-union tails, function types that still
+require instantiation, unsuffixed numeric literals, empty containers, lambdas,
+closures, calls, and dispatch expressions. It accepts closed literals and
+closed aggregate expressions whose children are also known. A call result can
+become known only by normal call-instantiation logic that connects its known
+arguments and expected result slot; it is not accepted merely because the
+checked result type happened to be closed after defaulting.
+
+Thus `clone_via_fold([1.I64, 2.I64])` can be used as the receiver for `.len()`
+because call instantiation sees the closed argument `[1.I64, 2.I64]` and derives
+the result `List(I64)`. `List.with_capacity(1)` inside `fold` cannot be used to
+infer `state`: it is a nested dispatch expression, and its apparent checked
+result must not be trusted as a closed source of truth because it may have been
+closed only by lack of context.
+
+When the outer `fold` graph has finalized the `state` slot, normal argument
+lowering lowers `List.with_capacity(1)` under expected type `List(I64)` for the
+first call and under expected type `List(List(I64))` for the second. This is the
+same "expected slot is the source of truth" rule used for empty lists, numeric
+literals, tags, records, and lambdas.
 
 When one checked template slot is connected to two concrete source-type
 payloads, mono must unify those concrete graphs structurally. It must not merely
@@ -16124,14 +21346,21 @@ shape. Release builds use `unreachable` for violations.
 
 The map exists so compile-time finalization can reify
 `ErasedCallableResultCodePlan.read_from_interpreted_erased_value` without
-recovering from CIR or source syntax. The LIR interpreter encodes erased function
-code fields as `LirProcSpecId` values. Finalization decodes that proc id, looks
-it up in this map, validates it against the already-published
-`ErasedCallableResultPlan`, and then publishes a concrete
-`ErasedCallableCodeRef`. Imported checked artifacts must never ask another
-module's interpreter to rerun just to rediscover this map; any exported
-compile-time callable result is published with concrete code before the exporter
-artifact is sealed.
+recovering from CIR or source syntax. The LIR interpreter must not use a private
+`LirProcSpecId + layout id` erased-callable payload header. Interpreter-created
+boxed erased callables use the same `ErasedCallablePayload { callable_fn_ptr,
+on_drop }` header as every backend: `callable_fn_ptr` points to the native
+interpreter trampoline, and the inline capture bytes begin with an
+`ErasedCallableInterpreterContext` that stores the interpreter pointer, the LIR
+procedure id, the optional semantic capture layout, and the byte offset of the
+semantic capture payload. Finalization reads the proc id from that explicit
+interpreter context, looks it up in this map, validates it against the
+already-published `ErasedCallableResultPlan`, and then publishes a concrete
+`ErasedCallableCodeRef`. Host-provided erased callables already use the same
+payload header and therefore require no interpreter-only call path. Imported
+checked artifacts must never ask another module's interpreter to rerun just to
+rediscover this map; any exported compile-time callable result is published with
+concrete code before the exporter artifact is sealed.
 
 The following clients must call this pipeline instead of hand-assembling old
 stage chains:
@@ -16863,6 +22092,154 @@ If any value-flow edge later contributes a concrete callable to the same slot,
 the slot is no longer vacant; lambda-solved representation must publish the
 finite or erased callable representation instead.
 
+Procedure boundary executable type payloads are published independently from
+procedure body materialization. This is required for compile-time callable
+promotion and finite callable result planning. A finite callable descriptor may
+name a target procedure instance whose body has not yet been demanded for
+runtime emission, but the descriptor still contains a semantic reference to that
+procedure's public boundary: parameter executable type keys, return executable
+type key, source function type, and capture shape key. Lambda-solved must
+publish executable payload rows for the public parameter and return keys for
+every procedure instance that can appear in a callable descriptor, callable
+result plan, erased adapter plan, promoted procedure row, or executable
+specialization key. It must not wait until the body is materialized.
+
+Body materialization remains demand-driven. Publishing boundary type payloads
+does not mean the procedure body is emitted into executable MIR, IR, LIR, or a
+backend. It only seals the type payload metadata that later artifact publication
+and callable result planning must be able to reference without reconstructing it.
+
+For example:
+
+```roc
+make_len : List((I64 -> I64)) -> (I64 -> U64)
+make_len = |fns| |_x| List.len(fns)
+
+len_empty : I64 -> U64
+len_empty = make_len([])
+
+main = len_empty(41)
+```
+
+The promoted callable `len_empty` has a finite callable leaf whose target
+procedure takes `I64` and returns `U64`. Its capture is an empty
+`List((I64 -> I64))`; the list element slot is represented as
+`vacant_callable_slot(I64 -> I64)` because this exact value contains no callable
+elements. Checking finalization still must publish the target procedure's
+parameter and return executable payloads (`I64`, `U64`) before it can publish the
+callable result plan for `len_empty`. If that target body is not otherwise
+needed yet, the body remains unmaterialized. Later stages must consume the
+published boundary payloads and descriptor; they must not walk the target body,
+scan the source, or derive payload rows from the specialization key.
+
+The same rule applies to member capture slots. A callable-set member descriptor
+contains explicit capture-slot source types and executable type keys. Lambda-solved
+must publish the corresponding executable endpoint on the target procedure's
+own capture value in the target procedure's solve session. If the callable-set
+descriptor is being published from another solve session, that other session may
+also import or clone the payload by canonical key, but the target capture value's
+`exec_ty` remains owned by the target session. Reification planning for the
+capture consumes the target session endpoint plus the descriptor slot key; it
+must not re-run endpoint construction from source type alone and must not assume
+that an empty aggregate has no executable schema.
+
+For the `len_empty` example, the closure target captures `fns`. The actual
+runtime list is empty, but the capture value still has a structural executable
+type:
+
+```text
+List(vacant_callable_slot(I64 -> I64))
+```
+
+That endpoint must be published on the closure target's capture value before
+`CallableResultPlan` construction. The reification plan then records a list
+whose element plan is a callable schema/vacant callable slot, not a finite
+callable leaf. This is how an empty `List((I64 -> I64))` capture can be
+serialized without inventing a function value, erasing through a non-`Box(T)`
+container, or inspecting source syntax.
+
+The checked artifact must also publish the executable payload row for every
+member capture-slot key that appears in a persisted callable result plan or a
+promoted callable wrapper body. Publishing only the member's public parameter
+and return payloads is incomplete. `ExecutableSpecializationKey.capture_shape_key`
+is a stable identity hash for the capture shape; it is not a payload graph and
+does not contain the child payload refs needed to lower or import a capture
+value later.
+
+The publication rule is:
+
+```zig
+fn publish_callable_result_member_payloads(
+    artifact: *CheckedModuleArtifact,
+    member: CanonicalCallableSetMember,
+    target_instance: ProcRepresentationInstance,
+) void {
+    for (target_instance.executable_specialization_key.exec_arg_tys) |arg_key| {
+        publish_executable_payload_for_session_key(
+            artifact,
+            target_instance.solve_session,
+            arg_key,
+        );
+    }
+
+    publish_executable_payload_for_session_key(
+        artifact,
+        target_instance.solve_session,
+        target_instance.executable_specialization_key.exec_ret_ty,
+    );
+
+    for (member.capture_slots) |slot| {
+        publish_executable_payload_for_session_key(
+            artifact,
+            target_instance.solve_session,
+            slot.exec_value_ty,
+        );
+    }
+}
+```
+
+The exact Zig names may differ, but the direction of ownership must not:
+
+- the lambda-solved target procedure session owns the target capture value's
+  `ValueInfo.exec_ty`
+- callable-result publication copies that executable payload graph into the
+  artifact's `ExecutableTypePayloadStore`
+- later promoted-wrapper lowering passes `ProcBoundaryExecutablePayloads` for
+  the forced member target
+- lambda-solved finalization imports the capture-slot payload from that
+  artifact store instead of recomputing the target capture endpoint from the
+  target value root
+
+This is required even when the captured runtime value is empty. In this Roc
+program:
+
+```roc
+make_len : List((I64 -> I64)) -> (I64 -> U64)
+make_len = |fns| |_x| List.len(fns)
+
+len_empty : I64 -> U64
+len_empty = make_len([])
+
+main = len_empty(41)
+```
+
+the promoted wrapper for `len_empty` creates a proc value for the selected
+member and passes the private captured `fns` value into that member. The member
+capture slot has executable payload:
+
+```text
+List(vacant_callable_slot(I64 -> I64))
+```
+
+If the artifact publishes only `I64` and `U64` for the wrapper's public
+arguments and return, then the later `proc_value.forced_target` instance has
+authoritative boundary payloads for the call boundary but no authoritative
+payload for its capture boundary. Falling back to the target value store at that
+point would reintroduce recovery from local roots. The correct fix is to publish
+the capture-slot payload into the artifact at callable-result publication time.
+Missing capture-slot payloads after publication are compiler bugs: debug builds
+assert immediately and release builds use `unreachable`.
+
 ### Value-Specific Source-Match Reachability
 
 `vacant_callable_slot` is only a structural executable type payload for an
@@ -16898,6 +22275,106 @@ not a real callable value in this executable specialization. It must not receive
 a dummy finite callable set, an erased callable, a runtime thunk, a runtime
 closure object, or a `vacant_callable_slot` call target. The `B` branch is
 published as unreachable executable control flow.
+
+Reachability is class-level, but "unknown tag inhabitance" is not the same as
+"this particular value has no aggregate metadata." A value may have no local
+aggregate metadata because it is a procedure capture, procedure parameter,
+procedure return, alias, projection, join result, or other boundary value whose
+representation is linked to another value. Only explicit unknown producers may
+mark a representation class as unknown.
+
+The required rule is:
+
+```zig
+fn collect_tag_inhabitance(value: ValueInfo, root_kind: RepresentationRootKind) void {
+    if (value.aggregate == .tag) {
+        add_selected_tag(value.solved_class, value.aggregate.tag);
+        return;
+    }
+
+    if (value.source_match_branch != null) {
+        return; // branch-owned values are gated by source-match reachability
+    }
+
+    if (value.value_alias_source != null or
+        value.projection_info != null or
+        value.join_info != null)
+    {
+        return; // inherits from the source class through explicit edges
+    }
+
+    switch (root_kind) {
+        .procedure_capture => return, // inherits from proc_value capture edge
+        .procedure_param => return,   // root/external params are marked separately
+        .procedure_return => |instance| {
+            if (!proc_instance(instance).materialized) mark_unknown(value.solved_class);
+            return;
+        },
+        .local_value => {
+            if (is_explicit_runtime_unknown_producer(value)) {
+                mark_unknown(value.solved_class);
+            }
+            return;
+        },
+        else => return,
+    }
+}
+```
+
+The exact Zig names may differ, but the invariant must not. A procedure capture
+is not a fresh runtime input. It is created by a `proc_value` construction, and
+lambda-solved has already published a value-flow edge from the source capture
+value to the target procedure's capture root:
+
+```zig
+RepresentationEdge{
+    .from = .{ .local = source_capture.root },
+    .to = .{ .procedure_public = target_capture_root },
+    .kind = .value_move,
+}
+```
+
+For the `make_tagged(A(1))` example, the target closure capture `tagged` has no
+local aggregate metadata inside the lifted target procedure. That absence must
+not make the class unknown. The class inherits the selected tag `A` from the
+source captured value through the proc-value capture edge. Therefore the
+`B(f)` branch is unreachable for this specialization, and its function-typed
+payload slot is a `vacant_callable_slot(I64 -> I64)` schema, not a callable
+value and not an erased callable.
+
+The same rule applies to values created while lowering the branch itself.
+Pattern values, binders, guards, and branch-body locals carry
+`SourceMatchBranchRef`. Before reachability is finalized, those values must not
+mark the scrutinee class unknown merely because they lack aggregate metadata.
+Their branch ownership gates whether they participate in callable emission,
+dependency publication, and executable lowering. If a reachable branch later
+creates an explicit runtime-unknown value and matches on that value in a nested
+`match`, the nested value's own published unknown-producer metadata makes the
+nested scrutinee conservative; the outer branch marker is not a heuristic
+fallback.
+
+Root procedure parameters, hosted/imported opaque returns, and other explicit
+runtime unknown producers remain conservative: they mark their classes unknown
+from their own published root/provenance metadata. Later stages must not
+approximate unknownness by scanning values that lack aggregate metadata.
+
+This requires public procedure roots to carry their exact root kind before
+source-match reachability runs. A parameter, return, or capture root must not
+remain classified only as a generic local value:
+
+```zig
+proc_root_kind(param_root) = .procedure_param{ .instance = instance, .index = i }
+proc_root_kind(ret_root) = .procedure_return(instance)
+proc_root_kind(capture_root) = .procedure_capture{ .instance = instance, .slot = i }
+```
+
+If a root is reserved as a generic local value and later becomes part of
+`ProcPublicValueRoots`, lambda-solved must replace that root kind with the
+public-boundary kind while the boundary is published. It is a compiler bug for
+source-match reachability to see a known procedure capture as `local_value` and
+mark it unknown merely because the capture root has no local aggregate
+metadata. Debug builds must assert when a public root has the wrong kind;
+release builds use `unreachable`.
 
 Lambda-solved MIR must publish branch ownership for every value occurrence and
 call site created while lowering a source `match` alternative. The exact Zig
@@ -18857,7 +24334,11 @@ The exact Zig names may differ, but the lifecycle must not:
 3. The queue reserves the output `MonoSpecializedProcRef`, including its output
    `ProcedureValueRef` and implementation-local `MonoProcHandle`, for each
    `MonoSpecializationKey` before lowering the body. The queue entry retains the
-   canonical `ConcreteSourceTypeRef` payload for that key.
+   canonical `ConcreteSourceTypeRef` payload for that key. If a later request
+   has the same `MonoSpecializationKey` but a different `ConcreteSourceTypeRef`,
+   the queue returns the existing reservation and keeps the original payload as
+   the body-lowering input. Ref equality is not part of the specialization
+   identity.
 4. The body is clone-instantiated from artifact-owned checked type/body stores
    into a specialization-local checked source type graph and then mono type
    store. The requested source function type payload is cloned into that same
@@ -18884,6 +24365,78 @@ The exact Zig names may differ, but the lifecycle must not:
    lowers `$out : List(I64)`, `dedup(List(Str))` must create a separate `$out :
    List(Str)` binder slot and separate mono symbols inside that local procedure
    instance.
+
+   A concrete local-procedure instance must not fork the enclosing body's
+   current substitution map. The enclosing body can contain sibling call sites
+   that have already specialized the same local procedure or another static
+   dispatch target at a different type. Those solved substitutions are valid
+   only for the expression that produced them. A local-procedure instance starts
+   with a fresh instantiation graph over the owning checked body/type store,
+   then connects exactly these explicit inputs:
+
+   - the local procedure definition's checked function root
+   - the requested concrete source function type from the current use site
+   - concrete binder environment entries for captured outer values
+   - concrete binder environment entries created while lowering this local
+     instance's own parameters, pattern binders, mutable variables, and nested
+     declarations
+
+   The implementation shape is:
+
+   ```zig
+   fn lowerLocalProcInstance(
+       owner: *BodyLowerer,
+       decl: LocalProcDecl,
+       requested_fn_ty: ConcreteSourceTypeRef,
+   ) LetFn {
+       var instantiator = TypeInstantiator.init(
+           owner.allocator,
+           owner.input,
+           owner.program,
+           owner.template_lookup.checked_types,
+           owner.name_resolver,
+           owner.template_lookup.artifact,
+       );
+       defer instantiator.deinit();
+
+       // The only seed for this local-procedure specialization is the explicit
+       // use-site function type. Do not copy owner.type_instantiator.substitutions.
+       instantiator.unifyTemplateWithConcrete(
+           checked_expr(decl.expr).ty,
+           requested_fn_ty,
+       );
+
+       lowerLocalProcBodyWith(
+           instantiator,
+           owner.local_symbol_types, // captured outer values only
+       );
+   }
+   ```
+
+   This is required for polymorphic local functions used through generic
+   methods:
+
+   ```roc
+   main = {
+       append_one = |acc, x| List.append(acc, x)
+       clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+
+       _first_len = clone_via_fold([1.I64, 2.I64]).len()
+       clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+   }
+   ```
+
+   The first `clone_via_fold` specialization lowers `append_one` as
+   `List(I64), I64 -> List(I64)`. The second lowers it as
+   `List(List(I64)), List(I64) -> List(List(I64))`. If the second local-proc
+   instance forks the first instance's substitution map, mono can try to reuse a
+   solved row or element slot from the `I64` specialization while connecting the
+   `List(I64)` specialization. That produces incompatible closed payloads such
+   as `{}` versus a tag-union-backed nominal. The correct architecture makes
+   this impossible by construction: sibling local-procedure instances share the
+   checked definition and outer concrete binder environment, but not solved
+   substitution maps, materialized template roots, lowered template type ids, or
+   concrete variable substitutions.
 
    For example:
 
@@ -19493,12 +25046,17 @@ and backends must not rediscover, infer, compare source syntax, compare row
 names, or attempt compatible-shape repair for aggregate assembly.
 
 The construction assembly bridge is intentionally separate from ordinary
-pattern-binder bridges. A pattern binder usually targets a normal executable
-value layout. An aggregate construction slot may target a physical slot inside a
-recursive record, tuple, tag payload, or list element. That slot can have a
-different layout node from the child expression's normal value layout even when
-the source-level type is the same recursive type. In that case executable MIR
-must publish the smallest correct bridge for the assembly edge:
+pattern-binder bridges, but both kinds of bridge obey the same physical-layout
+rule: same source-level type does not imply `.direct`. A pattern binder usually
+targets a normal executable value layout. An aggregate construction slot may
+target a physical slot inside a recursive record, tuple, tag payload, or list
+element. A source `match` payload binder is the inverse edge: it extracts a
+physical slot from a scrutinee and binds it as a normal executable value. Either
+direction can cross the committed recursive physical indirection even when the
+source-level type on both sides is exactly the same recursive nominal.
+
+Executable MIR must therefore publish the smallest correct bridge for every
+assembly edge and every pattern-binder edge:
 
 - primitive-to-same-primitive uses `direct`
 - list-to-list uses `list_reinterpret`
@@ -19509,7 +25067,7 @@ must publish the smallest correct bridge for the assembly edge:
 - tag-union slots use tag-union child bridges
 - nullary and vacant callable slots use `zst`
 
-This is a physical construction-edge transform, not a runtime traversal request.
+This is a physical storage-edge transform, not a runtime traversal request.
 For example, a recursive `List(T)` element that is already represented by the
 same runtime list backing must use `list_reinterpret`; it must not map over the
 list or rebuild the elements. A recursive tag payload record whose child fields
@@ -19517,6 +25075,118 @@ need raw-slot/value reinterpretation must use a structural bridge whose children
 encode those exact slot transforms. LIR consumes the bridge by constructing the
 target slot and applying child bridges; backends only execute the resulting LIR
 statements.
+
+The same rule is required for recursive source `match` payload binders. For
+example:
+
+```roc
+Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+
+main =
+    match Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False)) {
+        Logic.And(left, right) -> Str.inspect(left) ++ " / " ++ Str.inspect(right)
+        _ -> ""
+    }
+```
+
+The source type of `left` is `Logic`, and the source type of the first `And`
+payload is also `Logic`. That equality is not enough to emit a direct binder.
+After recursive layout commitment, the `And` payload slot may be a physical box
+whose payload is the raw recursive child layout, while `left` expects the
+ordinary logical `Logic` value layout. The pattern-binder bridge for `left` must
+therefore be the explicit bridge selected from the source slot endpoint and the
+target binder endpoint. LIR then emits the necessary `box_unbox` plus any
+raw-to-logical reinterpretation. If executable MIR short-circuits because the
+two executable type ids are equal, the binder receives the physical box pointer
+as though it were a `Logic` value and later `Str.inspect(left)` can render a
+payload such as `Or(True, False)` as `False`. That is a compiler bug.
+
+The inverse construction case is equally important:
+
+```roc
+Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+
+main = Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False))
+```
+
+The child expressions and the `And` payload slots have the same source-level
+type, but the payload slots may be physically indirect. The construction bridge
+must box the logical child value into the committed physical slot rather than
+relying on equal executable type ids. Pattern binding and construction are
+opposite directions over the same explicit endpoints; neither stage may recover
+the decision from recursive type syntax or physical layout names.
+
+IR lowering must also preserve the parent slot identity when it materializes a
+multi-payload tag record. It is not enough to construct a source-shaped temporary
+record from the already-lowered child values and later bridge that whole record
+into the tag union. For recursive tags, that temporary record is merely
+structurally similar to the real variant payload record; it is not the same
+layout-graph node owned by the parent tag union slot, so it may not participate
+in the recursive physical-indirection decision. The correct lowering is:
+
+1. lower each source payload expression exactly once in source evaluation order
+2. look up the parent tag union's exact variant payload layout by
+   `(parent_union_layout, tag_id)`
+3. create the payload record local at that exact variant payload layout
+4. assemble fields in finalized logical payload order
+5. apply each published payload `assembly_bridge` while writing the field into
+   that target payload record
+6. pass that payload record to `make_union` with only a direct outer payload
+   bridge, because the record already has the slot's physical layout
+
+In code shape:
+
+```zig
+const parent_union_layout = layout_for_type(tag_expr.ty);
+const payload_layout = payload_layout_from_parent_union(parent_union_layout, tag_id);
+
+const payload_record = make_struct_at_layout(
+    payload_layout,
+    .{
+        .fields = logical_payload_values,
+        .field_bridges = logical_payload_assembly_bridges,
+    },
+);
+
+make_union(
+    .target = tag_expr.value,
+    .tag = tag_id,
+    .payload = payload_record,
+    .payload_bridge = .direct,
+);
+```
+
+The forbidden shape is:
+
+```zig
+// Wrong for recursive tag payload records:
+const source_shaped_payload = make_struct_from_child_value_layouts(payload_values);
+make_union(
+    .target = tag_expr.value,
+    .tag = tag_id,
+    .payload = source_shaped_payload,
+    .payload_bridge = bridge_whole_payload_record_after_the_fact,
+);
+```
+
+That forbidden form can accidentally allocate a payload record outside the
+recursive layout SCC. In the `Logic` example above, the real `And` payload fields
+may be `Box(Logic)` slots after layout commitment, while the source-shaped
+temporary record's fields are ordinary logical `Logic` values. Cor/LSS avoids
+this class of bug by making the lowered IR payload record type name the boxed
+recursive slot directly before `@make_union`, for example conceptually:
+
+```text
+let payload: { Box(Logic), Box(Logic) } = { left, right }
+let value: Logic = @make_union<And, payload>
+```
+
+Our fixed-arity Roc implementation must do the same thing through explicit
+layout-graph slot identity and payload assembly bridges rather than Cor's
+prototype type syntax. If `Logic.And(Logic.Or(Logic.True, Logic.False),
+Logic.Not(Logic.False))` later inspects as `And(False, True)`, the payload record
+was not assembled at the union variant's exact physical slot layout; that is a
+compiler bug.
 
 LIR must preserve reinterpretation explicitly. An ordinary LIR local reference
 means exact physical layout identity: the source local's committed layout id and

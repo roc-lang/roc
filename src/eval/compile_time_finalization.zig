@@ -61,16 +61,41 @@ fn finalize(
     );
     defer dependency_summaries.deinit();
 
+    var runtime_dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
+        allocator,
+        .{
+            .root = checked_artifact.loweringView(artifact),
+            .imports = import_views,
+        },
+        .{
+            .requests = artifact.root_requests.requests,
+            .purpose = .runtime,
+            .compile_time_artifact_sink = artifact,
+        },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .artifact_state = .checking_finalization,
+        },
+    );
+    defer runtime_dependency_summaries.deinit();
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
     if (compile_time_roots.len == 0) {
+        try ensureDependencySummaryIdsConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            &runtime_env,
+            runtime_dependency_summaries.dependency_summaries,
+        );
         try artifact.comptime_values.sealBindings();
         return;
     }
 
     const ordered_roots = try orderCompileTimeRootRequests(allocator, artifact, compile_time_roots);
     defer allocator.free(ordered_roots);
-
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
 
     for (ordered_roots) |root_request| {
         try ensureRootConcreteDependencies(
@@ -80,6 +105,13 @@ fn finalize(
             &runtime_env,
             root_request,
         );
+
+        const root = compileTimeRootForRequest(artifact, root_request);
+        if (try publishAlreadyEvaluatedConstantRoot(
+            allocator,
+            artifact,
+            root,
+        )) continue;
 
         var lowered_request = try lowerSingleCompileTimeRequest(
             allocator,
@@ -97,7 +129,6 @@ fn finalize(
         );
         defer interpreter.deinit();
 
-        const root = compileTimeRootForRequest(artifact, root_request);
         const payload = switch (lowered_request.payload) {
             .local_root => |local| local,
             else => compileTimeFinalizationInvariant("local compile-time root lowering did not publish a local-root payload"),
@@ -132,7 +163,73 @@ fn finalize(
         }
     }
 
+    try ensureDependencySummaryIdsConcreteDependencies(
+        allocator,
+        artifact,
+        import_views,
+        &runtime_env,
+        runtime_dependency_summaries.dependency_summaries,
+    );
+
     try artifact.comptime_values.sealBindings();
+}
+
+fn publishAlreadyEvaluatedConstantRoot(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+) anyerror!bool {
+    if (root.kind != .constant) return false;
+
+    const request = constInstantiationRequestForConstantRoot(artifact, root);
+    const instance_ref = try artifact.const_instances.reserveRequest(allocator, &artifact.checked_types, request);
+    switch (artifact.const_instances.stateForRef(instance_ref)) {
+        .reserved => return false,
+        .evaluating => compileTimeFinalizationInvariant("compile-time root constant instance was still evaluating when root was reached"),
+        .evaluated => |instance| {
+            try publishConstantRootFromInstance(artifact, root, instance);
+            return true;
+        },
+    }
+}
+
+fn publishConstantRootFromInstance(
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    instance: checked_artifact.ConstInstance,
+) Allocator.Error!void {
+    const pattern = root.pattern orelse compileTimeFinalizationInvariant("constant root had no top-level pattern");
+    const reification_plan = instance.reification_plan orelse {
+        compileTimeFinalizationInvariant("evaluated constant root instance had no reification plan");
+    };
+    switch (artifact.compile_time_roots.root(root.id).payload) {
+        .pending => {},
+        else => compileTimeFinalizationInvariant("compile-time root was published more than once"),
+    }
+    try artifact.comptime_values.bind(pattern, instance.schema, instance.value);
+    artifact.compile_time_roots.fillPayload(root.id, .{ .const_graph = reification_plan });
+}
+
+fn constInstantiationRequestForConstantRoot(
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+) checked_artifact.ConstInstantiationRequest {
+    const pattern = root.pattern orelse compileTimeFinalizationInvariant("constant root had no top-level pattern");
+    const top_level = artifact.top_level_values.lookupByPattern(pattern) orelse {
+        compileTimeFinalizationInvariant("constant root had no top-level value entry");
+    };
+    const const_ref = switch (top_level.value) {
+        .const_ref => |ref| ref,
+        .procedure_binding => compileTimeFinalizationInvariant("constant root top-level value was a procedure binding"),
+    };
+    const requested_source_ty = artifact.checked_types.roots[@intFromEnum(root.checked_type)].key;
+    return .{
+        .key = .{
+            .const_ref = const_ref,
+            .requested_source_ty = requested_source_ty,
+        },
+        .requested_source_ty_payload = root.checked_type,
+    };
 }
 
 const LoweredCompileTimeRequest = struct {
@@ -525,7 +622,13 @@ const PromotedCallableProvenanceBase = union(enum) {
     },
     callable_binding_instance: checked_artifact.CallableBindingInstantiationKey,
     const_instance: checked_artifact.ConstInstantiationKey,
-    private_capture: checked_artifact.PromotedProcedureRef,
+    private_capture: PromotedPrivateCaptureOwner,
+};
+
+const PromotedPrivateCaptureOwner = struct {
+    promoted_ref: checked_artifact.PromotedProcedureRef,
+    template: canonical.ProcedureTemplateRef,
+    source_fn_ty: canonical.CanonicalTypeKey,
 };
 
 fn promotedProcedureProvenance(
@@ -553,11 +656,33 @@ fn promotedProcedureProvenance(
             .result_plan = result_plan,
             .value_path = comptimeValuePathKeyForCallableResult(result_plan),
         } },
-        .private_capture => |promoted_proc| .{ .private_capture_callable_leaf = .{
-            .promoted_proc = promoted_proc,
+        .private_capture => |owner| .{ .private_capture_callable_leaf = .{
+            .promoted_proc = owner.promoted_ref,
             .result_plan = result_plan,
             .capture_path = privateCapturePathKeyForCallableResult(result_plan),
         } },
+    };
+}
+
+fn privateCaptureOwner(
+    reserved: checked_artifact.ReservedPromotedCallableWrapper,
+) PromotedPrivateCaptureOwner {
+    return .{
+        .promoted_ref = reserved.promoted_ref,
+        .template = reserved.template,
+        .source_fn_ty = reserved.source_fn_ty,
+    };
+}
+
+fn privateCaptureOwnerMirProcedureRef(
+    owner: PromotedPrivateCaptureOwner,
+) canonical.MirProcedureRef {
+    return .{
+        .proc = owner.promoted_ref.proc,
+        .callable = .{
+            .template = .{ .synthetic = .{ .template = owner.template } },
+            .source_fn_ty = owner.source_fn_ty,
+        },
     };
 }
 
@@ -792,6 +917,27 @@ fn ensureRootConcreteDependencies(
     );
 }
 
+fn ensureDependencySummaryIdsConcreteDependencies(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+    summaries: []const ?checked_artifact.ComptimeDependencySummaryId,
+) anyerror!void {
+    for (summaries) |summary_id| {
+        const id = summary_id orelse {
+            compileTimeFinalizationInvariant("runtime root dependency summary was not published");
+        };
+        try ensureDependencySummaryConcreteDependencies(
+            allocator,
+            artifact,
+            import_views,
+            runtime_env,
+            artifact.comptime_dependencies.getSummary(id),
+        );
+    }
+}
+
 fn ensureDependencySummaryConcreteDependencies(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -819,9 +965,7 @@ fn ensureConcreteDependencyValue(
 ) anyerror!void {
     switch (value) {
         .const_instance => |key| {
-            const requested_source_ty_payload = artifact.checked_types.rootForKey(key.requested_source_ty) orelse {
-                compileTimeFinalizationInvariant("concrete dependency const instance requested type has no checked payload");
-            };
+            const requested_source_ty_payload = try checkedTypePayloadForConstInstanceDependency(allocator, artifact, import_views, key);
             _ = try ensureConstInstanceRequest(
                 allocator,
                 artifact,
@@ -850,6 +994,36 @@ fn ensureConcreteDependencyValue(
         },
         .procedure_callable => {},
     }
+}
+
+fn checkedTypePayloadForConstInstanceDependency(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    key: checked_artifact.ConstInstantiationKey,
+) Allocator.Error!checked_artifact.CheckedTypeId {
+    if (artifact.checked_types.rootForKey(key.requested_source_ty)) |root| return root;
+
+    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, import_views);
+    defer projector.deinit();
+
+    if (!std.mem.eql(u8, &key.const_ref.artifact.bytes, &artifact.key.bytes)) {
+        for (import_views) |imported| {
+            if (!std.mem.eql(u8, &imported.key.bytes, &key.const_ref.artifact.bytes)) continue;
+            if (try projector.projectImportedCheckedTypeForKey(imported, key.requested_source_ty)) |projected| {
+                return projected;
+            }
+            break;
+        }
+    }
+
+    for (import_views) |imported| {
+        if (try projector.projectImportedCheckedTypeForKey(imported, key.requested_source_ty)) |projected| {
+            return projected;
+        }
+    }
+
+    compileTimeFinalizationInvariant("concrete dependency const instance requested type has no checked payload");
 }
 
 fn dependencySummaryForCompileTimeRequest(
@@ -2039,6 +2213,12 @@ fn promoteFiniteCallableResult(
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
     const call_args = try promotedWrapperCallArgs(allocator, params.len);
     const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
+    const member_target = try repr.cloneExecutableSpecializationKey(allocator, selected.planned_member.target_key);
+    var member_target_owned = true;
+    errdefer if (member_target_owned) {
+        var owned_member_target = member_target;
+        repr.deinitExecutableSpecializationKey(allocator, &owned_member_target);
+    };
 
     var capture_builder = PrivateCaptureBuilder{
         .allocator = allocator,
@@ -2049,7 +2229,7 @@ fn promoteFiniteCallableResult(
         .owner = reserved.promoted_ref,
         .promotion_context = .{
             .source_binding = context.source_binding,
-            .base = .{ .private_capture = reserved.promoted_ref },
+            .base = .{ .private_capture = privateCaptureOwner(reserved) },
         },
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
         .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
@@ -2076,12 +2256,15 @@ fn promoteFiniteCallableResult(
         .callable_set_key = selected.result_plan.callable_set_key,
         .member = selected.planned_member.member,
         .member_proc = selected.descriptor_member.proc_value,
+        .member_target = member_target,
+        .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
         .member_capture_shape = selected.descriptor_member.capture_shape_key,
         .member_capture_slots = selected.descriptor_member.capture_slots,
         .captures = captures,
         .params = params,
         .call_args = call_args,
     } });
+    member_target_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
     const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
         allocator,
@@ -2104,6 +2287,19 @@ fn promoteFiniteCallableResult(
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
         .generated_procedure = generated_procedure,
+    };
+}
+
+fn finitePromotedWrapperMemberTargetProvenance(
+    context: PromotedCallablePublicationContext,
+) ?canonical.MirProcedureRef {
+    return switch (context.base) {
+        .private_capture => |owner| privateCaptureOwnerMirProcedureRef(owner),
+        .local_callable_root,
+        .local_const_root,
+        .callable_binding_instance,
+        .const_instance,
+        => null,
     };
 }
 
@@ -2137,7 +2333,7 @@ fn publishErasedCallableResult(
         .owner = reserved.promoted_ref,
         .promotion_context = .{
             .source_binding = context.source_binding,
-            .base = .{ .private_capture = reserved.promoted_ref },
+            .base = .{ .private_capture = privateCaptureOwner(reserved) },
         },
         .active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId).init(allocator),
         .erased_active = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId).init(allocator),
@@ -2173,6 +2369,13 @@ fn publishErasedCallableResult(
     const transforms = try publishErasedPromotedWrapperValueTransforms(
         allocator,
         artifact,
+        .{
+            .proc = reserved.promoted_ref.proc,
+            .callable = .{
+                .template = .{ .synthetic = .{ .template = reserved.template } },
+                .source_fn_ty = publication.erased.source_fn_ty,
+            },
+        },
         executable_signature,
     );
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
@@ -2182,6 +2385,7 @@ fn publishErasedCallableResult(
         .sig_key = publication.erased.sig_key,
         .code = publication.code,
         .finite_adapter_member_targets = publication.finite_adapter_member_targets,
+        .finite_adapter_branches = publication.finite_adapter_branches,
         .capture = publication.capture,
         .arg_transforms = transforms.args,
         .hidden_capture_arg = if (publication.erased.sig_key.capture_ty == null)
@@ -2220,6 +2424,7 @@ const PersistedErasedCallablePublication = struct {
     erased: checked_artifact.ErasedCallableResultPlan,
     code: canonical.ErasedCallableCodeRef,
     finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
+    finite_adapter_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan = &.{},
     capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 };
 
@@ -2271,6 +2476,7 @@ fn deinitPersistedErasedCallablePublication(
     publication: PersistedErasedCallablePublication,
 ) void {
     deinitExecutableSpecializationKeySlice(allocator, publication.finite_adapter_member_targets);
+    deinitPublishedFiniteSetEraseAdapterBranches(allocator, publication.finite_adapter_branches);
 }
 
 fn persistConcreteFiniteAdapterAsSingleton(
@@ -2321,7 +2527,7 @@ fn persistConcreteFiniteAdapterAsSingleton(
     };
     const private_context = PromotedCallablePublicationContext{
         .source_binding = context.source_binding,
-        .base = .{ .private_capture = owner.promoted_ref },
+        .base = .{ .private_capture = privateCaptureOwner(owner) },
     };
     const published_member = try publishCallableResult(
         allocator,
@@ -2337,6 +2543,7 @@ fn persistConcreteFiniteAdapterAsSingleton(
         allocator,
         published_member.proc_value,
         source_proc,
+        erased,
         original_targets[member_index],
     );
     errdefer {
@@ -2371,6 +2578,22 @@ fn persistConcreteFiniteAdapterAsSingleton(
         .capture_shape_key = capture_shape_key,
     };
 
+    const branches = try persistedSingletonAdapterBranches(
+        allocator,
+        artifact,
+        .{
+            .proc = owner.promoted_ref.proc,
+            .callable = .{
+                .template = .{ .synthetic = .{ .template = owner.template } },
+                .source_fn_ty = erased.source_fn_ty,
+            },
+        },
+        singleton_adapter,
+        erased,
+        target_key,
+    );
+    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
+
     const targets = try allocator.alloc(canonical.ExecutableSpecializationKey, 1);
     targets[0] = target_key;
     return .{
@@ -2389,6 +2612,7 @@ fn persistConcreteFiniteAdapterAsSingleton(
         },
         .code = .{ .finite_set_adapter = singleton_adapter },
         .finite_adapter_member_targets = targets,
+        .finite_adapter_branches = branches,
         .capture = .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
             allocator,
             .{ .finite_callable_set = .{
@@ -2399,6 +2623,86 @@ fn persistConcreteFiniteAdapterAsSingleton(
             } },
         ) },
     };
+}
+
+fn persistedSingletonAdapterBranches(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    owner_proc: canonical.MirProcedureRef,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    target_key: canonical.ExecutableSpecializationKey,
+) Allocator.Error![]const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan {
+    if (target_key.exec_arg_tys.len != erased.executable_signature_payloads.erased_call_arg_keys.len) {
+        compileTimeFinalizationInvariant("persisted finite-set adapter branch target arity differs from erased ABI");
+    }
+    if (!repr.canonicalExecValueTypeKeyEql(target_key.exec_ret_ty, erased.executable_signature_payloads.erased_call_ret_key)) {
+        compileTimeFinalizationInvariant("persisted finite-set adapter branch target return differs from erased ABI");
+    }
+
+    const branches = try allocator.alloc(checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan, 1);
+    @memset(branches, .{
+        .member = .{
+            .callable_set_key = adapter.callable_set_key,
+            .member_index = @enumFromInt(0),
+        },
+        .target_key = .{
+            .base = @enumFromInt(0),
+            .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .exec_arg_tys = &.{},
+            .exec_ret_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .callable_repr_mode = .direct,
+            .capture_shape_key = .{ .bytes = [_]u8{0} ** 32 },
+        },
+        .arg_transforms = &.{},
+        .capture_transforms = &.{},
+        .result_transform = .{
+            .artifact = artifact.key,
+            .transform = @enumFromInt(0),
+        },
+    });
+    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
+
+    const arg_transforms: []checked_artifact.PublishedExecutableValueTransformRef = if (target_key.exec_arg_tys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.PublishedExecutableValueTransformRef, target_key.exec_arg_tys.len);
+    errdefer if (arg_transforms.len > 0) allocator.free(arg_transforms);
+
+    const provenance = [_]checked_artifact.BoxErasureProvenance{.{ .promoted_wrapper = owner_proc }};
+    var planner = PublishedValueTransformPlanner{
+        .allocator = allocator,
+        .artifact = artifact,
+        .provenance = provenance[0..],
+    };
+
+    for (target_key.exec_arg_tys, erased.executable_signature_payloads.erased_call_args, erased.executable_signature_payloads.erased_call_arg_keys, 0..) |target_arg_key, erased_arg_ty, erased_arg_key, i| {
+        if (!repr.canonicalExecValueTypeKeyEql(target_arg_key, erased_arg_key)) {
+            compileTimeFinalizationInvariant("persisted finite-set adapter branch target argument differs from erased ABI");
+        }
+        arg_transforms[i] = try planner.publish(
+            .{ .ty = erased_arg_ty, .key = erased_arg_key },
+            executableEndpointForKey(artifact, target_arg_key),
+        );
+    }
+
+    branches[0] = .{
+        .member = .{
+            .callable_set_key = adapter.callable_set_key,
+            .member_index = @enumFromInt(0),
+        },
+        .target_key = try repr.cloneExecutableSpecializationKey(allocator, target_key),
+        .arg_transforms = arg_transforms,
+        .capture_transforms = &.{},
+        .result_transform = try planner.publish(
+            executableEndpointForKey(artifact, target_key.exec_ret_ty),
+            .{
+                .ty = erased.executable_signature_payloads.erased_call_ret,
+                .key = erased.executable_signature_payloads.erased_call_ret_key,
+            },
+        ),
+    };
+    return branches;
 }
 
 fn erasedSignaturePayloadsWithHiddenCapture(
@@ -2442,16 +2746,20 @@ fn persistedSingletonAdapterMemberTarget(
     allocator: Allocator,
     proc_value: canonical.ProcedureCallableRef,
     source_proc: canonical.MirProcedureRef,
+    erased: checked_artifact.ErasedCallableResultPlan,
     original_target: canonical.ExecutableSpecializationKey,
 ) Allocator.Error!canonical.ExecutableSpecializationKey {
     if (!std.mem.eql(u8, &proc_value.source_fn_ty.bytes, &original_target.requested_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("persisted singleton adapter member source function type differs from original target");
     }
+    if (original_target.exec_arg_tys.len != erased.executable_signature_payloads.param_exec_ty_keys.len) {
+        compileTimeFinalizationInvariant("persisted singleton adapter member arity differs from promoted executable signature");
+    }
     return .{
         .base = source_proc.proc.proc_base,
         .requested_fn_ty = proc_value.source_fn_ty,
-        .exec_arg_tys = try cloneExecValueTypeKeySlice(allocator, original_target.exec_arg_tys),
-        .exec_ret_ty = original_target.exec_ret_ty,
+        .exec_arg_tys = try cloneExecValueTypeKeySlice(allocator, erased.executable_signature_payloads.param_exec_ty_keys),
+        .exec_ret_ty = erased.executable_signature_payloads.wrapper_ret_key,
         .callable_repr_mode = .direct,
         .capture_shape_key = repr.captureShapeKeyForExecKeys(&.{}),
     };
@@ -2802,6 +3110,33 @@ fn deinitExecutableSpecializationKeySlice(
     if (keys.len > 0) allocator.free(keys);
 }
 
+fn deinitPublishedFiniteSetEraseAdapterBranches(
+    allocator: Allocator,
+    branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+) void {
+    for (branches) |branch| {
+        var target_key = branch.target_key;
+        repr.deinitExecutableSpecializationKey(allocator, &target_key);
+        if (branch.arg_transforms.len > 0) allocator.free(branch.arg_transforms);
+        if (branch.capture_transforms.len > 0) allocator.free(branch.capture_transforms);
+    }
+    if (branches.len > 0) allocator.free(branches);
+}
+
+fn executableEndpointForKey(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    key: canonical.CanonicalExecValueTypeKey,
+) checked_artifact.ExecutableValueEndpoint {
+    const artifact_ref = canonical.ArtifactRef{ .bytes = artifact.key.bytes };
+    const ty = artifact.executable_type_payloads.refForKey(artifact_ref, key) orelse {
+        compileTimeFinalizationInvariant("published finite adapter branch endpoint key has no executable payload");
+    };
+    return .{
+        .ty = ty,
+        .key = key,
+    };
+}
+
 fn validateLoweredErasedCallableCodeEntry(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     erased: checked_artifact.ErasedCallableResultPlan,
@@ -2868,15 +3203,7 @@ fn erasedClosureCodeProc(
     const payload_ptr = value.read(?[*]u8) orelse {
         compileTimeFinalizationInvariant("erased callable result payload pointer was null");
     };
-    const encoded: usize = switch (lowered.target_usize.size()) {
-        4 => @as(*const u32, @ptrCast(@alignCast(payload_ptr))).*,
-        8 => @as(*const usize, @ptrCast(@alignCast(payload_ptr))).*,
-        else => unreachable,
-    };
-    if (encoded == 0) {
-        compileTimeFinalizationInvariant("erased callable result code pointer was null");
-    }
-    return @enumFromInt(@as(u32, @intCast(encoded - 1)));
+    return Interpreter.erasedCallableInterpreterProcId(payload_ptr);
 }
 
 fn erasedHiddenCaptureLayout(
@@ -2919,7 +3246,7 @@ fn erasedClosureHiddenCapturePhysical(
     }
     return .{
         .layout_idx = expected_capture_layout_idx,
-        .value = .{ .ptr = builtins.erased_callable.capturePtr(payload) },
+        .value = .{ .ptr = Interpreter.erasedCallableInterpreterSemanticCapturePtr(payload) },
     };
 }
 
@@ -2931,6 +3258,7 @@ const ErasedPromotedWrapperValueTransforms = struct {
 fn publishErasedPromotedWrapperValueTransforms(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    owner: canonical.MirProcedureRef,
     signature: checked_artifact.ErasedPromotedProcedureExecutableSignature,
 ) Allocator.Error!ErasedPromotedWrapperValueTransforms {
     if (signature.wrapper_params.len != signature.erased_call_args.len or
@@ -2945,18 +3273,21 @@ fn publishErasedPromotedWrapperValueTransforms(
         try allocator.alloc(checked_artifact.PublishedExecutableValueTransformRef, signature.wrapper_params.len);
     errdefer if (arg_transforms.len > 0) allocator.free(arg_transforms);
 
+    const provenance = [_]checked_artifact.BoxErasureProvenance{.{ .promoted_wrapper = owner }};
+    var planner = PublishedValueTransformPlanner{
+        .allocator = allocator,
+        .artifact = artifact,
+        .provenance = provenance[0..],
+    };
+
     for (signature.wrapper_params, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |param, erased_arg, erased_arg_key, i| {
-        arg_transforms[i] = try publishIdentityValueTransform(
-            allocator,
-            artifact,
+        arg_transforms[i] = try planner.publish(
             .{ .ty = param.exec_ty, .key = param.exec_ty_key },
             .{ .ty = erased_arg, .key = erased_arg_key },
         );
     }
 
-    const result_transform = try publishIdentityValueTransform(
-        allocator,
-        artifact,
+    const result_transform = try planner.publish(
         .{ .ty = signature.erased_call_ret, .key = signature.erased_call_ret_key },
         .{ .ty = signature.wrapper_ret, .key = signature.wrapper_ret_key },
     );
@@ -2967,25 +3298,408 @@ fn publishErasedPromotedWrapperValueTransforms(
     };
 }
 
-fn publishIdentityValueTransform(
+const PublishedValueTransformPlanner = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    from: checked_artifact.ExecutableValueEndpoint,
-    to: checked_artifact.ExecutableValueEndpoint,
-) Allocator.Error!checked_artifact.PublishedExecutableValueTransformRef {
-    if (!std.mem.eql(u8, &from.key.bytes, &to.key.bytes)) {
-        compileTimeFinalizationInvariant("erased promoted wrapper requires non-identity value transform publication");
+    provenance: []const checked_artifact.BoxErasureProvenance,
+
+    fn publish(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+    ) Allocator.Error!checked_artifact.PublishedExecutableValueTransformRef {
+        return .{
+            .artifact = self.artifact.key,
+            .transform = try self.plan(from, to),
+        };
     }
-    const transform = try artifact.executable_value_transforms.append(allocator, .{
-        .from = from,
-        .to = to,
-        .provenance = .none,
-        .op = .identity,
-    });
-    return .{
-        .artifact = artifact.key,
-        .transform = transform,
-    };
+
+    fn plan(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        self.verifyEndpoint(from);
+        self.verifyEndpoint(to);
+
+        if (repr.canonicalExecValueTypeKeyEql(from.key, to.key)) {
+            return try self.append(from, to, .none, .identity);
+        }
+
+        const from_payload = self.payload(from);
+        const to_payload = self.payload(to);
+        return switch (from_payload) {
+            .record => |source| switch (to_payload) {
+                .record => |target| try self.planRecord(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .tuple => |source| switch (to_payload) {
+                .tuple => |target| try self.planTuple(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .tag_union => |source| switch (to_payload) {
+                .tag_union => |target| try self.planTagUnion(from, to, source, target),
+                .nominal => |target| try self.planBackingToNominal(from, to, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .nominal => |source| switch (to_payload) {
+                .nominal => |target| try self.planNominal(from, to, source, target),
+                .tag_union => try self.planNominalToBacking(from, to, source),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .list => |source| switch (to_payload) {
+                .list => |target| try self.planList(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .box => |source| switch (to_payload) {
+                .box => |target| try self.planBox(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .callable_set => |source| switch (to_payload) {
+                .erased_fn => |target| try self.planFiniteCallableToErased(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .erased_fn => |source| switch (to_payload) {
+                .erased_fn => |target| try self.planAlreadyErasedCallable(from, to, source, target),
+                else => self.transformPayloadInvariant(from_payload, to_payload),
+            },
+            .primitive,
+            .vacant_callable_slot,
+            .recursive_ref,
+            .pending,
+            => self.transformPayloadInvariant(from_payload, to_payload),
+        };
+    }
+
+    fn append(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        provenance: checked_artifact.ValueTransformProvenance,
+        op: checked_artifact.ExecutableValueTransformOp,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        return try self.artifact.executable_value_transforms.append(self.allocator, .{
+            .from = from,
+            .to = to,
+            .provenance = provenance,
+            .op = op,
+        });
+    }
+
+    fn provenanceForTransform(self: *PublishedValueTransformPlanner) Allocator.Error!checked_artifact.ValueTransformProvenance {
+        if (self.provenance.len == 0) {
+            compileTimeFinalizationInvariant("published erased-wrapper value transform has no Box(T) provenance");
+        }
+        return .{ .box_erasure = try self.allocator.dupe(checked_artifact.BoxErasureProvenance, self.provenance) };
+    }
+
+    fn payload(
+        self: *PublishedValueTransformPlanner,
+        endpoint: checked_artifact.ExecutableValueEndpoint,
+    ) checked_artifact.ExecutableTypePayload {
+        return self.artifact.executable_type_payloads.get(endpoint.ty.payload);
+    }
+
+    fn verifyEndpoint(
+        self: *PublishedValueTransformPlanner,
+        endpoint: checked_artifact.ExecutableValueEndpoint,
+    ) void {
+        if (!std.mem.eql(u8, &endpoint.ty.artifact.bytes, &self.artifact.key.bytes)) {
+            compileTimeFinalizationInvariant("published erased-wrapper value transform endpoint points at a different artifact");
+        }
+        const actual = self.artifact.executable_type_payloads.keyFor(endpoint.ty.payload);
+        if (!repr.canonicalExecValueTypeKeyEql(actual, endpoint.key)) {
+            compileTimeFinalizationInvariant("published erased-wrapper value transform endpoint key differs from payload key");
+        }
+    }
+
+    fn transformPayloadInvariant(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableTypePayload,
+        to: checked_artifact.ExecutableTypePayload,
+    ) noreturn {
+        _ = self;
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "compile-time finalization invariant violated: erased promoted wrapper value transform has incompatible executable payloads: {s} -> {s}",
+                .{ @tagName(from), @tagName(to) },
+            );
+        }
+        unreachable;
+    }
+
+    fn planRecord(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: []const checked_artifact.ExecutableRecordFieldPayload,
+        target: []const checked_artifact.ExecutableRecordFieldPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        const fields = try self.allocator.alloc(checked_artifact.ValueTransformRecordField, target.len);
+        errdefer self.allocator.free(fields);
+
+        for (target, 0..) |target_field, i| {
+            const source_field = sourceRecordFieldPayload(source, target_field.field) orelse {
+                compileTimeFinalizationInvariant("published erased-wrapper record transform target field has no source field");
+            };
+            fields[i] = .{
+                .field = target_field.field,
+                .transform = try self.plan(
+                    .{ .ty = source_field.ty, .key = source_field.key },
+                    .{ .ty = target_field.ty, .key = target_field.key },
+                ),
+            };
+        }
+
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .record = fields });
+    }
+
+    fn planTuple(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: []const checked_artifact.ExecutableTupleElemPayload,
+        target: []const checked_artifact.ExecutableTupleElemPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (source.len != target.len) {
+            compileTimeFinalizationInvariant("published erased-wrapper tuple transform arity mismatch");
+        }
+        const elems = try self.allocator.alloc(checked_artifact.ValueTransformTupleElem, target.len);
+        errdefer self.allocator.free(elems);
+
+        for (target, 0..) |target_elem, i| {
+            const source_elem = sourceTupleElemPayload(source, target_elem.index) orelse {
+                compileTimeFinalizationInvariant("published erased-wrapper tuple transform target index has no source element");
+            };
+            elems[i] = .{
+                .index = target_elem.index,
+                .transform = try self.plan(
+                    .{ .ty = source_elem.ty, .key = source_elem.key },
+                    .{ .ty = target_elem.ty, .key = target_elem.key },
+                ),
+            };
+        }
+
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .tuple = elems });
+    }
+
+    fn planTagUnion(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: []const checked_artifact.ExecutableTagVariantPayload,
+        target: []const checked_artifact.ExecutableTagVariantPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        const cases = try self.allocator.alloc(checked_artifact.ValueTransformTagCase, source.len);
+        @memset(cases, .{
+            .source_tag = @enumFromInt(0),
+            .target_tag = @enumFromInt(0),
+            .payloads = &.{},
+        });
+        errdefer {
+            for (cases) |case| if (case.payloads.len > 0) self.allocator.free(case.payloads);
+            self.allocator.free(cases);
+        }
+
+        for (source, 0..) |source_variant, i| {
+            const target_variant = targetTagVariantPayload(target, source_variant.tag) orelse {
+                compileTimeFinalizationInvariant("published erased-wrapper tag transform source tag has no target tag");
+            };
+            if (source_variant.payloads.len != target_variant.payloads.len) {
+                compileTimeFinalizationInvariant("published erased-wrapper tag transform payload arity mismatch");
+            }
+            const payloads = try self.allocator.alloc(checked_artifact.ValueTransformTagPayloadEdge, target_variant.payloads.len);
+            errdefer self.allocator.free(payloads);
+
+            for (target_variant.payloads, 0..) |target_payload, payload_i| {
+                const source_payload = sourceTagPayload(source_variant.payloads, target_payload.index) orelse {
+                    compileTimeFinalizationInvariant("published erased-wrapper tag transform target payload has no source payload");
+                };
+                payloads[payload_i] = .{
+                    .source_payload_index = source_payload.index,
+                    .target_payload_index = target_payload.index,
+                    .transform = try self.plan(
+                        .{ .ty = source_payload.ty, .key = source_payload.key },
+                        .{ .ty = target_payload.ty, .key = target_payload.key },
+                    ),
+                };
+            }
+
+            cases[i] = .{
+                .source_tag = source_variant.tag,
+                .target_tag = target_variant.tag,
+                .payloads = payloads,
+            };
+        }
+
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .tag_union = cases });
+    }
+
+    fn planNominal(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableNominalPayload,
+        target: checked_artifact.ExecutableNominalPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (!nominalTypeKeyEql(source.nominal, target.nominal)) {
+            compileTimeFinalizationInvariant("published erased-wrapper nominal transform changed nominal type");
+        }
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .nominal = .{
+            .nominal = target.nominal,
+            .source_ty = target.source_ty,
+            .backing = try self.plan(
+                .{ .ty = source.backing, .key = source.backing_key },
+                .{ .ty = target.backing, .key = target.backing_key },
+            ),
+        } });
+    }
+
+    fn planNominalToBacking(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableNominalPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (!repr.canonicalExecValueTypeKeyEql(source.backing_key, to.key)) {
+            self.transformPayloadInvariant(self.payload(from), self.payload(to));
+        }
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .structural_bridge = .nominal_reinterpret });
+    }
+
+    fn planBackingToNominal(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        target: checked_artifact.ExecutableNominalPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (!repr.canonicalExecValueTypeKeyEql(from.key, target.backing_key)) {
+            self.transformPayloadInvariant(self.payload(from), self.payload(to));
+        }
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .structural_bridge = .nominal_reinterpret });
+    }
+
+    fn planList(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableTypePayloadChild,
+        target: checked_artifact.ExecutableTypePayloadChild,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .list = .{
+            .elem = try self.plan(
+                .{ .ty = source.ty, .key = source.key },
+                .{ .ty = target.ty, .key = target.key },
+            ),
+        } });
+    }
+
+    fn planBox(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableTypePayloadChild,
+        target: checked_artifact.ExecutableTypePayloadChild,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .box_payload = .{
+            .boundary = self.localBoxBoundary(),
+            .kind = .box_to_box,
+            .payload = try self.plan(
+                .{ .ty = source.ty, .key = source.key },
+                .{ .ty = target.ty, .key = target.key },
+            ),
+        } });
+    }
+
+    fn planFiniteCallableToErased(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableCallableSetPayload,
+        target: checked_artifact.ExecutableErasedFnPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (self.provenance.len == 0) {
+            compileTimeFinalizationInvariant("published erased-wrapper finite callable erasure has no Box(T) provenance");
+        }
+        const adapter = canonical.ErasedAdapterKey{
+            .source_fn_ty = target.sig_key.source_fn_ty,
+            .callable_set_key = source.key,
+            .erased_fn_sig_key = target.sig_key,
+            .capture_shape_key = target.capture_shape_key,
+        };
+        return try self.append(from, to, try self.provenanceForTransform(), .{ .callable_to_erased = .{ .finite_value = .{
+            .source_fn_ty = target.sig_key.source_fn_ty,
+            .callable_set_key = source.key,
+            .adapter_key = adapter,
+        } } });
+    }
+
+    fn planAlreadyErasedCallable(
+        self: *PublishedValueTransformPlanner,
+        from: checked_artifact.ExecutableValueEndpoint,
+        to: checked_artifact.ExecutableValueEndpoint,
+        source: checked_artifact.ExecutableErasedFnPayload,
+        target: checked_artifact.ExecutableErasedFnPayload,
+    ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
+        if (!repr.erasedFnSigKeyEql(source.sig_key, target.sig_key)) {
+            compileTimeFinalizationInvariant("published erased-wrapper already-erased transform changed erased signature");
+        }
+        return try self.append(from, to, .none, .{ .already_erased_callable = .{ .sig_key = target.sig_key } });
+    }
+
+    fn localBoxBoundary(self: *PublishedValueTransformPlanner) ?canonical.BoxBoundaryId {
+        for (self.provenance) |provenance| {
+            switch (provenance) {
+                .local_box_boundary => |boundary| return boundary,
+                .promoted_wrapper => {},
+            }
+        }
+        return null;
+    }
+};
+
+fn sourceRecordFieldPayload(
+    fields: []const checked_artifact.ExecutableRecordFieldPayload,
+    label: canonical.RecordFieldLabelId,
+) ?checked_artifact.ExecutableRecordFieldPayload {
+    for (fields) |field| {
+        if (field.field == label) return field;
+    }
+    return null;
+}
+
+fn sourceTupleElemPayload(
+    elems: []const checked_artifact.ExecutableTupleElemPayload,
+    index: u32,
+) ?checked_artifact.ExecutableTupleElemPayload {
+    for (elems) |elem| {
+        if (elem.index == index) return elem;
+    }
+    return null;
+}
+
+fn targetTagVariantPayload(
+    variants: []const checked_artifact.ExecutableTagVariantPayload,
+    label: canonical.TagLabelId,
+) ?checked_artifact.ExecutableTagVariantPayload {
+    for (variants) |variant| {
+        if (variant.tag == label) return variant;
+    }
+    return null;
+}
+
+fn sourceTagPayload(
+    payloads: []const checked_artifact.ExecutableTagPayload,
+    index: u32,
+) ?checked_artifact.ExecutableTagPayload {
+    for (payloads) |payload| {
+        if (payload.index == index) return payload;
+    }
+    return null;
+}
+
+fn nominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
+    return a.module_name == b.module_name and a.type_name == b.type_name;
 }
 
 fn buildErasedPromotedProcedureExecutableSignature(
@@ -4314,6 +5028,8 @@ const ComptimeReifier = struct {
         if (fields.len == 0) return self.reifyZst();
         const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
         const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag == .zst) return try self.reifyZstRecordPlan(fields);
+        if (layout.tag != .struct_ and fields.len == 1) return try self.reifySingleFieldRecordPlan(fields[0], physical.layout_idx, physical.value);
         if (layout.tag != .struct_) reifierInvariant("record const graph plan did not lower to struct layout");
 
         const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
@@ -4330,6 +5046,48 @@ const ComptimeReifier = struct {
             schema_fields[i] = .{ .name = field.field, .schema = reified.schema };
             value_fields[i] = reified.value;
         }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .record = schema_fields }),
+            .value = try self.values.addValue(.{ .record = value_fields }),
+        };
+    }
+
+    fn reifyZstRecordPlan(
+        self: *ComptimeReifier,
+        fields: []const checked_artifact.ConstRecordFieldPlan,
+    ) Allocator.Error!ReifiedValue {
+        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, fields.len);
+        errdefer self.allocator.free(schema_fields);
+        const value_fields = try self.allocator.alloc(checked_artifact.ComptimeValueId, fields.len);
+        errdefer self.allocator.free(value_fields);
+
+        for (fields, 0..) |field, i| {
+            const reified = try self.reifyPlan(field.value, .zst, Value.zst);
+            schema_fields[i] = .{ .name = field.field, .schema = reified.schema };
+            value_fields[i] = reified.value;
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .record = schema_fields }),
+            .value = try self.values.addValue(.{ .record = value_fields }),
+        };
+    }
+
+    fn reifySingleFieldRecordPlan(
+        self: *ComptimeReifier,
+        field: checked_artifact.ConstRecordFieldPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const reified = try self.reifyPlan(field.value, layout_idx, value);
+
+        const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, 1);
+        errdefer self.allocator.free(schema_fields);
+        const value_fields = try self.allocator.alloc(checked_artifact.ComptimeValueId, 1);
+        errdefer self.allocator.free(value_fields);
+        schema_fields[0] = .{ .name = field.field, .schema = reified.schema };
+        value_fields[0] = reified.value;
 
         return .{
             .schema = try self.values.addSchema(.{ .record = schema_fields }),
@@ -4363,6 +5121,8 @@ const ComptimeReifier = struct {
         if (items.len == 0) return self.reifyZst();
         const physical = self.logicalAggregateValue(layout_idx, value, .struct_);
         const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag == .zst) return try self.reifyZstTuplePlan(items);
+        if (layout.tag != .struct_ and items.len == 1) return try self.reifySingleElemTuplePlan(items[0], physical.layout_idx, physical.value);
         if (layout.tag != .struct_) reifierInvariant("tuple const graph plan did not lower to struct layout");
 
         const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
@@ -4379,6 +5139,48 @@ const ComptimeReifier = struct {
             schemas[i] = reified.schema;
             values[i] = reified.value;
         }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .tuple = schemas }),
+            .value = try self.values.addValue(.{ .tuple = values }),
+        };
+    }
+
+    fn reifyZstTuplePlan(
+        self: *ComptimeReifier,
+        items: []const checked_artifact.ConstTupleElemPlan,
+    ) Allocator.Error!ReifiedValue {
+        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, items.len);
+        errdefer self.allocator.free(schemas);
+        const values = try self.allocator.alloc(checked_artifact.ComptimeValueId, items.len);
+        errdefer self.allocator.free(values);
+
+        for (items, 0..) |item, i| {
+            const reified = try self.reifyPlan(item.value, .zst, Value.zst);
+            schemas[i] = reified.schema;
+            values[i] = reified.value;
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .tuple = schemas }),
+            .value = try self.values.addValue(.{ .tuple = values }),
+        };
+    }
+
+    fn reifySingleElemTuplePlan(
+        self: *ComptimeReifier,
+        item: checked_artifact.ConstTupleElemPlan,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const reified = try self.reifyPlan(item.value, layout_idx, value);
+
+        const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, 1);
+        errdefer self.allocator.free(schemas);
+        const values = try self.allocator.alloc(checked_artifact.ComptimeValueId, 1);
+        errdefer self.allocator.free(values);
+        schemas[0] = reified.schema;
+        values[0] = reified.value;
 
         return .{
             .schema = try self.values.addSchema(.{ .tuple = schemas }),
@@ -4408,6 +5210,7 @@ const ComptimeReifier = struct {
     ) Allocator.Error!ReifiedValue {
         const physical = self.logicalAggregateValue(layout_idx, value, .tag_union);
         const layout = self.layouts.getLayout(physical.layout_idx);
+        if (layout.tag == .zst) return try self.reifyZstTagUnionPlan(variants_plan);
         if (layout.tag != .tag_union) reifierInvariant("tag union const graph plan did not lower to tag-union layout");
         const info = self.layouts.getTagUnionInfo(layout);
         const discriminant = info.data.readDiscriminant(physical.value.ptr);
@@ -4444,6 +5247,42 @@ const ComptimeReifier = struct {
             .schema = try self.values.addSchema(.{ .tag_union = variants }),
             .value = try self.values.addValue(.{ .tag_union = .{
                 .variant_index = discriminant,
+                .payloads = payload_values,
+            } }),
+        };
+    }
+
+    fn reifyZstTagUnionPlan(
+        self: *ComptimeReifier,
+        variants_plan: []const checked_artifact.ConstTagVariantPlan,
+    ) Allocator.Error!ReifiedValue {
+        if (variants_plan.len != 1) reifierInvariant("ZST tag-union const graph plan must have exactly one variant");
+
+        const variants = try self.allocator.alloc(checked_artifact.ComptimeVariantSchema, variants_plan.len);
+        errdefer {
+            for (variants) |variant| self.allocator.free(variant.payloads);
+            self.allocator.free(variants);
+        }
+
+        const active_variant = variants_plan[0];
+        const payload_values = try self.allocator.alloc(checked_artifact.ComptimeValueId, active_variant.payloads.len);
+        errdefer self.allocator.free(payload_values);
+
+        {
+            const payload_schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, active_variant.payloads.len);
+            errdefer self.allocator.free(payload_schemas);
+            for (active_variant.payloads, 0..) |payload_plan, payload_i| {
+                const reified = try self.reifyPlan(payload_plan.value, .zst, Value.zst);
+                payload_schemas[payload_i] = reified.schema;
+                payload_values[payload_i] = reified.value;
+            }
+            variants[0] = .{ .name = active_variant.tag, .payloads = payload_schemas };
+        }
+
+        return .{
+            .schema = try self.values.addSchema(.{ .tag_union = variants }),
+            .value = try self.values.addValue(.{ .tag_union = .{
+                .variant_index = 0,
                 .payloads = payload_values,
             } }),
         };

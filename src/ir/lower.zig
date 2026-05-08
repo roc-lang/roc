@@ -141,6 +141,7 @@ const IrBuilder = struct {
                 const ret_layout = self.blockReturnLayout(body);
                 _ = try self.output.store.addDef(.{
                     .proc = def.proc,
+                    .origin = def.origin,
                     .debug_name = null,
                     .args = args,
                     .body = body,
@@ -152,6 +153,7 @@ const IrBuilder = struct {
                 const args = try self.lowerArgSpan(hosted.args);
                 _ = try self.output.store.addDef(.{
                     .proc = def.proc,
+                    .origin = def.origin,
                     .debug_name = null,
                     .args = args,
                     .body = null,
@@ -238,7 +240,10 @@ const IrBuilder = struct {
         }
 
         const lowered: Ast.Var = switch (expr.data) {
-            .value_ref => |value| self.value_env.get(value) orelse irInvariant("IR lowering reached executable value_ref before value was bound"),
+            .value_ref => |value| blk: {
+                const existing = self.value_env.get(value) orelse irInvariant("IR lowering reached executable value_ref before value was bound");
+                break :blk existing;
+            },
             .int_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .int = literal } }, stmts),
             .frac_f32_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .f32 = literal } }, stmts),
             .frac_f64_lit => |literal| try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .lit = .{ .f64 = literal } }, stmts),
@@ -258,7 +263,7 @@ const IrBuilder = struct {
                 }, stmts);
             },
             .tag => |tag| blk: {
-                const payload = try self.lowerTagPayloadForConstruction(tag.tag, tag.payloads, stmts);
+                const payload = try self.lowerTagPayloadForConstruction(expr.ty, tag.tag, tag.payloads, stmts);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
                     .discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
                     .payload = payload.var_,
@@ -411,14 +416,10 @@ const IrBuilder = struct {
         const func = self.value_env.get(call.func) orelse irInvariant("IR lowering call_erased function value was not bound");
         const args = try self.lowerVarSpanFromValueRefSpan(call.args);
         defer if (args.len > 0) self.allocator.free(args);
-        const capture_layout = if (call.capture_ty) |capture_ty|
-            try self.layoutForType(capture_ty)
-        else
-            null;
+        _ = call.capture_ty;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_erased = .{
             .func = func,
             .args = try self.output.store.addVarSpan(args),
-            .capture_layout = capture_layout,
         } }, stmts);
     }
 
@@ -515,7 +516,13 @@ const IrBuilder = struct {
         const subject = try self.bindExpr(
             self.freshInternalValueRef(),
             .{ .canonical = .u16 },
-            .{ .get_union_id = callee },
+            .{ .get_union_id = .{
+                .value = callee,
+                .source = if (branch_ids.len == 1)
+                    .{ .known_singleton = @intCast(@intFromEnum(branch_ids[0].member.member_index)) }
+                else
+                    .runtime_callable_set,
+            } },
             stmts,
         );
         const result = try self.freshVar(try self.layoutForType(expr.ty));
@@ -620,7 +627,10 @@ const IrBuilder = struct {
         const discriminant = try self.bindExpr(
             self.freshInternalValueRef(),
             .{ .canonical = .u16 },
-            .{ .get_union_id = source },
+            .{ .get_union_id = .{
+                .value = source,
+                .source = self.discriminantSourceForTagUnionShape(tag_transform.source_union_shape),
+            } },
             stmts,
         );
 
@@ -1223,8 +1233,11 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         return switch (pattern_test) {
             .tag => |tag| blk: {
-                const discriminant = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .get_union_id = path_value }, stmts);
-                const literal = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{ .int = @intCast(self.input.row_shapes.tag(tag).logical_index) } }, stmts);
+                const discriminant = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .get_union_id = .{
+                    .value = path_value,
+                    .source = self.discriminantSourceForTagUnionShape(tag.union_shape),
+                } }, stmts);
+                const literal = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{ .int = @intCast(self.input.row_shapes.tag(tag.tag).logical_index) } }, stmts);
                 break :blk try self.boolLowLevel(.num_is_eq, discriminant, literal, stmts);
             },
             .int_literal => |literal| blk: {
@@ -1259,6 +1272,17 @@ const IrBuilder = struct {
             },
             .guard => |guard_expr| try self.lowerExpr(guard_expr, stmts),
         };
+    }
+
+    fn discriminantSourceForTagUnionShape(
+        self: *const IrBuilder,
+        shape: mir.MonoRow.TagUnionShapeId,
+    ) Ast.DiscriminantSource {
+        const tags = self.input.row_shapes.tagUnionTags(shape);
+        if (tags.len == 1) {
+            return .{ .known_singleton = @intCast(self.input.row_shapes.tag(tags[0]).logical_index) };
+        }
+        return .{ .runtime_tag_union = shape };
     }
 
     fn boolStructuralEq(
@@ -1571,6 +1595,7 @@ const IrBuilder = struct {
 
     fn lowerTagPayloadForConstruction(
         self: *IrBuilder,
+        union_ty: Exec.Type.TypeId,
         tag_id: mir.MonoRow.TagId,
         span: Exec.Ast.Span(Exec.Ast.TagPayloadExpr),
         stmts: *std.ArrayList(Ast.StmtId),
@@ -1602,12 +1627,10 @@ const IrBuilder = struct {
         }
 
         if (payload_vars.len == 1) return .{ .var_ = payload_vars[0], .bridge = payload_bridges[0] };
-        const payload_layout = try self.structLayout(payload_vars);
-        const payload_record = try self.bindAnonymous(payload_layout, try self.makeDirectStructExpr(payload_vars), stmts);
-        const payload_bridge = try self.output.store.addBridgePlan(.{
-            .struct_ = try self.output.store.addBridgePlanSpan(payload_bridges),
-        });
-        return .{ .var_ = payload_record, .bridge = payload_bridge };
+        const payload_layout = try self.payloadStructLayoutFromUnionLayout(try self.layoutForType(union_ty), tag_id);
+        const payload_record = try self.bindAnonymous(payload_layout, try self.makeStructExpr(payload_vars, payload_bridges), stmts);
+        const direct = try self.output.store.addBridgePlan(.direct);
+        return .{ .var_ = payload_record, .bridge = direct };
     }
 
     fn lowerTupleItems(
@@ -1813,12 +1836,6 @@ const IrBuilder = struct {
         }
         const node = try self.output.layouts.reserveNode(self.allocator);
         self.output.layouts.setNode(node, .{ .struct_ = try self.output.layouts.appendFields(self.allocator, graph_fields) });
-        return .{ .local = node };
-    }
-
-    fn boxLayout(self: *IrBuilder, child: Ast.LayoutRef) LowerResourceError!Ast.LayoutRef {
-        const node = try self.output.layouts.reserveNode(self.allocator);
-        self.output.layouts.setNode(node, .{ .box = child });
         return .{ .local = node };
     }
 

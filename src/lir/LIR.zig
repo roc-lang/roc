@@ -170,6 +170,23 @@ pub const ForListElementSource = enum {
     aliases_iterable_element,
 };
 
+/// Explicit final-drop callback plan for a packed boxed erased callable.
+///
+/// This is selected before backend lowering. Backends materialize exactly this
+/// plan into the `Payload.on_drop` slot; they must not infer final-drop behavior
+/// from the capture layout.
+pub const ErasedCallableOnDrop = union(enum) {
+    none,
+    rc_helper: layout.RcHelperKey,
+    interpreter_context_drop,
+};
+
+/// Concrete callable ABI used to enter a LIR procedure.
+pub const ProcAbi = enum {
+    roc,
+    erased_callable,
+};
+
 /// Single canonical statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     assign_ref: struct {
@@ -192,7 +209,6 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
-        capture_layout: ?layout.Idx,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -200,6 +216,7 @@ pub const CFStmt = union(enum) {
         proc: LirProcSpecId,
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
+        on_drop: ErasedCallableOnDrop,
         next: CFStmtId,
     },
     assign_low_level: struct {
@@ -298,6 +315,7 @@ pub const LirProcSpec = struct {
     args: LocalSpan,
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
+    abi: ProcAbi = .roc,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
 };

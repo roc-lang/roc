@@ -110,6 +110,11 @@ const Lowerer = struct {
     break_targets: std.ArrayList(LIR.CFStmtId),
     next_join_point: u32,
 
+    const TagUnionSource = struct {
+        source: LIR.LocalId,
+        layout: layout_mod.Idx,
+    };
+
     fn init(
         allocator: Allocator,
         target_usize: base.target.TargetUsize,
@@ -193,6 +198,10 @@ const Lowerer = struct {
                 .args = try self.store.addLocalSpan(arg_locals),
                 .body = null,
                 .ret_layout = try self.lowerLayoutRef(def.ret_layout),
+                .abi = switch (def.origin) {
+                    .source => .roc,
+                    .erased_direct_proc_adapter, .erased_adapter => .erased_callable,
+                },
                 .hosted = if (def.hosted) |hosted| .{
                     .external_symbol_name = hosted.external_symbol_name,
                     .dispatch_index = hosted.dispatch_index,
@@ -506,6 +515,80 @@ const Lowerer = struct {
         } });
     }
 
+    fn materializeTagUnionSource(
+        self: *Lowerer,
+        source: LIR.LocalId,
+        source_layout: layout_mod.Idx,
+    ) LowerResourceError!TagUnionSource {
+        const layout = self.layouts.getLayout(source_layout);
+        return switch (layout.tag) {
+            .tag_union => .{
+                .source = source,
+                .layout = source_layout,
+            },
+            .box => blk: {
+                const child = self.layouts.getLayout(layout.data.box);
+                if (child.tag != .tag_union) {
+                    lirInvariant("lir.lower_ir recursive tag source box did not contain a tag union");
+                }
+                const unboxed = try self.store.addLocal(.{ .layout_idx = layout.data.box });
+                break :blk .{
+                    .source = unboxed,
+                    .layout = layout.data.box,
+                };
+            },
+            else => lirInvariant("lir.lower_ir tag operation expected tag-union source layout"),
+        };
+    }
+
+    fn prependTagUnionSourceUnbox(
+        self: *Lowerer,
+        original_source: LIR.LocalId,
+        source: TagUnionSource,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        if (source.source == original_source) return next;
+        return try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = source.source,
+            .op = .box_unbox,
+            .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+            .args = try self.store.addLocalSpan(&[_]LIR.LocalId{original_source}),
+            .next = next,
+        } });
+    }
+
+    fn lowerUnionDiscriminantInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        union_id: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        switch (union_id.source) {
+            .known_singleton => |discriminant| {
+                return try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i128_literal = .{
+                        .value = @intCast(discriminant),
+                        .layout_idx = self.store.getLocal(target).layout_idx,
+                    } },
+                    .next = next,
+                } });
+            },
+            .runtime_tag_union, .runtime_callable_set => {},
+        }
+        const source = try self.lowerVar(union_id.value);
+        const source_layout = self.store.getLocal(source).layout_idx;
+        const source_union = try self.materializeTagUnionSource(source, source_layout);
+        const read_discriminant = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .discriminant = .{
+                .source = source_union.source,
+            } },
+            .next = next,
+        } });
+        return try self.prependTagUnionSourceUnbox(source, source_union, read_discriminant);
+    }
+
     fn lowerTagPayloadStructRefInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -519,29 +602,35 @@ const Lowerer = struct {
             if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
             lirInvariant("lir.lower_ir tag payload access from zst source expected zst target");
         }
-        const payload_layout = self.tagPayloadLayoutFromSource(source_layout, tag_discriminant);
+        const source_union = try self.materializeTagUnionSource(source, source_layout);
+        const payload_layout = self.tagUnionPayloadLayout(source_union.layout, tag_discriminant);
         if (target_layout == payload_layout) {
-            if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
-            return try self.store.addCFStmt(.{ .assign_ref = .{
+            if (self.isZstLayout(target_layout)) {
+                const assign_zst = try self.assignZst(target, next);
+                return try self.prependTagUnionSourceUnbox(source, source_union, assign_zst);
+            }
+            const extract = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .tag_payload_struct = .{
-                    .source = source,
+                    .source = source_union.source,
                     .tag_discriminant = tag_discriminant,
                 } },
                 .next = next,
             } });
+            return try self.prependTagUnionSourceUnbox(source, source_union, extract);
         }
 
         const raw_payload = try self.store.addLocal(.{ .layout_idx = payload_layout });
         const after_extract = try self.lowerPhysicalSlotInto(target, raw_payload, next);
-        return try self.store.addCFStmt(.{ .assign_ref = .{
+        const extract = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = raw_payload,
             .op = .{ .tag_payload_struct = .{
-                .source = source,
+                .source = source_union.source,
                 .tag_discriminant = tag_discriminant,
             } },
             .next = after_extract,
         } });
+        return try self.prependTagUnionSourceUnbox(source, source_union, extract);
     }
 
     fn lowerMakeStructInto(
@@ -738,13 +827,7 @@ const Lowerer = struct {
             .make_struct => |make_struct| try self.lowerMakeStructInto(target, make_struct, next),
             .make_list => |list| try self.lowerMakeListInto(target, list, next),
             .make_union => |tag| try self.lowerMakeUnionInto(target, tag, next),
-            .get_union_id => |source| try self.store.addCFStmt(.{ .assign_ref = .{
-                .target = target,
-                .op = .{ .discriminant = .{
-                    .source = try self.lowerVar(source),
-                } },
-                .next = next,
-            } }),
+            .get_union_id => |source| try self.lowerUnionDiscriminantInto(target, source, next),
             .get_union_struct => |payload| try self.lowerTagPayloadStructRefInto(
                 target,
                 try self.lowerVar(payload.value),
@@ -777,18 +860,39 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
-            .call_low_level => |call| try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target,
-                .op = call.op,
-                .rc_effect = call.rc_effect,
-                .args = try self.lowerVarSpan(call.args),
-                .next = next,
-            } }),
+            .call_low_level => |call| blk: {
+                if (call.op == .box_box or call.op == .box_unbox) {
+                    const target_layout = self.store.getLocal(target).layout_idx;
+                    if (self.isErasedCallableLayout(target_layout)) {
+                        const vars = self.input.store.sliceVarSpan(call.args);
+                        if (vars.len != 1) {
+                            lirInvariant("lir.lower_ir erased-callable Box operation expected exactly one argument");
+                        }
+                        const source = try self.lowerVar(vars[0]);
+                        const source_layout = self.store.getLocal(source).layout_idx;
+                        if (!self.isErasedCallableLayout(source_layout)) {
+                            lirInvariant("lir.lower_ir erased-callable Box operation source was not an erased callable");
+                        }
+                        break :blk try self.store.addCFStmt(.{ .assign_ref = .{
+                            .target = target,
+                            .op = .{ .local = source },
+                            .next = next,
+                        } });
+                    }
+                }
+
+                break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = call.op,
+                    .rc_effect = call.rc_effect,
+                    .args = try self.lowerVarSpan(call.args),
+                    .next = next,
+                } });
+            },
             .call_erased => |call| try self.store.addCFStmt(.{ .assign_call_erased = .{
                 .target = target,
                 .closure = try self.lowerVar(call.func),
                 .args = try self.lowerVarSpan(call.args),
-                .capture_layout = if (call.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
                 .next = next,
             } }),
             .packed_erased_fn => |packed_fn| try self.lowerPackedErasedFnInto(target, packed_fn, next),
@@ -818,11 +922,23 @@ const Lowerer = struct {
         if (has_capture != (packed_fn.capture_layout != null)) {
             lirInvariant("lir.lower_ir packed erased fn capture value disagrees with capture layout");
         }
+        const capture_layout = if (packed_fn.capture_layout) |capture_layout_ref|
+            try self.lowerLayoutRef(capture_layout_ref)
+        else
+            null;
+        const on_drop: LIR.ErasedCallableOnDrop = if (capture_layout) |layout_idx| blk: {
+            const helper_key = layout_mod.RcHelperKey{ .op = .decref, .layout_idx = layout_idx };
+            if (self.layouts.rcHelperPlan(helper_key) == .noop) {
+                break :blk .none;
+            }
+            break :blk .{ .rc_helper = helper_key };
+        } else .none;
         return try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = self.lirProcForExecutable(packed_fn.proc) orelse lirInvariant("lir.lower_ir reached packed_erased_fn before proc placeholder"),
             .capture = if (packed_fn.capture) |capture| try self.lowerVar(capture) else null,
-            .capture_layout = if (packed_fn.capture_layout) |capture_layout| try self.lowerLayoutRef(capture_layout) else null,
+            .capture_layout = capture_layout,
+            .on_drop = on_drop,
             .next = next,
         } });
     }
@@ -916,6 +1032,12 @@ const Lowerer = struct {
         const child_plans = self.input.store.sliceBridgePlanSpan(children);
         const source_layout = self.store.getLocal(source).layout_idx;
         const target_layout = self.store.getLocal(target).layout_idx;
+        if (self.isZstLayout(source_layout) or self.isZstLayout(target_layout)) {
+            if (!self.isZstLayout(source_layout) or !self.isZstLayout(target_layout)) {
+                lirInvariant("lir.lower_ir struct bridge with ZST endpoint expected both endpoints to be ZST");
+            }
+            return try self.assignZst(target, next);
+        }
         if (child_plans.len != self.structFieldCount(source_layout) or child_plans.len != self.structFieldCount(target_layout)) {
             lirInvariant("lir.lower_ir struct bridge field count does not match source and target layouts");
         }
@@ -956,6 +1078,16 @@ const Lowerer = struct {
         const child_plans = self.input.store.sliceBridgePlanSpan(children);
         const source_layout = self.store.getLocal(source).layout_idx;
         const target_layout = self.store.getLocal(target).layout_idx;
+        if (self.isZstLayout(source_layout) or self.isZstLayout(target_layout)) {
+            if (!self.isZstLayout(source_layout) or !self.isZstLayout(target_layout) or child_plans.len != 1) {
+                lirInvariant("lir.lower_ir tag-union bridge with ZST endpoint expected both endpoints to be the same singleton/ZST shape");
+            }
+            return try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = LIR.LocalSpan.empty(),
+                .next = next,
+            } });
+        }
         if (child_plans.len != self.tagUnionVariantCount(source_layout) or child_plans.len != self.tagUnionVariantCount(target_layout)) {
             lirInvariant("lir.lower_ir tag-union bridge variant count does not match source and target layouts");
         }
@@ -1099,6 +1231,10 @@ const Lowerer = struct {
         };
     }
 
+    fn isErasedCallableLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) bool {
+        return self.layouts.getLayout(layout_idx).tag == .erased_callable;
+    }
+
     fn listElemLayout(self: *const Lowerer, list_layout_idx: layout_mod.Idx) layout_mod.Idx {
         const resolved = self.layouts.resolvedListLayoutIdx(list_layout_idx) orelse
             lirInvariant("lir.lower_ir list construction expected a resolved list layout");
@@ -1230,23 +1366,6 @@ const Lowerer = struct {
                 (self.raw_layout_value_cache.get(box_layout.data.box) orelse box_layout.data.box) == payload_layout_idx,
             .box_of_zst => self.isZstLayout(payload_layout_idx),
             else => false,
-        };
-    }
-
-    fn tagPayloadLayoutFromSource(
-        self: *const Lowerer,
-        source_layout_idx: layout_mod.Idx,
-        tag_discriminant: u16,
-    ) layout_mod.Idx {
-        const source_layout = self.layouts.getLayout(source_layout_idx);
-        return switch (source_layout.tag) {
-            .tag_union => self.tagUnionPayloadLayout(source_layout_idx, tag_discriminant),
-            .box => blk: {
-                const inner = self.layouts.getLayout(source_layout.data.box);
-                if (inner.tag != .tag_union) lirInvariant("lir.lower_ir tag payload access expected boxed tag-union layout");
-                break :blk self.tagUnionPayloadLayout(source_layout.data.box, tag_discriminant);
-            },
-            else => lirInvariant("lir.lower_ir tag payload access expected tag-union source layout"),
         };
     }
 

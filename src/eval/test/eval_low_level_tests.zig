@@ -3390,7 +3390,7 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\make_boxed : {} -> Box(({ f : (I64 -> I64) } -> I64))
-        \\make_boxed = |_| Box.box(|r| r.f(1))
+        \\make_boxed = |_| Box.box(|r| (r.f)(1))
         \\
         \\apply_record : { f : (I64 -> I64) } -> I64
         \\apply_record = Box.unbox(make_boxed({}))

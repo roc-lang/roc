@@ -7,6 +7,7 @@ const row = @import("../mono_row/mod.zig");
 const solved = @import("../lambda_solved/mod.zig");
 const type_mod = @import("type.zig");
 const mir_ids = @import("../ids.zig");
+const debug = @import("../debug_verify.zig");
 
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
@@ -364,7 +365,10 @@ pub const DecisionEdge = struct {
 
 /// Public `PatternTest` declaration.
 pub const PatternTest = union(enum) {
-    tag: row.TagId,
+    tag: struct {
+        union_shape: row.TagUnionShapeId,
+        tag: row.TagId,
+    },
     int_literal: i128,
     float_f32_literal: f32,
     float_f64_literal: f64,
@@ -466,6 +470,7 @@ pub const Expr = struct {
         source_match: SourceMatch,
         value_transform_tag_union: struct {
             source: ExecutableValueRef,
+            source_union_shape: row.TagUnionShapeId,
             branches: Span(ValueTransformTagBranch),
         },
         value_transform_list: ValueTransformList,
@@ -601,6 +606,7 @@ pub const Store = struct {
     tag_payload_exprs: std.ArrayList(TagPayloadExpr),
     tuple_item_exprs: std.ArrayList(TupleItemExpr),
     list_item_exprs: std.ArrayList(ListItemExpr),
+    value_types: std.ArrayList(?TypeId),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -641,10 +647,12 @@ pub const Store = struct {
             .tag_payload_exprs = .empty,
             .tuple_item_exprs = .empty,
             .list_item_exprs = .empty,
+            .value_types = .empty,
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.value_types.deinit(self.allocator);
         self.list_item_exprs.deinit(self.allocator);
         self.tuple_item_exprs.deinit(self.allocator);
         self.tag_payload_exprs.deinit(self.allocator);
@@ -695,12 +703,17 @@ pub const Store = struct {
     }
 
     pub fn addExpr(self: *Store, ty: TypeId, value: ExecutableValueRef, data: Expr.Data) std.mem.Allocator.Error!ExprId {
+        try self.defineValueType(value, ty);
         const idx: u32 = @intCast(self.exprs.items.len);
         try self.exprs.append(self.allocator, .{ .ty = ty, .value = value, .data = data });
         return @enumFromInt(idx);
     }
 
     pub fn addValueRefExpr(self: *Store, ty: TypeId, value: ExecutableValueRef) std.mem.Allocator.Error!ExprId {
+        const source_ty = self.requireValueType(value);
+        if (source_ty != ty) {
+            storeInvariant("executable MIR value_ref tried to ascribe a different type to an existing value");
+        }
         return self.addExpr(ty, self.freshValueRef(), .{ .value_ref = value });
     }
 
@@ -710,20 +723,81 @@ pub const Store = struct {
         return id;
     }
 
+    pub fn freshTypedValueRef(self: *Store, ty: TypeId) std.mem.Allocator.Error!ExecutableValueRef {
+        const value = self.freshValueRef();
+        try self.defineValueType(value, ty);
+        return value;
+    }
+
+    pub fn valueType(self: *const Store, value: ExecutableValueRef) ?TypeId {
+        const idx = @intFromEnum(value);
+        if (idx >= self.next_value_ref) {
+            storeInvariant("executable MIR referenced a value ref that was never allocated");
+        }
+        if (idx >= self.value_types.items.len) return null;
+        return self.value_types.items[idx];
+    }
+
+    pub fn requireValueType(self: *const Store, value: ExecutableValueRef) TypeId {
+        return self.valueType(value) orelse {
+            storeInvariant("executable MIR referenced a value before its type was defined");
+        };
+    }
+
+    fn defineValueType(self: *Store, value: ExecutableValueRef, ty: TypeId) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(value);
+        if (idx >= self.next_value_ref) {
+            storeInvariant("executable MIR defined a value ref that was never allocated");
+        }
+        while (idx >= self.value_types.items.len) {
+            try self.value_types.append(self.allocator, null);
+        }
+        if (self.value_types.items[idx]) |existing| {
+            if (existing != ty) {
+                storeInvariant("executable MIR tried to define one value ref at two types");
+            }
+        } else {
+            self.value_types.items[idx] = ty;
+        }
+    }
+
     pub fn getExpr(self: *const Store, id: ExprId) Expr {
         return self.exprs.items[@intFromEnum(id)];
     }
 
     pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
+        switch (stmt) {
+            .decl => |decl| {
+                const body_ty = self.getExpr(decl.body).ty;
+                try self.defineValueType(decl.value, body_ty);
+            },
+            .reassign => |reassign| {
+                const body_ty = self.getExpr(reassign.body).ty;
+                const target_ty = self.requireValueType(reassign.target);
+                if (target_ty != body_ty) {
+                    storeInvariant("executable MIR reassign target type differs from reassigned body type");
+                }
+            },
+            else => {},
+        }
         const idx: u32 = @intCast(self.stmts.items.len);
         try self.stmts.append(self.allocator, stmt);
         return @enumFromInt(idx);
     }
 
     pub fn addPat(self: *Store, pat: Pat) std.mem.Allocator.Error!PatId {
+        try self.definePatternBindings(pat);
         const idx: u32 = @intCast(self.pats.items.len);
         try self.pats.append(self.allocator, pat);
         return @enumFromInt(idx);
+    }
+
+    fn definePatternBindings(self: *Store, pat: Pat) std.mem.Allocator.Error!void {
+        switch (pat.data) {
+            .bind => |value| try self.defineValueType(value, pat.ty),
+            .as => |as_pat| try self.defineValueType(as_pat.bind, pat.ty),
+            else => {},
+        }
     }
 
     pub fn addBranch(self: *Store, branch: Branch) std.mem.Allocator.Error!BranchId {
@@ -851,6 +925,9 @@ pub const Store = struct {
 
     pub fn addTypedValueSpan(self: *Store, values: []const TypedValue) std.mem.Allocator.Error!Span(TypedValue) {
         if (values.len == 0) return Span(TypedValue).empty();
+        for (values) |value| {
+            try self.defineValueType(value.value, value.ty);
+        }
         const start: u32 = @intCast(self.typed_values.items.len);
         try self.typed_values.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
@@ -910,6 +987,16 @@ pub const Store = struct {
 
     pub fn addCallableMatchBranchSpan(self: *Store, values: []const CallableMatchBranch) std.mem.Allocator.Error!Span(CallableMatchBranch) {
         if (values.len == 0) return Span(CallableMatchBranch).empty();
+        for (values) |branch| {
+            if (branch.capture_payload) |payload| {
+                const payload_ty = branch.capture_payload_ty orelse {
+                    storeInvariant("executable callable_match branch capture payload has no type");
+                };
+                try self.defineValueType(payload, payload_ty);
+            } else if (branch.capture_payload_ty != null) {
+                storeInvariant("executable callable_match branch capture type has no payload value");
+            }
+        }
         const start: u32 = @intCast(self.callable_match_branches.items.len);
         try self.callable_match_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
@@ -1004,6 +1091,11 @@ pub const Store = struct {
         return self.record_rest_projections.items[@intFromEnum(id)];
     }
 };
+
+fn storeInvariant(comptime message: []const u8) noreturn {
+    debug.invariant(false, message);
+    unreachable;
+}
 
 test "executable ast tests" {
     std.testing.refAllDecls(@This());

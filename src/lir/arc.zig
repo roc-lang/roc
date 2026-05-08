@@ -114,20 +114,22 @@ const Inserter = struct {
             },
             .assign_call_erased => |assign| {
                 var current_start = start;
-                current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target, options.loop_keep);
+                if (!self.spanUsesLocal(assign.args, assign.target) and assign.closure != assign.target) {
+                    current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                }
+                self.unsetMaskedArgs(owned, assign.args, arg_ownership.transfer_mask);
                 self.addOwnedIfRc(owned, assign.target);
                 var next = try self.rewritePath(assign.next, owned, options);
-                next = try self.releaseSpan(assign.args, next);
                 next = try self.releaseLocalIfRc(assign.closure, next);
                 self.store.getCFStmtPtr(start).* = .{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
-                    .capture_layout = assign.capture_layout,
                     .next = next,
                 } };
                 current_start = try self.retainLocalIfRc(assign.closure, current_start);
-                current_start = try self.retainSpan(assign.args, current_start);
+                current_start = try self.retainMaskedArgs(assign.args, arg_ownership.retain_mask, current_start);
                 return current_start;
             },
             .assign_packed_erased_fn => |assign| {
@@ -143,6 +145,7 @@ const Inserter = struct {
                     .proc = assign.proc,
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
+                    .on_drop = assign.on_drop,
                     .next = next,
                 } };
                 return current_start;
@@ -512,6 +515,8 @@ const Inserter = struct {
                 try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
             .assign_call_erased => |assign| {
+                const arg_ownership = try self.callArgOwnership(owned, assign.args, assign.next, assign.target, loop_keep);
+                self.unsetMaskedArgs(owned, assign.args, arg_ownership.transfer_mask);
                 self.addOwnedIfRc(owned, assign.target);
                 try self.analyzeUntil(assign.next, owned, stop, exits, loop_keep);
             },
@@ -870,17 +875,6 @@ const Inserter = struct {
         while (i > 0) {
             i -= 1;
             current = try self.retainLocalIfRc(locals[i], current);
-        }
-        return current;
-    }
-
-    fn releaseSpan(self: *Inserter, span: LIR.LocalSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var current = next;
-        const locals = self.store.getLocalSpan(span);
-        var i = locals.len;
-        while (i > 0) {
-            i -= 1;
-            current = try self.releaseLocalIfRc(locals[i], current);
         }
         return current;
     }

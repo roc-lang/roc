@@ -207,7 +207,11 @@ type_repr_to_rust : List(TypeRepr), TypeRepr -> Str
 type_repr_to_rust = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
-		RocBox(inner_id) => "*mut ${type_id_to_rust(type_table, inner_id)}"
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "RocErasedCallable"
+				_ => "*mut ${type_id_to_rust(type_table, inner_id)}"
+			}
 		RocStr => "RocStr"
 		RocUnit => "()"
 		RocU8 => "u8"
@@ -587,6 +591,61 @@ generate_host_abi_types_rust =
 	\\pub struct HostedFunctions {
 	\\    pub count: u32,
 	\\    pub fns: *const HostedFn,
+	\\}
+	\\
+	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
+	\\pub type RocErasedCallableFn = extern "C" fn(*const RocOps, *mut u8, *const u8, *mut u8);
+	\\
+	\\/// Final-drop callback for inline erased-callable captures.
+	\\pub type RocErasedCallableOnDrop = extern "C" fn(*mut u8, *const RocOps);
+	\\
+	\\/// Payload header for `Box(function)`.
+	\\#[repr(C)]
+	\\#[derive(Debug, Clone, Copy)]
+	\\pub struct RocErasedCallablePayload {
+	\\    pub callable_fn_ptr: RocErasedCallableFn,
+	\\    pub on_drop: Option<RocErasedCallableOnDrop>,
+	\\}
+	\\
+	\\/// Runtime representation of `Box(function)`.
+	\\pub type RocErasedCallable = *mut u8;
+	\\
+	\\pub const ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT: usize = 16;
+	\\pub const ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT: usize = 16;
+	\\pub const ROC_ERASED_CALLABLE_CAPTURE_OFFSET: usize =
+	\\    (core::mem::size_of::<RocErasedCallablePayload>() + 15) & !15;
+	\\
+	\\#[inline]
+	\\pub const fn roc_erased_callable_payload_size(capture_size: usize) -> usize {
+	\\    ROC_ERASED_CALLABLE_CAPTURE_OFFSET + capture_size
+	\\}
+	\\
+	\\#[inline]
+	\\pub unsafe fn roc_erased_callable_payload_ptr(callable: RocErasedCallable) -> *mut RocErasedCallablePayload {
+	\\    callable as *mut RocErasedCallablePayload
+	\\}
+	\\
+	\\#[inline]
+	\\pub unsafe fn roc_erased_callable_capture_ptr(callable: RocErasedCallable) -> *mut u8 {
+	\\    callable.add(ROC_ERASED_CALLABLE_CAPTURE_OFFSET)
+	\\}
+	\\
+	\\pub unsafe fn roc_erased_callable_allocate(
+	\\    roc_ops: &RocOps,
+	\\    callable_fn_ptr: RocErasedCallableFn,
+	\\    on_drop: Option<RocErasedCallableOnDrop>,
+	\\    capture_size: usize,
+	\\) -> RocErasedCallable {
+	\\    let ptr_width = core::mem::size_of::<usize>();
+	\\    let alignment = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
+	\\    let extra_bytes = core::cmp::max(ptr_width, ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT);
+	\\    let base = roc_ops.alloc(alignment, extra_bytes + roc_erased_callable_payload_size(capture_size)) as *mut u8;
+	\\    let data = base.add(extra_bytes);
+	\\    let rc = data.sub(core::mem::size_of::<isize>()) as *mut isize;
+	\\    *rc = 1;
+	\\    let payload = roc_erased_callable_payload_ptr(data);
+	\\    *payload = RocErasedCallablePayload { callable_fn_ptr, on_drop };
+	\\    data
 	\\}
 	\\
 	\\/// Arguments for a Roc allocation request.

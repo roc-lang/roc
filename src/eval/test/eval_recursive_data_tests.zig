@@ -386,6 +386,20 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "And(Or(True, False), Not(False))" },
     },
     .{
+        .name = "recursive nominal logic nested match",
+        .source_kind = .module,
+        .source =
+        \\Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+        \\
+        \\main =
+        \\    match Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False)) {
+        \\        And(Or(True, False), Not(False)) => "ok"
+        \\        _ => "bad"
+        \\    }
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
         .name = "inspect: recursive nominal singly linked",
         .source_kind = .module,
         .source =

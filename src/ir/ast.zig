@@ -5,6 +5,7 @@ const base = @import("base");
 const mir = @import("mir");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
+const row = mir.MonoRow;
 
 /// Interned symbol identifiers referenced by lowered IR nodes.
 pub const Symbol = symbol_mod.Symbol;
@@ -16,6 +17,8 @@ pub const ProcRef = mir.Executable.Ast.ExecutableProcId;
 pub const ProgramLiteralId = mir.Ids.ProgramLiteralId;
 /// Platform-hosted procedure metadata.
 pub const HostedProc = mir.Hosted.Proc;
+/// Executable procedure origin preserved for ABI-sensitive lowering.
+pub const ProcOrigin = mir.Executable.Ast.ProcOrigin;
 
 /// Identifier for a lowered IR expression node.
 pub const ExprId = enum(u32) { _ };
@@ -80,6 +83,13 @@ pub const BridgePlan = union(enum) {
     },
 };
 
+/// Explicit logical source for a discriminant read.
+pub const DiscriminantSource = union(enum) {
+    runtime_tag_union: row.TagUnionShapeId,
+    runtime_callable_set,
+    known_singleton: u16,
+};
+
 /// Lowered IR expression node.
 pub const Expr = union(enum) {
     var_: Var,
@@ -91,7 +101,10 @@ pub const Expr = union(enum) {
         payload: ?Var,
         payload_bridge_plan: ?BridgePlanId,
     },
-    get_union_id: Var,
+    get_union_id: struct {
+        value: Var,
+        source: DiscriminantSource,
+    },
     get_union_struct: struct {
         value: Var,
         tag_discriminant: u16,
@@ -126,7 +139,6 @@ pub const Expr = union(enum) {
     call_erased: struct {
         func: Var,
         args: Span(Var),
-        capture_layout: ?LayoutRef,
     },
     packed_erased_fn: struct {
         proc: ProcRef,
@@ -198,6 +210,7 @@ pub const Stmt = union(enum) {
 /// Lowered IR definition.
 pub const Def = struct {
     proc: ProcRef,
+    origin: ProcOrigin,
     debug_name: ?Symbol = null,
     args: Span(Var),
     body: ?BlockId = null,

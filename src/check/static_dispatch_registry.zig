@@ -11,7 +11,6 @@ const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
 const checked_ids = @import("checked_ids.zig");
-const canonical_type_keys = @import("canonical_type_keys.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -384,13 +383,8 @@ fn checkedTypeIdForVar(
     checked_types: anytype,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
-    const key = try canonical_type_keys.fromVar(
-        allocator,
-        module.typeStoreConst(),
-        module.identStoreConst(),
-        var_,
-    );
-    return checked_types.rootForKey(key) orelse {
+    _ = allocator;
+    return checked_types.rootForSourceVar(module, var_) orelse {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
         }

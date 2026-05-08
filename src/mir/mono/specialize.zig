@@ -51,6 +51,7 @@ pub const Input = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
     mode: LoweringMode = .runnable,
+    checking_artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
 };
 
 /// Public `LoweringMode` declaration.
@@ -118,6 +119,7 @@ pub const Program = struct {
     executable_synthetic_procs: std.ArrayList(mir_ids.ExecutableSyntheticProc),
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(mir_ids.RootMetadata),
+    nominal_backing_instantiations: std.StringHashMap(checked_artifact.CheckedTypeId),
     bool_source_ty: ?canonical.CanonicalTypeKey,
 
     pub fn init(allocator: Allocator) Program {
@@ -134,11 +136,15 @@ pub const Program = struct {
             .executable_synthetic_procs = .empty,
             .root_procs = .empty,
             .root_metadata = .empty,
+            .nominal_backing_instantiations = std.StringHashMap(checked_artifact.CheckedTypeId).init(allocator),
             .bool_source_ty = null,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        var nominal_keys = self.nominal_backing_instantiations.keyIterator();
+        while (nominal_keys.next()) |stored_key| self.allocator.free(stored_key.*);
+        self.nominal_backing_instantiations.deinit();
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
         self.executable_synthetic_procs.deinit(self.allocator);
@@ -176,6 +182,32 @@ pub const Program = struct {
             if (canonical.mirProcedureRefEql(existing.source_proc, proc.source_proc)) return;
         }
         try self.executable_synthetic_procs.append(self.allocator, proc);
+    }
+
+    pub fn cachedNominalBackingInstantiation(
+        self: *Program,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        nominal: canonical.NominalTypeKey,
+        arg_keys: []const canonical.CanonicalTypeKey,
+    ) Allocator.Error!?checked_artifact.CheckedTypeId {
+        const key = try nominalBackingInstantiationKey(self.allocator, artifact, nominal, arg_keys);
+        defer self.allocator.free(key);
+        return self.nominal_backing_instantiations.get(key);
+    }
+
+    pub fn rememberNominalBackingInstantiation(
+        self: *Program,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        nominal: canonical.NominalTypeKey,
+        arg_keys: []const canonical.CanonicalTypeKey,
+        root: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        const key = try nominalBackingInstantiationKey(self.allocator, artifact, nominal, arg_keys);
+        errdefer self.allocator.free(key);
+        if (self.nominal_backing_instantiations.contains(key)) {
+            invariantViolation("mono nominal backing instantiation cache attempted to overwrite an existing reservation");
+        }
+        try self.nominal_backing_instantiations.put(key, root);
     }
 
     pub fn addPatternBinderSymbol(
@@ -263,6 +295,36 @@ pub const Program = struct {
     }
 };
 
+fn nominalBackingInstantiationKey(
+    allocator: Allocator,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    nominal: canonical.NominalTypeKey,
+    arg_keys: []const canonical.CanonicalTypeKey,
+) Allocator.Error![]u8 {
+    const key_len = artifact.bytes.len + 4 + 4 + 4 + canonical_type_key_bytes_len * arg_keys.len;
+    const key = try allocator.alloc(u8, key_len);
+    var offset: usize = 0;
+
+    @memcpy(key[offset..][0..artifact.bytes.len], artifact.bytes[0..]);
+    offset += artifact.bytes.len;
+
+    std.mem.writeInt(u32, key[offset..][0..4], @intFromEnum(nominal.module_name), .little);
+    offset += 4;
+    std.mem.writeInt(u32, key[offset..][0..4], @intFromEnum(nominal.type_name), .little);
+    offset += 4;
+    std.mem.writeInt(u32, key[offset..][0..4], @intCast(arg_keys.len), .little);
+    offset += 4;
+
+    for (arg_keys) |arg_key| {
+        @memcpy(key[offset..][0..canonical_type_key_bytes_len], arg_key.bytes[0..]);
+        offset += canonical_type_key_bytes_len;
+    }
+
+    return key;
+}
+
+const canonical_type_key_bytes_len = @sizeOf(@TypeOf(@as(canonical.CanonicalTypeKey, .{}).bytes));
+
 /// Public `run` function.
 pub fn run(
     allocator: Allocator,
@@ -291,9 +353,23 @@ pub fn run(
             root,
             @intCast(root_index),
         ) orelse continue;
+        const template_ref = try name_resolver.procedureTemplateRef(seed.template);
+        const template_lookup = checkedTemplateForKey(input, template_ref, null);
+        var root_type_instantiator = TypeInstantiator.init(
+            allocator,
+            input,
+            &program,
+            template_lookup.checked_types,
+            &name_resolver,
+            template_lookup.artifact,
+        );
+        defer root_type_instantiator.deinit();
+        try root_type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, seed.requested_fn_ty);
+        const materialized_fn_root = try root_type_instantiator.materializeConcreteRef(seed.requested_fn_ty);
+        const materialized_fn_ty = try program.concrete_source_types.registerLocalRoot(materialized_fn_root);
         const request = MonoSpecializationRequest{
-            .template = try name_resolver.procedureTemplateRef(seed.template),
-            .requested_fn_ty = seed.requested_fn_ty,
+            .template = template_ref,
+            .requested_fn_ty = materialized_fn_ty,
             .reason = seed.reason,
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
@@ -1450,6 +1526,7 @@ const TypeInstantiator = struct {
         template_fn_root: checked_artifact.CheckedTypeId,
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
+        _ = try self.materializeConcreteRef(requested_fn_ty);
         try self.unifyTemplateWithConcrete(template_fn_root, requested_fn_ty);
     }
 
@@ -1685,7 +1762,7 @@ const TypeInstantiator = struct {
                 .args = try self.cloneTemplateTypeIdsForRowEquation(nominal.args),
             } },
             .function => |func| .{ .function = .{
-                .kind = func.kind,
+                .kind = checked_artifact.finalizedFunctionKind(func.kind),
                 .args = try self.cloneTemplateTypeIdsForRowEquation(func.args),
                 .ret = try self.cloneTemplateTypeForRowEquation(func.ret),
                 .needs_instantiation = false,
@@ -1729,7 +1806,7 @@ const TypeInstantiator = struct {
                 .args = try self.cloneConcreteTypeIdsForRowEquation(ref, nominal.args),
             } },
             .function => |func| .{ .function = .{
-                .kind = func.kind,
+                .kind = checked_artifact.finalizedFunctionKind(func.kind),
                 .args = try self.cloneConcreteTypeIdsForRowEquation(ref, func.args),
                 .ret = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, func.ret)),
                 .needs_instantiation = false,
@@ -1905,22 +1982,18 @@ const TypeInstantiator = struct {
                 .backing = try self.materializeTemplateType(alias.backing),
                 .args = try self.materializeTemplateTypeIds(alias.args),
             } },
-            .record_unbound => |fields| .{ .record_unbound = try self.materializeTemplateRecordFields(fields) },
+            .record_unbound => |fields| .{ .record = .{
+                .fields = try self.materializeTemplateRecordFields(fields),
+                .ext = try self.materializeSyntheticPayload(.empty_record),
+            } },
             .record => |record| .{ .record = .{
                 .fields = try self.materializeTemplateRecordFields(record.fields),
                 .ext = try self.materializeTemplateRecordExt(record.ext),
             } },
             .tuple => |items| .{ .tuple = try self.materializeTemplateTypeIds(items) },
-            .nominal => |nominal| .{ .nominal = .{
-                .name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
-                .origin_module = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
-                .builtin = nominal.builtin,
-                .is_opaque = nominal.is_opaque,
-                .backing = try self.materializeTemplateType(nominal.backing),
-                .args = try self.materializeTemplateTypeIds(nominal.args),
-            } },
+            .nominal => |nominal| try self.materializeTemplateNominalPayload(nominal),
             .function => |func| .{ .function = .{
-                .kind = func.kind,
+                .kind = checked_artifact.finalizedFunctionKind(func.kind),
                 .args = try self.materializeTemplateTypeIds(func.args),
                 .ret = try self.materializeTemplateType(func.ret),
                 .needs_instantiation = false,
@@ -1954,6 +2027,56 @@ const TypeInstantiator = struct {
             .flex => |flex| try self.materializeEmptyTagUnionRowTail(flex),
             else => try self.materializeTemplateType(ext),
         };
+    }
+
+    fn materializeTemplateNominalPayload(
+        self: *TypeInstantiator,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        const args = try self.materializeTemplateTypeIds(nominal.args);
+        errdefer self.allocator.free(args);
+
+        const backing = if (nominal.builtin == null)
+            try self.materializePublishedNominalBacking(nominal, args)
+        else
+            try self.materializeTemplateType(nominal.backing);
+
+        return .{ .nominal = .{
+            .name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
+            .origin_module = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
+            .builtin = nominal.builtin,
+            .is_opaque = nominal.is_opaque,
+            .backing = backing,
+            .args = args,
+        } };
+    }
+
+    fn materializePublishedNominalBacking(
+        self: *TypeInstantiator,
+        nominal: checked_artifact.CheckedNominalType,
+        materialized_args: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const nominal_key = canonical.NominalTypeKey{
+            .module_name = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
+            .type_name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
+        };
+        const arg_keys = try self.allocator.alloc(canonical.CanonicalTypeKey, materialized_args.len);
+        defer self.allocator.free(arg_keys);
+        const arg_refs = try self.allocator.alloc(ConcreteSourceType.ConcreteSourceTypeRef, materialized_args.len);
+        defer self.allocator.free(arg_refs);
+        for (materialized_args, 0..) |arg, i| {
+            const index: usize = @intFromEnum(arg);
+            if (index >= self.program.concrete_source_types.local_roots.items.len) {
+                invariantViolation("mono nominal materialization argument was not a local concrete source root");
+            }
+            arg_refs[i] = try self.program.concrete_source_types.registerLocalRoot(arg);
+            arg_keys[i] = self.program.concrete_source_types.key(arg_refs[i]);
+        }
+
+        const backing_root = try self.publishedNominalBackingRootForRefs(nominal_key, arg_refs, arg_keys) orelse {
+            invariantViolation("mono nominal materialization has no published instantiated nominal backing");
+        };
+        return backing_root;
     }
 
     fn materializeTemplateTypeIds(
@@ -2293,15 +2416,19 @@ const TypeInstantiator = struct {
             debug.invariant(false, "mono specialization invariant violated: concrete type ref artifact was not available");
             unreachable;
         };
-        var lowerer = LowerType.Lowerer.initWithResolver(
-            self.allocator,
-            checked_types,
-            &self.program.types,
-            self.name_resolver,
+        const concrete_ref = try self.program.concrete_source_types.registerArtifactRoot(
             ref.artifact,
+            checked_types,
+            ref.ty,
+        );
+        const local_root = try self.materializeConcreteRef(concrete_ref);
+        var lowerer = LowerType.Lowerer.init(
+            self.allocator,
+            self.program.concrete_source_types.localView(),
+            &self.program.types,
         );
         defer lowerer.deinit();
-        return try lowerer.lowerChecked(ref.ty);
+        return try lowerer.lowerChecked(local_root);
     }
 
     fn lowerConcreteRef(
@@ -2355,7 +2482,7 @@ const TypeInstantiator = struct {
 
         switch (self.concretePayload(concrete)) {
             .flex, .rigid => {
-                try self.bindConcreteVariable(concrete, try self.concreteRefForTemplateType(template_id));
+                try self.bindConcreteVariable(concrete, try self.concreteRefForTemplateTypePreservingVariables(template_id));
                 return;
             },
             .alias => |alias| {
@@ -3133,34 +3260,50 @@ const TypeInstantiator = struct {
         const nominal_key = try self.nominalKeyForConcreteRef(ref, nominal.origin_module, nominal.name);
         const arg_keys = try self.allocator.alloc(canonical.CanonicalTypeKey, nominal.args.len);
         defer self.allocator.free(arg_keys);
+        const arg_refs = try self.allocator.alloc(ConcreteSourceType.ConcreteSourceTypeRef, nominal.args.len);
+        defer self.allocator.free(arg_refs);
         for (nominal.args, 0..) |arg, i| {
-            arg_keys[i] = self.program.concrete_source_types.key(try self.concreteChildRef(ref, arg));
+            arg_refs[i] = try self.concreteChildRef(ref, arg);
+            arg_keys[i] = self.program.concrete_source_types.key(arg_refs[i]);
         }
 
-        if (try self.publishedNominalBackingRefInArtifact(
+        const backing_root = try self.publishedNominalBackingRootForRefs(nominal_key, arg_refs, arg_keys) orelse return null;
+        return try self.program.concrete_source_types.registerLocalRoot(backing_root);
+    }
+
+    fn publishedNominalBackingRootForRefs(
+        self: *TypeInstantiator,
+        nominal_key: canonical.NominalTypeKey,
+        arg_refs: []const ConcreteSourceType.ConcreteSourceTypeRef,
+        arg_keys: []const canonical.CanonicalTypeKey,
+    ) Allocator.Error!?checked_artifact.CheckedTypeId {
+        if (try self.publishedNominalBackingRootInArtifact(
             self.input.root.artifact.key,
             self.input.root.artifact.checked_types.view(),
             &self.input.root.artifact.interface_capabilities,
             nominal_key,
+            arg_refs,
             arg_keys,
         )) |published| return published;
 
         for (self.input.imports) |imported| {
-            if (try self.publishedNominalBackingRefInArtifact(
+            if (try self.publishedNominalBackingRootInArtifact(
                 imported.key,
                 imported.checked_types,
                 imported.interface_capabilities,
                 nominal_key,
+                arg_refs,
                 arg_keys,
             )) |published| return published;
         }
 
         for (self.input.root.relation_artifacts) |related| {
-            if (try self.publishedNominalBackingRefInArtifact(
+            if (try self.publishedNominalBackingRootInArtifact(
                 related.key,
                 related.checked_types,
                 related.interface_capabilities,
                 nominal_key,
+                arg_refs,
                 arg_keys,
             )) |published| return published;
         }
@@ -3168,14 +3311,23 @@ const TypeInstantiator = struct {
         return null;
     }
 
-    fn publishedNominalBackingRefInArtifact(
+    fn publishedNominalBackingRootInArtifact(
         self: *TypeInstantiator,
         artifact: checked_artifact.CheckedModuleArtifactKey,
         checked_types: checked_artifact.CheckedTypeStoreView,
         capabilities: *const checked_artifact.ModuleInterfaceCapabilities,
         nominal_key: canonical.NominalTypeKey,
+        arg_refs: []const ConcreteSourceType.ConcreteSourceTypeRef,
         arg_keys: []const canonical.CanonicalTypeKey,
-    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+    ) Allocator.Error!?checked_artifact.CheckedTypeId {
+        if (try self.instantiatePublishedNominalDeclarationBacking(
+            artifact,
+            checked_types,
+            nominal_key,
+            arg_refs,
+            arg_keys,
+        )) |published| return published;
+
         for (capabilities.exported_nominal_representations) |representation| {
             const remapped_nominal = canonical.NominalTypeKey{
                 .module_name = try self.name_resolver.moduleName(artifact, representation.nominal.module_name),
@@ -3184,11 +3336,99 @@ const TypeInstantiator = struct {
             if (remapped_nominal.module_name != nominal_key.module_name or remapped_nominal.type_name != nominal_key.type_name) continue;
             const capability = capabilities.boxPayloadCapability(representation.box_payload_capability);
             if (!canonicalTypeKeySliceEql(capability.instantiated_args, arg_keys)) continue;
-            return try self.program.concrete_source_types.registerArtifactRoot(
+            return try self.materializePublishedCapabilityBacking(
                 artifact,
                 checked_types,
                 capability.backing_ty,
             );
+        }
+
+        return null;
+    }
+
+    fn materializePublishedCapabilityBacking(
+        self: *TypeInstantiator,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_types: checked_artifact.CheckedTypeStoreView,
+        backing_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        var child = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            checked_types,
+            self.name_resolver,
+            artifact,
+        );
+        defer child.deinit();
+
+        const backing_ref = try self.program.concrete_source_types.registerArtifactRoot(
+            artifact,
+            checked_types,
+            backing_ty,
+        );
+        return try child.materializeConcreteRef(backing_ref);
+    }
+
+    fn instantiatePublishedNominalDeclarationBacking(
+        self: *TypeInstantiator,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_types: checked_artifact.CheckedTypeStoreView,
+        nominal_key: canonical.NominalTypeKey,
+        arg_refs: []const ConcreteSourceType.ConcreteSourceTypeRef,
+        arg_keys: []const canonical.CanonicalTypeKey,
+    ) Allocator.Error!?checked_artifact.CheckedTypeId {
+        const declaration = try self.publishedNominalDeclarationInArtifact(
+            artifact,
+            checked_types,
+            nominal_key,
+        ) orelse return null;
+
+        if (declaration.formal_args.len != arg_refs.len) {
+            invariantViolation("mono nominal declaration instantiation arity did not match nominal arguments");
+        }
+
+        if (try self.program.cachedNominalBackingInstantiation(artifact, nominal_key, arg_keys)) |cached| return cached;
+
+        const backing_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try self.program.rememberNominalBackingInstantiation(artifact, nominal_key, arg_keys, backing_root);
+
+        var child = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            checked_types,
+            self.name_resolver,
+            artifact,
+        );
+        defer child.deinit();
+
+        try child.materialized_template_roots.put(declaration.backing, backing_root);
+        for (declaration.formal_args, arg_refs) |formal_arg, arg_ref| {
+            try child.substitutions.put(formal_arg, arg_ref);
+        }
+
+        const payload = try child.materializeTemplatePayload(child.templatePayload(declaration.backing));
+        self.program.concrete_source_types.fillLocalRoot(backing_root, payload);
+        try child.sealReachableMaterializedLocalGraph(backing_root);
+
+        return backing_root;
+    }
+
+    fn publishedNominalDeclarationInArtifact(
+        self: *TypeInstantiator,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_types: checked_artifact.CheckedTypeStoreView,
+        nominal_key: canonical.NominalTypeKey,
+    ) Allocator.Error!?checked_artifact.CheckedNominalDeclaration {
+        for (checked_types.nominal_declarations) |declaration| {
+            const remapped_nominal = canonical.NominalTypeKey{
+                .module_name = try self.name_resolver.moduleName(artifact, declaration.nominal.module_name),
+                .type_name = try self.name_resolver.typeName(artifact, declaration.nominal.type_name),
+            };
+            if (remapped_nominal.module_name == nominal_key.module_name and remapped_nominal.type_name == nominal_key.type_name) {
+                return declaration;
+            }
         }
         return null;
     }
@@ -3535,7 +3775,10 @@ const TypeInstantiator = struct {
                 .backing = try self.materializeConcreteRef(try self.concreteAliasBackingRef(ref, alias)),
                 .args = try self.materializeConcreteTypeIds(ref, alias.args),
             } },
-            .record_unbound => |fields| .{ .record_unbound = try self.materializeConcreteRecordFields(ref, fields) },
+            .record_unbound => |fields| .{ .record = .{
+                .fields = try self.materializeConcreteRecordFields(ref, fields),
+                .ext = try self.materializeSyntheticPayload(.empty_record),
+            } },
             .record => |record| .{ .record = .{
                 .fields = try self.materializeConcreteRecordFields(ref, record.fields),
                 .ext = try self.materializeConcreteRecordExt(try self.concreteChildRef(ref, record.ext)),
@@ -3550,7 +3793,7 @@ const TypeInstantiator = struct {
                 .args = try self.materializeConcreteTypeIds(ref, nominal.args),
             } },
             .function => |func| .{ .function = .{
-                .kind = func.kind,
+                .kind = checked_artifact.finalizedFunctionKind(func.kind),
                 .args = try self.materializeConcreteTypeIds(ref, func.args),
                 .ret = try self.materializeConcreteRef(try self.concreteChildRef(ref, func.ret)),
                 .needs_instantiation = false,
@@ -4521,6 +4764,12 @@ const BodyLowerer = struct {
             .proc = member_proc,
             .captures = try self.program.ast.addCaptureArgSpan(capture_args),
             .fn_ty = fn_ty,
+            .forced_target = .{
+                .key = finite.member_target,
+                .artifact = self.template_lookup.artifact,
+                .payloads = self.template_lookup.executable_type_payloads,
+                .promoted_wrapper = finite.member_target_promoted_wrapper,
+            },
         } });
 
         const call_args = try self.allocator.alloc(Ast.ExprId, finite.call_args.len);
@@ -5123,6 +5372,11 @@ const BodyLowerer = struct {
         param_ty: ConcreteTypeInfo,
     };
 
+    const PatternBinderAction = enum {
+        declaration,
+        reassignment,
+    };
+
     const LoweredParamBundle = struct {
         args: Ast.Span(Ast.TypedSymbol),
         destructures: []ParamDestructure,
@@ -5313,7 +5567,7 @@ const BodyLowerer = struct {
             .call => |call| try self.callResultTypeInFreshInstantiation(
                 call.source_fn_ty_payload,
                 call.args,
-                try self.concreteTypeInfoForChecked(fallback_checked_ty),
+                null,
             ),
             else => try self.concreteTypeInfoForChecked(fallback_checked_ty),
         };
@@ -5572,7 +5826,8 @@ const BodyLowerer = struct {
             .run_low_level => |run_low_level| try self.lowerRunLowLevel(ty, run_low_level.op, run_low_level.args),
             .nominal => |nominal| blk: {
                 _ = nominal.backing_type;
-                const backing = try self.lowerExpr(nominal.backing_expr);
+                const backing_info = try self.concreteNominalBackingInfo(expected_info);
+                const backing = try self.lowerExprConcreteExpected(nominal.backing_expr, backing_info);
                 break :blk try self.program.ast.addExpr(ty, .{ .nominal_reinterpret = backing });
             },
             .dispatch_call => |plan| try self.lowerStaticDispatch(expected_info, plan orelse invariantViolation("checked dispatch call reached mono without a StaticDispatchCallPlan")),
@@ -5785,7 +6040,7 @@ const BodyLowerer = struct {
             .top_level_const,
             .imported_const,
             .platform_required_const,
-            => |const_use| try self.lowerConstUse(ty, const_use, record.checked_ty),
+            => |const_use| try self.lowerConstUse(expected, const_use, record.checked_ty),
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -5863,7 +6118,14 @@ const BodyLowerer = struct {
             self.local_symbol_types = saved_local_symbol_types;
         }
 
-        var instantiator = try self.type_instantiator.fork();
+        var instantiator = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            self.type_instantiator.template_types,
+            self.name_resolver,
+            self.type_instantiator.template_artifact,
+        );
         defer instantiator.deinit();
 
         const previous = self.type_instantiator;
@@ -5953,7 +6215,7 @@ const BodyLowerer = struct {
 
     fn lowerConstUse(
         self: *BodyLowerer,
-        ty: Type.TypeId,
+        expected: ConcreteTypeInfo,
         const_use: checked_artifact.ConstUseTemplate,
         _: checked_artifact.CheckedTypeId,
     ) Allocator.Error!Ast.ExprId {
@@ -5962,9 +6224,13 @@ const BodyLowerer = struct {
             unreachable;
         };
         const concrete_ref = try self.type_instantiator.concreteRefForTemplateType(requested_payload);
-        const requested_key = self.program.concrete_source_types.key(concrete_ref);
-        if (!std.mem.eql(u8, &requested_key.bytes, &const_use.requested_source_ty_template.bytes)) {
-            invariantViolation("mono body lowering constant use payload key disagrees with requested source type template");
+        const concrete_producer = try self.concreteConstProducer(const_use.const_ref);
+        const requested_key = if (concrete_producer) |producer|
+            producer.key
+        else
+            self.program.concrete_source_types.key(concrete_ref);
+        if (concrete_producer == null and !std.mem.eql(u8, &requested_key.bytes, &expected.source_ty.bytes)) {
+            invariantViolation("mono body lowering constant use concrete payload key disagrees with expected source type");
         }
         const key = checked_artifact.ConstInstantiationKey{
             .const_ref = const_use.const_ref,
@@ -5972,7 +6238,14 @@ const BodyLowerer = struct {
         };
         const instance = constInstanceForKey(self.input, self.input.root.artifact.key, key) orelse {
             switch (self.input.mode) {
-                .comptime_dependency_summary => return try self.program.ast.addExpr(ty, .{ .const_ref = key }),
+                .comptime_dependency_summary => {
+                    if (concrete_producer) |producer| {
+                        try self.publishConcreteConstProducerType(producer);
+                    } else {
+                        try self.publishConcreteConstDependencyType(concrete_ref);
+                    }
+                    return try self.program.ast.addExpr(expected.ty, .{ .const_ref = key });
+                },
                 .runnable => {
                     debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
                     unreachable;
@@ -5982,7 +6255,98 @@ const BodyLowerer = struct {
         var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
         defer dependency_state.deinit();
         try reserveConstInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, instance);
-        return try self.program.ast.addExpr(ty, .{ .const_instance = instance });
+        return try self.program.ast.addExpr(expected.ty, .{ .const_instance = instance });
+    }
+
+    const ConcreteConstProducer = struct {
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        payload: checked_artifact.CheckedTypeId,
+        key: canonical.CanonicalTypeKey,
+    };
+
+    fn concreteConstProducer(
+        self: *BodyLowerer,
+        ref: checked_artifact.ConstRef,
+    ) Allocator.Error!?ConcreteConstProducer {
+        const checked_types = checkedTypesForKey(self.input, ref.artifact) orelse {
+            invariantViolation("mono body lowering constant use referenced unavailable producer artifact");
+        };
+        const scheme = checkedTypeSchemeForKey(checked_types, ref.source_scheme) orelse {
+            invariantViolation("mono body lowering constant use referenced unavailable producer source scheme");
+        };
+        if (!try checkedTypeViewIsConcreteConstProducerScheme(self.allocator, checked_types, scheme.root)) return null;
+
+        const root_index: usize = @intFromEnum(scheme.root);
+        if (root_index >= checked_types.roots.len) {
+            invariantViolation("mono body lowering concrete const producer scheme root was missing");
+        }
+        return .{
+            .artifact = ref.artifact,
+            .payload = scheme.root,
+            .key = checked_types.roots[root_index].key,
+        };
+    }
+
+    fn publishConcreteConstProducerType(
+        self: *BodyLowerer,
+        producer: ConcreteConstProducer,
+    ) Allocator.Error!void {
+        const artifact_sink = self.input.checking_artifact_sink orelse {
+            invariantViolation("compile-time dependency summary constant use had no mutable checked artifact sink");
+        };
+        if (artifact_sink.checked_types.rootForKey(producer.key) != null) return;
+
+        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, self.input.imports);
+        defer projector.deinit();
+
+        if (std.mem.eql(u8, &producer.artifact.bytes, &artifact_sink.key.bytes)) {
+            _ = try projector.projectCheckedTypeViewRoot(artifact_sink.checked_types.view(), producer.payload);
+            return;
+        }
+
+        for (self.input.imports) |imported| {
+            if (!std.mem.eql(u8, &imported.key.bytes, &producer.artifact.bytes)) continue;
+            if (try projector.projectImportedCheckedTypeForKey(imported, producer.key)) |_| return;
+            invariantViolation("compile-time dependency summary concrete const producer type was missing from the imported artifact");
+        }
+        invariantViolation("compile-time dependency summary concrete const producer referenced an unknown import");
+    }
+
+    fn publishConcreteConstDependencyType(
+        self: *BodyLowerer,
+        concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const artifact_sink = self.input.checking_artifact_sink orelse {
+            invariantViolation("compile-time dependency summary constant use had no mutable checked artifact sink");
+        };
+
+        const root = self.program.concrete_source_types.root(concrete_ref);
+        if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
+
+        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, self.input.imports);
+        defer projector.deinit();
+
+        switch (root.source) {
+            .local => |local| {
+                _ = try projector.projectCheckedTypeViewRootWithNames(
+                    self.program.concrete_source_types.localView(),
+                    &self.program.canonical_names,
+                    local,
+                );
+            },
+            .artifact => |artifact_ref| {
+                if (std.mem.eql(u8, &artifact_ref.artifact.bytes, &artifact_sink.key.bytes)) {
+                    if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
+                    invariantViolation("compile-time dependency summary concrete artifact type was missing from the artifact sink");
+                }
+                for (self.input.imports) |imported| {
+                    if (!std.mem.eql(u8, &imported.key.bytes, &artifact_ref.artifact.bytes)) continue;
+                    if (try projector.projectImportedCheckedTypeForKey(imported, root.key)) |_| return;
+                    invariantViolation("compile-time dependency summary concrete imported type was missing from the imported artifact");
+                }
+                invariantViolation("compile-time dependency summary concrete artifact type referenced an unknown import");
+            },
+        }
     }
 
     fn lowerList(
@@ -6117,9 +6481,64 @@ const BodyLowerer = struct {
     ) Allocator.Error!void {
         const statement = self.checkedStatement(statement_id);
         switch (statement.data) {
+            .decl => |decl| {
+                if (self.localProcDeclForStatement(statement) != null) {
+                    try out.append(self.allocator, try self.lowerStmt(statement_id));
+                    return;
+                }
+                try self.lowerDeclPatternStmtInto(decl.pattern, decl.expr, out);
+            },
             .reassign => |reassign| try self.lowerReassignPatternStmtInto(reassign.pattern, reassign.expr, out),
             else => try out.append(self.allocator, try self.lowerStmt(statement_id)),
         }
+    }
+
+    fn lowerDeclPatternStmtInto(
+        self: *BodyLowerer,
+        pattern_id: checked_artifact.CheckedPatternId,
+        expr_id: checked_artifact.CheckedExprId,
+        out: *std.ArrayList(Ast.StmtId),
+    ) Allocator.Error!void {
+        const pattern = self.checkedPattern(pattern_id);
+        const source_info = self.concreteTypeForPatternBinder(pattern_id) orelse
+            try self.concreteResultTypeForExpr(expr_id, pattern.ty);
+
+        if (self.patternCanLowerAsSingleDeclaration(pattern.data)) {
+            const bind = try self.lowerParamPatternWithType(pattern_id, source_info);
+            const body = try self.lowerExprConcreteExpected(expr_id, source_info);
+            try out.append(self.allocator, try self.program.ast.addStmt(.{ .decl = .{
+                .bind = bind,
+                .body = body,
+            } }));
+            return;
+        }
+
+        const body = try self.lowerExprConcreteExpected(expr_id, source_info);
+        const source_symbol = try self.program.addSyntheticSymbol();
+        try out.append(self.allocator, try self.program.ast.addStmt(.{ .decl = .{
+            .bind = .{
+                .ty = source_info.ty,
+                .source_ty = source_info.source_ty,
+                .symbol = source_symbol,
+            },
+            .body = body,
+        } }));
+
+        const source_expr = try self.program.ast.addExprWithSource(source_info.ty, source_info.source_ty, .{ .var_ = source_symbol });
+        try self.appendPatternActions(out, pattern_id, source_info, source_expr, .declaration);
+    }
+
+    fn patternCanLowerAsSingleDeclaration(
+        self: *const BodyLowerer,
+        data: checked_artifact.CheckedPatternData,
+    ) bool {
+        _ = self;
+        return switch (data) {
+            .assign,
+            .underscore,
+            => true,
+            else => false,
+        };
     }
 
     fn lowerReassignPatternStmtInto(
@@ -6143,35 +6562,36 @@ const BodyLowerer = struct {
         } }));
 
         const source_expr = try self.program.ast.addExprWithSource(source_info.ty, source_info.source_ty, .{ .var_ = source_symbol });
-        try self.appendReassignPatternActions(out, pattern_id, source_info, source_expr);
+        try self.appendPatternActions(out, pattern_id, source_info, source_expr, .reassignment);
     }
 
-    fn appendReassignPatternActions(
+    fn appendPatternActions(
         self: *BodyLowerer,
         out: *std.ArrayList(Ast.StmtId),
         pattern_id: checked_artifact.CheckedPatternId,
         source_info: ConcreteTypeInfo,
         source_expr: Ast.ExprId,
+        action: PatternBinderAction,
     ) Allocator.Error!void {
         const pattern = self.checkedPattern(pattern_id);
         switch (pattern.data) {
-            .assign => |binder| try self.appendReassignBinderAction(out, binder, source_info, source_expr),
+            .assign => |binder| try self.appendPatternBinderAction(out, binder, source_info, source_expr, action),
             .as => |as| {
-                try self.appendReassignBinderAction(out, as.binder, source_info, source_expr);
-                try self.appendReassignPatternActions(out, as.pattern, source_info, source_expr);
+                try self.appendPatternBinderAction(out, as.binder, source_info, source_expr, action);
+                try self.appendPatternActions(out, as.pattern, source_info, source_expr, action);
             },
             .nominal => |nominal| {
                 const backing_info = try self.concreteNominalBackingInfo(source_info);
                 const backing_expr = try self.program.ast.addExprWithSource(backing_info.ty, backing_info.source_ty, .{
                     .nominal_reinterpret = source_expr,
                 });
-                try self.appendReassignPatternActions(out, nominal.backing_pattern, backing_info, backing_expr);
+                try self.appendPatternActions(out, nominal.backing_pattern, backing_info, backing_expr, action);
             },
             .record_destructure => |destructs| {
                 for (destructs) |destruct| {
                     const child_pattern = switch (destruct.kind) {
                         .required, .sub_pattern => |field_pattern| field_pattern,
-                        .rest => invariantViolation("mono body lowering requires published decision-plan metadata for record-rest reassignment patterns"),
+                        .rest => invariantViolation("mono body lowering requires published decision-plan metadata for record-rest declaration/reassignment patterns"),
                     };
                     const label = destruct.label;
                     const field_info = try self.concreteRecordFieldInfo(source_info.source_ref, label);
@@ -6180,7 +6600,7 @@ const BodyLowerer = struct {
                         .field = label,
                         .field_index = self.recordFieldIndex(source_info.ty, label),
                     } });
-                    try self.appendReassignPatternActions(out, child_pattern, field_info, field_expr);
+                    try self.appendPatternActions(out, child_pattern, field_info, field_expr, action);
                 }
             },
             .tuple => |items| {
@@ -6191,18 +6611,18 @@ const BodyLowerer = struct {
                         .tuple = source_expr,
                         .elem_index = @intCast(i),
                     } });
-                    try self.appendReassignPatternActions(out, item_pattern, item_info, item_expr);
+                    try self.appendPatternActions(out, item_pattern, item_info, item_expr, action);
                 }
             },
             .applied_tag => |tag| {
                 const tag_name = try self.tagLabel(tag.name);
                 if (!self.tagPatternIsIrrefutable(source_info.ty, tag_name)) {
-                    invariantViolation("mono body lowering requires published decision-plan metadata for refutable tag reassignment patterns");
+                    invariantViolation("mono body lowering requires published decision-plan metadata for refutable tag declaration/reassignment patterns");
                 }
                 const payload_infos = try self.concreteTagPayloadInfosForUnionType(source_info.source_ref, tag_name);
                 defer if (payload_infos.len != 0) self.allocator.free(payload_infos);
                 if (payload_infos.len != tag.args.len) {
-                    invariantViolation("mono body lowering tag reassignment payload arity did not match resolved source type");
+                    invariantViolation("mono body lowering tag declaration/reassignment payload arity did not match resolved source type");
                 }
                 const tag_info = self.tagInfoForUnionType(source_info.ty, tag_name);
                 for (tag.args, payload_infos, 0..) |payload_pattern, payload_info, i| {
@@ -6212,7 +6632,7 @@ const BodyLowerer = struct {
                         .tag_discriminant = tag_info.discriminant,
                         .payload_index = @intCast(i),
                     } });
-                    try self.appendReassignPatternActions(out, payload_pattern, payload_info, payload_expr);
+                    try self.appendPatternActions(out, payload_pattern, payload_info, payload_expr, action);
                 }
             },
             .underscore => {},
@@ -6223,37 +6643,54 @@ const BodyLowerer = struct {
             .frac_f32_literal,
             .frac_f64_literal,
             .str_literal,
-            => invariantViolation("mono body lowering requires published decision-plan metadata for refutable reassignment patterns"),
-            .runtime_error => invariantViolation("mono body lowering reached runtime_error reassignment pattern"),
-            .pending => invariantViolation("mono body lowering reached an unresolved reassignment pattern"),
+            => invariantViolation("mono body lowering requires published decision-plan metadata for refutable declaration/reassignment patterns"),
+            .runtime_error => invariantViolation("mono body lowering reached runtime_error declaration/reassignment pattern"),
+            .pending => invariantViolation("mono body lowering reached an unresolved declaration/reassignment pattern"),
         }
     }
 
-    fn appendReassignBinderAction(
+    fn appendPatternBinderAction(
         self: *BodyLowerer,
         out: *std.ArrayList(Ast.StmtId),
         binder: checked_artifact.PatternBinderId,
         source_info: ConcreteTypeInfo,
         source_expr: Ast.ExprId,
+        action: PatternBinderAction,
     ) Allocator.Error!void {
-        const existing_symbol = self.local_symbols.get(binder);
-        try self.recordConcreteTypeForBinder(binder, source_info);
-        const symbol = existing_symbol orelse try self.symbolForBinder(binder);
-        const stmt = if (existing_symbol != null)
-            Ast.Stmt{ .reassign = .{
-                .target = symbol,
-                .body = source_expr,
-            } }
-        else
-            Ast.Stmt{ .decl = .{
-                .bind = .{
-                    .ty = source_info.ty,
-                    .source_ty = source_info.source_ty,
-                    .symbol = symbol,
-                },
-                .body = source_expr,
-            } };
-        try out.append(self.allocator, try self.program.ast.addStmt(stmt));
+        return switch (action) {
+            .declaration => {
+                try self.recordConcreteTypeForBinder(binder, source_info);
+                const symbol = try self.symbolForBinder(binder);
+                try out.append(self.allocator, try self.program.ast.addStmt(.{ .decl = .{
+                    .bind = .{
+                        .ty = source_info.ty,
+                        .source_ty = source_info.source_ty,
+                        .symbol = symbol,
+                    },
+                    .body = source_expr,
+                } }));
+            },
+            .reassignment => {
+                const existing_symbol = self.local_symbols.get(binder);
+                try self.recordConcreteTypeForBinder(binder, source_info);
+                const symbol = existing_symbol orelse try self.symbolForBinder(binder);
+                const stmt = if (existing_symbol != null)
+                    Ast.Stmt{ .reassign = .{
+                        .target = symbol,
+                        .body = source_expr,
+                    } }
+                else
+                    Ast.Stmt{ .decl = .{
+                        .bind = .{
+                            .ty = source_info.ty,
+                            .source_ty = source_info.source_ty,
+                            .symbol = symbol,
+                        },
+                        .body = source_expr,
+                    } };
+                try out.append(self.allocator, try self.program.ast.addStmt(stmt));
+            },
+        };
     }
 
     fn tagPatternIsIrrefutable(
@@ -6503,6 +6940,7 @@ const BodyLowerer = struct {
         self.type_instantiator = &call_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
+        try self.bindKnownCallCalleeType(call.source_fn_ty_payload, call.func);
         const instantiated = try self.instantiateCallType(call.source_fn_ty_payload, call.args, expected);
         if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
             invariantViolation("mono body lowering call result type disagreed with concrete expected type");
@@ -6556,9 +6994,20 @@ const BodyLowerer = struct {
         const param_templates = try self.templateFunctionArgTypes(source_fn_ty);
         if (param_templates.len != args.len) invariantViolation("mono body lowering call argument count disagreed with checked function type");
         for (args, param_templates) |arg, param_template| {
-            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse continue;
+            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse {
+                continue;
+            };
             try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
         }
+    }
+
+    fn bindKnownCallCalleeType(
+        self: *BodyLowerer,
+        source_fn_ty: checked_artifact.CheckedTypeId,
+        func: checked_artifact.CheckedExprId,
+    ) Allocator.Error!void {
+        const callee_ty = (try self.knownConcreteResultTypeForExpr(func)) orelse return;
+        try self.type_instantiator.unifyTemplateWithConcrete(source_fn_ty, callee_ty.source_ref);
     }
 
     fn templateFunctionArgTypes(
@@ -6580,15 +7029,134 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!?ConcreteTypeInfo {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
+        if (try self.exprPublishesClosedConcreteType(expr_id)) {
+            const expr = self.checkedExpr(expr_id);
+            return try self.concreteTypeInfoForChecked(expr.ty);
+        }
+        return null;
+    }
+
+    fn exprPublishesClosedConcreteType(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!bool {
         const expr = self.checkedExpr(expr_id);
+        if (!try self.checkedTypeIsClosedConcrete(expr.ty)) return false;
         return switch (expr.data) {
-            .call => |call| try self.callResultTypeInFreshInstantiation(call.source_fn_ty_payload, call.args, null),
-            .dispatch_call,
-            .method_eq,
-            .type_dispatch_call,
-            => try self.concreteResultTypeForExpr(expr_id, expr.ty),
-            else => null,
+            .typed_int,
+            .typed_frac,
+            .str_segment,
+            .bytes_literal,
+            .empty_record,
+            .zero_argument_tag,
+            => true,
+            .num => |num| switch (num.kind) {
+                .num_unbound,
+                .int_unbound,
+                => false,
+                else => true,
+            },
+            .frac_f32 => |frac| frac.has_suffix,
+            .frac_f64 => |frac| frac.has_suffix,
+            .dec => |dec| dec.has_suffix,
+            .dec_small => |dec| dec.has_suffix,
+            .str => |segments| try self.exprSpanPublishesClosedConcreteTypes(segments),
+            .list => |items| items.len != 0 and try self.exprSpanPublishesClosedConcreteTypes(items),
+            .tuple => |items| try self.exprSpanPublishesClosedConcreteTypes(items),
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (!try self.exprPublishesClosedConcreteType(field.value)) return false;
+                }
+                if (record.ext) |ext| return try self.exprPublishesClosedConcreteType(ext);
+                return true;
+            },
+            .tag => |tag| try self.exprSpanPublishesClosedConcreteTypes(tag.args),
+            .nominal => |nominal| try self.exprPublishesClosedConcreteType(nominal.backing_expr),
+            else => false,
         };
+    }
+
+    fn exprSpanPublishesClosedConcreteTypes(
+        self: *BodyLowerer,
+        exprs: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!bool {
+        for (exprs) |expr| {
+            if (!try self.exprPublishesClosedConcreteType(expr)) return false;
+        }
+        return true;
+    }
+
+    fn checkedTypeIsClosedConcrete(
+        self: *BodyLowerer,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var active = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer active.deinit();
+        return try self.checkedTypeIsClosedConcreteInner(checked_ty, &active);
+    }
+
+    fn checkedTypeIsClosedConcreteInner(
+        self: *BodyLowerer,
+        checked_ty: checked_artifact.CheckedTypeId,
+        active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        if (active.contains(checked_ty)) return true;
+        try active.put(checked_ty, {});
+        defer _ = active.remove(checked_ty);
+
+        return switch (self.type_instantiator.templatePayload(checked_ty)) {
+            .pending,
+            .flex,
+            .rigid,
+            => false,
+            .empty_record,
+            .empty_tag_union,
+            => true,
+            .alias => |alias| try self.checkedTypeIsClosedConcreteInner(alias.backing, active),
+            .record => |record| (try self.checkedTypeSpanIsClosedConcrete(record.fields, active)) and
+                try self.checkedTypeIsClosedConcreteInner(record.ext, active),
+            .record_unbound => |fields| try self.checkedTypeSpanIsClosedConcrete(fields, active),
+            .tuple => |items| try self.checkedTypeIdSpanIsClosedConcrete(items, active),
+            .nominal => |nominal| try self.checkedTypeIdSpanIsClosedConcrete(nominal.args, active),
+            .function => |function| !function.needs_instantiation and
+                (try self.checkedTypeIdSpanIsClosedConcrete(function.args, active)) and
+                try self.checkedTypeIsClosedConcreteInner(function.ret, active),
+            .tag_union => |tag_union| (try self.checkedTagsAreClosedConcrete(tag_union.tags, active)) and
+                try self.checkedTypeIsClosedConcreteInner(tag_union.ext, active),
+        };
+    }
+
+    fn checkedTypeSpanIsClosedConcrete(
+        self: *BodyLowerer,
+        fields: []const checked_artifact.CheckedRecordField,
+        active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if (!try self.checkedTypeIsClosedConcreteInner(field.ty, active)) return false;
+        }
+        return true;
+    }
+
+    fn checkedTypeIdSpanIsClosedConcrete(
+        self: *BodyLowerer,
+        items: []const checked_artifact.CheckedTypeId,
+        active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (items) |item| {
+            if (!try self.checkedTypeIsClosedConcreteInner(item, active)) return false;
+        }
+        return true;
+    }
+
+    fn checkedTagsAreClosedConcrete(
+        self: *BodyLowerer,
+        tags: []const checked_artifact.CheckedTag,
+        active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (tags) |tag| {
+            if (!try self.checkedTypeIdSpanIsClosedConcrete(tag.args, active)) return false;
+        }
+        return true;
     }
 
     fn lowerCallArgs(
@@ -6636,7 +7204,14 @@ const BodyLowerer = struct {
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!Ast.ExprId {
-        var dispatch_instantiator = try self.type_instantiator.fork();
+        var dispatch_instantiator = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            self.type_instantiator.template_types,
+            self.name_resolver,
+            self.type_instantiator.template_artifact,
+        );
         defer dispatch_instantiator.deinit();
 
         const previous_instantiator = self.type_instantiator;
@@ -6753,7 +7328,9 @@ const BodyLowerer = struct {
         }
 
         for (plan.args, param_templates) |arg, param_template| {
-            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse continue;
+            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse {
+                continue;
+            };
             try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
         }
     }
@@ -8110,6 +8687,85 @@ fn checkedTypePayload(
     return checked_types.payloads[index];
 }
 
+fn checkedTypeViewIsConcreteConstProducerScheme(
+    allocator: Allocator,
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    root: checked_artifact.CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, root, &active);
+}
+
+fn checkedTypeViewIsConcreteConstProducerSchemeInner(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    root: checked_artifact.CheckedTypeId,
+    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+) Allocator.Error!bool {
+    if (active.contains(root)) return true;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    return switch (checkedTypePayload(checked_types, root)) {
+        .pending => invariantViolation("mono body lowering const producer checked type was pending"),
+        .flex,
+        .rigid,
+        => false,
+        .empty_record,
+        .empty_tag_union,
+        => true,
+        .alias => |alias| (try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, alias.backing, active)) and
+            try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, alias.args, active),
+        .record => |record| (try checkedTypeViewFieldsAreConcreteConstProducerScheme(checked_types, record.fields, active)) and
+            try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, record.ext, active),
+        .record_unbound => |fields| checkedTypeViewFieldsAreConcreteConstProducerScheme(checked_types, fields, active),
+        .tuple => |items| checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, items, active),
+        .nominal => |nominal| blk: {
+            if (!try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, nominal.args, active)) break :blk false;
+            if (nominal.builtin != null) break :blk true;
+            break :blk try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, nominal.backing, active);
+        },
+        .function => |function| !function.needs_instantiation and
+            (try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, function.args, active)) and
+            try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, function.ret, active),
+        .tag_union => |tag_union| (try checkedTypeViewTagsAreConcreteConstProducerScheme(checked_types, tag_union.tags, active)) and
+            try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, tag_union.ext, active),
+    };
+}
+
+fn checkedTypeViewSpanIsConcreteConstProducerScheme(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    items: []const checked_artifact.CheckedTypeId,
+    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, item, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTypeViewFieldsAreConcreteConstProducerScheme(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    fields: []const checked_artifact.CheckedRecordField,
+    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, field.ty, active)) return false;
+    }
+    return true;
+}
+
+fn checkedTypeViewTagsAreConcreteConstProducerScheme(
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    tags: []const checked_artifact.CheckedTag,
+    active: *std.AutoHashMap(checked_artifact.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (!try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, tag.args, active)) return false;
+    }
+    return true;
+}
+
 fn privateRecordFieldCount(
     checked_types: checked_artifact.CheckedTypeStoreView,
     ty: checked_artifact.CheckedTypeId,
@@ -8895,10 +9551,6 @@ pub const Queue = struct {
         };
         const callable_template = request.callable_template orelse canonical.CallableProcedureTemplateRef{ .checked = request.template };
         if (self.requested.getPtr(key)) |existing| {
-            if (existing.requested_fn_ty != request.requested_fn_ty) {
-                debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different concrete payload ref");
-                unreachable;
-            }
             if (!canonical.callableProcedureTemplateRefEql(existing.callable_template, callable_template)) {
                 debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different callable template identity");
                 unreachable;
@@ -8972,5 +9624,48 @@ test "mono specialization queue reserves once" {
     const first = try queue.reserve(&concrete, request);
     const second = try queue.reserve(&concrete, request);
     try std.testing.expectEqual(first.local_handle, second.local_handle);
+    try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
+}
+
+test "mono specialization queue accepts equivalent payload refs for one key" {
+    var queue = Queue.init(std.testing.allocator);
+    defer queue.deinit();
+    var concrete = ConcreteSourceType.Store.init(std.testing.allocator);
+    defer concrete.deinit();
+
+    const requested_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{2} ** 32 };
+    try concrete.roots.append(std.testing.allocator, .{
+        .key = requested_key,
+        .source = .{
+            .artifact = .{},
+            .ty = @enumFromInt(0),
+        },
+    });
+    try concrete.roots.append(std.testing.allocator, .{
+        .key = requested_key,
+        .source = .{
+            .artifact = .{ .artifact = .{ .bytes = [_]u8{3} ** 32 }, .ty = @enumFromInt(1) },
+        },
+    });
+
+    const template = canonical.ProcedureTemplateRef{
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
+    const first_request = MonoSpecializationRequest{
+        .template = template,
+        .requested_fn_ty = @enumFromInt(0),
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
+    };
+    const second_request = MonoSpecializationRequest{
+        .template = template,
+        .requested_fn_ty = @enumFromInt(1),
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
+    };
+
+    const first = try queue.reserve(&concrete, first_request);
+    const second = try queue.reserve(&concrete, second_request);
+    try std.testing.expectEqual(first.local_handle, second.local_handle);
+    try std.testing.expectEqual(first.requested_fn_ty, second.requested_fn_ty);
     try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
 }

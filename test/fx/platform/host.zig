@@ -959,10 +959,13 @@ fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *co
 const BoxedHostDropCounts = struct {
     primitive: usize = 0,
     nested_record: usize = 0,
+    nested_record_str_releases: usize = 0,
     recursive_tree: usize = 0,
+    recursive_tree_child_box_releases: usize = 0,
 };
 
 var boxed_host_drop_counts: BoxedHostDropCounts = .{};
+var stored_boxed_callable: ?[*]u8 = null;
 
 const AddCapture = extern struct {
     amount: i64,
@@ -1006,14 +1009,48 @@ fn writeErasedCallable(
     capture: Capture,
     ops: *builtins.host_abi.RocOps,
 ) void {
+    comptime {
+        if (@alignOf(Capture) > builtins.erased_callable.capture_alignment) {
+            @compileError("boxed erased callable host capture alignment exceeds Roc erased callable ABI alignment");
+        }
+    }
     const payload = builtins.erased_callable.allocate(callable_fn_ptr, on_drop, @sizeOf(Capture), ops);
     capturePtrAs(Capture, builtins.erased_callable.capturePtr(payload)).* = capture;
     ret.* = payload;
 }
 
-fn hostAddCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+const I64ToI64Args = extern struct {
+    arg0: i64,
+};
+
+fn readI64ToI64Arg(args: ?[*]const u8) i64 {
+    return @as(*align(1) const I64ToI64Args, @ptrCast(args orelse unreachable)).arg0;
+}
+
+fn writeI64Result(ret: ?[*]u8, value: i64) void {
+    @as(*align(1) i64, @ptrCast(ret orelse unreachable)).* = value;
+}
+
+fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i64 {
+    const payload_ptr = boxed orelse {
+        ops.crash("host attempted to call a null boxed erased callable");
+        unreachable;
+    };
+    const payload = builtins.erased_callable.payloadPtr(payload_ptr);
+    var call_args = I64ToI64Args{ .arg0 = arg0 };
+    var result: i64 = undefined;
+    payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        builtins.erased_callable.capturePtr(payload_ptr),
+    );
+    return result;
+}
+
+fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(AddCapture, capture_ptr);
-    return x + capture.amount;
+    writeI64Result(ret, readI64ToI64Arg(args) + capture.amount);
 }
 
 fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1031,14 +1068,16 @@ fn hostedHostBoxedAdd(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const
     );
 }
 
-fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
-    return x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len));
+    const x = readI64ToI64Arg(args);
+    writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
 }
 
 fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     capture.inner.label.decref(ops);
+    boxed_host_drop_counts.nested_record_str_releases += 1;
     boxed_host_drop_counts.nested_record += 1;
 }
 
@@ -1077,6 +1116,7 @@ fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callcon
     switch (tree.discriminant) {
         0 => {},
         1 => {
+            boxed_host_drop_counts.recursive_tree_child_box_releases += 2;
             builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayload, ops);
             builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayload, ops);
         },
@@ -1096,9 +1136,9 @@ fn hostTreeSum(tree: *const HostTree) i64 {
     };
 }
 
-fn hostTreeCallable(_: *builtins.host_abi.RocOps, x: i64, capture_ptr: ?[*]u8) callconv(.c) i64 {
+fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
-    return x + hostTreeSum(&capture.tree);
+    writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
 }
 
 fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1119,21 +1159,62 @@ fn hostedHostBoxedRecursiveTree(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, ar
     );
 }
 
+fn hostedHostCallBoxed(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { boxed: ?[*]u8, value: i64 }) callconv(.c) void {
+    ret.* = callBoxedI64ToI64(ops, args.boxed, args.value);
+}
+
+fn hostedHostReleaseStoredBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+    if (stored_boxed_callable) |boxed| {
+        builtins.erased_callable.decref(boxed, ops);
+        stored_boxed_callable = null;
+    }
+}
+
+fn hostedHostRoundtripBoxed(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { boxed: ?[*]u8 }) callconv(.c) void {
+    if (args.boxed) |boxed| {
+        builtins.erased_callable.incref(boxed, 1, ops);
+    }
+    ret.* = args.boxed;
+}
+
+fn hostedHostStoreBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { boxed: ?[*]u8 }) callconv(.c) void {
+    if (stored_boxed_callable) |boxed| {
+        builtins.erased_callable.decref(boxed, ops);
+        stored_boxed_callable = null;
+    }
+    const boxed = args.boxed orelse {
+        ops.crash("host attempted to store a null boxed erased callable");
+        unreachable;
+    };
+    builtins.erased_callable.incref(boxed, 1, ops);
+    stored_boxed_callable = boxed;
+}
+
+fn hostedHostStoredBoxedCall(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { value: i64 }) callconv(.c) void {
+    ret.* = callBoxedI64ToI64(ops, stored_boxed_callable, args.value);
+}
+
 fn hostedHostBoxedDropReport(ops: *builtins.host_abi.RocOps, ret: *RocStr, _: *anyopaque) callconv(.c) void {
-    var buf: [128]u8 = undefined;
+    var buf: [256]u8 = undefined;
     const report = std.fmt.bufPrint(
         &buf,
-        "drops primitive={d} nested_record={d} recursive_tree={d}",
+        "drops primitive={d} nested_record={d} nested_str={d} recursive_tree={d} tree_child_boxes={d}",
         .{
             boxed_host_drop_counts.primitive,
             boxed_host_drop_counts.nested_record,
+            boxed_host_drop_counts.nested_record_str_releases,
             boxed_host_drop_counts.recursive_tree,
+            boxed_host_drop_counts.recursive_tree_child_box_releases,
         },
     ) catch "drops unavailable";
     ret.* = RocStr.fromSlice(report, ops);
 }
 
-fn hostedHostResetBoxedDropReport(_: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+fn hostedHostResetBoxedDropReport(ops: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+    if (stored_boxed_callable) |boxed| {
+        builtins.erased_callable.decref(boxed, ops);
+        stored_boxed_callable = null;
+    }
     boxed_host_drop_counts = .{};
 }
 
@@ -1145,11 +1226,16 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     builtins.host_abi.hostedFn(&hostedHostBoxedDropReport), // Host.boxed_drop_report! (index 2)
     builtins.host_abi.hostedFn(&hostedHostBoxedNestedRecord), // Host.boxed_nested_record! (index 3)
     builtins.host_abi.hostedFn(&hostedHostBoxedRecursiveTree), // Host.boxed_recursive_tree! (index 4)
-    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 5)
-    builtins.host_abi.hostedFn(&hostedHostResetBoxedDropReport), // Host.reset_boxed_drop_report! (index 6)
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 7)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 8)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 9)
+    builtins.host_abi.hostedFn(&hostedHostCallBoxed), // Host.call_boxed! (index 5)
+    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 6)
+    builtins.host_abi.hostedFn(&hostedHostReleaseStoredBoxed), // Host.release_stored_boxed! (index 7)
+    builtins.host_abi.hostedFn(&hostedHostResetBoxedDropReport), // Host.reset_boxed_drop_report! (index 8)
+    builtins.host_abi.hostedFn(&hostedHostRoundtripBoxed), // Host.roundtrip_boxed! (index 9)
+    builtins.host_abi.hostedFn(&hostedHostStoreBoxed), // Host.store_boxed! (index 10)
+    builtins.host_abi.hostedFn(&hostedHostStoredBoxedCall), // Host.stored_boxed_call! (index 11)
+    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 12)
+    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 13)
+    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 14)
 };
 
 /// Platform host entrypoint

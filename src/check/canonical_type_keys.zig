@@ -76,7 +76,6 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
     writeIdentText(&hasher, idents, builtinDecTypeIdent(idents));
     writeIdentText(&hasher, idents, builtinModuleIdent(idents));
     writeBoolValue(&hasher, true);
-    writeByteSlice(&hasher, "empty_tag_union");
     writeU32Value(&hasher, 0);
     return .{ .bytes = hasher.finalResult() };
 }
@@ -229,7 +228,6 @@ const Builder = struct {
         self.writeIdent(builtinDecTypeIdent(self.idents));
         self.writeIdent(builtinModuleIdent(self.idents));
         self.writeBool(true);
-        self.writeTag("empty_tag_union");
         self.writeU32(0);
     }
 
@@ -254,23 +252,18 @@ const Builder = struct {
                 self.writeIdent(nominal.ident.ident_idx);
                 self.writeIdent(nominal.origin_module);
                 self.writeBool(nominal.is_opaque);
-                try self.writeVar(self.store.getNominalBackingVar(nominal));
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
                 for (args) |arg| {
                     try self.writeVar(arg);
                 }
             },
-            .fn_pure => |func| {
+            .fn_pure, .fn_unbound => |func| {
                 self.writeTag("fn_pure");
                 try self.writeFunc(func);
             },
             .fn_effectful => |func| {
                 self.writeTag("fn_effectful");
-                try self.writeFunc(func);
-            },
-            .fn_unbound => |func| {
-                self.writeTag("fn_unbound");
                 try self.writeFunc(func);
             },
             .tag_union => |tag_union| {

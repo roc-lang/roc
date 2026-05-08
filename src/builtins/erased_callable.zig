@@ -11,11 +11,21 @@ const utils = @import("utils.zig");
 
 pub const RocOps = utils.RocOps;
 
-/// ABI of a boxed erased callable function pointer.
+/// Uniform ABI of a boxed erased callable function pointer.
 ///
-/// The concrete generated function decides its exact explicit Roc arguments.
-/// The erased callable runtime layout only stores this pointer-sized value.
-pub const CallableFnPtr = *const anyopaque;
+/// `args` points at the generated fixed-arity argument struct for this erased
+/// call signature, or is null for arity 0. `ret` points at caller-owned result
+/// storage, or is null for zero-sized results. `capture` is always the pointer
+/// returned by `capturePtr(payload_data_ptr)`.
+pub const ErasedCallableFn = *const fn (
+    ops: *RocOps,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+) callconv(.c) void;
+
+/// Stored function-pointer field type in `Payload`.
+pub const CallableFnPtr = ErasedCallableFn;
 
 /// Final-drop callback for the inline hidden capture.
 ///
@@ -41,6 +51,11 @@ pub const payload_alignment: u32 = capture_alignment;
 
 /// Fixed byte offset from the start of `Payload` to the first capture byte.
 pub const capture_offset: u32 = @intCast(std.mem.alignForward(usize, @sizeOf(Payload), capture_alignment));
+
+comptime {
+    std.debug.assert(capture_offset % capture_alignment == 0);
+    std.debug.assert(payload_alignment == 16);
+}
 
 /// The runtime allocation never relies on Roc's list-style element-count header.
 /// Nested data in the capture is handled solely by `Payload.on_drop`.
@@ -74,28 +89,34 @@ pub fn allocate(
     return data_ptr;
 }
 
+/// Interpret a boxed-erased-callable data pointer as its payload header.
 pub fn payloadPtr(data_ptr: [*]u8) *Payload {
     return @ptrCast(@alignCast(data_ptr));
 }
 
+/// Return the payload header for a nullable data pointer, or null.
 pub fn maybePayloadPtr(data_ptr: ?[*]u8) ?*Payload {
     const ptr = data_ptr orelse return null;
     return payloadPtr(ptr);
 }
 
+/// Return the fixed inline capture pointer for a boxed-erased-callable payload.
 pub fn capturePtr(data_ptr: [*]u8) [*]u8 {
     return data_ptr + capture_offset;
 }
 
+/// Return the fixed inline capture pointer for a nullable payload, or null.
 pub fn maybeCapturePtr(data_ptr: ?[*]u8) ?[*]u8 {
     const ptr = data_ptr orelse return null;
     return capturePtr(ptr);
 }
 
+/// Increment the outer boxed-erased-callable allocation refcount.
 pub fn incref(data_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
     utils.increfDataPtrC(data_ptr, amount, roc_ops);
 }
 
+/// Decrement the outer refcount, running `on_drop` if this was the final ref.
 pub fn decref(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     if (data_ptr) |ptr| {
         if (utils.isUnique(ptr, roc_ops)) {
@@ -108,6 +129,7 @@ pub fn decref(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     utils.decrefDataPtrC(data_ptr, payload_alignment, allocation_has_refcounted_children, roc_ops);
 }
 
+/// Run final-drop logic and free the boxed-erased-callable allocation.
 pub fn free(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     if (data_ptr) |ptr| {
         const payload = payloadPtr(ptr);

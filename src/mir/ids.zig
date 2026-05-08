@@ -69,6 +69,14 @@ pub const ExecutableSyntheticProc = struct {
     body: ExecutableSyntheticProcBody,
 };
 
+/// Explicit executable target required by a generated procedure value.
+pub const ProcValueExecutableTarget = struct {
+    key: canonical.ExecutableSpecializationKey,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    promoted_wrapper: ?canonical.MirProcedureRef = null,
+};
+
 /// Public `RecordShapeId` declaration.
 pub const RecordShapeId = enum(u32) { _ };
 /// Public `RecordFieldId` declaration.

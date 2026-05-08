@@ -138,7 +138,13 @@ pub fn lowerArtifactsToLir(
     const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
     defer allocator.free(selected_entrypoints);
 
-    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .runnable);
+    var solved = try lowerArtifactsToLambdaSolved(
+        allocator,
+        artifacts,
+        selected_entrypoints,
+        .runnable,
+        if (target.artifact_state == .checking_finalization) roots.compile_time_artifact_sink else null,
+    );
     errdefer solved.deinit();
 
     var callable_set_descriptors = try callableSetDescriptorsForLowering(
@@ -248,17 +254,14 @@ pub fn summarizeCompileTimeDependencies(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!CompileTimeDependencySummaryResult {
-    if (roots.purpose != .compile_time) {
-        checkedPipelineInvariant("compile-time dependency summary requires compile-time root purpose");
-    }
     switch (target.artifact_state) {
         .published => checkedPipelineInvariant("compile-time dependency summary requires checking-finalization artifact state"),
         .checking_finalization => if (builtin.mode == .Debug) artifacts.root.artifact.verifyReadyForCompileTimeLowering(),
     }
 
-    const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("compile-time dependency summary requires mutable checked artifact sink");
+    const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization dependency summary requires mutable checked artifact sink");
     if (@intFromPtr(artifact_sink) != @intFromPtr(artifacts.root.artifact)) {
-        checkedPipelineInvariant("compile-time dependency summary artifact sink does not match root artifact");
+        checkedPipelineInvariant("checking-finalization dependency summary artifact sink does not match root artifact");
     }
 
     const selected_roots = try filterRootsForPurpose(allocator, roots.requests, roots.purpose);
@@ -266,7 +269,13 @@ pub fn summarizeCompileTimeDependencies(
     const selected_entrypoints = try entrypointsForPurpose(allocator, selected_roots, roots);
     defer allocator.free(selected_entrypoints);
 
-    var solved = try lowerArtifactsToLambdaSolved(allocator, artifacts, selected_entrypoints, .comptime_dependency_summary);
+    var solved = try lowerArtifactsToLambdaSolved(
+        allocator,
+        artifacts,
+        selected_entrypoints,
+        .comptime_dependency_summary,
+        artifact_sink,
+    );
     defer solved.deinit();
 
     var callable_set_descriptors = try callableSetDescriptorsForLowering(
@@ -302,7 +311,7 @@ pub fn summarizeCompileTimeDependencies(
         &solved,
         callable_set_descriptors.descriptors,
         selected_entrypoints,
-        compile_time_payloads,
+        if (roots.purpose == .compile_time) compile_time_payloads else null,
     );
     errdefer if (dependency_summaries.len > 0) allocator.free(dependency_summaries);
 
@@ -318,11 +327,13 @@ fn lowerArtifactsToLambdaSolved(
     artifacts: ArtifactSet,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     mode: mir.Mono.Specialize.LoweringMode,
+    checking_artifact_sink: ?*checked_artifact.CheckedModuleArtifact,
 ) Allocator.Error!mir.LambdaSolved.Solve.Program {
     const mono = try mir.Mono.Specialize.run(allocator, .{
         .root = artifacts.root,
         .imports = artifacts.imports,
         .mode = mode,
+        .checking_artifact_sink = checking_artifact_sink,
     }, selected_entrypoints);
 
     const row_finalized = try mir.MonoRow.run(allocator, mono);
@@ -904,10 +915,15 @@ fn publishCompileTimeDependencySummariesFromSolved(
     solved: *const mir.LambdaSolved.Solve.Program,
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
-    payloads: []const checked_artifact.CompileTimeEvaluationPayload,
+    payloads: ?[]const checked_artifact.CompileTimeEvaluationPayload,
 ) Allocator.Error![]const ?checked_artifact.ComptimeDependencySummaryId {
-    if (selected_entrypoints.len != solved.root_instances.items.len or selected_entrypoints.len != payloads.len) {
+    if (selected_entrypoints.len != solved.root_instances.items.len) {
         checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
+    }
+    if (payloads) |payload_slice| {
+        if (selected_entrypoints.len != payload_slice.len) {
+            checkedPipelineInvariant("compile-time dependency summary payload count changed before publication");
+        }
     }
 
     var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved, callable_set_descriptors);
@@ -917,7 +933,8 @@ fn publishCompileTimeDependencySummariesFromSolved(
     errdefer allocator.free(summary_ids);
     @memset(summary_ids, null);
 
-    for (selected_entrypoints, solved.root_instances.items, payloads, 0..) |entrypoint, root_instance, payload, i| {
+    for (selected_entrypoints, solved.root_instances.items, 0..) |entrypoint, root_instance, i| {
+        const payload = if (payloads) |payload_slice| payload_slice[i] else null;
         var summary = try collector.entrypointSummary(root_instance, payload);
         defer summary.deinit(allocator);
         const summary_id = try artifact_sink.comptime_dependencies.appendSummary(allocator, .{
@@ -925,14 +942,16 @@ fn publishCompileTimeDependencySummariesFromSolved(
             .concrete_values = summary.concrete.items,
         });
         summary_ids[i] = summary_id;
-        switch (entrypoint) {
-            .root => |root_request| {
-                const root = compileTimeRootForRequest(artifact, root_request);
-                artifact_sink.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
-            },
-            .const_instance,
-            .callable_binding_instance,
-            => {},
+        if (payloads != null) {
+            switch (entrypoint) {
+                .root => |root_request| {
+                    const root = compileTimeRootForRequest(artifact, root_request);
+                    artifact_sink.comptime_dependencies.fillRootRequest(root.dependency_summary_request, summary_id);
+                },
+                .const_instance,
+                .callable_binding_instance,
+                => {},
+            }
         }
     }
 
@@ -997,7 +1016,7 @@ const CompileTimeDependencySummaryBuilder = struct {
     fn entrypointSummary(
         self: *CompileTimeDependencySummaryBuilder,
         root_instance: repr.ProcRepresentationInstanceId,
-        payload: checked_artifact.CompileTimeEvaluationPayload,
+        payload: ?checked_artifact.CompileTimeEvaluationPayload,
     ) Allocator.Error!CompileTimeRootSummary {
         var summary = CompileTimeRootSummary.init();
         errdefer summary.deinit(self.allocator);
@@ -1006,7 +1025,9 @@ const CompileTimeDependencySummaryBuilder = struct {
         self.active_const_graphs.clearRetainingCapacity();
         self.active_capture_slots.clearRetainingCapacity();
         try self.collectTransitiveProc(root_instance, &summary.availability, &summary.concrete);
-        try self.collectEntrypointPayload(payload, &summary.availability, &summary.concrete);
+        if (payload) |entrypoint_payload| {
+            try self.collectEntrypointPayload(entrypoint_payload, &summary.availability, &summary.concrete);
+        }
 
         return summary;
     }
@@ -1150,8 +1171,8 @@ const CompileTimeDependencySummaryBuilder = struct {
             .crash,
             .runtime_error,
             => {},
-            .const_instance => |const_instance| try self.appendConstInstanceDependency(const_instance, availability, concrete),
-            .const_ref => |key| try self.appendConstRefDependency(key, availability),
+            .const_instance => |const_instance| try self.appendConstKeyDependency(const_instance.key, availability, concrete),
+            .const_ref => |key| try self.appendConstKeyDependency(key, availability, concrete),
             .pending_local_root => |root| try availability.append(self.allocator, .{ .local_root = root }),
             .tag => |tag| {
                 for (self.sliceTagPayloadEval(tag.eval_order)) |payload| try self.collectExprImmediate(payload.value, value_store, representation_store, availability, concrete, call_deps);
@@ -1326,7 +1347,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                 }
                 break :blk .{ .finite_set_adapter = .{
                     .adapter_key = erase.adapter,
-                    .member_targets = try self.cloneExecutableKeysForCallableSet(erase.adapter.callable_set_key),
+                    .member_targets = try cloneExecutableSpecializationKeySlice(self.allocator, erase.member_targets),
                 } };
             },
             .already_erased => |erased| {
@@ -1384,14 +1405,14 @@ const CompileTimeDependencySummaryBuilder = struct {
         };
     }
 
-    fn appendConstInstanceDependency(
+    fn appendConstKeyDependency(
         self: *CompileTimeDependencySummaryBuilder,
-        const_instance: checked_artifact.ConstInstanceRef,
+        key: checked_artifact.ConstInstantiationKey,
         availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
-        try concrete.append(self.allocator, .{ .const_instance = const_instance.key });
-        try self.appendConstRefDependency(const_instance.key, availability);
+        try concrete.append(self.allocator, .{ .const_instance = key });
+        try self.appendConstRefDependency(key, availability);
     }
 
     fn appendConstRefDependency(
@@ -1462,8 +1483,6 @@ const CompileTimeDependencySummaryBuilder = struct {
     ) Allocator.Error!void {
         switch (self.artifact_sink.comptime_plans.callableResult(plan_id)) {
             .finite => |finite| {
-                const descriptor = self.callableSetDescriptor(finite.callable_set_key);
-                for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
                 for (finite.members) |member| {
                     for (member.capture_slots) |capture| try self.collectCaptureSlotPlan(capture, availability, concrete);
                 }
@@ -1472,10 +1491,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                 switch (erased.code_plan) {
                     .materialized_by_lowering => |code| switch (code) {
                         .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
-                        .finite_set_adapter => |adapter| {
-                            const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
-                            for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
-                        },
+                        .finite_set_adapter => {},
                     },
                     .read_from_interpreted_erased_value => {},
                 }
@@ -1532,14 +1548,12 @@ const CompileTimeDependencySummaryBuilder = struct {
         availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
+        _ = availability;
         switch (leaf) {
             .finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
             .erased_boxed => |erased| switch (erased.code) {
                 .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
-                .finite_set_adapter => |adapter| {
-                    const descriptor = self.callableSetDescriptor(adapter.callable_set_key);
-                    for (descriptor.members) |member| try self.collectTransitiveProc(member.target_instance, availability, concrete);
-                },
+                .finite_set_adapter => {},
             },
         }
     }
@@ -1587,25 +1601,6 @@ const CompileTimeDependencySummaryBuilder = struct {
         }
     }
 
-    fn cloneExecutableKeysForCallableSet(
-        self: *CompileTimeDependencySummaryBuilder,
-        key: canonical.CanonicalCallableSetKey,
-    ) Allocator.Error![]const canonical.ExecutableSpecializationKey {
-        const descriptor = self.callableSetDescriptor(key);
-        if (descriptor.members.len == 0) return &.{};
-        const out = try self.allocator.alloc(canonical.ExecutableSpecializationKey, descriptor.members.len);
-        var initialized: usize = 0;
-        errdefer {
-            for (out[0..initialized]) |*item| repr.deinitExecutableSpecializationKey(self.allocator, item);
-            self.allocator.free(out);
-        }
-        for (descriptor.members, 0..) |member, i| {
-            out[i] = try self.cloneExecutableKeyForInstance(member.target_instance);
-            initialized += 1;
-        }
-        return out;
-    }
-
     fn cloneExecutableKeyForInstance(
         self: *CompileTimeDependencySummaryBuilder,
         instance_id: repr.ProcRepresentationInstanceId,
@@ -1629,6 +1624,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         key: canonical.ExecutableSpecializationKey,
     ) repr.ProcRepresentationInstanceId {
         for (self.solved.proc_instances.items, 0..) |instance, raw| {
+            if (!instance.materialized) continue;
             if (repr.executableSpecializationKeyEql(instance.executable_specialization_key, key)) {
                 return @enumFromInt(@as(u32, @intCast(raw)));
             }
@@ -1680,6 +1676,18 @@ fn deinitExecutableSpecializationKeys(
         repr.deinitExecutableSpecializationKey(allocator, &owned);
     }
     allocator.free(keys);
+}
+
+fn deinitCallableResultMembersForPipeline(
+    allocator: Allocator,
+    members: []checked_artifact.CallableResultMemberPlan,
+) void {
+    for (members) |member| {
+        var target_key = member.target_key;
+        repr.deinitExecutableSpecializationKey(allocator, &target_key);
+        allocator.free(member.capture_slots);
+    }
+    allocator.free(members);
 }
 
 fn cloneExecutableSpecializationKeySlice(
@@ -1892,7 +1900,20 @@ const ExecutableTypePayloadBuilder = struct {
                 .key = key,
             };
         }
+        const source_payload = store.get(payload_id);
         if (self.artifact.executable_type_payloads.refForKey(self.artifactRef(), key)) |existing| {
+            switch (source_payload) {
+                .callable_set => |callable_set| {
+                    const id = try self.artifact.executable_type_payloads.replaceDerived(self.allocator, key, .{
+                        .callable_set = try self.sessionCallableSetPayload(solve_session, callable_set),
+                    });
+                    return .{
+                        .ref = self.refFor(id),
+                        .key = key,
+                    };
+                },
+                else => {},
+            }
             return .{
                 .ref = existing,
                 .key = key,
@@ -1903,7 +1924,7 @@ const ExecutableTypePayloadBuilder = struct {
         try self.active_session_payloads.put(active_key, id);
         errdefer _ = self.active_session_payloads.remove(active_key);
 
-        const payload = try self.sessionPayload(solve_session, payload_id);
+        const payload = try self.sessionPayloadForPayload(solve_session, source_payload);
         self.artifact.executable_type_payloads.fill(id, payload);
         _ = self.active_session_payloads.remove(active_key);
         return .{
@@ -1912,12 +1933,11 @@ const ExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn sessionPayload(
+    fn sessionPayloadForPayload(
         self: *ExecutableTypePayloadBuilder,
         solve_session: repr.RepresentationSolveSessionId,
-        payload_id: repr.SessionExecutableTypePayloadId,
+        payload: repr.SessionExecutableTypePayload,
     ) Allocator.Error!checked_artifact.ExecutableTypePayload {
-        const payload = self.sessionPayloadStore(solve_session).get(payload_id);
         return switch (payload) {
             .pending => checkedPipelineInvariant("artifact executable payload reached pending session payload"),
             .primitive => |prim| .{ .primitive = prim },
@@ -1929,7 +1949,7 @@ const ExecutableTypePayloadBuilder = struct {
             .nominal => |nominal| blk: {
                 const backing = try self.payloadForSessionPayload(solve_session, nominal.backing.payload, nominal.backing_key);
                 break :blk .{ .nominal = .{
-                    .nominal = nominal.nominal,
+                    .nominal = try self.artifactNominalTypeKey(nominal.nominal),
                     .source_ty = nominal.source_ty,
                     .backing = backing.ref,
                     .backing_key = backing.key,
@@ -1965,7 +1985,7 @@ const ExecutableTypePayloadBuilder = struct {
         for (record.fields, 0..) |field, i| {
             const child = try self.payloadForSessionPayload(solve_session, field.ty.payload, field.key);
             out[i] = .{
-                .field = self.row_shapes.recordField(field.field).label,
+                .field = try self.artifactRecordFieldLabel(self.row_shapes.recordField(field.field).label),
                 .ty = child.ref,
                 .key = child.key,
             };
@@ -2006,7 +2026,7 @@ const ExecutableTypePayloadBuilder = struct {
         }
         for (tag_union.variants, 0..) |variant, i| {
             out[i] = .{
-                .tag = self.row_shapes.tag(variant.tag).label,
+                .tag = try self.artifactTagLabel(self.row_shapes.tag(variant.tag).label),
                 .payloads = try self.sessionTagPayloads(solve_session, variant.payloads),
             };
         }
@@ -2102,6 +2122,36 @@ const ExecutableTypePayloadBuilder = struct {
         checkedPipelineInvariant("artifact executable payload could not identify solve session for representation store");
     }
 
+    fn artifactRecordFieldLabel(
+        self: *ExecutableTypePayloadBuilder,
+        lowering_label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        var publisher = checked_artifact.ArtifactNamePublisher.init(self.artifact);
+        return try publisher.recordFieldFromLowering(&self.solved.canonical_names, lowering_label);
+    }
+
+    fn artifactTagLabel(
+        self: *ExecutableTypePayloadBuilder,
+        lowering_label: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        var publisher = checked_artifact.ArtifactNamePublisher.init(self.artifact);
+        return try publisher.tagFromLowering(&self.solved.canonical_names, lowering_label);
+    }
+
+    fn artifactNominalTypeKey(
+        self: *ExecutableTypePayloadBuilder,
+        lowering_nominal: canonical.NominalTypeKey,
+    ) Allocator.Error!canonical.NominalTypeKey {
+        return .{
+            .module_name = try self.artifact.canonical_names.internModuleName(
+                self.solved.canonical_names.moduleNameText(lowering_nominal.module_name),
+            ),
+            .type_name = try self.artifact.canonical_names.internTypeName(
+                self.solved.canonical_names.typeNameText(lowering_nominal.type_name),
+            ),
+        };
+    }
+
     fn hiddenCapturePayloadForAlreadyErased(
         self: *ExecutableTypePayloadBuilder,
         erased: repr.AlreadyErasedCallablePlan,
@@ -2158,6 +2208,7 @@ const ExecutableTypePayloadBuilder = struct {
         expected_key: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!ExecutablePayloadWithKey {
         const context = self.currentContext();
+        const solve_session = self.solveSessionIdForRepresentationStore(context.representation_store);
         const ref = context.representation_store.session_executable_type_payloads.refForKey(expected_key) orelse {
             checkedPipelineInvariant("callable-set executable payload key had no session payload");
         };
@@ -2169,11 +2220,14 @@ const ExecutableTypePayloadBuilder = struct {
         if (!repr.callableSetKeyEql(callable_set.key, key)) {
             checkedPipelineInvariant("callable-set executable payload key disagrees with requested callable-set key");
         }
-        return try self.payloadForSessionPayload(
-            self.solveSessionIdForRepresentationStore(context.representation_store),
-            ref.payload,
-            expected_key,
-        );
+        const payload: checked_artifact.ExecutableTypePayload = .{
+            .callable_set = try self.sessionCallableSetPayload(solve_session, callable_set),
+        };
+        const id = try self.artifact.executable_type_payloads.replaceDerived(self.allocator, expected_key, payload);
+        return .{
+            .ref = self.refFor(id),
+            .key = expected_key,
+        };
     }
 
     fn tuplePayloadForTargetCaptureSlots(
@@ -2217,16 +2271,6 @@ const ExecutableTypePayloadBuilder = struct {
             .ref = ref,
             .key = expected_key,
         };
-    }
-
-    fn procInstanceForMir(
-        self: *ExecutableTypePayloadBuilder,
-        proc: canonical.MirProcedureRef,
-    ) *const repr.ProcRepresentationInstance {
-        for (self.solved.proc_instances.items) |*instance| {
-            if (canonical.mirProcedureRefEql(instance.proc, proc)) return instance;
-        }
-        checkedPipelineInvariant("executable payload could not find procedure instance for MIR procedure");
     }
 };
 
@@ -2340,28 +2384,66 @@ fn erasedPromotedSignaturePayloadsForFiniteSetAdapter(
     var builder = ExecutableTypePayloadBuilder.init(allocator, artifact_sink, value_context);
     defer builder.deinit();
 
-    const descriptor = value_context.representation_store.callableSetDescriptor(erase.adapter.callable_set_key) orelse {
-        checkedPipelineInvariant("erased finite-set promoted signature has no callable-set descriptor");
+    const abi = value_context.representation_store.erased_fn_abis.abiFor(erase.adapter.erased_fn_sig_key.abi) orelse {
+        checkedPipelineInvariant("erased finite-set promoted signature references missing erased ABI");
     };
-    if (descriptor.members.len == 0) {
-        checkedPipelineInvariant("erased finite-set promoted signature descriptor has no members");
+    if (abi.fixed_arity != @as(u32, @intCast(abi.arg_exec_keys.len))) {
+        checkedPipelineInvariant("erased finite-set promoted signature ABI arity differs from argument key count");
     }
-
-    const first_instance = builder.procInstanceForMir(descriptor.members[0].source_proc);
     const hidden_capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
         null
     else
         try builder.payloadForCallableSetType(erase.adapter.callable_set_key, erase.adapter.erased_fn_sig_key.capture_ty.?);
-    return try erasedPromotedSignaturePayloadsForProcInstance(
-        allocator,
-        &builder,
-        first_instance,
-        erase.adapter.erased_fn_sig_key,
-        erase.adapter.source_fn_ty,
-        first_instance.executable_specialization_key.exec_ret_ty,
-        erase.adapter.capture_shape_key,
-        hidden_capture,
-    );
+
+    const param_exec_tys: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
+    errdefer if (param_exec_tys.len > 0) allocator.free(param_exec_tys);
+    const param_exec_ty_keys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
+    errdefer if (param_exec_ty_keys.len > 0) allocator.free(param_exec_ty_keys);
+    const erased_call_args: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.alloc(checked_artifact.ExecutableTypePayloadRef, abi.arg_exec_keys.len);
+    errdefer if (erased_call_args.len > 0) allocator.free(erased_call_args);
+    const erased_call_arg_keys = if (abi.arg_exec_keys.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
+    errdefer if (erased_call_arg_keys.len > 0) allocator.free(erased_call_arg_keys);
+
+    for (abi.arg_exec_keys, 0..) |arg_key, i| {
+        const payload_ref = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), arg_key) orelse {
+            checkedPipelineInvariant("erased finite-set promoted signature ABI argument key has no published executable payload");
+        };
+        param_exec_tys[i] = payload_ref;
+        erased_call_args[i] = payload_ref;
+    }
+
+    const ret_payload = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), abi.ret_exec_key) orelse {
+        checkedPipelineInvariant("erased finite-set promoted signature ABI result key has no published executable payload");
+    };
+
+    return .{
+        .source_fn_ty = erase.adapter.source_fn_ty,
+        .param_exec_tys = param_exec_tys,
+        .param_exec_ty_keys = param_exec_ty_keys,
+        .wrapper_ret = ret_payload,
+        .wrapper_ret_key = abi.ret_exec_key,
+        .erased_call_args = erased_call_args,
+        .erased_call_arg_keys = erased_call_arg_keys,
+        .erased_call_ret = ret_payload,
+        .erased_call_ret_key = abi.ret_exec_key,
+        .hidden_capture = if (hidden_capture) |capture| .{
+            .exec_ty = capture.ref,
+            .exec_ty_key = capture.key,
+        } else null,
+        .capture_shape_key = erase.adapter.capture_shape_key,
+    };
 }
 
 fn erasedPromotedSignaturePayloadsForAlreadyErased(
@@ -2465,17 +2547,6 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         try allocator.alloc(canonical.CanonicalExecValueTypeKey, params.len);
     errdefer if (param_exec_ty_keys.len > 0) allocator.free(param_exec_ty_keys);
 
-    for (params, 0..) |param, i| {
-        const payload = try builder.payloadForValueInStore(
-            instance.value_store,
-            value_store,
-            representation_store,
-            param,
-        );
-        param_exec_tys[i] = payload.ref;
-        param_exec_ty_keys[i] = payload.key;
-    }
-
     const erased_call_args: []checked_artifact.ExecutableTypePayloadRef = if (abi.arg_exec_keys.len == 0)
         &.{}
     else
@@ -2487,23 +2558,18 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         try allocator.dupe(canonical.CanonicalExecValueTypeKey, abi.arg_exec_keys);
     errdefer if (erased_call_arg_keys.len > 0) allocator.free(erased_call_arg_keys);
     for (abi.arg_exec_keys, 0..) |arg_key, i| {
-        erased_call_args[i] = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), arg_key) orelse {
+        const payload_ref = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), arg_key) orelse {
             checkedPipelineInvariant("erased promoted executable signature ABI argument key has no published executable payload");
         };
+        param_exec_tys[i] = payload_ref;
+        param_exec_ty_keys[i] = arg_key;
+        erased_call_args[i] = payload_ref;
     }
 
-    const wrapper_ret = try builder.payloadForValueInStore(
-        instance.value_store,
-        value_store,
-        representation_store,
-        instance.public_roots.ret,
-    );
-    if (!repr.canonicalExecValueTypeKeyEql(wrapper_ret.key, expected_wrapper_ret_key)) {
-        checkedPipelineInvariant("erased promoted executable signature wrapper return key differs from target proc return key");
-    }
     const erased_call_ret = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), abi.ret_exec_key) orelse {
         checkedPipelineInvariant("erased promoted executable signature ABI result key has no published executable payload");
     };
+    _ = expected_wrapper_ret_key;
 
     if ((sig_key.capture_ty == null) != (hidden_capture == null)) {
         checkedPipelineInvariant("erased promoted executable signature hidden capture presence differs from erased signature key");
@@ -2519,8 +2585,8 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
         .source_fn_ty = source_fn_ty,
         .param_exec_tys = param_exec_tys,
         .param_exec_ty_keys = param_exec_ty_keys,
-        .wrapper_ret = wrapper_ret.ref,
-        .wrapper_ret_key = wrapper_ret.key,
+        .wrapper_ret = erased_call_ret,
+        .wrapper_ret_key = abi.ret_exec_key,
         .erased_call_args = erased_call_args,
         .erased_call_arg_keys = erased_call_arg_keys,
         .erased_call_ret = erased_call_ret,
@@ -3089,12 +3155,19 @@ const CaptureSlotPlanBuilder = struct {
 
         const source_fn_ty = descriptor.members[0].proc_value.source_fn_ty;
         const members = try self.allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
-        errdefer self.allocator.free(members);
+        var initialized_members: usize = 0;
+        errdefer deinitCallableResultMembersForPipeline(self.allocator, members[0..initialized_members]);
 
         for (descriptor.members, 0..) |member, i| {
             if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
                 checkedPipelineInvariant("finite compile-time callable result descriptor mixes source function types");
             }
+            const target_key = try self.cloneAndPublishMemberTargetKey(member);
+            var target_key_owned = true;
+            errdefer if (target_key_owned) {
+                var owned_target_key = target_key;
+                repr.deinitExecutableSpecializationKey(self.allocator, &owned_target_key);
+            };
             if (member.capture_slots.len != 0) {
                 const slot_plans = try self.allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
                 errdefer self.allocator.free(slot_plans);
@@ -3111,29 +3184,40 @@ const CaptureSlotPlanBuilder = struct {
                         try self.fillMemberCapturePlansFromConstruction(member, construction_id.?, constructed, slot_plans);
                         members[i] = .{
                             .member = member.member,
+                            .target_key = target_key,
                             .capture_slots = slot_plans,
                         };
+                        target_key_owned = false;
+                        initialized_members += 1;
                         continue;
                     }
                 }
                 try self.fillMemberCapturePlansFromTargetProc(member, slot_plans);
                 members[i] = .{
                     .member = member.member,
+                    .target_key = target_key,
                     .capture_slots = slot_plans,
                 };
+                target_key_owned = false;
+                initialized_members += 1;
                 continue;
             }
             members[i] = .{
                 .member = member.member,
+                .target_key = target_key,
                 .capture_slots = &.{},
             };
+            target_key_owned = false;
+            initialized_members += 1;
         }
 
-        return try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
+        const result = try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
             .source_fn_ty = source_fn_ty,
             .callable_set_key = key,
             .members = members,
         } });
+        initialized_members = 0;
+        return result;
     }
 
     fn fillMemberCapturePlansFromConstruction(
@@ -3270,12 +3354,19 @@ const CaptureSlotPlanBuilder = struct {
         }
 
         const members = try self.allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
-        errdefer self.allocator.free(members);
+        var initialized_members: usize = 0;
+        errdefer deinitCallableResultMembersForPipeline(self.allocator, members[0..initialized_members]);
 
         for (descriptor.members, 0..) |member, i| {
             if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
                 checkedPipelineInvariant("finite executable callable result descriptor source function type disagrees with payload");
             }
+            const target_key = try self.cloneAndPublishMemberTargetKey(member);
+            var target_key_owned = true;
+            errdefer if (target_key_owned) {
+                var owned_target_key = target_key;
+                repr.deinitExecutableSpecializationKey(self.allocator, &owned_target_key);
+            };
             const slot_plans: []const checked_artifact.CaptureSlotReificationPlanId = if (member.capture_slots.len == 0)
                 &.{}
             else blk: {
@@ -3286,15 +3377,40 @@ const CaptureSlotPlanBuilder = struct {
             };
             members[i] = .{
                 .member = member.member,
+                .target_key = target_key,
                 .capture_slots = slot_plans,
             };
+            target_key_owned = false;
+            initialized_members += 1;
         }
 
-        return try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
+        const result = try self.plans.appendCallableResult(self.allocator, .{ .finite = .{
             .source_fn_ty = source_fn_ty,
             .callable_set_key = key,
             .members = members,
         } });
+        initialized_members = 0;
+        return result;
+    }
+
+    fn cloneAndPublishMemberTargetKey(
+        self: *CaptureSlotPlanBuilder,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!canonical.ExecutableSpecializationKey {
+        const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(member.target_instance)];
+        if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
+            checkedPipelineInvariant("finite callable result target instance disagrees with descriptor source procedure");
+        }
+        var payload_builder = ExecutableTypePayloadBuilder.initForSolved(self.allocator, self.artifact, self.value_context.solved);
+        defer payload_builder.deinit();
+        for (target_instance.executable_specialization_key.exec_arg_tys) |arg_key| {
+            _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, arg_key);
+        }
+        _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, target_instance.executable_specialization_key.exec_ret_ty);
+        for (member.capture_slots) |slot| {
+            _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, slot.exec_value_ty);
+        }
+        return try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
     }
 
     fn callableLeafPlan(
@@ -4371,18 +4487,18 @@ const ConstGraphPlanBuilder = struct {
         defer self.allocator.free(seen);
         @memset(seen, false);
 
-        for (tag_union.variants) |variant| {
-            const shape_tag_info = context.row_shapes.tag(variant.tag);
-            const tag_index: usize = @intCast(shape_tag_info.logical_index);
-            if (tag_index >= tag_union.variants.len) {
-                checkedPipelineInvariant("tag-union constant executable logical index exceeded arity");
+        for (tags) |checked_tag| {
+            const variant = self.tagVariantForArtifactLabel(context, tag_union, checked_tag.name) orelse {
+                checkedPipelineInvariant("tag-union constant executable omitted expected tag label");
+            };
+            const tag = context.row_shapes.tag(variant.tag);
+            const tag_index: usize = @intCast(tag.logical_index);
+            if (tag_index >= variants.len) {
+                checkedPipelineInvariant("tag-union constant executable logical tag index exceeded arity");
             }
             if (seen[tag_index]) {
-                checkedPipelineInvariant("tag-union constant executable duplicated a logical index");
+                checkedPipelineInvariant("tag-union constant executable duplicated a logical tag index");
             }
-            const checked_tag = self.checkedTagForSolvedLabel(tags, context, shape_tag_info.label) orelse {
-                checkedPipelineInvariant("tag-union constant executable referenced a tag missing from checked type");
-            };
             variants[tag_index] = .{
                 .tag = checked_tag.name,
                 .payloads = try self.tagPayloadsForExecutableVariant(checked_tag, context, variant, value_context, value_info),
@@ -4688,15 +4804,15 @@ const ConstGraphPlanBuilder = struct {
         return try publisher.recordFieldFromLowering(context.canonical_names, solved_label);
     }
 
-    fn checkedTagForSolvedLabel(
+    fn tagVariantForArtifactLabel(
         self: *const ConstGraphPlanBuilder,
-        tags: []const checked_artifact.CheckedTag,
         context: ConstValueContext,
-        solved_label: canonical.TagLabelId,
-    ) ?checked_artifact.CheckedTag {
-        const publisher = self.artifactNamePublisher();
-        for (tags) |tag| {
-            if (publisher.tagMatchesLowering(tag.name, context.canonical_names, solved_label)) return tag;
+        tag_union: repr.SessionExecutableTagUnionPayload,
+        artifact_label: canonical.TagLabelId,
+    ) ?repr.SessionExecutableTagVariantPayload {
+        for (tag_union.variants) |variant| {
+            const solved_label = context.row_shapes.tag(variant.tag).label;
+            if (self.tagLabelsEql(context, artifact_label, solved_label)) return variant;
         }
         return null;
     }
