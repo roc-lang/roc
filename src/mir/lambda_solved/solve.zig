@@ -4284,6 +4284,7 @@ const CallableEmissionAssigner = struct {
         try self.collectFunctionRootMetadata();
         try self.collectFiniteCallableContributions();
         try self.collectBoxErasureRequirements();
+        try self.publishClassErasureProvenance();
         try self.publishCallableClassSets();
         try self.assignValueEmissionPlans();
     }
@@ -4569,6 +4570,12 @@ const CallableEmissionAssigner = struct {
                     try self.markErasedPayloadRoot(erasure.payload_root, erasure.provenance);
                 },
             }
+        }
+    }
+
+    fn publishClassErasureProvenance(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.erased_classes.items) |entry| {
+            try self.representationStore().publishClassErasureProvenance(entry.class, entry.provenance.items);
         }
     }
 
@@ -5735,6 +5742,27 @@ fn boxErasureProvenanceSliceEql(
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (!boxErasureProvenanceEql(left, right)) return false;
+    }
+    return true;
+}
+
+fn boxErasureProvenanceSliceContains(
+    items: []const repr.BoxErasureProvenance,
+    needle: repr.BoxErasureProvenance,
+) bool {
+    for (items) |item| {
+        if (boxErasureProvenanceEql(item, needle)) return true;
+    }
+    return false;
+}
+
+fn boxErasureProvenanceSetEql(
+    a: []const repr.BoxErasureProvenance,
+    b: []const repr.BoxErasureProvenance,
+) bool {
+    if (a.len != b.len) return false;
+    for (a) |item| {
+        if (!boxErasureProvenanceSliceContains(b, item)) return false;
     }
     return true;
 }
@@ -8430,14 +8458,17 @@ const ValueTransformFinalizer = struct {
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const boundary = self.boxBoundaryForEndpoints(from, to);
-        if (boundary == null and provenance.len == 0) {
-            lambdaInvariant("lambda-solved box transform has no Box-erasure provenance");
-        }
-        const child_provenance = if (boundary) |local_boundary|
-            try self.extendBoxProvenance(provenance, local_boundary)
+        const inherited_provenance = if (provenance.len == 0 and boundary == null)
+            self.endpointBoxErasureProvenance(from, to)
         else
             provenance;
-        const child_provenance_owned = child_provenance.len != provenance.len;
+        var child_provenance_owned = false;
+        const child_provenance = if (boundary) |local_boundary| blk: {
+            const extended = try self.extendBoxProvenance(inherited_provenance, local_boundary);
+            child_provenance_owned = extended.len != inherited_provenance.len or
+                (extended.len > 0 and extended.ptr != inherited_provenance.ptr);
+            break :blk extended;
+        } else inherited_provenance;
         defer if (child_provenance_owned) self.allocator.free(child_provenance);
 
         const from_child = try self.transformChildEndpoint(
@@ -8463,6 +8494,105 @@ const ValueTransformFinalizer = struct {
             .kind = kind,
             .payload = try self.planValueTransform(scope, from_child, to_child, child_provenance),
         } });
+    }
+
+    fn endpointBoxErasureProvenance(
+        self: *ValueTransformFinalizer,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+    ) []const repr.BoxErasureProvenance {
+        const from_provenance = self.endpointErasureProvenance(from);
+        const to_provenance = self.endpointErasureProvenance(to);
+        if (from_provenance.len == 0) return to_provenance;
+        if (to_provenance.len == 0) return from_provenance;
+        if (!boxErasureProvenanceSetEql(from_provenance, to_provenance)) {
+            lambdaInvariant("lambda-solved box transform endpoints have conflicting Box-erasure provenance");
+        }
+        return from_provenance;
+    }
+
+    fn endpointErasureProvenance(
+        self: *ValueTransformFinalizer,
+        endpoint: repr.SessionExecutableValueEndpoint,
+    ) []const repr.BoxErasureProvenance {
+        return switch (endpoint.owner) {
+            .local_value => |value| self.valueErasureProvenance(self.instance, value),
+            .procedure_param => |param| blk: {
+                const instance = self.procInstance(param.instance);
+                const params = self.valueStoreFor(instance).sliceValueSpan(instance.public_roots.params);
+                const raw_index: usize = @intCast(param.index);
+                if (raw_index >= params.len) {
+                    lambdaInvariant("lambda-solved procedure param endpoint provenance index out of range");
+                }
+                break :blk self.valueErasureProvenance(instance, params[raw_index]);
+            },
+            .procedure_return => |instance_id| blk: {
+                const instance = self.procInstance(instance_id);
+                break :blk self.valueErasureProvenance(instance, instance.public_roots.ret);
+            },
+            .procedure_capture => |capture| blk: {
+                const instance = self.procInstance(capture.instance);
+                const captures = self.valueStoreFor(instance).sliceValueSpan(instance.public_roots.captures);
+                const raw_slot: usize = @intCast(capture.slot);
+                if (raw_slot >= captures.len) {
+                    lambdaInvariant("lambda-solved procedure capture endpoint provenance slot out of range");
+                }
+                break :blk self.valueErasureProvenance(instance, captures[raw_slot]);
+            },
+            .projection_slot => |projection| self.projectionSlotErasureProvenance(projection),
+            .call_raw_arg,
+            .erased_proc_value_adapter_arg,
+            .erased_finite_adapter_arg,
+            .erased_finite_adapter_capture,
+            .erased_finite_adapter_result,
+            .call_raw_result,
+            .consumer_use,
+            .transform_child,
+            => &.{},
+        };
+    }
+
+    fn valueErasureProvenance(
+        self: *ValueTransformFinalizer,
+        instance: *const repr.ProcRepresentationInstance,
+        value: repr.ValueInfoId,
+    ) []const repr.BoxErasureProvenance {
+        const store = self.representationStoreFor(instance);
+        const value_store = self.valueStoreFor(instance);
+        const raw_value: usize = @intFromEnum(value);
+        if (raw_value >= value_store.values.items.len) {
+            lambdaInvariant("lambda-solved endpoint provenance referenced missing value");
+        }
+        const root = value_store.values.items[raw_value].root;
+        return self.rootErasureProvenance(store, root);
+    }
+
+    fn projectionSlotErasureProvenance(
+        self: *ValueTransformFinalizer,
+        projection_id: repr.ProjectionInfoId,
+    ) []const repr.BoxErasureProvenance {
+        const raw_projection: usize = @intFromEnum(projection_id);
+        if (raw_projection >= self.valueStore().projections.items.len) {
+            lambdaInvariant("lambda-solved projection endpoint provenance referenced missing projection");
+        }
+        const projection = self.valueStore().projections.items[raw_projection];
+        const source_info = self.valueStore().values.items[@intFromEnum(projection.source)];
+        const edge_kind: repr.RepresentationEdgeKind = switch (projection.endpoint_kind orelse projection.kind) {
+            .record_field => |field| .{ .record_field = field },
+            .tuple_elem => |index| .{ .tuple_elem = index },
+            .tag_payload => |payload| .{ .tag_payload = payload },
+        };
+        const child_root = self.representationStore().solvedStructuralChildRoot(source_info.root, edge_kind) orelse return &.{};
+        return self.rootErasureProvenance(self.representationStore(), child_root);
+    }
+
+    fn rootErasureProvenance(
+        self: *ValueTransformFinalizer,
+        store: *const repr.RepresentationStore,
+        root: repr.RepRootId,
+    ) []const repr.BoxErasureProvenance {
+        _ = self;
+        return store.classErasureProvenance(store.classForRoot(root));
     }
 
     fn planFiniteCallableToErasedTransform(

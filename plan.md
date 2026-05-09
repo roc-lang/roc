@@ -3582,6 +3582,140 @@ promotion path even when it has no captures. It must not reject the entire
 lowering-run descriptor merely because another member in the transient descriptor
 has not yet been promoted.
 
+`CallableResultPlan` construction therefore has a two-step publication rule:
+
+1. the runtime callable-set descriptor stays lowering-run-owned and is used only
+   to decode the interpreted value and locate the selected member
+2. the `CallableResultMemberPlan.target_key` stored in the checked artifact is
+   converted to an artifact-owned executable specialization key before it is
+   appended to `CompileTimePlanStore`
+
+This conversion must happen for every member in the result plan, including
+inactive members, because `CompileTimePlanStore` is checked-artifact-owned data.
+For a member that already has `published_source_proc`, the conversion is direct:
+
+```zig
+fn artifact_member_target(member: RuntimeCallableSetMember) ExecutableSpecializationKey {
+    key = clone(member.runtime_target_key)
+    key.base = member.published_source_proc.?.proc.proc_base
+    return key
+}
+```
+
+For a member whose procedure is a lifted local function or closure, the finalizer
+must not persist the lowering-run nested `proc_base`. It must derive an
+artifact-owned lifted identity from explicit lifted data already present on the
+member:
+
+```zig
+const LiftedPublicationIdentity = struct {
+    owner_mono_specialization: MonoSpecializationKey, // artifact-owned owner template
+    site: NestedProcSiteId,
+    source_fn_ty: CanonicalTypeKey,
+    source_proc: MirProcedureRef,                    // artifact-owned nested proc_base
+    proc_value: ProcedureCallableRef,                // template = .lifted(...)
+};
+
+fn publish_lifted_member_identity(
+    artifact: *CheckedModuleArtifact,
+    lifted: LiftedProcedureTemplateRef,
+    source_fn_ty: CanonicalTypeKey,
+) LiftedPublicationIdentity {
+    owner_template = artifact.checked_procedure_templates.templates[
+        @intFromEnum(lifted.owner_mono_specialization.template.template)
+    ].template_ref()
+
+    source_proc_base = artifact.canonical_names.internProcBase(.{
+        .module_name = artifact.canonical_names.procBase(owner_template.proc_base).module_name,
+        .export_name = null,
+        .kind = .checked_source,
+        .ordinal = @intFromEnum(lifted.site),
+        .nested_proc_site = .{
+            .owner_template = owner_template,
+            .site = lifted.site,
+        },
+        .owner_mono_specialization = .{
+            .template = owner_template,
+            .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+        },
+    })
+
+    proc_value = .{
+        .template = .{ .lifted = .{
+            .owner_mono_specialization = .{
+                .template = owner_template,
+                .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+            },
+            .site = lifted.site,
+        } },
+        .source_fn_ty = source_fn_ty,
+    }
+
+    return .{
+        .owner_mono_specialization = proc_value.template.lifted.owner_mono_specialization,
+        .site = lifted.site,
+        .source_fn_ty = source_fn_ty,
+        .source_proc = .{
+            .proc = .{ .artifact = owner_template.artifact, .proc_base = source_proc_base },
+            .callable = proc_value,
+        },
+        .proc_value = proc_value,
+    }
+}
+```
+
+The owner template in that identity is recovered by checked procedure template id,
+not by procedure-name text, source syntax, expression ids, or a lowering-run
+canonical-name lookup. This is valid because the lifted member already carries
+`LiftedProcedureTemplateRef.owner_mono_specialization.template.template`, which
+is the checked artifact's template id; only the lowering-run `proc_base` needs to
+be replaced.
+
+If a member has no `published_source_proc` and is not `.lifted`, that is a
+compiler bug. A checked or synthetic callable with no publication identity means
+mono failed to carry data it was required to carry. Finalization must assert in
+debug builds and use `unreachable` in release builds; it must not inspect names
+or guess which procedure was intended.
+
+When mono later lowers a promoted wrapper from a checked artifact, it must remap
+the artifact-owned `member_target.base` through `ArtifactNameResolver.procBase`
+before storing it in the MIR `proc_value.forced_target`. `forced_target.key`
+inside mono/lambda-solved is a lowering-run key; `FinitePromotedWrapperBodyPlan`
+is artifact-owned. Using the stored key without this remap would compare a
+checked-artifact `proc_base` against the current lowering-run `proc_base` and
+would make the selected target instance unreachable.
+
+Every slice stored in `FinitePromotedWrapperBodyPlan` must be artifact-owned.
+The finalizer must clone `member_capture_slots`, `captures`, `params`, and
+`call_args` into the checked artifact before calling
+`fillPromotedCallableWrapperBody`. It must never store a pointer into
+`LoweredProgram.callable_set_descriptors`, lambda-solved stores, interpreter
+result buffers, or any temporary lowering arena. For example:
+
+```zig
+member_capture_slots = clone(selected.runtime_member.capture_slots)
+captures = clone_or_materialize_private_captures(selected.payload)
+params = promotedWrapperParamsForFnRoot(...)
+call_args = promotedWrapperCallArgs(...)
+
+fillPromotedCallableWrapperBody(.{ .finite = .{
+    .member_proc = artifact_owned_member_proc,
+    .member_target = artifact_owned_member_target,
+    .member_capture_slots = member_capture_slots,
+    .captures = captures,
+    .params = params,
+    .call_args = call_args,
+} })
+```
+
+This rule exists because runtime descriptors are owned by the current lowered
+program and are freed after compile-time interpretation. A promoted wrapper can
+be lowered later, including while evaluating another compile-time request or
+while importing the checked artifact. If the wrapper body stores borrowed runtime
+descriptor slices, debug builds will see freed-memory poison and release builds
+would read arbitrary capture-slot data. That is a compiler bug, not a reason to
+skip capture metadata or reconstruct it later.
+
 The compile-time finalizer must therefore use two separate descriptor lookup
 families:
 
@@ -5457,9 +5591,15 @@ const SessionBoxPayloadTransformPlan = struct {
 `boundary = null` does not authorize erasure by itself. The box transform may
 allocate, unbox, rebox, or map the payload according to `kind`, but any callable
 representation change inside `payload` must still carry non-empty
-`BoxErasureProvenance`. If neither `boundary` nor non-empty inherited
-provenance is present, the transform is malformed: debug builds assert and
-release builds use `unreachable`.
+`BoxErasureProvenance`. A null-boundary box transform with empty inherited
+provenance is valid only when its payload transform does not perform callable
+erasure. Enforcement happens at the callable leaf: `callable_set -> erased_fn`,
+`proc_value -> erased_fn`, and any already-erased materialization that requires
+Box authorization must assert immediately if the current transform context has
+empty provenance. This distinction is important because ordinary structural
+projection can require a mechanical `Box(T) -> Box(U)` transform where `T` and
+`U` differ for non-callable reasons; the presence of that transform must not
+invent erasure authorization.
 
 For example:
 
@@ -5497,6 +5637,64 @@ therefore has `boundary = null`, and its child callable transform carries
 callable-set value into an erased callable. This is correct because the nested
 box transform is not the source of erasure authorization; it only applies the
 already-authorized payload transform.
+
+Projection-owned box transforms need one more explicit publication rule. A
+projection result can have a different solved representation from the raw stored
+slot because a later `Box.unbox`, direct-call argument, return, or promoted
+wrapper boundary required an erased callable somewhere under that projected
+value. For example:
+
+```roc
+make_boxed : {} -> Box(({ inner : Box((I64 -> I64)) } -> I64))
+make_boxed = |_| Box.box(|record| Box.unbox(record.inner)(1))
+
+apply_record : { inner : Box((I64 -> I64)) } -> I64
+apply_record = Box.unbox(make_boxed({}))
+
+main : I64
+main = apply_record({ inner: Box.box(|x| x + 1) })
+```
+
+Inside the promoted `apply_record` body, `record.inner` is a projection. The raw
+record slot endpoint is the representation stored in the procedure parameter.
+The projection result endpoint is the value consumed by `Box.unbox(record.inner)`.
+Those endpoints can differ: the projection result's boxed payload is solved with
+the explicit `Box.unbox` boundary provenance. The projection transform is
+therefore a `box_to_box` transform whose child callable transform must inherit
+the provenance already attached to the solved representation class. It must not
+invent a fresh `BoxBoundaryId`, and it must not treat the projection itself as an
+erasure boundary.
+
+Lambda-solved MIR must publish this solved-class provenance explicitly:
+
+```zig
+const RepresentationStore = struct {
+    /// Indexed by RepresentationClassId after root classes are solved.
+    /// Empty means this class has no Box-erasure authorization.
+    class_erasure_provenance: []const []const BoxErasureProvenance,
+};
+```
+
+`CallableEmissionAssigner` already walks explicit `require_box_erased`
+requirements and propagates provenance through the solved representation graph.
+After that propagation, before value-transform finalization, it must publish the
+non-empty provenance set for each reached `RepresentationClassId` into
+`RepresentationStore.class_erasure_provenance`. This is not a cache and not
+recovery from type shape; it is the solved result of explicit requirements:
+
+- real `Box.box` and `Box.unbox` operations publish
+  `BoxErasureProvenance.local_box_boundary`
+- bodyless promoted wrappers publish
+  `BoxErasureProvenance.promoted_wrapper`
+- representation edges decide which solved classes those requirements reach
+
+When `ValueTransformFinalizer` plans a non-identity structural transform and no
+local `BoxBoundaryId` or inherited provenance is already in scope, it may read
+the source and target endpoint solved classes and inherit their published
+`class_erasure_provenance`. If both endpoints have provenance, they must agree
+as sets after de-duplication; a mismatch is a compiler invariant violation. If
+neither endpoint has provenance, the transform proceeds with empty provenance and
+will remain valid only if no callable-erasing child transform is needed.
 
 When a session does lower a real `Box.unbox(boxed)` operation, the boxed input
 value must also be marked as a boxed value carrying the new local boundary:

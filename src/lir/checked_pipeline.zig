@@ -3774,9 +3774,83 @@ const CaptureSlotPlanBuilder = struct {
             _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, slot.exec_value_ty);
         }
         var target_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
-        const published_source_proc = member.published_source_proc orelse checkedPipelineInvariant("checking finalization attempted to publish callable result member without artifact-owned source procedure");
+        const published_source_proc = try self.artifactOwnedSourceProcForMember(member);
         target_key.base = published_source_proc.proc.proc_base;
         return target_key;
+    }
+
+    fn artifactOwnedSourceProcForMember(
+        self: *CaptureSlotPlanBuilder,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        if (member.published_source_proc) |published| return published;
+
+        return switch (member.proc_value.template) {
+            .lifted => |lifted| try self.artifactOwnedLiftedSourceProc(lifted, member.proc_value.source_fn_ty),
+            .checked,
+            .synthetic,
+            => checkedPipelineInvariant("checking finalization reached non-lifted callable result member without artifact-owned publication identity"),
+        };
+    }
+
+    fn artifactOwnedLiftedSourceProc(
+        self: *CaptureSlotPlanBuilder,
+        lifted: canonical.LiftedProcedureTemplateRef,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        const owner_template = self.artifactOwnedOwnerTemplate(lifted.owner_mono_specialization.template);
+        const owner_key = canonical.MonoSpecializationKey{
+            .template = owner_template,
+            .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+        };
+        const owner_base = self.artifact.canonical_names.procBase(owner_template.proc_base);
+        const proc_base = try self.artifact.canonical_names.internProcBase(.{
+            .module_name = owner_base.module_name,
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = @intFromEnum(lifted.site),
+            .nested_proc_site = .{
+                .owner_template = owner_template,
+                .site = lifted.site,
+            },
+            .owner_mono_specialization = owner_key,
+        });
+        const proc_value = canonical.ProcedureCallableRef{
+            .template = .{ .lifted = .{
+                .owner_mono_specialization = owner_key,
+                .site = lifted.site,
+            } },
+            .source_fn_ty = source_fn_ty,
+        };
+        return .{
+            .proc = .{
+                .artifact = owner_template.artifact,
+                .proc_base = proc_base,
+            },
+            .callable = proc_value,
+        };
+    }
+
+    fn artifactOwnedOwnerTemplate(
+        self: *CaptureSlotPlanBuilder,
+        lowered_template: canonical.ProcedureTemplateRef,
+    ) canonical.ProcedureTemplateRef {
+        if (!std.mem.eql(u8, &lowered_template.artifact.bytes, &self.artifact.key.bytes)) {
+            checkedPipelineInvariant("checking finalization cannot publish lifted member owned by an unavailable artifact");
+        }
+        const raw_template: usize = @intFromEnum(lowered_template.template);
+        if (raw_template >= self.artifact.checked_procedure_templates.templates.len) {
+            checkedPipelineInvariant("checking finalization lifted member owner template id is outside checked artifact");
+        }
+        const record = self.artifact.checked_procedure_templates.templates[raw_template];
+        if (record.template_id != lowered_template.template) {
+            checkedPipelineInvariant("checking finalization lifted member owner template id disagrees with checked artifact table");
+        }
+        return .{
+            .artifact = lowered_template.artifact,
+            .proc_base = record.proc_base,
+            .template = lowered_template.template,
+        };
     }
 
     fn callableLeafPlan(

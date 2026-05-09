@@ -2320,8 +2320,13 @@ fn promoteFiniteCallableResult(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("promoted callable selected member capture schema disagrees with result plan");
     }
-    const published_member_proc = selected.descriptor_member.published_proc_value orelse
-        compileTimeFinalizationInvariant("promoted finite callable selected member had no artifact-owned member procedure");
+    const member_proc = try artifactOwnedCallableForSelectedMember(artifact, selected);
+    const member_capture_slots = if (selected.descriptor_member.capture_slots.len == 0)
+        &.{}
+    else
+        try allocator.dupe(canonical.CallableSetCaptureSlot, selected.descriptor_member.capture_slots);
+    var member_capture_slots_owned = true;
+    errdefer if (member_capture_slots_owned and member_capture_slots.len != 0) allocator.free(member_capture_slots);
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
         if (slot.slot != @as(u32, @intCast(i))) {
             compileTimeFinalizationInvariant("promoted callable selected member capture slots are not canonical");
@@ -2338,16 +2343,17 @@ fn promoteFiniteCallableResult(
         .source_fn_ty = selected.result_plan.source_fn_ty,
         .callable_set_key = selected.result_plan.callable_set_key,
         .member = selected.planned_member.member,
-        .member_proc = published_member_proc,
+        .member_proc = member_proc,
         .member_target = member_target,
         .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
         .member_capture_shape = selected.descriptor_member.capture_shape_key,
-        .member_capture_slots = selected.descriptor_member.capture_slots,
+        .member_capture_slots = member_capture_slots,
         .captures = captures,
         .params = params,
         .call_args = call_args,
     } });
     member_target_owned = false;
+    member_capture_slots_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
     const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
         allocator,
@@ -2370,6 +2376,51 @@ fn promoteFiniteCallableResult(
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
         .generated_procedure = generated_procedure,
+    };
+}
+
+fn artifactOwnedCallableForSelectedMember(
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    selected: SelectedFiniteCallableResult,
+) Allocator.Error!canonical.ProcedureCallableRef {
+    if (selected.descriptor_member.published_proc_value) |published| return published;
+
+    return switch (selected.descriptor_member.proc_value.template) {
+        .lifted => |lifted| .{
+            .template = .{ .lifted = .{
+                .owner_mono_specialization = .{
+                    .template = artifactOwnedOwnerTemplateForLiftedMember(artifact, lifted.owner_mono_specialization.template),
+                    .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+                },
+                .site = lifted.site,
+            } },
+            .source_fn_ty = selected.descriptor_member.proc_value.source_fn_ty,
+        },
+        .checked,
+        .synthetic,
+        => compileTimeFinalizationInvariant("promoted finite callable selected non-lifted member had no artifact-owned procedure"),
+    };
+}
+
+fn artifactOwnedOwnerTemplateForLiftedMember(
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered_template: canonical.ProcedureTemplateRef,
+) canonical.ProcedureTemplateRef {
+    if (!std.mem.eql(u8, &lowered_template.artifact.bytes, &artifact.key.bytes)) {
+        compileTimeFinalizationInvariant("promoted finite callable selected lifted member owner artifact was unavailable");
+    }
+    const raw_template: usize = @intFromEnum(lowered_template.template);
+    if (raw_template >= artifact.checked_procedure_templates.templates.len) {
+        compileTimeFinalizationInvariant("promoted finite callable selected lifted member owner template id was outside checked artifact");
+    }
+    const record = artifact.checked_procedure_templates.templates[raw_template];
+    if (record.template_id != lowered_template.template) {
+        compileTimeFinalizationInvariant("promoted finite callable selected lifted member owner template id disagreed with checked artifact table");
+    }
+    return .{
+        .artifact = lowered_template.artifact,
+        .proc_base = record.proc_base,
+        .template = lowered_template.template,
     };
 }
 

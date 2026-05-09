@@ -1772,6 +1772,7 @@ pub const RepresentationStore = struct {
     classes_len: u32 = 0,
     root_classes: []RepresentationClassId = &.{},
     callable_class_emissions: []?CallableValueEmissionPlanId = &.{},
+    class_erasure_provenance: [][]const BoxErasureProvenance = &.{},
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     root_type_infos: std.AutoHashMap(RepRootId, RepresentationRootTypeInfo),
     solved_structural_child_roots: std.AutoHashMap(SolvedStructuralChildKey, RepRootId),
@@ -1869,6 +1870,10 @@ pub const RepresentationStore = struct {
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
         if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
         if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
+        for (self.class_erasure_provenance) |provenance| {
+            if (provenance.len > 0) self.allocator.free(provenance);
+        }
+        if (self.class_erasure_provenance.len > 0) self.allocator.free(self.class_erasure_provenance);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
         self.solved_structural_child_roots.deinit();
@@ -2014,6 +2019,11 @@ pub const RepresentationStore = struct {
         self.solved_structural_child_roots_published = false;
         if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
         self.callable_class_emissions = &.{};
+        for (self.class_erasure_provenance) |provenance| {
+            if (provenance.len > 0) self.allocator.free(provenance);
+        }
+        if (self.class_erasure_provenance.len > 0) self.allocator.free(self.class_erasure_provenance);
+        self.class_erasure_provenance = &.{};
     }
 
     pub fn publishRootClasses(
@@ -2159,6 +2169,57 @@ pub const RepresentationStore = struct {
             unreachable;
         }
         return self.callable_class_emissions[class_index];
+    }
+
+    /// Public `publishClassErasureProvenance` function.
+    pub fn publishClassErasureProvenance(
+        self: *RepresentationStore,
+        class: RepresentationClassId,
+        provenance: []const BoxErasureProvenance,
+    ) std.mem.Allocator.Error!void {
+        if (provenance.len == 0) {
+            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance publication was empty");
+            unreachable;
+        }
+        const class_index: usize = @intFromEnum(class);
+        if (class_index >= @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance referenced an unreserved class");
+            unreachable;
+        }
+        if (self.class_erasure_provenance.len == 0) {
+            self.class_erasure_provenance = try self.allocator.alloc([]const BoxErasureProvenance, @intCast(self.classes_len));
+            @memset(self.class_erasure_provenance, &.{});
+        }
+        if (self.class_erasure_provenance.len != @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance table length differs from class count");
+            unreachable;
+        }
+        if (self.class_erasure_provenance[class_index].len > 0) {
+            if (!boxErasureProvenanceSliceEql(self.class_erasure_provenance[class_index], provenance)) {
+                debug.invariant(false, "lambda-solved invariant violated: class erasure provenance was published twice with different values");
+                unreachable;
+            }
+            return;
+        }
+        self.class_erasure_provenance[class_index] = try self.allocator.dupe(BoxErasureProvenance, provenance);
+    }
+
+    /// Public `classErasureProvenance` function.
+    pub fn classErasureProvenance(
+        self: *const RepresentationStore,
+        class: RepresentationClassId,
+    ) []const BoxErasureProvenance {
+        const class_index: usize = @intFromEnum(class);
+        if (class_index >= @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance lookup referenced an unreserved class");
+            unreachable;
+        }
+        if (self.class_erasure_provenance.len == 0) return &.{};
+        if (self.class_erasure_provenance.len != @as(usize, @intCast(self.classes_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance table length differs from class count");
+            unreachable;
+        }
+        return self.class_erasure_provenance[class_index];
     }
 
     pub fn appendBoxBoundary(

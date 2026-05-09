@@ -4936,18 +4936,25 @@ const BodyLowerer = struct {
             reserved.requested_fn_ty,
             .{ .promoted_callable_wrapper = wrapper_id },
         );
+        const member_target_artifact = checked_artifact.CheckedModuleArtifactKey{
+            .bytes = callableTemplateArtifact(finite.member_proc.template).bytes,
+        };
+        var member_target = try self.remapExecutableSpecializationKeyForArtifact(finite.member_target, member_target_artifact);
+        var member_target_owned = true;
+        errdefer if (member_target_owned) deinitExecutableSpecializationKeyForMono(self.allocator, &member_target);
         const proc_value = try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .proc_value = .{
             .proc = member_proc,
             .published_proc = publishedMirProcedureRefForCallable(finite.member_proc),
             .captures = try self.program.ast.addCaptureArgSpan(capture_args),
             .fn_ty = fn_ty,
             .forced_target = .{
-                .key = finite.member_target,
+                .key = member_target,
                 .artifact = self.template_lookup.artifact,
                 .payloads = self.template_lookup.executable_type_payloads,
                 .promoted_wrapper = finite.member_target_promoted_wrapper,
             },
         } });
+        member_target_owned = false;
 
         const call_args = try self.allocator.alloc(Ast.ExprId, finite.call_args.len);
         defer self.allocator.free(call_args);
@@ -4971,6 +4978,17 @@ const BodyLowerer = struct {
             .requested_fn_ty = fn_ty,
             .requested_source_fn_ty = finite.source_fn_ty,
         } });
+    }
+
+    fn remapExecutableSpecializationKeyForArtifact(
+        self: *BodyLowerer,
+        key: canonical.ExecutableSpecializationKey,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+    ) Allocator.Error!canonical.ExecutableSpecializationKey {
+        var out = try cloneExecutableSpecializationKeyForMono(self.allocator, key);
+        errdefer deinitExecutableSpecializationKeyForMono(self.allocator, &out);
+        out.base = try self.name_resolver.procBase(artifact, key.base);
+        return out;
     }
 
     const PromotedWrapperParamBundle = struct {
@@ -8967,6 +8985,31 @@ fn checkedTemplateFromCallableTemplate(
         .checked => |checked| checked,
         .synthetic => |synthetic| synthetic.template,
         .lifted => invariantViolation("mono specialization received a lifted procedure template before lifted MIR"),
+    };
+}
+
+fn deinitExecutableSpecializationKeyForMono(
+    allocator: Allocator,
+    key: *canonical.ExecutableSpecializationKey,
+) void {
+    if (key.exec_arg_tys.len > 0) allocator.free(key.exec_arg_tys);
+    key.exec_arg_tys = &.{};
+}
+
+fn cloneExecutableSpecializationKeyForMono(
+    allocator: Allocator,
+    key: canonical.ExecutableSpecializationKey,
+) Allocator.Error!canonical.ExecutableSpecializationKey {
+    return .{
+        .base = key.base,
+        .requested_fn_ty = key.requested_fn_ty,
+        .exec_arg_tys = if (key.exec_arg_tys.len == 0)
+            &.{}
+        else
+            try allocator.dupe(canonical.CanonicalExecValueTypeKey, key.exec_arg_tys),
+        .exec_ret_ty = key.exec_ret_ty,
+        .callable_repr_mode = key.callable_repr_mode,
+        .capture_shape_key = key.capture_shape_key,
     };
 }
 
