@@ -219,6 +219,7 @@ pub const Expr = struct {
         },
         proc_value: struct {
             proc: canonical.MirProcedureRef,
+            published_proc: ?canonical.MirProcedureRef = null,
             captures: Span(CaptureArg),
             fn_ty: TypeVarId,
             forced_target: ?mir_ids.ProcValueExecutableTarget = null,

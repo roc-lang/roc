@@ -280,6 +280,8 @@ pub const CanonicalCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: canonical.ProcedureCallableRef,
     source_proc: canonical.MirProcedureRef,
+    published_proc_value: ?canonical.ProcedureCallableRef = null,
+    published_source_proc: ?canonical.MirProcedureRef = null,
     target_instance: ProcRepresentationInstanceId,
     capture_slots: []const CallableSetCaptureSlot,
     capture_shape_key: CaptureShapeKey,
@@ -873,6 +875,7 @@ pub const CallableValueEmissionPlan = union(enum) {
 pub const CallableValueSource = union(enum) {
     proc_value: struct {
         proc: canonical.MirProcedureRef,
+        published_proc: ?canonical.MirProcedureRef = null,
         target_instance: ProcRepresentationInstanceId,
         captures: []const ValueInfoId,
         fn_ty: canonical.CanonicalTypeKey,
@@ -2628,6 +2631,7 @@ pub const RepresentationStore = struct {
         result: ValueInfoId,
         whole_function_root: RepRootId,
         proc: canonical.MirProcedureRef,
+        published_proc: ?canonical.MirProcedureRef,
         target_instance: ProcRepresentationInstanceId,
         capture_values: []const ValueInfoId,
     ) std.mem.Allocator.Error!CallableValueInfo {
@@ -2653,6 +2657,7 @@ pub const RepresentationStore = struct {
             .callable_root = callable_root,
             .source = .{ .proc_value = .{
                 .proc = proc,
+                .published_proc = published_proc,
                 .target_instance = target_instance,
                 .captures = construction.capture_values,
                 .fn_ty = source_fn_ty,
@@ -2913,6 +2918,8 @@ pub const RepresentationStore = struct {
             .member = @enumFromInt(0),
             .proc_value = members[0].proc_value,
             .source_proc = members[0].source_proc,
+            .published_proc_value = members[0].published_proc_value,
+            .published_source_proc = members[0].published_source_proc,
             .target_instance = members[0].target_instance,
             .capture_slots = &.{},
             .capture_shape_key = .{},
@@ -2928,6 +2935,8 @@ pub const RepresentationStore = struct {
                 .member = @enumFromInt(@as(u32, @intCast(i))),
                 .proc_value = member.proc_value,
                 .source_proc = member.source_proc,
+                .published_proc_value = member.published_proc_value,
+                .published_source_proc = member.published_source_proc,
                 .target_instance = member.target_instance,
                 .capture_slots = if (member.capture_slots.len == 0)
                     &.{}

@@ -563,9 +563,11 @@ fn publishedCallableSetDescriptorMatchesSolved(
     if (!repr.callableSetKeyEql(published.key, solved.key)) return false;
     if (published.members.len != solved.members.len) return false;
     for (published.members, solved.members) |left, right| {
+        const published_proc_value = right.published_proc_value orelse return false;
+        const published_source_proc = right.published_source_proc orelse return false;
         if (left.member != right.member) return false;
-        if (!canonical.procedureCallableRefEql(left.proc_value, right.proc_value)) return false;
-        if (!canonical.mirProcedureRefEql(left.source_proc, right.source_proc)) return false;
+        if (!canonical.procedureCallableRefEql(left.proc_value, published_proc_value)) return false;
+        if (!canonical.mirProcedureRefEql(left.source_proc, published_source_proc)) return false;
         if (!std.mem.eql(u8, &left.capture_shape_key.bytes, &right.capture_shape_key.bytes)) return false;
         if (left.capture_slots.len != right.capture_slots.len) return false;
         for (left.capture_slots, right.capture_slots) |left_slot, right_slot| {
@@ -599,10 +601,12 @@ fn publishCallableSetDescriptorsToArtifact(
         const members = try allocator.alloc(canonical.CanonicalCallableSetMember, descriptor.members.len);
         member_shells[i] = members;
         for (descriptor.members, 0..) |member, member_i| {
+            const published_proc_value = member.published_proc_value orelse checkedPipelineInvariant("checking finalization attempted to publish callable-set member without artifact-owned procedure value");
+            const published_source_proc = member.published_source_proc orelse checkedPipelineInvariant("checking finalization attempted to publish callable-set member without artifact-owned source procedure");
             members[member_i] = .{
                 .member = member.member,
-                .proc_value = member.proc_value,
-                .source_proc = member.source_proc,
+                .proc_value = published_proc_value,
+                .source_proc = published_source_proc,
                 .capture_slots = member.capture_slots,
                 .capture_shape_key = member.capture_shape_key,
             };
@@ -3410,7 +3414,10 @@ const CaptureSlotPlanBuilder = struct {
         for (member.capture_slots) |slot| {
             _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, slot.exec_value_ty);
         }
-        return try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
+        var target_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
+        const published_source_proc = member.published_source_proc orelse checkedPipelineInvariant("checking finalization attempted to publish callable result member without artifact-owned source procedure");
+        target_key.base = published_source_proc.proc.proc_base;
+        return target_key;
     }
 
     fn callableLeafPlan(

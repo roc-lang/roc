@@ -4762,6 +4762,7 @@ const BodyLowerer = struct {
         );
         const proc_value = try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .proc_value = .{
             .proc = member_proc,
+            .published_proc = publishedMirProcedureRefForCallable(finite.member_proc),
             .captures = try self.program.ast.addCaptureArgSpan(capture_args),
             .fn_ty = fn_ty,
             .forced_target = .{
@@ -4950,6 +4951,7 @@ const BodyLowerer = struct {
         );
         return try self.program.ast.addExprWithSource(ty, source_ty, .{ .proc_value = .{
             .proc = proc,
+            .published_proc = publishedMirProcedureRefForCallable(leaf.proc_value),
             .captures = Ast.Span(Ast.CaptureArg).empty(),
             .fn_ty = ty,
         } });
@@ -6051,8 +6053,10 @@ const BodyLowerer = struct {
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
                 }
+                const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
                 break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
-                    .proc = try self.reserveProcedureUseForConcrete(proc_use, requested_fn_ty, .{ .proc_value = record.expr }),
+                    .proc = try self.reserveCallableProcedure(callable, requested_fn_ty, .{ .proc_value = record.expr }),
+                    .published_proc = publishedMirProcedureRefForCallable(callable),
                     .captures = Ast.Span(Ast.CaptureArg).empty(),
                     .fn_ty = ty,
                 } });
@@ -8456,20 +8460,69 @@ const BodyLowerer = struct {
         };
     }
 
+    fn procedureCallableForUse(
+        self: *BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!canonical.ProcedureCallableRef {
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+        return switch (use.binding) {
+            .top_level => |binding_ref| try self.callableFromTopLevelBinding(
+                self.template_lookup.artifact,
+                topLevelProcedureBindingsForKey(self.input, self.template_lookup.artifact) orelse {
+                    debug.invariant(false, "mono body lowering invariant violated: callable artifact has no top-level procedure binding table");
+                    unreachable;
+                },
+                binding_ref,
+                .{ .top_level = binding_ref },
+                requested_key,
+            ),
+            .imported => |imported| try self.callableFromImportedProcedureBinding(imported, requested_key),
+            .hosted => |hosted| .{
+                .template = .{ .checked = hosted.template },
+                .source_fn_ty = requested_key,
+            },
+            .platform_required => |required| try self.callableFromTopLevelBinding(
+                required.artifact,
+                topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
+                    debug.invariant(false, "mono body lowering invariant violated: platform-required artifact has no procedure binding table");
+                    unreachable;
+                },
+                required.procedure_binding,
+                .{ .platform_required = required },
+                requested_key,
+            ),
+            .promoted => |promoted| blk: {
+                const promoted_record = self.promotedProcedureForRef(promoted);
+                break :blk .{
+                    .template = .{ .synthetic = .{ .template = promoted_record.template } },
+                    .source_fn_ty = requested_key,
+                };
+            },
+        };
+    }
+
     fn templateFromPromotedProcedure(
         self: *const BodyLowerer,
         promoted: checked_artifact.PromotedProcedureRef,
     ) canonical.ProcedureTemplateRef {
+        return self.promotedProcedureForRef(promoted).template;
+    }
+
+    fn promotedProcedureForRef(
+        self: *const BodyLowerer,
+        promoted: checked_artifact.PromotedProcedureRef,
+    ) checked_artifact.PromotedProcedure {
         if (self.input.root.artifact.module_identity.module_idx == promoted.module_idx) {
-            if (promotedProcedureTemplate(&self.input.root.artifact.promoted_procedures, promoted)) |template| return template;
+            if (self.input.root.artifact.promoted_procedures.get(promoted)) |procedure| return procedure;
         }
         for (self.input.imports) |view| {
             if (view.module_identity.module_idx != promoted.module_idx) continue;
-            if (promotedProcedureTemplate(view.promoted_procedures, promoted)) |template| return template;
+            if (view.promoted_procedures.get(promoted)) |procedure| return procedure;
         }
         for (self.input.root.relation_artifacts) |view| {
             if (view.module_identity.module_idx != promoted.module_idx) continue;
-            if (promotedProcedureTemplate(view.promoted_procedures, promoted)) |template| return template;
+            if (view.promoted_procedures.get(promoted)) |procedure| return procedure;
         }
         invariantViolation("mono body lowering could not find promoted procedure in published artifact views");
     }
@@ -8486,6 +8539,24 @@ const BodyLowerer = struct {
         return switch (binding.body) {
             .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
             .callable_eval_template => try self.templateFromCallableBindingInstance(owner, binding_key, requested_key),
+        };
+    }
+
+    fn callableFromTopLevelBinding(
+        self: *BodyLowerer,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        bindings: *const checked_artifact.TopLevelProcedureBindingTable,
+        binding_ref: checked_artifact.TopLevelProcedureBindingRef,
+        binding_key: checked_artifact.ProcedureBindingRef,
+        requested_key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!canonical.ProcedureCallableRef {
+        const binding = bindings.get(binding_ref);
+        return switch (binding.body) {
+            .direct_template => |direct| .{
+                .template = direct.template,
+                .source_fn_ty = requested_key,
+            },
+            .callable_eval_template => try self.callableFromCallableBindingInstance(owner, binding_key, requested_key),
         };
     }
 
@@ -8533,6 +8604,56 @@ const BodyLowerer = struct {
         invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
     }
 
+    fn callableFromImportedProcedureBinding(
+        self: *BodyLowerer,
+        imported: checked_artifact.ImportedProcedureBindingRef,
+        requested_key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!canonical.ProcedureCallableRef {
+        for (self.input.imports) |view| {
+            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.module_idx == imported.module_idx and
+                    binding.binding.def == imported.def and
+                    binding.binding.pattern == imported.pattern)
+                {
+                    return switch (binding.body) {
+                        .direct_template => |direct| .{
+                            .template = direct.template,
+                            .source_fn_ty = requested_key,
+                        },
+                        .callable_eval_template => try self.callableFromCallableBindingInstance(
+                            self.input.root.artifact.key,
+                            .{ .imported = imported },
+                            requested_key,
+                        ),
+                    };
+                }
+            }
+        }
+        for (self.input.root.relation_artifacts) |view| {
+            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.module_idx == imported.module_idx and
+                    binding.binding.def == imported.def and
+                    binding.binding.pattern == imported.pattern)
+                {
+                    return switch (binding.body) {
+                        .direct_template => |direct| .{
+                            .template = direct.template,
+                            .source_fn_ty = requested_key,
+                        },
+                        .callable_eval_template => try self.callableFromCallableBindingInstance(
+                            self.input.root.artifact.key,
+                            .{ .imported = imported },
+                            requested_key,
+                        ),
+                    };
+                }
+            }
+        }
+        invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
+    }
+
     fn templateFromCallableBindingInstance(
         self: *BodyLowerer,
         owner: checked_artifact.CheckedModuleArtifactKey,
@@ -8558,17 +8679,33 @@ const BodyLowerer = struct {
         }
         return checkedTemplateFromCallableTemplate(instance.proc_value.template);
     }
-};
 
-fn promotedProcedureTemplate(
-    table: *const checked_artifact.PromotedProcedureTable,
-    ref: checked_artifact.PromotedProcedureRef,
-) ?canonical.ProcedureTemplateRef {
-    for (table.procedures) |procedure| {
-        if (canonical.procedureValueRefEql(procedure.proc, ref.proc)) return procedure.template;
+    fn callableFromCallableBindingInstance(
+        self: *BodyLowerer,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        binding: checked_artifact.ProcedureBindingRef,
+        requested_key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!canonical.ProcedureCallableRef {
+        const key = checked_artifact.CallableBindingInstantiationKey{
+            .binding = binding,
+            .requested_source_fn_ty = requested_key,
+        };
+        const ref = callableBindingInstanceForKey(self.input, owner, key) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: callable-eval procedure binding had no sealed concrete instance for requested function type");
+            unreachable;
+        };
+        var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
+        defer dependency_state.deinit();
+        try reserveCallableBindingInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, ref);
+
+        const instance = callableBindingInstanceForRef(self.input, ref);
+        if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &requested_key.bytes)) {
+            debug.invariant(false, "mono body lowering invariant violated: callable-eval instance source function type disagrees with requested type");
+            unreachable;
+        }
+        return instance.proc_value;
     }
-    return null;
-}
+};
 
 const dec_scale: i128 = 1_000_000_000_000_000_000;
 
@@ -8620,6 +8757,23 @@ fn checkedTemplateFromCallableTemplate(
         .checked => |checked| checked,
         .synthetic => |synthetic| synthetic.template,
         .lifted => invariantViolation("mono specialization received a lifted procedure template before lifted MIR"),
+    };
+}
+
+fn publishedMirProcedureRefForCallable(
+    callable: canonical.ProcedureCallableRef,
+) ?canonical.MirProcedureRef {
+    const template = switch (callable.template) {
+        .checked => |checked| checked,
+        .synthetic => |synthetic| synthetic.template,
+        .lifted => return null,
+    };
+    return .{
+        .proc = .{
+            .artifact = template.artifact,
+            .proc_base = template.proc_base,
+        },
+        .callable = callable,
     };
 }
 

@@ -262,6 +262,7 @@ pub const PublishImportArtifact = struct {
 pub const PublishInputs = struct {
     module_env_storage: ModuleEnvStorage,
     imports: []const PublishImportArtifact = &.{},
+    relation_artifacts: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
@@ -276,6 +277,7 @@ pub const CompileTimeFinalizer = struct {
         allocator: Allocator,
         artifact: *CheckedModuleArtifact,
         imports: []const PublishImportArtifact,
+        relation_artifacts: []const ImportedModuleView,
     ) anyerror!void,
 
     pub fn run(
@@ -283,8 +285,9 @@ pub const CompileTimeFinalizer = struct {
         allocator: Allocator,
         artifact: *CheckedModuleArtifact,
         imports: []const PublishImportArtifact,
+        relation_artifacts: []const ImportedModuleView,
     ) anyerror!void {
-        try self.finalize(self.context, allocator, artifact, imports);
+        try self.finalize(self.context, allocator, artifact, imports, relation_artifacts);
     }
 };
 
@@ -1277,6 +1280,27 @@ pub const CheckedTypeStore = struct {
                 }
             }
         }
+
+        for (module.requiresTypes()) |required_type| {
+            const required_var = ModuleEnv.varFrom(required_type.type_anno);
+            const root = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, required_var);
+            const scheme_key = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.identStoreConst(),
+                required_var,
+            );
+            if (findCheckedTypeScheme(schemes.items, scheme_key) == null) {
+                const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(schemes.items.len)));
+                try schemes.append(allocator, .{
+                    .id = scheme_id,
+                    .key = scheme_key,
+                    .root = root,
+                    .generalized_vars = &.{},
+                });
+            }
+        }
+
         try appendStaticDispatchTypeRoots(allocator, module, names, &roots, &payloads, &active);
 
         for (module.allDefs()) |def_idx| {
@@ -7768,6 +7792,12 @@ pub const PlatformRequiredBindingId = enum(u32) { _ };
 /// Public `PlatformRequirementRelationId` declaration.
 pub const PlatformRequirementRelationId = enum(u32) { _ };
 
+/// Public `PlatformRequiredValueKind` declaration.
+pub const PlatformRequiredValueKind = enum {
+    const_value,
+    procedure_value,
+};
+
 /// Public `PlatformRequiredDeclaration` declaration.
 pub const PlatformRequiredDeclaration = struct {
     id: PlatformRequiredDeclarationId,
@@ -7856,6 +7886,17 @@ pub const PlatformRequiredValueUse = union(enum) {
     procedure_value: ProcedureUseTemplate,
 };
 
+/// Public `PlatformRequirementRelationInput` declaration.
+pub const PlatformRequirementRelationInput = struct {
+    id: PlatformRequirementRelationId,
+    declaration: PlatformRequiredDeclarationId,
+    requires_idx: u32,
+    app_value: TopLevelValueRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+    app_value_source_scheme: canonical.CanonicalTypeSchemeKey,
+    value_kind: PlatformRequiredValueKind,
+};
+
 /// Public `PlatformRequiredBindingInput` declaration.
 pub const PlatformRequiredBindingInput = struct {
     declaration: PlatformRequiredDeclarationId,
@@ -7872,17 +7913,156 @@ pub const PlatformAppRelation = struct {
     requirement_context: PlatformRequirementContextKey,
     platform_module_idx: u32,
     app_artifact: CheckedModuleArtifactKey,
+    relations: []const PlatformRequirementRelationInput,
     bindings: []const PlatformRequiredBindingInput,
 
     pub fn deinit(self: *PlatformAppRelation, allocator: Allocator) void {
+        allocator.free(self.relations);
         allocator.free(self.bindings);
         self.* = .{
             .key = .{},
             .requirement_context = .{},
             .platform_module_idx = 0,
             .app_artifact = .{},
+            .relations = &.{},
             .bindings = &.{},
         };
+    }
+};
+
+/// Public `PlatformRequirementRelation` declaration.
+pub const PlatformRequirementRelation = struct {
+    id: PlatformRequirementRelationId,
+    relation: PlatformAppRelationKey,
+    module_idx: u32,
+    declaration: PlatformRequiredDeclarationId,
+    requires_idx: u32,
+    app_value: TopLevelValueRef,
+    requested_source_ty: canonical.CanonicalTypeKey,
+    requested_source_ty_payload: CheckedTypeId,
+    app_value_source_scheme: canonical.CanonicalTypeSchemeKey,
+    value_kind: PlatformRequiredValueKind,
+};
+
+/// Public `PlatformRequirementRelationTable` declaration.
+pub const PlatformRequirementRelationTable = struct {
+    relations: []PlatformRequirementRelation = &.{},
+
+    pub fn fromRelation(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        module_identity: ModuleIdentity,
+        names: *const canonical.CanonicalNameStore,
+        checked_types: *const CheckedTypePublication,
+        declarations: *const PlatformRequiredDeclarationTable,
+        relation: ?PlatformAppRelation,
+    ) Allocator.Error!PlatformRequirementRelationTable {
+        const active_relation = relation orelse return .{};
+        validatePlatformAppRelationForModule(
+            module,
+            module_identity,
+            names,
+            declarations,
+            active_relation,
+        );
+        if (active_relation.relations.len != declarations.declarations.len) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} platform requirements",
+                    .{ active_relation.relations.len, declarations.declarations.len },
+                );
+            }
+            unreachable;
+        }
+
+        var seen_declarations: []bool = &.{};
+        if (builtin.mode == .Debug) {
+            seen_declarations = try allocator.alloc(bool, declarations.declarations.len);
+            @memset(seen_declarations, false);
+        }
+        defer {
+            if (builtin.mode == .Debug) allocator.free(seen_declarations);
+        }
+
+        const rows = try allocator.alloc(PlatformRequirementRelation, active_relation.relations.len);
+        errdefer allocator.free(rows);
+
+        for (active_relation.relations, 0..) |input, i| {
+            const declaration = declarations.lookupByDeclarationId(input.declaration) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app checked relation {d} references unknown requirement declaration",
+                        .{i},
+                    );
+                }
+                unreachable;
+            };
+            const declaration_index: usize = @intCast(@intFromEnum(input.declaration));
+            if (builtin.mode == .Debug) {
+                if (seen_declarations[declaration_index]) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app checked relation binds declaration {d} more than once",
+                        .{declaration_index},
+                    );
+                }
+                seen_declarations[declaration_index] = true;
+            }
+            if (input.requires_idx != declaration.requires_idx) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app checked relation {d} maps declaration {d} to required index {d}, expected {d}",
+                        .{ i, declaration_index, input.requires_idx, declaration.requires_idx },
+                    );
+                }
+                unreachable;
+            }
+            if (!std.mem.eql(u8, &input.app_value.artifact.bytes, &active_relation.app_artifact.bytes)) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
+                        .{i},
+                    );
+                }
+                unreachable;
+            }
+            const payload = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
+            const payload_key = checked_types.store.roots[@intFromEnum(payload)].key;
+            if (!canonicalTypeKeyEql(payload_key, input.requested_source_ty)) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app checked relation {d} requested type key disagrees with platform-owned checked payload",
+                        .{i},
+                    );
+                }
+                unreachable;
+            }
+
+            rows[i] = .{
+                .id = input.id,
+                .relation = active_relation.key,
+                .module_idx = module.moduleIndex(),
+                .declaration = input.declaration,
+                .requires_idx = input.requires_idx,
+                .app_value = input.app_value,
+                .requested_source_ty = input.requested_source_ty,
+                .requested_source_ty_payload = payload,
+                .app_value_source_scheme = input.app_value_source_scheme,
+                .value_kind = input.value_kind,
+            };
+        }
+
+        return .{ .relations = rows };
+    }
+
+    pub fn deinit(self: *PlatformRequirementRelationTable, allocator: Allocator) void {
+        allocator.free(self.relations);
+        self.* = .{};
+    }
+
+    pub fn lookupByRelationId(self: *const PlatformRequirementRelationTable, relation_id: PlatformRequirementRelationId) ?PlatformRequirementRelation {
+        const raw = @intFromEnum(relation_id);
+        if (raw >= self.relations.len) return null;
+        return self.relations[raw];
     }
 };
 
@@ -7909,18 +8089,17 @@ pub const PlatformRequiredBindingTable = struct {
         module_identity: ModuleIdentity,
         names: *const canonical.CanonicalNameStore,
         declarations: *const PlatformRequiredDeclarationTable,
+        relations: *const PlatformRequirementRelationTable,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequiredBindingTable {
         const active_relation = relation orelse return .{};
-        if (active_relation.platform_module_idx != module.moduleIndex()) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
-                    .{ active_relation.platform_module_idx, module.moduleIndex() },
-                );
-            }
-            unreachable;
-        }
+        validatePlatformAppRelationForModule(
+            module,
+            module_identity,
+            names,
+            declarations,
+            active_relation,
+        );
         if (active_relation.bindings.len != declarations.declarations.len) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -7930,33 +8109,6 @@ pub const PlatformRequiredBindingTable = struct {
             }
             unreachable;
         }
-        const expected_requirement_context = PlatformRequirementContextKey.compute(
-            module_identity,
-            declarations.identityHash(names),
-        );
-        if (!std.mem.eql(u8, &active_relation.requirement_context.bytes, &expected_requirement_context.bytes)) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
-                    .{},
-                );
-            }
-            unreachable;
-        }
-        const expected_key = PlatformAppRelationKey.compute(
-            active_relation.app_artifact,
-            active_relation.requirement_context,
-        );
-        if (!std.mem.eql(u8, &active_relation.key.bytes, &expected_key.bytes)) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
-                    .{},
-                );
-            }
-            unreachable;
-        }
-
         var seen_declarations: []bool = &.{};
         if (builtin.mode == .Debug) {
             seen_declarations = try allocator.alloc(bool, declarations.declarations.len);
@@ -8007,6 +8159,16 @@ pub const PlatformRequiredBindingTable = struct {
                 }
                 unreachable;
             }
+            const checked_relation = relations.lookupByRelationId(binding.checked_relation) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform/app binding {d} references missing checked relation",
+                        .{i},
+                    );
+                }
+                unreachable;
+            };
+            validatePlatformBindingRelation(binding, checked_relation, i);
             bindings[i] = .{
                 .id = @enumFromInt(@as(u32, @intCast(i))),
                 .relation = active_relation.key,
@@ -8014,9 +8176,9 @@ pub const PlatformRequiredBindingTable = struct {
                 .declaration = binding.declaration,
                 .requires_idx = binding.requires_idx,
                 .app_value = binding.app_value,
-                .requested_source_ty = binding.requested_source_ty,
+                .requested_source_ty = checked_relation.requested_source_ty,
                 .checked_relation = binding.checked_relation,
-                .value_use = binding.value_use,
+                .value_use = platformRequiredValueUseWithRelation(binding.value_use, checked_relation),
             };
         }
 
@@ -8041,6 +8203,142 @@ pub const PlatformRequiredBindingTable = struct {
     }
 };
 
+fn validatePlatformAppRelationForModule(
+    module: TypedCIR.Module,
+    module_identity: ModuleIdentity,
+    names: *const canonical.CanonicalNameStore,
+    declarations: *const PlatformRequiredDeclarationTable,
+    active_relation: PlatformAppRelation,
+) void {
+    if (active_relation.platform_module_idx != module.moduleIndex()) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
+                .{ active_relation.platform_module_idx, module.moduleIndex() },
+            );
+        }
+        unreachable;
+    }
+    const expected_requirement_context = PlatformRequirementContextKey.compute(
+        module_identity,
+        declarations.identityHash(names),
+    );
+    if (!std.mem.eql(u8, &active_relation.requirement_context.bytes, &expected_requirement_context.bytes)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
+                .{},
+            );
+        }
+        unreachable;
+    }
+    const expected_key = PlatformAppRelationKey.compute(
+        active_relation.app_artifact,
+        active_relation.requirement_context,
+    );
+    if (!std.mem.eql(u8, &active_relation.key.bytes, &expected_key.bytes)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
+                .{},
+            );
+        }
+        unreachable;
+    }
+}
+
+fn platformRequiredPayloadForDeclaration(
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypePublication,
+    declaration: PlatformRequiredDeclaration,
+) CheckedTypeId {
+    const module_env = module.moduleEnvConst();
+    if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
+                .{ @intFromEnum(declaration.id), declaration.requires_idx },
+            );
+        }
+        unreachable;
+    }
+    const required_type = module_env.requires_types.items.items[declaration.requires_idx];
+    return checked_types.rootForSourceVar(module, ModuleEnv.varFrom(required_type.type_anno)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
+                .{@intFromEnum(declaration.id)},
+            );
+        }
+        unreachable;
+    };
+}
+
+fn validatePlatformBindingRelation(
+    binding: PlatformRequiredBindingInput,
+    relation: PlatformRequirementRelation,
+    binding_index: usize,
+) void {
+    if (relation.declaration != binding.declaration or relation.requires_idx != binding.requires_idx) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different requirement",
+                .{binding_index},
+            );
+        }
+        unreachable;
+    }
+    if (!std.mem.eql(u8, &relation.app_value.artifact.bytes, &binding.app_value.artifact.bytes) or
+        relation.app_value.pattern != binding.app_value.pattern)
+    {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different app value",
+                .{binding_index},
+            );
+        }
+        unreachable;
+    }
+    switch (binding.value_use) {
+        .const_value => if (relation.value_kind != .const_value) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app binding {d} has const value use but procedure checked relation",
+                    .{binding_index},
+                );
+            }
+            unreachable;
+        },
+        .procedure_value => if (relation.value_kind != .procedure_value) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform/app binding {d} has procedure value use but const checked relation",
+                    .{binding_index},
+                );
+            }
+            unreachable;
+        },
+    }
+}
+
+fn platformRequiredValueUseWithRelation(
+    value_use: PlatformRequiredValueUse,
+    relation: PlatformRequirementRelation,
+) PlatformRequiredValueUse {
+    return switch (value_use) {
+        .const_value => |const_use| .{ .const_value = .{
+            .const_ref = const_use.const_ref,
+            .requested_source_ty_template = relation.requested_source_ty,
+            .requested_source_ty_payload = relation.requested_source_ty_payload,
+        } },
+        .procedure_value => |proc_use| .{ .procedure_value = .{
+            .binding = proc_use.binding,
+            .source_fn_ty_template = relation.requested_source_ty,
+            .source_fn_ty_payload = relation.requested_source_ty_payload,
+        } },
+    };
+}
+
 /// Public `platformRequirementContextKey` function.
 pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
@@ -8057,6 +8355,8 @@ pub fn buildPlatformAppRelation(
     app_artifact: *const CheckedModuleArtifact,
 ) Allocator.Error!PlatformAppRelation {
     const declarations = platform_declaration_artifact.platform_required_declarations.declarations;
+    const relations = try allocator.alloc(PlatformRequirementRelationInput, declarations.len);
+    errdefer allocator.free(relations);
     const bindings = try allocator.alloc(PlatformRequiredBindingInput, declarations.len);
     errdefer allocator.free(bindings);
 
@@ -8085,23 +8385,25 @@ pub fn buildPlatformAppRelation(
             .artifact = app_artifact.key,
             .pattern = app_value.pattern,
         };
-        const requested_source_ty_payload = app_artifact.checked_types.rootForKey(requested_source_ty) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: platform requirement {s} requested type has no checked payload in app artifact",
-                    .{required_name},
-                );
-            }
-            unreachable;
-        };
         const required_ty_is_function = sourceVarIsFunction(&platform_module_env.types, ModuleEnv.varFrom(declaration.type_anno));
+        const value_kind: PlatformRequiredValueKind = if (required_ty_is_function) .procedure_value else .const_value;
+
+        relations[i] = .{
+            .id = @enumFromInt(@as(u32, @intCast(i))),
+            .declaration = declaration.id,
+            .requires_idx = declaration.requires_idx,
+            .app_value = app_value_ref,
+            .requested_source_ty = requested_source_ty,
+            .app_value_source_scheme = app_value.source_scheme,
+            .value_kind = value_kind,
+        };
 
         bindings[i] = .{
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
             .requested_source_ty = requested_source_ty,
-            .checked_relation = @enumFromInt(@as(u32, @intCast(i))),
+            .checked_relation = relations[i].id,
             .value_use = if (required_ty_is_function) blk: {
                 const procedure_binding = switch (app_value.value) {
                     .procedure_binding => |binding| binding,
@@ -8122,7 +8424,7 @@ pub fn buildPlatformAppRelation(
                         .procedure_binding = procedure_binding,
                     } },
                     .source_fn_ty_template = requested_source_ty,
-                    .source_fn_ty_payload = requested_source_ty_payload,
+                    .source_fn_ty_payload = null,
                 } };
             } else blk: {
                 const const_ref = switch (app_value.value) {
@@ -8140,7 +8442,7 @@ pub fn buildPlatformAppRelation(
                 break :blk .{ .const_value = .{
                     .const_ref = const_ref,
                     .requested_source_ty_template = requested_source_ty,
-                    .requested_source_ty_payload = requested_source_ty_payload,
+                    .requested_source_ty_payload = null,
                 } };
             },
         };
@@ -8151,6 +8453,7 @@ pub fn buildPlatformAppRelation(
         .requirement_context = requirement_context,
         .platform_module_idx = platform_declaration_artifact.module_identity.module_idx,
         .app_artifact = app_artifact.key,
+        .relations = relations,
         .bindings = bindings,
     };
 }
@@ -13657,6 +13960,7 @@ pub const CheckedModuleArtifact = struct {
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_declarations: PlatformRequiredDeclarationTable,
+    platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable,
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
@@ -13828,6 +14132,7 @@ pub const CheckedModuleArtifact = struct {
         self.compile_time_roots.deinit(allocator);
         self.interface_capabilities.deinit(allocator);
         self.platform_required_bindings.deinit(allocator);
+        self.platform_requirement_relations.deinit(allocator);
         self.platform_required_declarations.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
@@ -14179,6 +14484,34 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(declaration.module_idx == self.module_identity.module_idx);
         }
 
+        for (self.platform_requirement_relations.relations, 0..) |relation, i| {
+            std.debug.assert(@intFromEnum(relation.id) == i);
+            std.debug.assert(relation.module_idx == self.module_identity.module_idx);
+            const declaration = self.platform_required_declarations.lookupByDeclarationId(relation.declaration) orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform requirement relation {d} has no declaration",
+                    .{i},
+                );
+            };
+            std.debug.assert(declaration.requires_idx == relation.requires_idx);
+            const payload_index = @intFromEnum(relation.requested_source_ty_payload);
+            if (payload_index >= self.checked_types.roots.len) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform requirement relation {d} requested payload is out of range",
+                    .{i},
+                );
+            }
+            if (!canonicalTypeKeyEql(self.checked_types.roots[payload_index].key, relation.requested_source_ty)) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform requirement relation {d} requested payload key disagrees with relation key",
+                    .{i},
+                );
+            }
+            switch (relation.value_kind) {
+                .const_value, .procedure_value => {},
+            }
+        }
+
         for (self.platform_required_bindings.bindings, 0..) |binding, i| {
             std.debug.assert(@intFromEnum(binding.id) == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
@@ -14188,6 +14521,20 @@ pub const CheckedModuleArtifact = struct {
                     .{i},
                 );
             };
+            const relation = self.platform_requirement_relations.lookupByRelationId(binding.checked_relation) orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform required binding {d} has no checked relation",
+                    .{i},
+                );
+            };
+            validatePlatformBindingRelation(.{
+                .declaration = binding.declaration,
+                .requires_idx = binding.requires_idx,
+                .app_value = binding.app_value,
+                .requested_source_ty = binding.requested_source_ty,
+                .checked_relation = binding.checked_relation,
+                .value_use = binding.value_use,
+            }, relation, i);
             verifyPlatformRequiredValueUse(binding);
         }
 
@@ -15493,12 +15840,24 @@ pub fn publishFromTypedModule(
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);
 
+    var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
+        allocator,
+        module,
+        module_identity,
+        &canonical_names,
+        &checked_type_publication,
+        &platform_required_declarations,
+        inputs.platform_app_relation,
+    );
+    errdefer platform_requirement_relations.deinit(allocator);
+
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
         allocator,
         module,
         module_identity,
         &canonical_names,
         &platform_required_declarations,
+        &platform_requirement_relations,
         inputs.platform_app_relation,
     );
     errdefer platform_required_bindings.deinit(allocator);
@@ -15693,6 +16052,7 @@ pub fn publishFromTypedModule(
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .platform_required_declarations = platform_required_declarations,
+        .platform_requirement_relations = platform_requirement_relations,
         .platform_required_bindings = platform_required_bindings,
         .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
@@ -15705,7 +16065,7 @@ pub fn publishFromTypedModule(
         .callable_binding_instances = callable_binding_instances,
         .semantic_instantiation_procedures = semantic_instantiation_procedures,
     };
-    try inputs.compile_time_finalizer.run(allocator, &artifact, inputs.imports);
+    try inputs.compile_time_finalizer.run(allocator, &artifact, inputs.imports, inputs.relation_artifacts);
     artifact.verifyPublished();
     return artifact;
 }

@@ -32,6 +32,7 @@ fn finalize(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.PublishImportArtifact,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
 ) anyerror!void {
     const compile_time_roots = try compileTimeRootRequests(allocator, artifact.root_requests.requests);
     defer if (compile_time_roots.len > 0) allocator.free(compile_time_roots);
@@ -41,11 +42,13 @@ fn finalize(
     for (imports, 0..) |import, i| {
         import_views[i] = import.view;
     }
+    const dependency_views = try dependencyArtifactViews(allocator, import_views, relation_artifacts);
+    defer if (dependency_views.len > 0) allocator.free(dependency_views);
 
     var dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
         allocator,
         .{
-            .root = checked_artifact.loweringView(artifact),
+            .root = checked_artifact.loweringViewWithRelations(artifact, relation_artifacts),
             .imports = import_views,
         },
         .{
@@ -65,7 +68,7 @@ fn finalize(
     defer runtime_env.deinit();
 
     if (compile_time_roots.len == 0) {
-        try finalizeRuntimeDependencySummaries(allocator, artifact, import_views, &runtime_env);
+        try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, import_views, relation_artifacts, &runtime_env);
         try artifact.comptime_values.sealBindings();
         return;
     }
@@ -77,7 +80,9 @@ fn finalize(
         try ensureRootConcreteDependencies(
             allocator,
             artifact,
+            dependency_views,
             import_views,
+            relation_artifacts,
             &runtime_env,
             root_request,
         );
@@ -93,6 +98,7 @@ fn finalize(
             allocator,
             artifact,
             import_views,
+            relation_artifacts,
             .{ .local_root = root_request },
         );
         defer lowered_request.deinit();
@@ -139,7 +145,7 @@ fn finalize(
         }
     }
 
-    try finalizeRuntimeDependencySummaries(allocator, artifact, import_views, &runtime_env);
+    try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, import_views, relation_artifacts, &runtime_env);
 
     try artifact.comptime_values.sealBindings();
 }
@@ -147,7 +153,9 @@ fn finalize(
 fn finalizeRuntimeDependencySummaries(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
 ) anyerror!void {
     if (artifactHasUnboundPlatformRequirements(artifact)) return;
@@ -155,8 +163,8 @@ fn finalizeRuntimeDependencySummaries(
     var runtime_dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
         allocator,
         .{
-            .root = checked_artifact.loweringView(artifact),
-            .imports = import_views,
+            .root = checked_artifact.loweringViewWithRelations(artifact, relation_artifacts),
+            .imports = lowering_imports,
         },
         .{
             .requests = artifact.root_requests.requests,
@@ -173,7 +181,9 @@ fn finalizeRuntimeDependencySummaries(
     try ensureDependencySummaryIdsConcreteDependencies(
         allocator,
         artifact,
-        import_views,
+        dependency_views,
+        lowering_imports,
+        relation_artifacts,
         runtime_env,
         runtime_dependency_summaries.dependency_summaries,
     );
@@ -256,13 +266,14 @@ fn lowerSingleCompileTimeRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     import_views: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     request: checked_artifact.CompileTimeEvaluationRequest,
 ) anyerror!LoweredCompileTimeRequest {
     const single_request = [_]checked_artifact.CompileTimeEvaluationRequest{request};
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         allocator,
         .{
-            .root = checked_artifact.loweringView(artifact),
+            .root = checked_artifact.loweringViewWithRelations(artifact, relation_artifacts),
             .imports = import_views,
         },
         .{
@@ -306,6 +317,35 @@ fn compileTimeRootRequests(
     }
 
     return try out.toOwnedSlice(allocator);
+}
+
+fn dependencyArtifactViews(
+    allocator: Allocator,
+    import_views: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
+) Allocator.Error![]checked_artifact.ImportedModuleView {
+    var views = std.ArrayList(checked_artifact.ImportedModuleView).empty;
+    errdefer views.deinit(allocator);
+
+    for (import_views) |view| {
+        try appendDependencyArtifactView(&views, allocator, view);
+    }
+    for (relation_artifacts) |view| {
+        try appendDependencyArtifactView(&views, allocator, view);
+    }
+
+    return try views.toOwnedSlice(allocator);
+}
+
+fn appendDependencyArtifactView(
+    views: *std.ArrayList(checked_artifact.ImportedModuleView),
+    allocator: Allocator,
+    candidate: checked_artifact.ImportedModuleView,
+) Allocator.Error!void {
+    for (views.items) |existing| {
+        if (std.mem.eql(u8, &existing.key.bytes, &candidate.key.bytes)) return;
+    }
+    try views.append(allocator, candidate);
 }
 
 fn orderCompileTimeRootRequests(
@@ -784,7 +824,9 @@ fn generatedProceduresForCallableBindingInstance(
 fn ensureConstInstanceRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     request: checked_artifact.ConstInstantiationRequest,
 ) anyerror!checked_artifact.ConstInstanceRef {
@@ -795,7 +837,7 @@ fn ensureConstInstanceRequest(
         .reserved => {},
     }
 
-    const source = constTemplateSourceForRef(artifact, import_views, request.key.const_ref);
+    const source = constTemplateSourceForRef(artifact, dependency_views, request.key.const_ref);
     switch (source.template.state) {
         .reserved => compileTimeFinalizationInvariant("constant instance request reached unsealed const template"),
         .value_graph_template => |graph| {
@@ -829,13 +871,16 @@ fn ensureConstInstanceRequest(
             const dependency_summary = try dependencySummaryForCompileTimeRequest(
                 allocator,
                 artifact,
-                import_views,
+                lowering_imports,
+                relation_artifacts,
                 .{ .const_instance = request },
             );
             try ensureDependencySummaryConcreteDependencies(
                 allocator,
                 artifact,
-                import_views,
+                dependency_views,
+                lowering_imports,
+                relation_artifacts,
                 runtime_env,
                 artifact.comptime_dependencies.getSummary(dependency_summary),
             );
@@ -843,7 +888,8 @@ fn ensureConstInstanceRequest(
             var lowered_request = try lowerSingleCompileTimeRequest(
                 allocator,
                 artifact,
-                import_views,
+                lowering_imports,
+                relation_artifacts,
                 .{ .const_instance = request },
             );
             defer lowered_request.deinit();
@@ -912,7 +958,9 @@ fn sourceBindingForConstInstanceRequest(
 fn ensureRootConcreteDependencies(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     request: checked_artifact.RootRequest,
 ) anyerror!void {
@@ -921,7 +969,9 @@ fn ensureRootConcreteDependencies(
     try ensureDependencySummaryConcreteDependencies(
         allocator,
         artifact,
-        import_views,
+        dependency_views,
+        lowering_imports,
+        relation_artifacts,
         runtime_env,
         summary,
     );
@@ -930,7 +980,9 @@ fn ensureRootConcreteDependencies(
 fn ensureDependencySummaryIdsConcreteDependencies(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     summaries: []const ?checked_artifact.ComptimeDependencySummaryId,
 ) anyerror!void {
@@ -941,7 +993,9 @@ fn ensureDependencySummaryIdsConcreteDependencies(
         try ensureDependencySummaryConcreteDependencies(
             allocator,
             artifact,
-            import_views,
+            dependency_views,
+            lowering_imports,
+            relation_artifacts,
             runtime_env,
             artifact.comptime_dependencies.getSummary(id),
         );
@@ -951,7 +1005,9 @@ fn ensureDependencySummaryIdsConcreteDependencies(
 fn ensureDependencySummaryConcreteDependencies(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     summary: checked_artifact.ComptimeDependencySummary,
 ) anyerror!void {
@@ -959,7 +1015,9 @@ fn ensureDependencySummaryConcreteDependencies(
         try ensureConcreteDependencyValue(
             allocator,
             artifact,
-            import_views,
+            dependency_views,
+            lowering_imports,
+            relation_artifacts,
             runtime_env,
             value,
         );
@@ -969,17 +1027,21 @@ fn ensureDependencySummaryConcreteDependencies(
 fn ensureConcreteDependencyValue(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     value: checked_artifact.ComptimeConcreteValueUse,
 ) anyerror!void {
     switch (value) {
         .const_instance => |key| {
-            const requested_source_ty_payload = try checkedTypePayloadForConstInstanceDependency(allocator, artifact, import_views, key);
+            const requested_source_ty_payload = try checkedTypePayloadForConstInstanceDependency(allocator, artifact, dependency_views, key);
             _ = try ensureConstInstanceRequest(
                 allocator,
                 artifact,
-                import_views,
+                dependency_views,
+                lowering_imports,
+                relation_artifacts,
                 runtime_env,
                 .{
                     .key = key,
@@ -994,7 +1056,9 @@ fn ensureConcreteDependencyValue(
             _ = try ensureCallableBindingInstanceRequest(
                 allocator,
                 artifact,
-                import_views,
+                dependency_views,
+                lowering_imports,
+                relation_artifacts,
                 runtime_env,
                 .{
                     .key = key,
@@ -1039,15 +1103,16 @@ fn checkedTypePayloadForConstInstanceDependency(
 fn dependencySummaryForCompileTimeRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     request: checked_artifact.CompileTimeEvaluationRequest,
 ) anyerror!checked_artifact.ComptimeDependencySummaryId {
     const single_request = [_]checked_artifact.CompileTimeEvaluationRequest{request};
     var summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
         allocator,
         .{
-            .root = checked_artifact.loweringView(artifact),
-            .imports = import_views,
+            .root = checked_artifact.loweringViewWithRelations(artifact, relation_artifacts),
+            .imports = lowering_imports,
         },
         .{
             .compile_time_requests = &single_request,
@@ -1077,10 +1142,10 @@ const DirectCallableBindingInfo = struct {
 fn fillDirectCallableBindingInstance(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
     request: checked_artifact.CallableBindingInstantiationRequest,
 ) Allocator.Error!bool {
-    const direct = directCallableBindingInfo(artifact, import_views, request.key.binding) orelse return false;
+    const direct = directCallableBindingInfo(artifact, dependency_views, request.key.binding) orelse return false;
     const proc_value = canonical.ProcedureCallableRef{
         .template = direct.direct.template,
         .source_fn_ty = request.key.requested_source_fn_ty,
@@ -1112,7 +1177,9 @@ fn fillDirectCallableBindingInstance(
 fn ensureCallableBindingInstanceRequest(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     runtime_env: *RuntimeHostEnv,
     request: checked_artifact.CallableBindingInstantiationRequest,
 ) anyerror!checked_artifact.CallableBindingInstanceRef {
@@ -1123,7 +1190,7 @@ fn ensureCallableBindingInstanceRequest(
         .reserved => {},
     }
 
-    if (try fillDirectCallableBindingInstance(allocator, artifact, import_views, request)) {
+    if (try fillDirectCallableBindingInstance(allocator, artifact, dependency_views, request)) {
         return instance_ref;
     }
 
@@ -1131,13 +1198,16 @@ fn ensureCallableBindingInstanceRequest(
     const dependency_summary = try dependencySummaryForCompileTimeRequest(
         allocator,
         artifact,
-        import_views,
+        lowering_imports,
+        relation_artifacts,
         .{ .callable_binding_instance = request },
     );
     try ensureDependencySummaryConcreteDependencies(
         allocator,
         artifact,
-        import_views,
+        dependency_views,
+        lowering_imports,
+        relation_artifacts,
         runtime_env,
         artifact.comptime_dependencies.getSummary(dependency_summary),
     );
@@ -1145,7 +1215,8 @@ fn ensureCallableBindingInstanceRequest(
     var lowered_request = try lowerSingleCompileTimeRequest(
         allocator,
         artifact,
-        import_views,
+        lowering_imports,
+        relation_artifacts,
         .{ .callable_binding_instance = request },
     );
     defer lowered_request.deinit();

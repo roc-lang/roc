@@ -299,6 +299,7 @@ pub const TypeCheckOutput = struct {
 
 /// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
+    relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
@@ -1340,6 +1341,7 @@ pub const PackageEnv = struct {
             .{
                 .module_env_storage = .{ .checked_source = env },
                 .imports = imported_artifacts,
+                .relation_artifacts = publication.relation_artifacts,
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,

@@ -754,7 +754,11 @@ pub const Coordinator = struct {
         );
         defer relation.deinit(self.gpa);
 
+        const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
+            check.CheckedArtifact.importedView(app_artifact),
+        };
         try self.republishCheckedArtifact(platform_root.pkg, platform_root.mod, .{
+            .relation_artifacts = &relation_artifacts,
             .platform_app_relation = relation,
         });
     }

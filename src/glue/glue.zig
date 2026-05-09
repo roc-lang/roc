@@ -28,6 +28,7 @@ const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const RocTarget = roc_target.RocTarget;
 const CheckedArtifact = check.CheckedArtifact;
+const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const CIR = can.CIR;
 
 const builtins = @import("builtins");
@@ -230,7 +231,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     for (modules) |mod| {
         if (!mod.is_platform_main) continue;
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
-        const env = @constCast(artifact.moduleEnvConst());
         type_table.clearVarMap();
 
         for (artifact.provides_requires.provides) |provides_entry| {
@@ -242,13 +242,19 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
         for (artifact.platform_required_declarations.declarations) |declaration| {
             const name = artifact.canonical_names.exportNameText(declaration.platform_name);
-            const type_id = type_table.getOrInsert(env, ModuleEnv.varFrom(declaration.type_anno));
+            const scheme = artifact.checked_types.schemeForKey(declaration.declared_source_ty) orelse
+                glueInvariant("platform-required declaration has no checked type scheme", .{});
+            const type_id = type_table.getOrInsert(artifact, scheme.root);
             try entrypoint_type_ids.put(name, type_id);
         }
 
         for (provides_entries.items) |provides_entry| {
             const def_idx = findTopLevelDefByName(artifact, provides_entry.name) orelse continue;
-            const type_id = type_table.getOrInsert(env, ModuleEnv.varFrom(def_idx));
+            const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse
+                glueInvariant("provided entry has no top-level value", .{});
+            const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
+                glueInvariant("provided entry has no checked type scheme", .{});
+            const type_id = type_table.getOrInsert(artifact, scheme.root);
             try provides_type_ids.put(provides_entry.ffi_symbol, type_id);
         }
         break;
@@ -389,6 +395,13 @@ fn checkedArtifactKeysEqual(
     b: CheckedArtifact.CheckedModuleArtifactKey,
 ) bool {
     return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: " ++ message, args);
+    }
+    unreachable;
 }
 
 fn hostedProcSortKey(
@@ -808,18 +821,16 @@ const CollectedTagInfo = struct {
     payload_alignment: u64,
 };
 
-/// Builds a type table from compiler type vars, deduplicating entries.
+/// Builds a type table from artifact-owned checked type payloads.
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
-    var_map: std.AutoHashMap(@import("types").Var, u64),
+    var_map: std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64),
     gpa: std.mem.Allocator,
-
-    const types = @import("types");
 
     fn init(gpa: std.mem.Allocator) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
-            .var_map = std.AutoHashMap(types.Var, u64).init(gpa),
+            .var_map = std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64).init(gpa),
             .gpa = gpa,
         };
     }
@@ -884,33 +895,31 @@ const TypeTable = struct {
         self.gpa.free(slice);
     }
 
-    /// Clear the var map when switching modules (vars are module-local).
+    /// Clear the checked-type map when switching modules (checked ids are artifact-local).
     fn clearVarMap(self: *TypeTable) void {
         self.var_map.clearRetainingCapacity();
     }
 
-    /// Get an existing type table index for a var, or insert a new entry.
+    /// Get an existing type table index for a checked type, or insert a new entry.
     /// Pre-registers a placeholder before conversion to prevent infinite recursion
     /// on cyclic types (the placeholder is updated in-place after conversion).
-    fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
-        const resolved = env.types.resolveVar(type_var);
-        const root_var = resolved.var_;
-
-        if (self.var_map.get(root_var)) |idx| {
+    fn getOrInsert(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) u64 {
+        if (self.var_map.get(checked_type)) |idx| {
             return idx;
         }
 
-        // Pre-register placeholder to break cycles
         const idx: u64 = @intCast(self.entries.items.len);
-        self.entries.append(self.gpa, .{ .unknown = "" }) catch return 0;
-        self.var_map.put(root_var, idx) catch {};
+        self.entries.append(self.gpa, .{ .unknown = "" }) catch glueInvariant("could not allocate glue type-table placeholder", .{});
+        self.var_map.put(checked_type, idx) catch glueInvariant("could not allocate glue type-table index", .{});
 
-        const repr = self.convertContent(env, resolved.desc.content);
+        const repr = self.convertCheckedType(artifact, checked_type);
 
-        // Update placeholder with actual representation
         self.entries.items[@intCast(idx)] = repr;
 
-        // Assign synthetic names to anonymous records so glue generates struct defs
         switch (repr) {
             .record => |rec| {
                 if (rec.name.len == 0) {
@@ -963,178 +972,167 @@ const TypeTable = struct {
         };
     }
 
-    fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
-        switch (content) {
-            .structure => |flat_type| return self.convertFlatType(env, flat_type),
-            .alias => |alias| {
-                const backing_var = env.types.getAliasBackingVar(alias);
-                return self.convertContent(env, env.types.resolveVar(backing_var).desc.content);
+    fn convertCheckedType(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        const payload = checkedTypePayload(artifact, checked_type);
+        return switch (payload) {
+            .pending => glueInvariant("pending checked type reached glue type table", .{}),
+            .flex => .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
+            .rigid => .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
+            .alias => |alias| self.getAliasBackingRepr(artifact, alias.backing),
+            .record => |record| self.convertRecord(artifact, record.fields, record.ext),
+            .record_unbound => |fields| self.convertRecord(artifact, fields, null),
+            .tuple => |items| self.convertTuple(artifact, items),
+            .nominal => |nominal| self.convertNominal(artifact, nominal),
+            .function => |func| self.convertFunc(artifact, func),
+            .empty_record, .empty_tag_union => .unit,
+            .tag_union => |tag_union| self.convertTagUnion(artifact, tag_union.tags, tag_union.ext),
+        };
+    }
+
+    fn getAliasBackingRepr(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        backing: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        return self.convertCheckedType(artifact, backing);
+    }
+
+    fn convertNominal(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+    ) CollectedTypeRepr {
+        const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+
+        if (nominal.builtin) |builtin_nominal| {
+            switch (builtin_nominal) {
+                .list => {
+                    if (nominal.args.len >= 1) return .{ .list = self.getOrInsert(artifact, nominal.args[0]) };
+                    return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
+                },
+                .box => {
+                    if (nominal.args.len >= 1) return .{ .box = self.getOrInsert(artifact, nominal.args[0]) };
+                    return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
+                },
+                .str => return .str_,
+                .bool => return .bool_,
+                .dec => return .dec,
+                .u8 => return .u8_,
+                .u16 => return .u16_,
+                .u32 => return .u32_,
+                .u64 => return .u64_,
+                .u128 => return .u128_,
+                .i8 => return .i8_,
+                .i16 => return .i16_,
+                .i32 => return .i32_,
+                .i64 => return .i64_,
+                .i128 => return .i128_,
+                .f32 => return .f32_,
+                .f64 => return .f64_,
+            }
+        }
+
+        const backing_repr = self.convertCheckedType(artifact, nominal.backing);
+        return switch (backing_repr) {
+            .record => |rec| .{ .record = .{
+                .name = self.gpa.dupe(u8, display_name) catch "",
+                .fields = rec.fields,
+                .size = rec.size,
+                .alignment = rec.alignment,
+            } },
+            .tag_union => |tu| blk: {
+                self.freeDuped(tu.name);
+                break :blk .{ .tag_union = .{
+                    .name = self.gpa.dupe(u8, display_name) catch "",
+                    .tags = tu.tags,
+                    .size = tu.size,
+                    .alignment = tu.alignment,
+                } };
             },
-            .flex => return .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
-            .rigid => return .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
-            .err => return .{ .unknown = self.gpa.dupe(u8, "error") catch "" },
+            else => backing_repr,
+        };
+    }
+
+    fn convertRecord(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        fields: []const CheckedArtifact.CheckedRecordField,
+        ext: ?CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+        defer all_fields.deinit(self.gpa);
+        all_fields.appendSlice(self.gpa, fields) catch return self.oomUnknown("record");
+        if (ext) |ext_id| self.appendRecordExtFields(artifact, ext_id, &all_fields);
+        return self.convertRecordFields(artifact, all_fields.items);
+    }
+
+    fn appendRecordExtFields(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        ext: CheckedArtifact.CheckedTypeId,
+        fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+    ) void {
+        switch (checkedTypePayload(artifact, ext)) {
+            .empty_record => {},
+            .record => |record| {
+                fields.appendSlice(self.gpa, record.fields) catch glueInvariant("could not allocate extended record fields", .{});
+                self.appendRecordExtFields(artifact, record.ext, fields);
+            },
+            .record_unbound => |unbound| fields.appendSlice(self.gpa, unbound) catch glueInvariant("could not allocate unbound record fields", .{}),
+            else => glueInvariant("non-record extension reached glue record conversion", .{}),
         }
     }
 
-    fn convertFlatType(self: *TypeTable, env: *const ModuleEnv, flat_type: types.FlatType) CollectedTypeRepr {
-        switch (flat_type) {
-            .nominal_type => |nominal| return self.convertNominal(env, nominal),
-            .record => |record| return self.convertRecord(env, record),
-            .tag_union => |tag_union| return self.convertTagUnion(env, tag_union),
-            .fn_pure, .fn_effectful, .fn_unbound => |func| return self.convertFunc(env, func),
-            .empty_record => return .unit,
-            .empty_tag_union => return .unit,
-            .tuple => |tuple| return self.convertTuple(env, tuple),
-            .record_unbound => return .{ .unknown = self.gpa.dupe(u8, "record_unbound") catch "" },
-        }
-    }
+    fn convertRecordFields(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        fields: []const CheckedArtifact.CheckedRecordField,
+    ) CollectedTypeRepr {
+        if (fields.len == 0) return .unit;
 
-    fn convertNominal(self: *TypeTable, env: *const ModuleEnv, nominal: types.NominalType) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const raw_name = ident_store.getText(nominal.ident.ident_idx);
-        const display_name = getTypeDisplayName(raw_name);
-
-        // Check for known builtin types
-        if (std.mem.eql(u8, display_name, "List")) {
-            const args = env.types.sliceNominalArgs(nominal);
-            if (args.len >= 1) {
-                const elem_id = self.getOrInsert(env, args[0]);
-                return .{ .list = elem_id };
-            }
-            return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
-        }
-        if (std.mem.eql(u8, display_name, "Box")) {
-            const args = env.types.sliceNominalArgs(nominal);
-            if (args.len >= 1) {
-                const inner_id = self.getOrInsert(env, args[0]);
-                return .{ .box = inner_id };
-            }
-            return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
-        }
-        if (std.mem.eql(u8, display_name, "Str")) return .str_;
-        if (std.mem.eql(u8, display_name, "Bool")) return .bool_;
-        if (std.mem.eql(u8, display_name, "Dec")) return .dec;
-        if (std.mem.eql(u8, display_name, "U8")) return .u8_;
-        if (std.mem.eql(u8, display_name, "U16")) return .u16_;
-        if (std.mem.eql(u8, display_name, "U32")) return .u32_;
-        if (std.mem.eql(u8, display_name, "U64")) return .u64_;
-        if (std.mem.eql(u8, display_name, "U128")) return .u128_;
-        if (std.mem.eql(u8, display_name, "I8")) return .i8_;
-        if (std.mem.eql(u8, display_name, "I16")) return .i16_;
-        if (std.mem.eql(u8, display_name, "I32")) return .i32_;
-        if (std.mem.eql(u8, display_name, "I64")) return .i64_;
-        if (std.mem.eql(u8, display_name, "I128")) return .i128_;
-        if (std.mem.eql(u8, display_name, "F32")) return .f32_;
-        if (std.mem.eql(u8, display_name, "F64")) return .f64_;
-
-        // Not a known builtin — check if it's an opaque wrapping something
-        if (nominal.vars.nonempty.count > 0) {
-            const backing_var = env.types.getNominalBackingVar(nominal);
-            const backing_resolved = env.types.resolveVar(backing_var);
-
-            // If it wraps a record, convert it but preserve the qualified name
-            if (backing_resolved.desc.content.unwrapRecord()) |record| {
-                const record_repr = self.convertRecord(env, record);
-                switch (record_repr) {
-                    .record => |rec| {
-                        return .{ .record = .{
-                            .name = self.gpa.dupe(u8, display_name) catch "",
-                            .fields = rec.fields,
-                            .size = rec.size,
-                            .alignment = rec.alignment,
-                        } };
-                    },
-                    else => return record_repr,
-                }
-            }
-
-            // If it wraps a tag union, convert it but preserve the qualified name
-            if (backing_resolved.desc.content.unwrapTagUnion()) |tu| {
-                const tu_repr = self.convertTagUnion(env, tu);
-                switch (tu_repr) {
-                    .tag_union => |collected_tu| {
-                        // Free the auto-generated name from convertTagUnion
-                        // before replacing it with the nominal's display name.
-                        self.freeDuped(collected_tu.name);
-                        return .{ .tag_union = .{
-                            .name = self.gpa.dupe(u8, display_name) catch "",
-                            .tags = collected_tu.tags,
-                            .size = collected_tu.size,
-                            .alignment = collected_tu.alignment,
-                        } };
-                    },
-                    else => return tu_repr,
-                }
-            }
-
-            // Otherwise, follow the backing var
-            return self.convertContent(env, backing_resolved.desc.content);
-        }
-
-        return .{ .unknown = self.gpa.dupe(u8, display_name) catch "" };
-    }
-
-    fn convertRecord(self: *TypeTable, env: *const ModuleEnv, record: types.Record) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const fields_slice = env.types.getRecordFieldsSlice(record.fields);
-        const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
-
-        if (field_names.len == 0) return .unit;
-
-        // First pass: getOrInsert all field type_ids so nested types are in the table
-        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return self.oomUnknown("record");
+        const field_type_ids = self.gpa.alloc(u64, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_type_ids);
-        for (0..field_names.len) |i| {
-            field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
+        for (fields, 0..) |field, i| {
+            field_type_ids[i] = self.getOrInsert(artifact, field.ty);
         }
 
-        // Get size/alignment for each field
-        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return self.oomUnknown("record");
+        const field_sizes = self.gpa.alloc(SizeAlign, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_sizes);
-        for (0..field_names.len) |i| {
+        for (0..fields.len) |i| {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
-        // Build sortable array of field indices
-        var field_indices = self.gpa.alloc(usize, field_names.len) catch return self.oomUnknown("record");
+        var field_indices = self.gpa.alloc(usize, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_indices);
-        for (0..field_names.len) |i| {
-            field_indices[i] = i;
-        }
+        for (0..fields.len) |i| field_indices[i] = i;
 
-        // Sort by alignment descending, then name ascending (matching store.zig ABI)
         const SortCtx = struct {
-            names: []const base.Ident.Idx,
-            idents: *const base.Ident.Store,
+            fields: []const CheckedArtifact.CheckedRecordField,
+            names: *const CanonicalNameStore,
             sizes: []const SizeAlign,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
                 const a_align = ctx.sizes[a].alignment;
                 const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
-                }
-                const a_text = ctx.idents.getText(ctx.names[a]);
-                const b_text = ctx.idents.getText(ctx.names[b]);
+                if (a_align != b_align) return a_align > b_align;
+                const a_text = ctx.names.recordFieldLabelText(ctx.fields[a].name);
+                const b_text = ctx.names.recordFieldLabelText(ctx.fields[b].name);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .fields = fields, .names = &artifact.canonical_names, .sizes = field_sizes }, SortCtx.lessThan);
 
-        // Build collected fields in sorted order and compute record size
-        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return self.oomUnknown("record");
+        const collected_fields = self.gpa.alloc(CollectedRecordField, fields.len) catch return self.oomUnknown("record");
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
-            const name_text = ident_store.getText(field_names[src_idx]);
             const f_size = field_sizes[src_idx].size;
             const f_align = field_sizes[src_idx].alignment;
-
-            // Track max alignment for the record
             if (f_align > max_alignment) max_alignment = f_align;
-
-            // Align current offset
             if (f_align > 0) {
                 const rem = current_offset % f_align;
                 if (rem != 0) current_offset += f_align - rem;
@@ -1142,14 +1140,13 @@ const TypeTable = struct {
             current_offset += f_size;
 
             collected_fields[dst_idx] = .{
-                .name = self.gpa.dupe(u8, name_text) catch "",
+                .name = self.gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(fields[src_idx].name)) catch "",
                 .type_id = field_type_ids[src_idx],
                 .size = f_size,
                 .alignment = f_align,
             };
         }
 
-        // Round total size up to max alignment
         var record_size = current_offset;
         if (max_alignment > 0) {
             const rem = record_size % max_alignment;
@@ -1168,34 +1165,37 @@ const TypeTable = struct {
         return .{ .unknown = self.gpa.dupe(u8, name) catch "" };
     }
 
-    fn convertTuple(self: *TypeTable, env: *const ModuleEnv, tuple: types.Tuple) CollectedTypeRepr {
-        const elem_vars = env.types.sliceVars(tuple.elems);
-        if (elem_vars.len == 0) return .unit;
+    fn convertTuple(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        elems: []const CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        if (elems.len == 0) return .unit;
 
         // Convert tuple elements as record fields with positional names (_0, _1, ...)
-        const field_type_ids = self.gpa.alloc(u64, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_type_ids = self.gpa.alloc(u64, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_type_ids);
-        for (elem_vars, 0..) |ev, i| {
-            field_type_ids[i] = self.getOrInsert(env, ev);
+        for (elems, 0..) |elem, i| {
+            field_type_ids[i] = self.getOrInsert(artifact, elem);
         }
 
-        const field_sizes = self.gpa.alloc(SizeAlign, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_sizes = self.gpa.alloc(SizeAlign, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_sizes);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
         // Generate positional field names (_0, _1, ...) before sorting
-        const field_names = self.gpa.alloc([]const u8, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_names = self.gpa.alloc([]const u8, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_names);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_names[i] = std.fmt.allocPrint(self.gpa, "_{d}", .{i}) catch "";
         }
 
         // Sort by alignment descending, then name ascending (matching Roc ABI)
-        var field_indices = self.gpa.alloc(usize, elem_vars.len) catch return self.oomUnknown("tuple");
+        var field_indices = self.gpa.alloc(usize, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_indices);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_indices[i] = i;
         }
 
@@ -1214,7 +1214,7 @@ const TypeTable = struct {
         };
         std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
 
-        const collected_fields = self.gpa.alloc(CollectedRecordField, elem_vars.len) catch return self.oomUnknown("tuple");
+        const collected_fields = self.gpa.alloc(CollectedRecordField, elems.len) catch return self.oomUnknown("tuple");
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
@@ -1251,58 +1251,62 @@ const TypeTable = struct {
         } };
     }
 
-    fn convertTagUnion(self: *TypeTable, env: *const ModuleEnv, tag_union: types.TagUnion) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const tags_slice = env.types.getTagsSlice(tag_union.tags);
-        const tag_names = tags_slice.items(.name);
-        const tag_args = tags_slice.items(.args);
+    fn convertTagUnion(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        tags: []const CheckedArtifact.CheckedTag,
+        ext: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
+        defer all_tags.deinit(self.gpa);
+        all_tags.appendSlice(self.gpa, tags) catch return self.oomUnknown("tag_union");
+        self.appendTagUnionExtTags(artifact, ext, &all_tags);
 
-        if (tag_names.len == 0) return .unit;
+        if (all_tags.items.len == 0) return .unit;
 
         // Build sortable array of tag indices
-        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return self.oomUnknown("tag_union");
+        var tag_indices = self.gpa.alloc(usize, all_tags.items.len) catch return self.oomUnknown("tag_union");
         defer self.gpa.free(tag_indices);
-        for (0..tag_names.len) |i| {
+        for (0..all_tags.items.len) |i| {
             tag_indices[i] = i;
         }
 
         // Sort by name (alphabetical = discriminant order)
         const SortCtx = struct {
-            names: []const base.Ident.Idx,
-            idents: *const base.Ident.Store,
+            tags: []const CheckedArtifact.CheckedTag,
+            names: *const CanonicalNameStore,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_text = ctx.idents.getText(ctx.names[a]);
-                const b_text = ctx.idents.getText(ctx.names[b]);
+                const a_text = ctx.names.tagLabelText(ctx.tags[a].name);
+                const b_text = ctx.names.tagLabelText(ctx.tags[b].name);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
+        std.mem.sort(usize, tag_indices, SortCtx{ .tags = all_tags.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
         // Collect tags and compute per-variant payload layout
-        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return self.oomUnknown("tag_union");
+        const collected_tags = self.gpa.alloc(CollectedTagInfo, all_tags.items.len) catch return self.oomUnknown("tag_union");
         var max_payload_size: u64 = 0;
         var max_payload_alignment: u64 = 0;
 
         // Also build auto-generated name from variant names joined with "Or"
         var name_len: usize = 0;
         for (tag_indices) |src_idx| {
-            const nt = ident_store.getText(tag_names[src_idx]);
+            const nt = artifact.canonical_names.tagLabelText(all_tags.items[src_idx].name);
             name_len += nt.len;
         }
         // Add "Or" separators between names
-        if (tag_names.len > 1) name_len += (tag_names.len - 1) * 2;
+        if (all_tags.items.len > 1) name_len += (all_tags.items.len - 1) * 2;
         const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return self.oomUnknown("tag_union");
         var name_pos: usize = 0;
 
         for (tag_indices, 0..) |src_idx, dst_idx| {
-            const name_text = ident_store.getText(tag_names[src_idx]);
-            const args_range = tag_args[src_idx];
-            const arg_vars = env.types.sliceVars(args_range);
+            const tag = all_tags.items[src_idx];
+            const name_text = artifact.canonical_names.tagLabelText(tag.name);
 
-            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("tag_union");
-            for (arg_vars, 0..) |av, i| {
-                payload_ids[i] = self.getOrInsert(env, av);
+            const payload_ids = self.gpa.alloc(u64, tag.args.len) catch return self.oomUnknown("tag_union");
+            for (tag.args, 0..) |arg, i| {
+                payload_ids[i] = self.getOrInsert(artifact, arg);
             }
 
             // Compute payload as a tuple: sequential fields with alignment padding
@@ -1352,7 +1356,7 @@ const TypeTable = struct {
 
         // Compute discriminant size/alignment from tag count.
         // Single-variant tag unions have no discriminant (ZigGlue unwraps them to payload).
-        const disc_size: u64 = if (tag_names.len <= 1) 0 else layout.TagUnionData.discriminantSize(tag_names.len);
+        const disc_size: u64 = if (all_tags.items.len <= 1) 0 else layout.TagUnionData.discriminantSize(all_tags.items.len);
         const disc_align: u64 = disc_size;
 
         // Compute overall tag union layout: payload at offset 0, discriminant at end
@@ -1381,13 +1385,32 @@ const TypeTable = struct {
         } };
     }
 
-    fn convertFunc(self: *TypeTable, env: *const ModuleEnv, func: types.Func) CollectedTypeRepr {
-        const arg_vars = env.types.sliceVars(func.args);
-        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("function");
-        for (arg_vars, 0..) |av, i| {
-            arg_ids[i] = self.getOrInsert(env, av);
+    fn appendTagUnionExtTags(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        ext: CheckedArtifact.CheckedTypeId,
+        tags: *std.ArrayList(CheckedArtifact.CheckedTag),
+    ) void {
+        switch (checkedTypePayload(artifact, ext)) {
+            .empty_tag_union => {},
+            .tag_union => |tag_union| {
+                tags.appendSlice(self.gpa, tag_union.tags) catch glueInvariant("could not allocate extended tag-union tags", .{});
+                self.appendTagUnionExtTags(artifact, tag_union.ext, tags);
+            },
+            else => glueInvariant("non-tag-union extension reached glue tag-union conversion", .{}),
         }
-        const ret_id = self.getOrInsert(env, func.ret);
+    }
+
+    fn convertFunc(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        func: CheckedArtifact.CheckedFunctionType,
+    ) CollectedTypeRepr {
+        const arg_ids = self.gpa.alloc(u64, func.args.len) catch return self.oomUnknown("function");
+        for (func.args, 0..) |arg, i| {
+            arg_ids[i] = self.getOrInsert(artifact, arg);
+        }
+        const ret_id = self.getOrInsert(artifact, func.ret);
 
         return .{ .function = .{
             .arg_ids = arg_ids,
@@ -1396,7 +1419,7 @@ const TypeTable = struct {
     }
 
     /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
-    fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+    pub fn getTypeDisplayName(raw_name: []const u8) []const u8 {
         if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
             const without_builtin = raw_name[8..];
             if (std.mem.startsWith(u8, without_builtin, "Num.")) {
@@ -1982,82 +2005,321 @@ fn extractGlueResult(result: *const ResultListFileStr) GlueResultFiles {
     }
 }
 
-/// Extract record fields from a type variable, returning field names and type strings.
-/// If the type is a nominal wrapping a record, unwraps the nominal first.
-/// Returns an empty slice for non-record types.
-fn extractRecordFields(
+fn checkedTypePayload(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) CheckedArtifact.CheckedTypePayload {
+    const idx = @intFromEnum(checked_type);
+    if (idx >= artifact.checked_types.payloads.len) {
+        glueInvariant("checked type id {d} out of bounds", .{idx});
+    }
+    return artifact.checked_types.payloads[idx];
+}
+
+fn checkedTypeRootForScheme(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    scheme_key: check.CanonicalNames.CanonicalTypeSchemeKey,
+) CheckedArtifact.CheckedTypeId {
+    return (artifact.checked_types.schemeForKey(scheme_key) orelse
+        glueInvariant("checked type scheme missing from artifact", .{})).root;
+}
+
+fn typeStringAlloc(
     gpa: std.mem.Allocator,
-    env: *ModuleEnv,
-    type_var: @import("types").Var,
-) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
-    const resolved = env.types.resolveVar(type_var);
-
-    // Check for nominal type wrapping a record
-    const content = switch (resolved.desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .nominal_type => |nominal| blk: {
-                if (nominal.vars.nonempty.count > 0) {
-                    const backing_var = env.types.getNominalBackingVar(nominal);
-                    const backing_resolved = env.types.resolveVar(backing_var);
-                    break :blk backing_resolved.desc.content;
-                }
-                break :blk resolved.desc.content;
-            },
-            else => resolved.desc.content,
-        },
-        else => resolved.desc.content,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) []const u8 {
+    var buf = std.ArrayList(u8).empty;
+    var active = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer active.deinit();
+    writeTypeString(gpa, artifact, checked_type, &buf, &active) catch {
+        buf.deinit(gpa);
+        return gpa.dupe(u8, "") catch "";
     };
+    return buf.toOwnedSlice(gpa) catch "";
+}
 
-    // Check if the (possibly unwrapped) content is a record
-    const record = content.unwrapRecord() orelse return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+fn writeTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    if (active.contains(checked_type)) {
+        try buf.appendSlice(gpa, "<cycle>");
+        return;
+    }
+    try active.put(checked_type, {});
+    defer _ = active.remove(checked_type);
 
-    const fields_slice = env.types.getRecordFieldsSlice(record.fields);
-    const field_names = fields_slice.items(.name);
-    const field_vars = fields_slice.items(.var_);
+    switch (checkedTypePayload(artifact, checked_type)) {
+        .pending => glueInvariant("pending checked type reached glue type string", .{}),
+        .flex => try buf.appendSlice(gpa, "flex"),
+        .rigid => try buf.appendSlice(gpa, "rigid"),
+        .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),
+        .record => |record| try writeRecordTypeString(gpa, artifact, record.fields, record.ext, buf, active),
+        .record_unbound => |fields| try writeRecordTypeString(gpa, artifact, fields, null, buf, active),
+        .tuple => |items| try writeTupleTypeString(gpa, artifact, items, buf, active),
+        .nominal => |nominal| try writeNominalTypeString(gpa, artifact, nominal, buf, active),
+        .function => |func| try writeFunctionTypeString(gpa, artifact, func, buf, active),
+        .empty_record => try buf.appendSlice(gpa, "{}"),
+        .tag_union => |tag_union| try writeTagUnionTypeString(gpa, artifact, tag_union.tags, tag_union.ext, buf, active),
+        .empty_tag_union => try buf.appendSlice(gpa, "[]"),
+    }
+}
 
-    var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+fn writeNominalTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    nominal: CheckedArtifact.CheckedNominalType,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+    try buf.appendSlice(gpa, name);
+    if (nominal.args.len == 0) return;
+    try buf.append(gpa, '(');
+    for (nominal.args, 0..) |arg, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try writeTypeString(gpa, artifact, arg, buf, active);
+    }
+    try buf.append(gpa, ')');
+}
 
-    // Collect fields sorted by name (Roc's C ABI uses alphabetical order)
-    const ident_store = env.getIdentStoreConst();
+fn writeFunctionTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    func: CheckedArtifact.CheckedFunctionType,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    if (func.args.len == 0) {
+        try buf.appendSlice(gpa, "{}");
+    } else {
+        for (func.args, 0..) |arg, i| {
+            if (i > 0) try buf.appendSlice(gpa, ", ");
+            try writeTypeString(gpa, artifact, arg, buf, active);
+        }
+    }
+    try buf.appendSlice(gpa, if (func.kind == .effectful) " => " else " -> ");
+    try writeTypeString(gpa, artifact, func.ret, buf, active);
+}
 
-    // Build sortable array of field indices
-    var field_indices = gpa.alloc(usize, field_names.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
-    defer gpa.free(field_indices);
-    for (0..field_names.len) |i| {
-        field_indices[i] = i;
+fn writeRecordTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    fields: []const CheckedArtifact.CheckedRecordField,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+    defer all_fields.deinit(gpa);
+    try all_fields.appendSlice(gpa, fields);
+    if (ext) |ext_id| appendRecordStringExtFields(gpa, artifact, ext_id, &all_fields);
+
+    if (all_fields.items.len == 0) {
+        try buf.appendSlice(gpa, "{}");
+        return;
     }
 
-    // Sort by name text
+    var indices = try gpa.alloc(usize, all_fields.items.len);
+    defer gpa.free(indices);
+    for (0..all_fields.items.len) |i| indices[i] = i;
     const SortCtx = struct {
-        names: []const base.Ident.Idx,
-        idents: *const base.Ident.Store,
+        fields: []const CheckedArtifact.CheckedRecordField,
+        names: *const CanonicalNameStore,
 
         pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            const a_text = ctx.idents.getText(ctx.names[a]);
-            const b_text = ctx.idents.getText(ctx.names[b]);
-            return std.mem.order(u8, a_text, b_text) == .lt;
+            return std.mem.lessThan(
+                u8,
+                ctx.names.recordFieldLabelText(ctx.fields[a].name),
+                ctx.names.recordFieldLabelText(ctx.fields[b].name),
+            );
         }
     };
-    std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+    std.mem.sort(usize, indices, SortCtx{ .fields = all_fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
-    for (field_indices) |idx| {
-        const name_text = ident_store.getText(field_names[idx]);
-        const field_var = field_vars[idx];
+    try buf.appendSlice(gpa, "{ ");
+    for (indices, 0..) |src_idx, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        const field = all_fields.items[src_idx];
+        try buf.appendSlice(gpa, artifact.canonical_names.recordFieldLabelText(field.name));
+        try buf.appendSlice(gpa, " : ");
+        try writeTypeString(gpa, artifact, field.ty, buf, active);
+    }
+    try buf.appendSlice(gpa, " }");
+}
 
-        // Write field type to string
-        var type_writer = env.initTypeWriter() catch continue;
-        defer type_writer.deinit();
+fn appendRecordStringExtFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ext: CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) void {
+    switch (checkedTypePayload(artifact, ext)) {
+        .empty_record => {},
+        .record => |record| {
+            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record type-string extension", .{});
+            appendRecordStringExtFields(gpa, artifact, record.ext, fields);
+        },
+        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate record type-string unbound fields", .{}),
+        else => glueInvariant("non-record extension reached glue type string", .{}),
+    }
+}
 
-        type_writer.write(field_var, .one_line) catch continue;
-        const field_type_str = type_writer.get();
+fn writeTupleTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    items: []const CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    try buf.append(gpa, '(');
+    for (items, 0..) |item, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try writeTypeString(gpa, artifact, item, buf, active);
+    }
+    try buf.append(gpa, ')');
+}
 
-        result_list.append(gpa, .{
-            .name = gpa.dupe(u8, name_text) catch continue,
-            .type_str = gpa.dupe(u8, field_type_str) catch continue,
-        }) catch continue;
+fn writeTagUnionTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    tags: []const CheckedArtifact.CheckedTag,
+    ext: CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
+    defer all_tags.deinit(gpa);
+    try all_tags.appendSlice(gpa, tags);
+    appendTagStringExtTags(gpa, artifact, ext, &all_tags);
+
+    try buf.append(gpa, '[');
+    for (all_tags.items, 0..) |tag, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try buf.appendSlice(gpa, artifact.canonical_names.tagLabelText(tag.name));
+        if (tag.args.len > 0) {
+            try buf.append(gpa, '(');
+            for (tag.args, 0..) |arg, arg_i| {
+                if (arg_i > 0) try buf.appendSlice(gpa, ", ");
+                try writeTypeString(gpa, artifact, arg, buf, active);
+            }
+            try buf.append(gpa, ')');
+        }
+    }
+    try buf.append(gpa, ']');
+}
+
+fn appendTagStringExtTags(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ext: CheckedArtifact.CheckedTypeId,
+    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
+) void {
+    switch (checkedTypePayload(artifact, ext)) {
+        .empty_tag_union => {},
+        .tag_union => |tag_union| {
+            tags.appendSlice(gpa, tag_union.tags) catch glueInvariant("could not allocate tag-union type-string extension", .{});
+            appendTagStringExtTags(gpa, artifact, tag_union.ext, tags);
+        },
+        else => glueInvariant("non-tag-union extension reached glue type string", .{}),
+    }
+}
+
+fn functionPayloadForRoot(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) ?CheckedArtifact.CheckedFunctionType {
+    return switch (checkedTypePayload(artifact, checked_type)) {
+        .function => |func| func,
+        .alias => |alias| functionPayloadForRoot(artifact, alias.backing),
+        .nominal => |nominal| functionPayloadForRoot(artifact, nominal.backing),
+        else => null,
+    };
+}
+
+/// Extract record fields from artifact-owned checked type payloads.
+fn extractRecordFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+    var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+    defer fields.deinit(gpa);
+    if (!collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields)) {
+        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
     }
 
+    var indices = gpa.alloc(usize, fields.items.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    defer gpa.free(indices);
+    for (0..fields.items.len) |i| indices[i] = i;
+
+    const SortCtx = struct {
+        fields: []const CheckedArtifact.CheckedRecordField,
+        names: *const CanonicalNameStore,
+
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            return std.mem.lessThan(
+                u8,
+                ctx.names.recordFieldLabelText(ctx.fields[a].name),
+                ctx.names.recordFieldLabelText(ctx.fields[b].name),
+            );
+        }
+    };
+    std.mem.sort(usize, indices, SortCtx{ .fields = fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
+
+    var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+    for (indices) |idx| {
+        const field = fields.items[idx];
+        result_list.append(gpa, .{
+            .name = gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(field.name)) catch continue,
+            .type_str = typeStringAlloc(gpa, artifact, field.ty),
+        }) catch continue;
+    }
     return result_list.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+}
+
+fn collectRecordFieldsForRoot(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) bool {
+    switch (checkedTypePayload(artifact, checked_type)) {
+        .alias => |alias| return collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
+        .nominal => |nominal| return collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
+        .record => |record| {
+            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record field extraction", .{});
+            collectRecordExtFields(gpa, artifact, record.ext, fields);
+            return true;
+        },
+        .record_unbound => |unbound| {
+            fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record field extraction", .{});
+            return true;
+        },
+        .empty_record => return true,
+        else => return false,
+    }
+}
+
+fn collectRecordExtFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    ext: CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) void {
+    switch (checkedTypePayload(artifact, ext)) {
+        .empty_record => {},
+        .record => |record| {
+            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record extension extraction", .{});
+            collectRecordExtFields(gpa, artifact, record.ext, fields);
+        },
+        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record extension extraction", .{}),
+        else => glueInvariant("non-record extension reached record field extraction", .{}),
+    }
 }
 
 /// Collect type information from a published checked artifact.
@@ -2068,32 +2330,13 @@ fn collectModuleTypeInfo(
     hosted_indices: []const HostedProcGlobalIndex,
     type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
-    const env = @constCast(artifact.moduleEnvConst());
-
-    // Find main type
-    var main_type_str: []const u8 = "";
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_nominal_decl) {
-            const nominal = stmt.s_nominal_decl;
-            const type_header = env.store.getTypeHeader(nominal.header);
-            const type_name = env.getIdent(type_header.relative_name);
-
-            if (std.mem.eql(u8, type_name, module_name)) {
-                var type_writer = env.initTypeWriter() catch continue;
-                defer type_writer.deinit();
-
-                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
-                const type_var = ModuleEnv.varFrom(anno_node_idx);
-
-                type_writer.write(type_var, .one_line) catch continue;
-                const type_str = type_writer.get();
-
-                main_type_str = gpa.dupe(u8, type_str) catch "";
-                break;
-            }
+    var main_type_str: []const u8 = gpa.dupe(u8, "") catch "";
+    for (artifact.checked_types.nominal_declarations) |declaration| {
+        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
+        if (std.mem.eql(u8, type_name, module_name)) {
+            if (main_type_str.len > 0) gpa.free(main_type_str);
+            main_type_str = typeStringAlloc(gpa, artifact, declaration.declaration_root);
+            break;
         }
     }
 
@@ -2116,73 +2359,26 @@ fn collectModuleTypeInfo(
         else
             continue;
 
+        const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
+        const type_str = typeStringAlloc(gpa, artifact, checked_type);
+
         if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |_| {
-            var type_writer = env.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-            const type_var = ModuleEnv.varFrom(def_node_idx);
-
-            type_writer.write(type_var, .one_line) catch continue;
-            const type_str = type_writer.get();
-
             // Extract record fields from function arg and return types.
-            const resolved = env.types.resolveVar(type_var);
             var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
             var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-
-            if (resolved.desc.content.unwrapFunc()) |func| {
-                ret_fields = extractRecordFields(gpa, env, func.ret);
-                const arg_vars = env.types.sliceVars(func.args);
-                if (arg_vars.len == 1) {
-                    arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                }
-            } else {
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .nominal_type => |nom| {
-                                if (nom.vars.nonempty.count > 0) {
-                                    const backing_var = env.types.getNominalBackingVar(nom);
-                                    const backing_resolved = env.types.resolveVar(backing_var);
-                                    if (backing_resolved.desc.content.unwrapFunc()) |func| {
-                                        ret_fields = extractRecordFields(gpa, env, func.ret);
-                                        const arg_vars = env.types.sliceVars(func.args);
-                                        if (arg_vars.len == 1) {
-                                            arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                                        }
-                                    }
-                                }
-                            },
-                            else => {},
-                        }
-                    },
-                    else => {},
-                }
-            }
-
             var arg_type_ids: []const u64 = &.{};
             var ret_type_id: u64 = 0;
 
-            const func_content = blk: {
-                if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
-                if (resolved.desc.content.unwrapNominalType()) |nom| {
-                    if (nom.vars.nonempty.count > 0) {
-                        const bv = env.types.getNominalBackingVar(nom);
-                        const br = env.types.resolveVar(bv);
-                        if (br.desc.content.unwrapFunc()) |func| break :blk func;
-                    }
+            if (functionPayloadForRoot(artifact, checked_type)) |func| {
+                ret_fields = extractRecordFields(gpa, artifact, func.ret);
+                if (func.args.len == 1) {
+                    arg_fields = extractRecordFields(gpa, artifact, func.args[0]);
                 }
-                break :blk null;
-            };
-
-            if (func_content) |func| {
-                ret_type_id = type_table.getOrInsert(env, func.ret);
-                const arg_vars_for_ids = env.types.sliceVars(func.args);
-                if (arg_vars_for_ids.len > 0) {
-                    const ids = gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
-                    for (arg_vars_for_ids, 0..) |av, i| {
-                        ids[i] = type_table.getOrInsert(env, av);
+                ret_type_id = type_table.getOrInsert(artifact, func.ret);
+                if (func.args.len > 0) {
+                    const ids = gpa.alloc(u64, func.args.len) catch continue;
+                    for (func.args, 0..) |arg, i| {
+                        ids[i] = type_table.getOrInsert(artifact, arg);
                     }
                     arg_type_ids = ids;
                 }
@@ -2193,29 +2389,26 @@ fn collectModuleTypeInfo(
             hosted_functions.append(gpa, .{
                 .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
                 .name = gpa.dupe(u8, local_name) catch continue,
-                .type_str = gpa.dupe(u8, type_str) catch continue,
+                .type_str = type_str,
                 .arg_fields = arg_fields,
                 .ret_fields = ret_fields,
                 .arg_type_ids = arg_type_ids,
                 .ret_type_id = ret_type_id,
-            }) catch continue;
+            }) catch {
+                gpa.free(type_str);
+                continue;
+            };
         } else switch (entry.value) {
             .procedure_binding => {
-                var type_writer = env.initTypeWriter() catch continue;
-                defer type_writer.deinit();
-
-                const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                const type_var = ModuleEnv.varFrom(def_node_idx);
-
-                type_writer.write(type_var, .one_line) catch continue;
-                const type_str = type_writer.get();
-
                 functions.append(gpa, .{
                     .name = gpa.dupe(u8, local_name) catch continue,
-                    .type_str = gpa.dupe(u8, type_str) catch continue,
-                }) catch continue;
+                    .type_str = type_str,
+                }) catch {
+                    gpa.free(type_str);
+                    continue;
+                };
             },
-            .const_ref => {},
+            .const_ref => gpa.free(type_str),
         }
     }
 

@@ -3068,6 +3068,12 @@ The member identity is exactly:
 
 ```zig
 const CallableSetMemberIdentity = struct {
+    // Runtime/lowering identity in the current MIR lowering run.
+    //
+    // These refs live in the lowering run's canonical-name store. They are the
+    // identities lambda-solved and executable MIR use to reserve procedures,
+    // find representation instances, compare callable-set members during a
+    // solve fixed point, and emit executable calls.
     source_proc: MirProcedureRef,
     proc_value: ProcedureCallableRef,
     target_instance: ProcRepresentationInstanceId,
@@ -3095,6 +3101,113 @@ Appending a second member for the same identity but with a different capture
 schema is forbidden. It would make callable-set branch tags depend on transient
 solver order and would let executable payload publication lower stale capture
 payloads that no final value can construct.
+
+Callable-set members that can be persisted into a checked artifact must also
+carry an explicit publication identity:
+
+```zig
+const CallableSetMemberPublicationIdentity = struct {
+    // Artifact-owned identity for the same selected procedure value.
+    //
+    // These refs live in the owning checked artifact's canonical-name store,
+    // not in the current lowering run's canonical-name store. They are the only
+    // refs checking finalization may store in `CheckedModuleArtifact`
+    // callable-set descriptors, callable result plans, promoted wrapper body
+    // plans, concrete dependency summaries, or callable binding instances.
+    published_source_proc: MirProcedureRef,
+    published_proc_value: ProcedureCallableRef,
+};
+
+const CanonicalCallableSetMember = struct {
+    identity: CallableSetMemberIdentity,
+    publication: ?CallableSetMemberPublicationIdentity,
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+```
+
+This split is mandatory because mono MIR lowers artifact-owned checked
+procedure references into a fresh canonical-name store for the current
+specialization run. The lowering-run `proc_base` ids are correct inside mono,
+row-finalized mono, lifted MIR, lambda-solved MIR, executable MIR, IR, and LIR,
+but they are not stable checked-artifact ids. Checking finalization must never
+persist a lowering-run `proc_base` into a checked artifact.
+
+For example:
+
+```roc
+platform "demo"
+    requires {
+        main! : {} => {}
+    }
+    exposes []
+    packages {}
+    provides { main_for_host!: "main" }
+
+main_for_host! : {} => {}
+main_for_host! = main!
+```
+
+with an app:
+
+```roc
+app [main!] { pf: platform "demo.roc" }
+
+main! : {} => {}
+main! = |_| {}
+```
+
+During compile-time evaluation of `main_for_host!`, the selected callable value
+is the app's `main!` procedure. The lowered MIR/LIR value uses the current
+platform lowering run's remapped canonical-name ids so executable lowering can
+call it. The published callable binding instance for `main_for_host!`, however,
+must store the app artifact's original `ProcedureCallableRef` and
+`MirProcedureRef`, because a later runtime lowering imports the app artifact
+view and remaps those artifact-owned ids into its own lowering run. If checking
+finalization stores the already-remapped lowering-run ids instead, later mono
+lowering will look up a `proc_base` id in the app artifact's canonical-name
+store that belongs to a different canonical-name store. That is a compiler bug.
+
+The publication identity is produced when mono lowers a procedure value from an
+explicit checked artifact source:
+
+1. mono receives the artifact-owned `ProcedureCallableRef` from a checked
+   top-level binding, imported binding, hosted binding, platform-required
+   relation binding, promoted procedure, or private promoted capture
+2. mono remaps that ref into the current lowering-run canonical-name store for
+   runtime MIR use
+3. the mono `proc_value` expression stores both refs: `proc` is the remapped
+   lowering-run `MirProcedureRef`, and `published_proc` is the original
+   artifact-owned `MirProcedureRef`; `published_proc` may be null only for a
+   local/lifted procedure that has no checked-artifact identity yet
+4. lifted MIR and lambda-solved MIR copy `published_proc` unchanged
+5. lambda-solved copies `published_proc` into every callable-set member it
+   derives from that proc value
+
+No later stage may reconstruct the artifact-owned identity by inspecting
+`proc_base` text, source syntax, `ModuleEnv`, import names, expression ids, or
+the current lowering canonical-name store. If a compile-time publication path
+needs to persist a callable-set member whose `publication` is null, it must
+first promote that member into a private synthetic checked procedure and then
+persist the promoted procedure's artifact-owned identity. Persisting null or
+lowering-run identities into a checked artifact is forbidden.
+
+Checking-finalization publication uses the two identities differently:
+
+- runtime lowering descriptors keep the lowering-run identity in the
+  lambda-solved session so executable MIR can call the exact reserved procedure
+- checked artifact `CallableSetDescriptorStore` rows are written from
+  `publication.published_source_proc` and `publication.published_proc_value`
+- checked artifact `CallableResultMemberPlan.target_key.base` is rewritten from
+  `publication.published_source_proc.proc.proc_base`, while the executable
+  argument/return/capture keys remain the explicitly solved executable keys
+- checked artifact dependency summaries and callable binding instances store
+  `publication.published_proc_value`, never the lowering-run `proc_value`
+
+This is still not a fallback or compatibility path. The publication identity is
+explicit stage data carried from the point where both identities are known. A
+missing publication identity in a persistence path is handled only as a compiler
+bug: debug assertion in debug builds, `unreachable` in release builds.
 
 For example:
 
@@ -17111,16 +17224,27 @@ Checking finalization order:
     sealed app `TopLevelValueTable`, `CompileTimeValueStore`,
     `ConstInstantiationStore`, `CallableBindingInstantiationStore`,
     `SemanticInstantiationProcedureTable`, and promoted procedure table to build
-    the app-specific `PlatformRequiredBindingTable` for the platform root
-    artifact. This happens before either root artifact is published. A
-    platform-required binding for a non-function value stores a
-    `PlatformRequiredValueUse.const_value` that points at the app `ConstRef` and
-    exact requested source type. A binding for a function value stores a
-    `PlatformRequiredValueUse.procedure_value` that points at the sealed app
-    `TopLevelProcedureBindingRef` or concrete callable-binding instance required
-    by the platform's requested function type. No binding may be created from a
-    raw app name, pattern lookup, generated wrapper name, or unsealed
-    `pending_callable_root`.
+    the app-specific `PlatformRequirementRelationTable` and
+    `PlatformRequiredBindingTable` for the platform root artifact. This happens
+    before either root artifact is published. The relation table is built first:
+    each row records the platform declaration, app value, app value source
+    scheme, canonical platform-requested source type, and the platform artifact's
+    local checked payload for that requested type. The binding table then points
+    at the relation row and stores either `PlatformRequiredValueUse.const_value`
+    or `PlatformRequiredValueUse.procedure_value` with the requested payload
+    copied from the relation. A platform-required binding for a non-function
+    value stores a `PlatformRequiredValueUse.const_value` that points at the app
+    `ConstRef` plus the relation's exact requested source type. A binding for a
+    function value stores a `PlatformRequiredValueUse.procedure_value` that
+    points at the sealed app `TopLevelProcedureBindingRef` or concrete
+    callable-binding instance required by the platform's requested function type.
+    No binding may be created from a raw app name, pattern lookup, generated
+    wrapper name, unsealed `pending_callable_root`, or app-artifact
+    `checked_types.rootForKey(platform_requested_type)` lookup. The platform root
+    artifact is then finalized with `relation_artifacts` containing exactly the
+    sealed app artifact views named by the relation; compile-time callable
+    promotion, dependency summaries, mono MIR, and runtime lowering all consume
+    those views through `LoweringModuleView.relation_artifacts`.
 15. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
     that every referenced top-level binding maps to either a `ConstRef`-backed
     constant template or `procedure_binding`.
@@ -21136,6 +21260,34 @@ const PlatformRequiredBindingTable = struct {
     by_declaration: Map(PlatformRequiredDeclarationId, PlatformRequiredBindingId),
 };
 
+const PlatformRequirementRelationTable = struct {
+    entries: Span(PlatformRequirementRelation),
+    by_declaration: Map(PlatformRequiredDeclarationId, PlatformRequirementRelationId),
+};
+
+const PlatformRequirementRelation = struct {
+    id: PlatformRequirementRelationId,
+    relation: PlatformAppRelationKey,
+    declaration: PlatformRequiredDeclarationId,
+    app_value: TopLevelValueRef,
+
+    // The platform-requested source type, using the canonical key produced from
+    // the platform requirement annotation.
+    requested_source_ty: CanonicalTypeKey,
+
+    // The checked payload graph for `requested_source_ty` in the executable
+    // platform artifact's own CheckedTypeStore. This is the payload mono must
+    // clone-instantiate when lowering the required lookup/root.
+    requested_source_ty_payload: CheckedTypeId,
+
+    // The app value's checked source scheme. This records what app-side value
+    // was proved to satisfy the requirement; it is not used by later stages to
+    // rediscover the platform requested type.
+    app_value_source_scheme: CanonicalTypeSchemeKey,
+
+    value_kind: PlatformRequiredValueKind,
+};
+
 const PlatformRequiredBinding = struct {
     id: PlatformRequiredBindingId,
     relation: PlatformAppRelationKey,
@@ -21154,6 +21306,11 @@ const TopLevelValueRef = struct {
 const PlatformRequiredValueUse = union(enum) {
     const_value: ConstUseTemplate,
     procedure_value: ProcedureUseTemplate,
+};
+
+const PlatformRequiredValueKind = enum {
+    const_value,
+    procedure_value,
 };
 ```
 
@@ -21192,8 +21349,9 @@ artifacts do not store foreign `ModuleIdentity` ids from another artifact's
 
 The binding table is app-specific executable data. It replaces post-check
 lookup-target population. It records exactly which sealed app top-level value
-satisfies each platform requirement and which checked relation proved it. It is
-built only after the app root artifact has sealed its `TopLevelValueTable`,
+satisfies each platform requirement and points at the explicit checked relation
+record that proved it. It is built only after the app root artifact has sealed
+its `TopLevelValueTable`,
 `CompileTimeValueStore`, `ConstInstantiationStore`,
 `CallableBindingInstantiationStore`, `SemanticInstantiationProcedureTable`, and
 promoted procedure table. A required value can be a non-function constant or a
@@ -21204,6 +21362,57 @@ procedure value:
 - function required values use `PlatformRequiredValueUse.procedure_value` and
   point at a sealed app procedure binding or concrete callable-binding instance
   at the platform-requested function type
+
+The relation table is the authority for the platform-requested source type
+payload. Platform/app relation construction must never ask the app artifact for a
+checked type root whose key equals the platform requirement's requested type. That
+would be semantic recovery by key lookup in the wrong artifact. The app value's
+checked type can be a different artifact-local graph, and even when its canonical
+key is structurally equal to the platform request, the app artifact's checked
+payload is not the payload the executable platform root must lower. The executable
+platform artifact must publish a `PlatformRequirementRelation` row whose
+`requested_source_ty_payload` is a checked type root in the platform artifact's
+own `CheckedTypeStore`.
+
+For example, glue generation builds a synthetic app like this for a platform
+requirement:
+
+```roc
+platform "demo"
+    requires {
+        main! : () => {}
+    }
+    exposes []
+    packages {}
+    provides { main_for_host!: "main" }
+
+main_for_host! : () => {}
+main_for_host! = main!
+```
+
+```roc
+app [main!] { pf: platform "demo.roc" }
+
+main! = || {}
+```
+
+The app value `main!` is inferred in the app artifact. The platform requirement
+`main! : () => {}` is published in the platform artifact. The platform/app
+relation says that the app value satisfies that specific requirement and carries
+the executable platform artifact's checked payload for `() => {}`. Later mono
+lowering consumes that payload directly from the relation row. It must not look
+for `() => {}` in the app artifact, clone a payload by matching a hash, rescan
+app exports, or reinterpret the app value's inferred source scheme as the
+platform-requested payload.
+
+The checked relation is produced during app/platform co-finalization, while the
+checker still has access to both the platform requirement annotation and the app
+value's checked type. If the app value does not satisfy the requirement, the
+checker reports the user-facing platform requirement error before publication.
+After publication, a missing relation row, mismatched relation id, missing
+platform-owned requested payload, wrong value kind, or app-artifact payload
+lookup is a compiler bug: debug assertion in debug builds and `unreachable` in
+release builds.
 
 Required values are not always procedures. For example, this is valid Roc:
 
@@ -21225,6 +21434,39 @@ Mono MIR consumes the binding table when producing roots and when lowering
 required lookups in platform code. It must not lower `e_lookup_required` by
 looking up a platform-local procedure, by constructing a generated
 `platform_required_wrapper`, or by re-searching the app exports.
+
+For procedure requirements, `PlatformRequiredValueUse.procedure_value` carries a
+`ProcedureUseTemplate` whose `source_fn_ty_payload` is copied from the matching
+`PlatformRequirementRelation.requested_source_ty_payload`. For constant
+requirements, `PlatformRequiredValueUse.const_value` carries a `ConstUseTemplate`
+whose `requested_source_ty_payload` is copied from the same relation row. This is
+the only payload later stages use for the requirement. The app artifact provides
+only the app value identity (`TopLevelValueRef`, `TopLevelProcedureBindingRef`,
+`ConstRef`, or concrete callable-binding instance), not the platform requested
+type payload.
+
+Executable platform artifacts must also publish relation artifact views into
+checking finalization and every MIR-family lowering request. These relation
+artifact views are not ordinary source imports; they are the sealed app artifacts
+named by `PlatformRequirementRelation.app_value.artifact`. They are available to
+post-check lowering only because the platform/app relation explicitly names them.
+This matters for platform code like:
+
+```roc
+main_for_host! : () => {}
+main_for_host! = main!
+```
+
+When `main!` is a required function, `main_for_host!` may itself be a
+compile-time callable root that must be evaluated/promoted during platform
+artifact finalization. Lowering that root needs the app artifact's sealed
+procedure binding, but the app is not necessarily a normal import of the
+platform module. Therefore `CompileTimeFinalizer`, `LoweringModuleView`, mono
+MIR, compile-time dependency summaries, runtime dependency summaries, and
+single-root compile-time evaluation must all receive the same explicit
+`relation_artifacts` slice. They must not recover relation artifacts by scanning
+packages, looking through build-module lists, re-reading app source, or treating
+relation artifacts as ordinary imports.
 
 Debug-only artifact verification must assert that every `e_lookup_required`
 reachable from an executable platform artifact has a binding and that the
@@ -21393,6 +21635,133 @@ public helpers that return NoRootProc or NoRootDefinition
 Internal stage tests may call an individual MIR pass only when they construct
 that pass's exact input type-state. Those helpers must not become compatibility
 entrypoints for tools.
+
+### Glue Input Catalog Boundary
+
+`roc glue` is a post-check tool client, so it follows the same boundary rules as
+runtime lowering, eval, REPL, and snapshots. After a platform and its synthetic
+app have been checked, glue generation must build its input catalog only from
+artifact-owned, publication-time records:
+
+- `CheckedModuleArtifact.checked_types`
+- `CheckedModuleArtifact.checked_bodies`, only through published ids referenced
+  by other artifact tables
+- `CheckedModuleArtifact.top_level_values`
+- `CheckedModuleArtifact.hosted_procs`
+- `CheckedModuleArtifact.platform_required_declarations`
+- `CheckedModuleArtifact.platform_requirement_relations`
+- `CheckedModuleArtifact.platform_required_bindings`
+- `CheckedModuleArtifact.provides_requires`
+- `CheckedModuleArtifact.root_requests`
+- canonical-name text owned by `CheckedModuleArtifact.canonical_names`
+- imported and relation artifact views explicitly passed to the glue command
+
+Glue must not read `ModuleEnv`, `CommonEnv`, checker `types.Store`, raw
+`types.Var`, raw `CIR.Def.Idx` as a type source, raw `Ident.Idx`, source
+statements, source expressions, source declaration lists, or parser AST nodes
+after the checked artifacts have been published. Header parsing before checking
+is still parser-stage work; it may parse the platform header to build the
+synthetic app. Once the platform artifact exists, semantic glue data comes from
+the artifact.
+
+The glue input builder constructs a target-language-independent
+`GlueInputCatalog` view from those artifact records. The exact Zig names may
+differ, but the view has this conceptual shape:
+
+```zig
+const GlueInputCatalog = struct {
+    modules: []GlueModuleInfo,
+    type_table: []GlueTypeRepr,
+    entrypoints: []GlueEntrypointInfo,
+    provides_entries: []GlueProvidesEntry,
+};
+
+const GlueModuleInfo = struct {
+    name: ExportedModuleName,
+    main_type: ?CheckedTypeId,
+    functions: []GlueFunctionInfo,
+    hosted_functions: []GlueHostedFunctionInfo,
+};
+
+const GlueFunctionInfo = struct {
+    name: ExportNameId,
+    source_type: CheckedTypeId,
+};
+
+const GlueHostedFunctionInfo = struct {
+    global_index: u32,
+    name: ExportNameId,
+    source_type: CheckedTypeId,
+    arg_types: []CheckedTypeId,
+    ret_type: CheckedTypeId,
+};
+
+const GlueEntrypointInfo = struct {
+    platform_name: ExportNameId,
+    requested_source_type: CheckedTypeId,
+};
+
+const GlueProvidesEntry = struct {
+    source_name: ExportNameId,
+    ffi_symbol: ExternalSymbolNameId,
+    source_type: CheckedTypeId,
+};
+```
+
+`GlueTypeRepr` is produced by walking artifact-owned `CheckedTypePayload`
+records. Recursive types are handled by pre-registering the `CheckedTypeId` in
+the glue type table before converting its payload. The walk may follow
+artifact-owned alias, nominal, record, tuple, function, and tag-union payload
+references, but it must never ask the original checker store to resolve a type
+variable. A missing payload, pending payload, open row in a finalized platform
+ABI position, missing hosted type, missing platform-required type, or missing
+provided-export type is a compiler bug after checking: debug builds assert at
+the first invalid read, and release builds use `unreachable`.
+
+For example, this platform requirement:
+
+```roc
+platform "demo"
+    requires { main : {} => I64 }
+    exposes []
+    packages {}
+    imports []
+    provides [main_for_host = main]
+```
+
+publishes the `main` requirement in
+`PlatformRequiredDeclarationTable`. Glue gets the requested `{} => I64` type
+from `PlatformRequiredDeclaration.requested_source_ty_payload` or the matching
+`PlatformRequirementRelation.requested_source_ty_payload`; it must not call
+`ModuleEnv.varFrom(requires_idx.type_anno)`.
+
+Likewise, for a hosted function:
+
+```roc
+hosted_log! : Str => {}
+hosted_log! = \hosted
+```
+
+the hosted table row names the source definition and the checked artifact's
+top-level value table names that definition's published source type. Glue gets
+the function type from the checked type scheme/root recorded in the artifact. It
+must not format the hosted function by constructing a checker type variable from
+the original source definition id.
+
+The human-readable `type_str` fields passed to legacy Roc glue specs are display
+strings derived from the same `CheckedTypePayload` graph used for `GlueTypeRepr`.
+They are documentation and compatibility fields for existing glue specs; they
+are not semantic input to compiler lowering. Structured `TypeRepr` ids are the
+source of ABI shape for Zig/Rust glue. C glue may continue to print textual
+signatures until it is converted to structured `TypeRepr`, but those strings
+must still be derived from checked artifact payloads, not from `TypeWriter` over
+`ModuleEnv`.
+
+The glue command may run the normal checked-artifact-to-LIR pipeline to execute
+the Roc glue spec itself. That execution receives the constructed
+`GlueInputCatalog` as ordinary Roc values. The glue spec interpreter and
+backends follow the regular LIR/runtime rules; they do not get access to
+`ModuleEnv` or checked artifacts.
 
 ### Interpreter Shim Runtime Image Boundary
 

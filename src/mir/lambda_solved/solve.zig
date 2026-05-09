@@ -4223,6 +4223,7 @@ const PendingProcValueClassMember = struct {
 
 const ProcValueCallableSource = struct {
     proc: canonical.MirProcedureRef,
+    published_proc: ?canonical.MirProcedureRef = null,
     target_instance: repr.ProcRepresentationInstanceId,
     captures: []const repr.ValueInfoId,
     fn_ty: canonical.CanonicalTypeKey,
@@ -4330,6 +4331,7 @@ const CallableEmissionAssigner = struct {
                             .proc_value => |source| {
                                 const proc_source = ProcValueCallableSource{
                                     .proc = source.proc,
+                                    .published_proc = source.published_proc,
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
@@ -4355,6 +4357,7 @@ const CallableEmissionAssigner = struct {
                             .class = class,
                             .source = .{
                                 .proc = source.proc,
+                                .published_proc = source.published_proc,
                                 .target_instance = source.target_instance,
                                 .captures = source.captures,
                                 .fn_ty = source.fn_ty,
@@ -4368,6 +4371,7 @@ const CallableEmissionAssigner = struct {
                         };
                         const member = try self.memberForProcValueSource(.{
                             .proc = source.proc,
+                            .published_proc = source.published_proc,
                             .target_instance = source.target_instance,
                             .captures = source.captures,
                             .fn_ty = source.fn_ty,
@@ -4380,6 +4384,7 @@ const CallableEmissionAssigner = struct {
                             .proc_value => |source| {
                                 const proc_source = ProcValueCallableSource{
                                     .proc = source.proc,
+                                    .published_proc = source.published_proc,
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
@@ -4430,6 +4435,8 @@ const CallableEmissionAssigner = struct {
                 if (existing.capture_slots.len > 0) self.allocator.free(existing.capture_slots);
                 existing.capture_slots = capture_slots;
                 existing.capture_shape_key = member.capture_shape_key;
+                existing.published_proc_value = member.published_proc_value;
+                existing.published_source_proc = member.published_source_proc;
                 return;
             }
         }
@@ -4442,6 +4449,8 @@ const CallableEmissionAssigner = struct {
             .member = member.member,
             .proc_value = member.proc_value,
             .source_proc = member.source_proc,
+            .published_proc_value = member.published_proc_value,
+            .published_source_proc = member.published_source_proc,
             .target_instance = member.target_instance,
             .capture_slots = capture_slots,
             .capture_shape_key = member.capture_shape_key,
@@ -4991,6 +5000,8 @@ const CallableEmissionAssigner = struct {
             .member = @enumFromInt(0),
             .proc_value = source.proc.callable,
             .source_proc = source.proc,
+            .published_proc_value = if (source.published_proc) |published| published.callable else null,
+            .published_source_proc = source.published_proc,
             .target_instance = target_id,
             .capture_slots = capture_slots,
             .capture_shape_key = capture_shape_key,
@@ -10675,12 +10686,14 @@ const BodySolver = struct {
                     value,
                     whole_function_root,
                     proc_value.proc,
+                    proc_value.published_proc,
                     target_instance,
                     self.value_store.sliceValueSpan(captures.values),
                 );
                 self.value_store.values.items[@intFromEnum(value)].callable = callable;
                 break :blk .{ .proc_value = .{
                     .proc = proc_value.proc,
+                    .published_proc = proc_value.published_proc,
                     .captures = captures.args,
                     .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
                     .forced_target = proc_value.forced_target,

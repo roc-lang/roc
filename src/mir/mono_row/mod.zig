@@ -549,6 +549,7 @@ const BodyFinalizer = struct {
             } },
             .proc_value => |proc_value| .{ .proc_value = .{
                 .proc = proc_value.proc,
+                .published_proc = proc_value.published_proc,
                 .captures = try self.lowerCaptureArgSpan(proc_value.captures),
                 .fn_ty = proc_value.fn_ty,
                 .forced_target = proc_value.forced_target,
