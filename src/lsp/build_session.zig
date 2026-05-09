@@ -122,7 +122,7 @@ pub const BuildSession = struct {
             const sched = entry.value_ptr.*;
             for (sched.modules.items) |*module_state| {
                 if (std.mem.eql(u8, module_state.path, self.absolute_path)) {
-                    if (module_state.env) |*mod_env| {
+                    if (module_state.moduleEnv()) |mod_env| {
                         self.cached_module_env = mod_env;
                         return mod_env;
                     }
@@ -133,7 +133,7 @@ pub const BuildSession = struct {
         // Fallback: try to get root module from "app" scheduler
         if (self.env.schedulers.get("app")) |sched| {
             if (sched.getRootModule()) |rm| {
-                if (rm.env) |*e| {
+                if (rm.moduleEnv()) |e| {
                     self.cached_module_env = e;
                     return e;
                 }
@@ -145,7 +145,7 @@ pub const BuildSession = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             if (sched.getRootModule()) |rm| {
-                if (rm.env) |*e| {
+                if (rm.moduleEnv()) |e| {
                     self.cached_module_env = e;
                     return e;
                 }

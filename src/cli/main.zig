@@ -3142,7 +3142,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .verbose = false,
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
+    const cache_dir = try cache_manager.config.getVersionCacheDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -3155,7 +3155,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const cwd = try std.process.getCwdAlloc(ctx.gpa);
     defer ctx.gpa.free(cwd);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -3428,7 +3431,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
 
     const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
-    const cache_stats = build_env.getCacheStats();
+    const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
     else
@@ -3483,7 +3486,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .verbose = false,
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
+    const cache_dir = try cache_manager.config.getVersionCacheDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -3496,7 +3499,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const cwd = try std.process.getCwdAlloc(ctx.gpa);
     defer ctx.gpa.free(cwd);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -3764,7 +3770,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
 
     const elapsed_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
-    const cache_stats = build_env.getCacheStats();
+    const cache_stats = build_env.getBuildStats();
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
     else
@@ -4122,7 +4128,10 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const cwd = try std.process.getCwdAlloc(ctx.gpa);
     defer ctx.gpa.free(cwd);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4692,7 +4701,10 @@ fn checkFileWithBuildEnvPreserved(
 
     const cwd = try std.process.getCwdAlloc(ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
 
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
@@ -4711,8 +4723,11 @@ fn checkFileWithBuildEnvPreserved(
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.freeDrainedReports(drained);
 
-        // Print any error reports to stderr before failing
-        return err;
+        // Print any error reports to stderr before failing.
+        return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.Internal,
+        };
     };
 
     // Force processing to ensure canonicalization happens
@@ -4800,7 +4815,10 @@ fn checkFileWithBuildEnv(
 
     const cwd = try std.process.getCwdAlloc(ctx.gpa);
     defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5332,8 +5350,8 @@ fn generateDocs(
         const sched_pkg_name = sched_entry.key_ptr.*;
         const package_env = sched_entry.value_ptr.*;
 
-        for (package_env.modules.items) |module_state| {
-            if (module_state.env) |*mod_env| {
+        for (package_env.modules.items) |*module_state| {
+            if (module_state.moduleEnv()) |mod_env| {
                 // Skip platform main.roc modules when documenting an app
                 // Platform modules are still included when documenting a platform directly
                 if (mod_env.module_kind == .platform and !is_documenting_platform) {

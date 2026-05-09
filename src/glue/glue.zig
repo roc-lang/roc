@@ -28,6 +28,7 @@ const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const RocTarget = roc_target.RocTarget;
 const CheckedArtifact = check.CheckedArtifact;
+const CIR = can.CIR;
 
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
@@ -403,6 +404,16 @@ fn hostedProcSortKey(
     const stripped = try allocator.dupe(u8, qualified[0 .. qualified.len - 1]);
     allocator.free(qualified);
     return stripped;
+}
+
+fn hostedProcForDef(
+    table: *const CheckedArtifact.HostedProcTable,
+    def_idx: CIR.Def.Idx,
+) ?CheckedArtifact.HostedProc {
+    for (table.procs) |proc| {
+        if (proc.def_idx == def_idx) return proc;
+    }
+    return null;
 }
 
 fn collectHostedProcGlobalIndices(

@@ -363,7 +363,7 @@ pub const SyntaxChecker = struct {
             // Iterate through all modules in this package
             for (sched.modules.items) |*module_state| {
                 if (std.mem.eql(u8, module_state.path, path)) {
-                    if (module_state.env) |*mod_env| {
+                    if (module_state.moduleEnv()) |mod_env| {
                         return mod_env;
                     }
                 }
@@ -405,7 +405,7 @@ pub const SyntaxChecker = struct {
         for (imports) |import_id| {
             if (import_id < sched.modules.items.len) {
                 const imported_module = &sched.modules.items[import_id];
-                if (imported_module.env) |*imp_env| {
+                if (imported_module.moduleEnv()) |imp_env| {
                     try imported_envs.append(self.allocator, imp_env);
                 }
             }
@@ -465,7 +465,7 @@ pub const SyntaxChecker = struct {
             for (sched.modules.items) |*module_state| {
                 total_modules += 1;
 
-                if (module_state.env) |*module_env| {
+                if (module_state.moduleEnv()) |module_env| {
                     const new_exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
                         self.logDebug(.build, "[DEPS] Failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
                         continue;
@@ -1874,7 +1874,7 @@ pub const SyntaxChecker = struct {
             // Try "app" scheduler first
             if (env.schedulers.get("app")) |sched| {
                 if (sched.getRootModule()) |rm| {
-                    if (rm.env) |*e| {
+                    if (rm.moduleEnv()) |e| {
                         break :blk e;
                     }
                 }
@@ -1884,7 +1884,7 @@ pub const SyntaxChecker = struct {
             while (sched_it.next()) |entry| {
                 const sched = entry.value_ptr.*;
                 if (sched.getRootModule()) |rm| {
-                    if (rm.env) |*e| {
+                    if (rm.moduleEnv()) |e| {
                         break :blk e;
                     }
                 }
@@ -2011,7 +2011,7 @@ pub const SyntaxChecker = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             if (sched.getModuleState(module_name)) |mod_state| {
-                if (mod_state.env) |*mod_env| return mod_env;
+                if (mod_state.moduleEnv()) |mod_env| return mod_env;
             }
         }
 

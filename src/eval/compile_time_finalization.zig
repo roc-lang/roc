@@ -61,35 +61,11 @@ fn finalize(
     );
     defer dependency_summaries.deinit();
 
-    var runtime_dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
-        allocator,
-        .{
-            .root = checked_artifact.loweringView(artifact),
-            .imports = import_views,
-        },
-        .{
-            .requests = artifact.root_requests.requests,
-            .purpose = .runtime,
-            .compile_time_artifact_sink = artifact,
-        },
-        .{
-            .target_usize = base.target.TargetUsize.native,
-            .artifact_state = .checking_finalization,
-        },
-    );
-    defer runtime_dependency_summaries.deinit();
-
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
     if (compile_time_roots.len == 0) {
-        try ensureDependencySummaryIdsConcreteDependencies(
-            allocator,
-            artifact,
-            import_views,
-            &runtime_env,
-            runtime_dependency_summaries.dependency_summaries,
-        );
+        try finalizeRuntimeDependencySummaries(allocator, artifact, import_views, &runtime_env);
         try artifact.comptime_values.sealBindings();
         return;
     }
@@ -163,15 +139,49 @@ fn finalize(
         }
     }
 
+    try finalizeRuntimeDependencySummaries(allocator, artifact, import_views, &runtime_env);
+
+    try artifact.comptime_values.sealBindings();
+}
+
+fn finalizeRuntimeDependencySummaries(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+) anyerror!void {
+    if (artifactHasUnboundPlatformRequirements(artifact)) return;
+
+    var runtime_dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
+        allocator,
+        .{
+            .root = checked_artifact.loweringView(artifact),
+            .imports = import_views,
+        },
+        .{
+            .requests = artifact.root_requests.requests,
+            .purpose = .runtime,
+            .compile_time_artifact_sink = artifact,
+        },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .artifact_state = .checking_finalization,
+        },
+    );
+    defer runtime_dependency_summaries.deinit();
+
     try ensureDependencySummaryIdsConcreteDependencies(
         allocator,
         artifact,
         import_views,
-        &runtime_env,
+        runtime_env,
         runtime_dependency_summaries.dependency_summaries,
     );
+}
 
-    try artifact.comptime_values.sealBindings();
+fn artifactHasUnboundPlatformRequirements(artifact: *const checked_artifact.CheckedModuleArtifact) bool {
+    return artifact.platform_required_declarations.declarations.len != 0 and
+        artifact.platform_required_bindings.bindings.len == 0;
 }
 
 fn publishAlreadyEvaluatedConstantRoot(

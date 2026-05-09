@@ -109,6 +109,14 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
+    /// Get the module source cache directory for tooling-owned materialized sources.
+    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "src" });
+    }
+
     /// Get the executable cache directory (for cached linked executables).
     pub fn getExeCacheDir(self: Self, allocator: Allocator) ![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);

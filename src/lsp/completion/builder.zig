@@ -228,7 +228,7 @@ pub const CompletionBuilder = struct {
             for (sched.modules.items) |*module_state| {
                 // Check if this module's name matches
                 if (std.mem.eql(u8, module_state.name, module_name)) {
-                    if (module_state.env) |*imported_env| {
+                    if (module_state.moduleEnv()) |imported_env| {
                         try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
                     }
                     return;
@@ -401,7 +401,7 @@ pub const CompletionBuilder = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             for (sched.modules.items) |*module_state| {
-                if (module_state.env) |*module_env| {
+                if (module_state.moduleEnv()) |module_env| {
                     try self.addTypeNamesFromModuleEnv(module_env);
                 }
             }

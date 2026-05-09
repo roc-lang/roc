@@ -67,6 +67,7 @@ const WorkerResult = messages.WorkerResult;
 const ModuleId = messages.ModuleId;
 const ParseTask = messages.ParseTask;
 const CanonicalizeTask = messages.CanonicalizeTask;
+const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
@@ -1106,6 +1107,20 @@ pub const Coordinator = struct {
         };
     }
 
+    fn createOwnedSemanticResult(
+        self: *Coordinator,
+        env: *ModuleEnv,
+        checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
+    ) *OwnedSemanticModuleData {
+        const allocator = self.getWorkerAllocator();
+        const semantic = allocator.create(OwnedSemanticModuleData) catch @panic("out of memory allocating type-check result");
+        semantic.* = .{
+            .module_env = env,
+            .checked_artifact = checked_artifact,
+        };
+        return semantic;
+    }
+
     /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
     fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
         if (comptime builtin.mode == .Debug) {
@@ -2046,15 +2061,14 @@ pub const Coordinator = struct {
         }
         const module_dir = std.fs.path.dirname(task.path) orelse "";
         for (local_import_names) |module_name| {
-            const path = self.resolveModulePath(module_dir, module_name) catch continue;
+            const path = self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc) catch continue;
             discovered_local_imports.append(worker_alloc, .{
                 .module_name = worker_alloc.dupe(u8, module_name) catch {
                     worker_alloc.free(path);
                     continue;
                 },
                 .path = path,
-            }) catch |err| {
-                _ = err;
+            }) catch {
                 worker_alloc.free(path);
             };
         }
@@ -2175,10 +2189,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = .{
-                        .module_env = env,
-                        .checked_artifact = null,
-                    },
+                    .semantic = self.createOwnedSemanticResult(env, null),
                     .reports = std.ArrayList(Report).empty,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2196,7 +2207,6 @@ pub const Coordinator = struct {
         // Pre-allocate to reduce allocation contention in multi-threaded mode
         var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
 
-        const check = @import("check");
         var rb = check.ReportBuilder.init(
             worker_alloc,
             env,
@@ -2217,10 +2227,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = .{
-                        .module_env = env,
-                        .checked_artifact = null,
-                    },
+                    .semantic = self.createOwnedSemanticResult(env, null),
                     .reports = reports,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2248,10 +2255,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .semantic = .{
-                    .module_env = env,
-                    .checked_artifact = checked_artifact,
-                },
+                .semantic = self.createOwnedSemanticResult(env, checked_artifact),
                 .reports = reports,
                 .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
                 .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,

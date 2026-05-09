@@ -136,7 +136,7 @@ const ModuleState = struct {
     /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
     cached_ast: ?*parse.AST = null,
 
-    fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
+    pub fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*artifact| return artifact.moduleEnv();
             return semantic.module_env;
@@ -144,14 +144,14 @@ const ModuleState = struct {
         return null;
     }
 
-    fn checkedArtifact(self: *ModuleState) ?*CheckedArtifact.CheckedModuleArtifact {
+    pub fn checkedArtifact(self: *ModuleState) ?*CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*artifact| return artifact;
         }
         return null;
     }
 
-    fn semanticData(self: *ModuleState) ?SemanticModuleData {
+    pub fn semanticData(self: *ModuleState) ?SemanticModuleData {
         const env = self.moduleEnv() orelse return null;
         return .{
             .env = env,

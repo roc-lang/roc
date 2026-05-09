@@ -208,7 +208,7 @@ pub const TypeCheckedResult = struct {
     /// Path to the module file
     path: []const u8,
     /// The type-checked semantic module data (ownership returned)
-    semantic: OwnedSemanticModuleData,
+    semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent type checking
@@ -325,6 +325,7 @@ pub const WorkerResult = union(enum) {
             },
             .type_checked => |*r| {
                 r.semantic.deinit();
+                gpa.destroy(r.semantic);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },

@@ -421,12 +421,17 @@ pub const RootRequestTable = struct {
         compile_time_roots: *const CompileTimeRootTable,
         entry_wrappers: *const EntryWrapperTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
+        checked_bodies: *const CheckedBodyStore,
+        resolved_value_refs: *const ResolvedValueRefTable,
         explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
 
         const module_env = module.moduleEnvConst();
+        const relation_blocked_exprs = try allocator.alloc(?bool, checked_bodies.exprs.len);
+        defer allocator.free(relation_blocked_exprs);
+        @memset(relation_blocked_exprs, null);
 
         for (explicit_roots) |root| {
             try appendRoot(&requests, allocator, .{
@@ -459,6 +464,14 @@ pub const RootRequestTable = struct {
 
         for (compile_time_roots.roots) |root| {
             if (root.kind != .expect and !try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type)) {
+                continue;
+            }
+            if (compileTimeRootDependsOnUnboundPlatformRequirement(
+                checked_bodies,
+                resolved_value_refs,
+                root,
+                relation_blocked_exprs,
+            )) {
                 continue;
             }
             try appendRoot(&requests, allocator, .{
@@ -597,6 +610,184 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
         .expr => |expr| expr == b.expr,
         .statement => |statement| statement == b.statement,
         .required_binding => |binding| binding == b.required_binding,
+    };
+}
+
+fn compileTimeRootDependsOnUnboundPlatformRequirement(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    root: CompileTimeRoot,
+    relation_blocked_exprs: []?bool,
+) bool {
+    return switch (root.kind) {
+        .constant,
+        .callable_binding,
+        => exprDependsOnUnboundPlatformRequirement(
+            checked_bodies,
+            resolved_value_refs,
+            root.expr,
+            relation_blocked_exprs,
+        ),
+        .expect => false,
+    };
+}
+
+fn exprDependsOnUnboundPlatformRequirement(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    expr_id: CheckedExprId,
+    relation_blocked_exprs: []?bool,
+) bool {
+    const index = @intFromEnum(expr_id);
+    if (relation_blocked_exprs[index]) |cached| return cached;
+
+    const data = checked_bodies.exprs[index].data;
+    const result = switch (data) {
+        .lookup_local => |lookup| resolvedRefIsUnboundPlatformRequirement(resolved_value_refs, lookup.resolved),
+        .lookup_external,
+        .lookup_required,
+        => |ref_id| resolvedRefIsUnboundPlatformRequirement(resolved_value_refs, ref_id),
+        .str,
+        .list,
+        .tuple,
+        => |items| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, items, relation_blocked_exprs),
+        .match_ => |match| blk: {
+            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, match.cond, relation_blocked_exprs)) break :blk true;
+            for (match.branches) |branch| {
+                if (branch.guard) |guard| {
+                    if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, guard, relation_blocked_exprs)) break :blk true;
+                }
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.value, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk false;
+        },
+        .if_ => |if_| blk: {
+            for (if_.branches) |branch| {
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.cond, relation_blocked_exprs)) break :blk true;
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.body, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, if_.final_else, relation_blocked_exprs);
+        },
+        .call => |call| blk: {
+            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, call.func, relation_blocked_exprs)) break :blk true;
+            break :blk exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, call.args, relation_blocked_exprs);
+        },
+        .record => |record| blk: {
+            if (record.ext) |ext| {
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ext, relation_blocked_exprs)) break :blk true;
+            }
+            for (record.fields) |field| {
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, field.value, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk false;
+        },
+        .block => |block| blk: {
+            for (block.statements) |statement| {
+                if (statementDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, block.final_expr, relation_blocked_exprs);
+        },
+        .tag => |tag| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, tag.args, relation_blocked_exprs),
+        .nominal => |nominal| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, nominal.backing_expr, relation_blocked_exprs),
+        .closure => |closure| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, closure.lambda, relation_blocked_exprs),
+        .lambda => |lambda| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, lambda.body, relation_blocked_exprs),
+        .binop => |binop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.lhs, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.rhs, relation_blocked_exprs),
+        .unary_minus,
+        .unary_not,
+        .dbg,
+        .expect,
+        => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
+        .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
+        .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
+        .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
+        .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
+        .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
+        .run_low_level => |run| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, run.args, relation_blocked_exprs),
+        .pending,
+        .num,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .dec_small,
+        .typed_int,
+        .typed_frac,
+        .str_segment,
+        .bytes_literal,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .dispatch_call,
+        .method_eq,
+        .type_dispatch_call,
+        .runtime_error,
+        .crash,
+        .ellipsis,
+        .anno_only,
+        .hosted_lambda,
+        => false,
+    };
+
+    relation_blocked_exprs[index] = result;
+    return result;
+}
+
+fn exprSpanDependsOnUnboundPlatformRequirement(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    exprs: []const CheckedExprId,
+    relation_blocked_exprs: []?bool,
+) bool {
+    for (exprs) |expr_id| {
+        if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expr_id, relation_blocked_exprs)) return true;
+    }
+    return false;
+}
+
+fn statementDependsOnUnboundPlatformRequirement(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    statement_id: CheckedStatementId,
+    relation_blocked_exprs: []?bool,
+) bool {
+    return switch (checked_bodies.statements[@intFromEnum(statement_id)].data) {
+        .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .dbg,
+        .expr,
+        .expect,
+        => |expr| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expr, relation_blocked_exprs),
+        .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
+        .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
+        .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
+        .pending,
+        .crash,
+        .break_,
+        .import_,
+        .alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        .runtime_error,
+        => false,
+    };
+}
+
+fn resolvedRefIsUnboundPlatformRequirement(
+    resolved_value_refs: *const ResolvedValueRefTable,
+    maybe_ref: ?ResolvedValueRefId,
+) bool {
+    const ref_id = maybe_ref orelse return false;
+    const index = @intFromEnum(ref_id);
+    std.debug.assert(index < resolved_value_refs.records.len);
+    return switch (resolved_value_refs.records[index].ref) {
+        .platform_required_declaration => true,
+        else => false,
     };
 }
 
@@ -15330,17 +15521,6 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
     );
 
-    var root_requests = try RootRequestTable.fromModule(
-        allocator,
-        module,
-        &checked_type_publication,
-        &compile_time_roots,
-        &entry_wrappers,
-        &platform_required_bindings,
-        inputs.explicit_roots,
-    );
-    errdefer root_requests.deinit(allocator);
-
     var comptime_values = CompileTimeValueStore.init(allocator);
     errdefer comptime_values.deinit(allocator);
 
@@ -15397,6 +15577,19 @@ pub fn publishFromTypedModule(
     );
     errdefer resolved_value_refs.deinit(allocator);
     checked_bodies.attachResolvedValueRefs(&resolved_value_refs);
+
+    var root_requests = try RootRequestTable.fromModule(
+        allocator,
+        module,
+        &checked_type_publication,
+        &compile_time_roots,
+        &entry_wrappers,
+        &platform_required_bindings,
+        &checked_bodies,
+        &resolved_value_refs,
+        inputs.explicit_roots,
+    );
+    errdefer root_requests.deinit(allocator);
 
     try sealCheckedProcedureTemplateRefs(
         allocator,
