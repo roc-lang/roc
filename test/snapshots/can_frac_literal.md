@@ -6,7 +6,9 @@ type=snippet
 # SOURCE
 ~~~roc
 x = 3.14
+
 y = 1.23e45
+
 z = 0.5
 ~~~
 # EXPECTED

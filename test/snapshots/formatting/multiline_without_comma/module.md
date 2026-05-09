@@ -94,6 +94,7 @@ EndOfFile,
 
 
 a = 'a'
+
 b = 'a'
 ~~~
 # CANONICALIZE

@@ -6,6 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 name = "luc"
+
 foo = "hello ${name}"
 ~~~
 # EXPECTED

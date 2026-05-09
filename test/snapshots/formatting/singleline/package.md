@@ -8,6 +8,7 @@ type=file
 package [a!, b!] { a: "a", b: "b" }
 
 a! : Str => Str
+
 b! : Str => Str
 ~~~
 # EXPECTED

@@ -9,6 +9,7 @@ func = |a, b| {
 	add_ab = |x| a + b + x
 	add_ab(10)
 }
+
 result = func(1, 2)
 ~~~
 # MONO

@@ -18,6 +18,7 @@ Response : [Ok(Try), NetworkError, ParseError]
 
 # Multiple tag unions using similar tag names
 UserState : [Active(Str), Inactive, Suspended(Str)]
+
 ConnectionState : [Active, Disconnected, Connecting(Str)]
 
 # Function using tag unions

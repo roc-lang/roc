@@ -1503,6 +1503,7 @@ import Bae as Gooe
 import
 	Ba
 Map(a, b) : Lis, (ab) -> List(b)
+
 MapML # Ag
 	: # Aon
 		List(),
@@ -1510,10 +1511,13 @@ MapML # Ag
 			List(b) # z)
 
 line : () # Co
+
 Som : { foo : O, bar : g }
+
 Ml(a) : {}
 
 Soine(a) : {} #
+
 Maybe(a) : [Somne]
 
 Mayine(a) : [] # )
@@ -1521,6 +1525,7 @@ Mayine(a) : [] # )
 ane = |num| if num 2 else 5
 
 one : U6
+
 add = |Rum| {
 	1
 	if num {
@@ -1568,6 +1573,7 @@ expect # Cord
 	nt
 
 main! : Listlt({}, _)
+
 ma = |_| {
 	e
 	w = "d"
@@ -1616,6 +1622,7 @@ ma = |_| {
 } # Cocl
 
 y : {}
+
 e = {}
 
 t : V((a, c))

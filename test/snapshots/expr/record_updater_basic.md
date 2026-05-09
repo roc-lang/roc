@@ -6,6 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 person = { name: "Alice", age: 30 }
+
 updated = { ..person, age: 31 }
 ~~~
 # EXPECTED

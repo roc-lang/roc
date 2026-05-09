@@ -6,8 +6,11 @@ type=mono
 # SOURCE
 ~~~roc
 x = 10
+
 make_adder = |y| |z| x + y + z
+
 add_five = make_adder(5)
+
 result = add_five(3)
 ~~~
 # MONO

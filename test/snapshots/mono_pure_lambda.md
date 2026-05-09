@@ -6,7 +6,9 @@ type=mono
 # SOURCE
 ~~~roc
 one = 1
+
 add_one = |x| x + one
+
 result = add_one(5)
 ~~~
 # MONO

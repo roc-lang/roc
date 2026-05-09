@@ -1710,6 +1710,7 @@ import Bae as Gooe
 import
 	Ba
 Map(a, b) : List(a), (a -> b) -> List(b)
+
 MapML( # Cere
 	a, # Anre
 	b,
@@ -1725,7 +1726,9 @@ line : ( # Cpen
 	Bar, #
 	Baz, # m
 ) # Co
+
 Some(a) : { foo : Ok(a), bar : g }
+
 Ml(a) : { # d
 	bar : Som, # Afld
 }

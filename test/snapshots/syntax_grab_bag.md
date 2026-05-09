@@ -1821,6 +1821,7 @@ import
 		GoodNameMultiline
 
 Map(a, b) : List(a), (a -> b) -> List(b)
+
 MapML( # Comment here
 	a, # And here
 	b,
@@ -1842,6 +1843,7 @@ FooMultiline : ( # Comment after pattern tuple open
 ) # Comment after pattern tuple close
 
 Some(a) : { foo : Ok(a), bar : Something }
+
 SomeMl(a) : { # After record open
 	foo : Ok(a), # After field
 	bar : Something, # After last field

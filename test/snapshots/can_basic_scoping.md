@@ -94,6 +94,7 @@ EndOfFile,
 ~~~roc
 # Top-level variables
 x = 5
+
 y = 10
 
 # Function that shadows outer variable

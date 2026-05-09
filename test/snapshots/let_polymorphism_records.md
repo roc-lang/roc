@@ -9,9 +9,13 @@ app [main] { pf: platform "../basic-cli/platform.roc" }
 
 # Basic values for polymorphism testing
 num = 42
+
 frac = 4.2
+
 str = "hello"
+
 my_empty_list = []
+
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
@@ -19,7 +23,9 @@ make_container = |value| { data: value, count: 1 }
 
 # Used with different types
 int_container = make_container(num)
+
 str_container = make_container(str)
+
 list_container = make_container(my_empty_list)
 
 # Polymorphic record update
@@ -29,7 +35,9 @@ update_data = |container, new_value| { ..container, data: new_value }
 
 # Used with different record types
 updated_int = update_data(int_container, 100)
+
 updated_str = update_data(str_container, "world")
+
 updated_mismatch = update_data(str_container, 99)
 
 # Function returning polymorphic record
@@ -37,7 +45,9 @@ identity_record = |x| { value: x }
 
 # Used at different types
 int_record = identity_record(42)
+
 str_record = identity_record("test")
+
 list_record = identity_record([1, 2, 3])
 
 main = |_| {
@@ -49,13 +59,13 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
-MISSING METHOD - let_polymorphism_records.md:38:2:38:17
-MISSING METHOD - let_polymorphism_records.md:38:2:38:3
+TYPE MISMATCH - let_polymorphism_records.md:34:47:34:49
+MISSING METHOD - let_polymorphism_records.md:48:2:48:17
+MISSING METHOD - let_polymorphism_records.md:48:2:48:3
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
-**let_polymorphism_records.md:26:47:26:49:**
+**let_polymorphism_records.md:34:47:34:49:**
 ```roc
 updated_mismatch = update_data(str_container, 99)
 ```
@@ -67,7 +77,7 @@ Other code expects this to have the type:
 
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:38:2:38:17:**
+**let_polymorphism_records.md:48:2:48:17:**
 ```roc
 	1 + update_data
 ```
@@ -79,7 +89,7 @@ The value's type, which does not have a method named **plus**, is:
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:38:2:38:3:**
+**let_polymorphism_records.md:48:2:48:3:**
 ```roc
 	1 + update_data
 ```
