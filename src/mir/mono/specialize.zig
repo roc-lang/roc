@@ -691,11 +691,11 @@ fn specializationSeedForEntrypoint(
             };
         },
         .callable_binding_instance => |request| callable_seed: {
-            const template = callableEvalEntryTemplateForRequest(input, request) orelse {
+            const selection = callableEvalEntryTemplateForRequest(input, request) orelse {
                 invariantViolation("mono specialization compile-time callable binding instance did not name a callable eval template");
             };
             break :callable_seed .{
-                .template = template,
+                .template = selection.template,
                 .requested_fn_ty = try compileTimeFunctionTypeForRequest(
                     allocator,
                     input,
@@ -705,6 +705,7 @@ fn specializationSeedForEntrypoint(
                 ),
                 .metadata = compileTimeMetadata(order, .compile_time_callable),
                 .reason = .{ .callable_binding_instance = request },
+                .imported_closure = selection.imported_closure,
             };
         },
     };
@@ -866,10 +867,11 @@ fn constRefEql(a: checked_artifact.ConstRef, b: checked_artifact.ConstRef) bool 
 fn callableEvalEntryTemplateForRequest(
     input: Input,
     request: checked_artifact.CallableBindingInstantiationRequest,
-) ?canonical.ProcedureTemplateRef {
+) ?RootTemplateSelection {
     const OwnerAndBinding = struct {
         owner: checked_artifact.CheckedModuleArtifactKey,
         binding: checked_artifact.TopLevelProcedureBindingRef,
+        imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
     };
     const owner_and_binding: OwnerAndBinding = switch (request.key.binding) {
         .top_level => |binding| .{
@@ -879,6 +881,7 @@ fn callableEvalEntryTemplateForRequest(
         .platform_required => |required| .{
             .owner = required.artifact,
             .binding = required.procedure_binding,
+            .imported_closure = relationClosureForProcedureBindingRef(input, request.key.binding),
         },
         .imported => |imported| {
             const view = importedProcedureBindingViewForRef(input, imported) orelse {
@@ -886,7 +889,10 @@ fn callableEvalEntryTemplateForRequest(
                 unreachable;
             };
             return switch (view.body) {
-                .callable_eval_template => |template_id| callableEvalEntryTemplateForKey(input, imported.artifact, template_id),
+                .callable_eval_template => |template_id| .{
+                    .template = callableEvalEntryTemplateForKey(input, imported.artifact, template_id),
+                    .imported_closure = view.template_closure,
+                },
                 .direct_template => null,
             };
         },
@@ -900,9 +906,53 @@ fn callableEvalEntryTemplateForRequest(
     };
     const binding = bindings.get(owner_and_binding.binding);
     return switch (binding.body) {
-        .callable_eval_template => |template_id| callableEvalEntryTemplateForKey(input, owner_and_binding.owner, template_id),
+        .callable_eval_template => |template_id| .{
+            .template = callableEvalEntryTemplateForKey(input, owner_and_binding.owner, template_id),
+            .imported_closure = owner_and_binding.imported_closure,
+        },
         .direct_template => null,
     };
+}
+
+fn relationClosureForProcedureBindingRef(
+    input: Input,
+    binding_ref: checked_artifact.ProcedureBindingRef,
+) ?checked_artifact.ImportedTemplateClosureView {
+    return switch (binding_ref) {
+        .platform_required => |required| blk: {
+            for (input.root.artifact.platform_required_bindings.bindings) |binding| {
+                const procedure_use = switch (binding.value_use) {
+                    .procedure_value => |procedure| procedure,
+                    .const_value => continue,
+                };
+                if (!requiredAppProcedureRefEql(procedure_use.procedure.binding, required)) continue;
+                break :blk procedure_use.relation_template_closure;
+            }
+            debug.invariant(false, "mono specialization invariant violated: platform-required callable eval binding had no relation closure");
+            unreachable;
+        },
+        else => null,
+    };
+}
+
+fn requiredAppProcedureRefEql(
+    binding_ref: checked_artifact.ProcedureBindingRef,
+    required: checked_artifact.RequiredAppProcedureRef,
+) bool {
+    const actual = switch (binding_ref) {
+        .platform_required => |actual| actual,
+        else => return false,
+    };
+    return std.mem.eql(u8, &actual.artifact.bytes, &required.artifact.bytes) and
+        topLevelValueRefEql(actual.app_value, required.app_value) and
+        actual.procedure_binding == required.procedure_binding;
+}
+
+fn topLevelValueRefEql(
+    a: checked_artifact.TopLevelValueRef,
+    b: checked_artifact.TopLevelValueRef,
+) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and a.pattern == b.pattern;
 }
 
 fn executableSyntheticProcForReserved(
@@ -1364,11 +1414,38 @@ fn reserveCallableBindingInstanceRefDependencies(
 
     const instance = callableBindingInstanceForRef(input, ref);
     const reason = MonoSpecializationReason{ .comptime_dependency_summary = instance.dependency_summary };
-    try reserveCallableProcedureDependency(input, program, queue, instance.proc_value, reason);
+    _ = try reserveCallableProcedureDependencyWithClosure(
+        input,
+        program,
+        queue,
+        instance.proc_value,
+        closureForCallableBindingInstanceRef(input, ref),
+        reason,
+    );
     try reserveComptimeDependencySummaryDependencies(input, program, queue, state, ref.owner, instance.dependency_summary);
     for (instance.generated_procedures) |procedure| {
         try reserveSemanticInstantiationProcedureDependency(input, program, queue, state, ref.owner, procedure);
     }
+}
+
+fn closureForCallableBindingInstanceRef(
+    input: Input,
+    ref: checked_artifact.CallableBindingInstanceRef,
+) ?checked_artifact.ImportedTemplateClosureView {
+    return switch (ref.key.binding) {
+        .imported => |imported| blk: {
+            const view = importedProcedureBindingViewForRef(input, imported) orelse {
+                debug.invariant(false, "mono dependency reservation invariant violated: imported callable binding instance had no imported binding view");
+                unreachable;
+            };
+            break :blk view.template_closure;
+        },
+        .platform_required => relationClosureForProcedureBindingRef(input, ref.key.binding),
+        .top_level,
+        .hosted,
+        .promoted,
+        => null,
+    };
 }
 
 fn reserveComptimeDependencySummaryDependencies(
@@ -1475,6 +1552,17 @@ fn reserveProcedureCallableDependency(
     callable: canonical.ProcedureCallableRef,
     reason: MonoSpecializationReason,
 ) Allocator.Error!canonical.MirProcedureRef {
+    return reserveCallableProcedureDependencyWithClosure(input, program, queue, callable, null, reason);
+}
+
+fn reserveCallableProcedureDependencyWithClosure(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    callable: canonical.ProcedureCallableRef,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
     const template = checkedTemplateFromCallableTemplate(callable.template);
     const artifact = artifactKeyForRef(input, template.artifact) orelse {
         debug.invariant(false, "mono dependency reservation invariant violated: callable template artifact was not available");
@@ -1498,6 +1586,7 @@ fn reserveProcedureCallableDependency(
         .callable_template = callable.template,
         .requested_fn_ty = requested_fn_ty,
         .reason = reason,
+        .imported_closure = imported_closure,
     });
     return .{
         .proc = reserved.proc.proc,
@@ -5241,6 +5330,7 @@ const BodyLowerer = struct {
                     .callable_template = remapped_callable.template,
                     .requested_fn_ty = requested_fn_ty,
                     .reason = reason,
+                    .imported_closure = self.importedClosureForTemplate(template),
                 });
                 break :blk .{
                     .proc = reserved.proc.proc,
@@ -5279,6 +5369,7 @@ const BodyLowerer = struct {
             .template = owner_key.template,
             .requested_fn_ty = owner_requested_fn_ty,
             .reason = reason,
+            .imported_closure = self.importedClosureForTemplate(owner_key.template),
         });
 
         const owner_base = self.program.canonical_names.procBase(owner_key.template.proc_base);
@@ -5300,6 +5391,16 @@ const BodyLowerer = struct {
             },
             .callable = callable,
         };
+    }
+
+    fn importedClosureForTemplate(
+        self: *const BodyLowerer,
+        template: canonical.ProcedureTemplateRef,
+    ) ?checked_artifact.ImportedTemplateClosureView {
+        if (self.template_lookup.imported_closure) |closure| {
+            if (importedClosureContainsProcedureTemplate(closure, template)) return closure;
+        }
+        return null;
     }
 
     fn lowerEntryWrapperDef(

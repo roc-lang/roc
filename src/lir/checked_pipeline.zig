@@ -389,9 +389,11 @@ pub const LoweredProgram = struct {
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
+    callable_set_descriptors: []const canonical.CanonicalCallableSetDescriptor = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
+        deinitCanonicalCallableSetDescriptors(self.lir_result.store.allocator, self.callable_set_descriptors);
         for (self.erased_callable_code_map) |entry| {
             if (entry.exec_arg_tys.len > 0) {
                 self.lir_result.store.allocator.free(entry.exec_arg_tys);
@@ -473,16 +475,21 @@ pub fn lowerArtifactsToLir(
         .runnable,
         if (target.artifact_state == .checking_finalization) roots.compile_time_artifact_sink else null,
     );
-    errdefer solved.deinit();
+    var solved_owned = true;
+    errdefer if (solved_owned) solved.deinit();
 
     var callable_set_descriptors = try callableSetDescriptorsForLowering(
         allocator,
         artifacts.root.artifact,
         &solved,
-        roots,
         target.artifact_state,
     );
     defer callable_set_descriptors.deinit(allocator);
+    const runtime_callable_set_descriptors = try cloneRuntimeCallableSetDescriptors(
+        allocator,
+        callable_set_descriptors.descriptors,
+    );
+    errdefer deinitCanonicalCallableSetDescriptors(allocator, runtime_callable_set_descriptors);
     try publishErasedFnAbisForLowering(
         allocator,
         artifacts.root.artifact,
@@ -517,6 +524,7 @@ pub fn lowerArtifactsToLir(
     var runtime_value_schemas = try RuntimeValueSchemaStore.fromLambdaSolved(allocator, &solved);
     errdefer runtime_value_schemas.deinit();
 
+    solved_owned = false;
     var executable = try mir.Executable.Build.run(
         allocator,
         solved,
@@ -542,8 +550,7 @@ pub fn lowerArtifactsToLir(
     const executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
 
-    var lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir, compile_time_layout_request_keys);
-    errdefer lowered_ir.deinit();
+    const lowered_ir = try ir.Lower.fromExecutable(allocator, executable_for_ir, compile_time_layout_request_keys);
 
     const executable_roots = lowered_ir.root_procs.items;
     const executable_root_metadata = lowered_ir.root_metadata.items;
@@ -577,6 +584,7 @@ pub fn lowerArtifactsToLir(
         .target_usize = target.target_usize,
         .runtime_value_schemas = runtime_value_schemas,
         .compile_time_payloads = compile_time_payloads,
+        .callable_set_descriptors = runtime_callable_set_descriptors,
         .erased_callable_code_map = erased_callable_code_map,
     };
 }
@@ -616,7 +624,6 @@ pub fn summarizeCompileTimeDependencies(
         allocator,
         artifacts.root.artifact,
         &solved,
-        roots,
         target.artifact_state,
     );
     defer callable_set_descriptors.deinit(allocator);
@@ -849,7 +856,6 @@ fn callableSetDescriptorsForLowering(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     solved: *const mir.LambdaSolved.Solve.Program,
-    roots: RootRequestSet,
     artifact_state: ArtifactState,
 ) Allocator.Error!CallableSetDescriptorsForLowering {
     var descriptors = std.ArrayList(repr.CanonicalCallableSetDescriptor).empty;
@@ -876,17 +882,74 @@ fn callableSetDescriptorsForLowering(
             };
         },
         .checking_finalization => {
-            const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization lowering requires mutable checked artifact sink");
-            if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
-                checkedPipelineInvariant("checking-finalization descriptor publication artifact sink does not match root artifact");
-            }
-
-            try publishCallableSetDescriptorsToArtifact(allocator, artifact_sink, owned);
             return .{
                 .descriptors = owned,
                 .owned_shell = owned,
             };
         },
+    }
+}
+
+fn cloneRuntimeCallableSetDescriptors(
+    allocator: Allocator,
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
+) Allocator.Error![]const canonical.CanonicalCallableSetDescriptor {
+    if (descriptors.len == 0) return &.{};
+    const cloned = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, descriptors.len);
+    var initialized: usize = 0;
+    errdefer {
+        deinitCanonicalCallableSetDescriptorContents(allocator, cloned[0..initialized]);
+        allocator.free(cloned);
+    }
+
+    for (descriptors, 0..) |descriptor, i| {
+        const members = try allocator.alloc(canonical.CanonicalCallableSetMember, descriptor.members.len);
+        var member_i: usize = 0;
+        errdefer {
+            for (members[0..member_i]) |member| {
+                if (member.capture_slots.len > 0) allocator.free(member.capture_slots);
+            }
+            allocator.free(members);
+        }
+        for (descriptor.members) |member| {
+            members[member_i] = .{
+                .member = member.member,
+                .proc_value = member.proc_value,
+                .source_proc = member.source_proc,
+                .capture_slots = if (member.capture_slots.len == 0)
+                    &.{}
+                else
+                    try allocator.dupe(canonical.CallableSetCaptureSlot, member.capture_slots),
+                .capture_shape_key = member.capture_shape_key,
+            };
+            member_i += 1;
+        }
+        cloned[i] = .{
+            .key = descriptor.key,
+            .members = members,
+        };
+        initialized += 1;
+    }
+    return cloned;
+}
+
+fn deinitCanonicalCallableSetDescriptors(
+    allocator: Allocator,
+    descriptors: []const canonical.CanonicalCallableSetDescriptor,
+) void {
+    deinitCanonicalCallableSetDescriptorContents(allocator, descriptors);
+    if (descriptors.len > 0) allocator.free(descriptors);
+}
+
+fn deinitCanonicalCallableSetDescriptorContents(
+    allocator: Allocator,
+    descriptors: []const canonical.CanonicalCallableSetDescriptor,
+) void {
+    for (descriptors) |descriptor| {
+        for (descriptor.members) |member| {
+            if (member.capture_slots.len > 0) allocator.free(member.capture_slots);
+        }
+        if (descriptor.members.len > 0) allocator.free(descriptor.members);
     }
 }
 
@@ -911,47 +974,6 @@ fn publishedCallableSetDescriptorMatchesSolved(
         }
     }
     return true;
-}
-
-fn publishCallableSetDescriptorsToArtifact(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    descriptors: []const repr.CanonicalCallableSetDescriptor,
-) Allocator.Error!void {
-    if (descriptors.len == 0) return;
-    const canonical_descriptors = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, descriptors.len);
-    defer allocator.free(canonical_descriptors);
-
-    var member_shells = try allocator.alloc([]canonical.CanonicalCallableSetMember, descriptors.len);
-    defer allocator.free(member_shells);
-    for (member_shells) |*members| members.* = &.{};
-    defer {
-        for (member_shells) |members| {
-            if (members.len > 0) allocator.free(members);
-        }
-    }
-
-    for (descriptors, 0..) |descriptor, i| {
-        const members = try allocator.alloc(canonical.CanonicalCallableSetMember, descriptor.members.len);
-        member_shells[i] = members;
-        for (descriptor.members, 0..) |member, member_i| {
-            const published_proc_value = member.published_proc_value orelse checkedPipelineInvariant("checking finalization attempted to publish callable-set member without artifact-owned procedure value");
-            const published_source_proc = member.published_source_proc orelse checkedPipelineInvariant("checking finalization attempted to publish callable-set member without artifact-owned source procedure");
-            members[member_i] = .{
-                .member = member.member,
-                .proc_value = published_proc_value,
-                .source_proc = published_source_proc,
-                .capture_slots = member.capture_slots,
-                .capture_shape_key = member.capture_shape_key,
-            };
-        }
-        canonical_descriptors[i] = .{
-            .key = descriptor.key,
-            .members = members,
-        };
-    }
-
-    try artifact.callable_set_descriptors.publishFromDescriptors(allocator, canonical_descriptors);
 }
 
 fn publishErasedFnAbisForLowering(

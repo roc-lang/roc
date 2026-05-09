@@ -3756,7 +3756,7 @@ const RepresentationClassSolver = struct {
             const root: repr.RepRootId = @enumFromInt(@as(u32, @intCast(raw_root)));
             class.* = try self.classForRoot(root);
         }
-        self.session.representation_store.publishRootClasses(root_classes);
+        try self.session.representation_store.publishRootClasses(root_classes);
 
         for (self.session.members) |member| {
             const record = self.recordForInstance(member);
@@ -7909,48 +7909,62 @@ const ValueTransformFinalizer = struct {
         to: repr.SessionExecutableValueEndpoint,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        const from_payload = self.sessionPayload(from.exec_ty.ty);
-        const to_payload = self.sessionPayload(to.exec_ty.ty);
+        const from_payload = self.resolvedSessionPayload(from.exec_ty.ty);
+        const to_payload = self.resolvedSessionPayload(to.exec_ty.ty);
         return switch (from_payload) {
             .record => |source| switch (to_payload) {
                 .record => |target| try self.planRecordTransform(scope, from, to, source, target, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .tuple => |source| switch (to_payload) {
                 .tuple => |target| try self.planTupleTransform(scope, from, to, source, target, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .tag_union => |source| switch (to_payload) {
                 .tag_union => |target| try self.planTagUnionTransform(scope, from, to, source, target, provenance),
                 .primitive => self.transformPayloadInvariant(from, to, from_payload, to_payload),
-                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, source, target, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .nominal => |source| switch (to_payload) {
                 .nominal => |target| try self.planNominalTransform(scope, from, to, source, target, provenance),
-                .tag_union => |target| try self.planNominalToBackingTransform(scope, from, to, source, target, provenance),
-                else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
+                .pending,
+                .recursive_ref,
+                => self.transformPayloadInvariant(from, to, from_payload, to_payload),
+                else => try self.planNominalToBackingTransform(scope, from, to, source, provenance),
             },
             .list => |source| switch (to_payload) {
                 .list => |target| try self.planListTransform(scope, from, to, source, target, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .box => |source| switch (to_payload) {
                 .box => |target| try self.planBoxTransform(scope, from, to, source, target, .box_to_box, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .callable_set => |source| switch (to_payload) {
                 .erased_fn => |target| try self.planFiniteCallableToErasedTransform(scope, from, to, source, target, provenance),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
             .erased_fn => |source| switch (to_payload) {
                 .erased_fn => |target| try self.planAlreadyErasedCallableTransform(scope, from, to, source, target),
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
                 else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
             },
-            .primitive,
-            .vacant_callable_slot,
-            .recursive_ref,
+            .primitive => switch (to_payload) {
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
+                else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
+            },
+            .vacant_callable_slot => switch (to_payload) {
+                .nominal => |target| try self.planBackingToNominalTransform(scope, from, to, target, provenance),
+                else => self.transformPayloadInvariant(from, to, from_payload, to_payload),
+            },
             .pending,
+            .recursive_ref,
             => self.transformPayloadInvariant(from, to, from_payload, to_payload),
         };
     }
@@ -8195,12 +8209,10 @@ const ValueTransformFinalizer = struct {
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
         source: repr.SessionExecutableNominalPayload,
-        target: repr.SessionExecutableTagUnionPayload,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        _ = target;
         if (!repr.canonicalExecValueTypeKeyEql(source.backing_key, to.exec_ty.key)) {
-            self.transformPayloadInvariant(from, to, self.sessionPayload(from.exec_ty.ty), self.sessionPayload(to.exec_ty.ty));
+            self.transformPayloadInvariant(from, to, self.resolvedSessionPayload(from.exec_ty.ty), self.resolvedSessionPayload(to.exec_ty.ty));
         }
         return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
             .structural_bridge = .nominal_reinterpret,
@@ -8212,13 +8224,11 @@ const ValueTransformFinalizer = struct {
         scope: repr.TransformEndpointScopeId,
         from: repr.SessionExecutableValueEndpoint,
         to: repr.SessionExecutableValueEndpoint,
-        source: repr.SessionExecutableTagUnionPayload,
         target: repr.SessionExecutableNominalPayload,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        _ = source;
         if (!repr.canonicalExecValueTypeKeyEql(from.exec_ty.key, target.backing_key)) {
-            self.transformPayloadInvariant(from, to, self.sessionPayload(from.exec_ty.ty), self.sessionPayload(to.exec_ty.ty));
+            self.transformPayloadInvariant(from, to, self.resolvedSessionPayload(from.exec_ty.ty), self.resolvedSessionPayload(to.exec_ty.ty));
         }
         return try self.appendSessionValueTransform(scope, from, to, self.provenanceFor(provenance), .{
             .structural_bridge = .nominal_reinterpret,

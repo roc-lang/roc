@@ -3373,6 +3373,105 @@ explicit stage data carried from the point where both identities are known. A
 missing publication identity in a persistence path is handled only as a compiler
 bug: debug assertion in debug builds, `unreachable` in release builds.
 
+Compile-time lowering must keep the runtime descriptor table separate from the
+checked artifact descriptor store. During checking finalization, MIR/IR/LIR
+lowering may create callable-set descriptors whose members are valid only in the
+current lowering run's canonical-name store. Those descriptors are required for
+the LIR interpreter to decode finite callable values, select callable-set
+members from runtime payloads, follow erased finite-set adapters, and materialize
+captures. They must be returned as owned lowering output, for example:
+
+```zig
+const LoweredProgram = struct {
+    lir_result: LowerIr.Result,
+    callable_set_descriptors: []const RuntimeCallableSetDescriptor,
+    // ...
+};
+```
+
+Those `LoweredProgram.callable_set_descriptors` rows are runtime lowering
+descriptors, not checked-artifact descriptors. Each member carries both kinds of
+identity when both are known:
+
+```zig
+const RuntimeCallableSetMember = struct {
+    member: CallableSetMemberId,
+
+    // The lowering-run identity used by this exact LIR program and interpreter
+    // run. This may name lifted/local/synthetic lowering procedures that cannot
+    // be stored in a checked artifact.
+    proc_value: ProcedureCallableRef,
+    source_proc: MirProcedureRef,
+
+    // The artifact-owned identity for persistence boundaries, if this member
+    // already has one. This is the only identity a checked artifact may store
+    // when collapsing a selected finite callable to an existing procedure.
+    published_proc_value: ?ProcedureCallableRef,
+    published_source_proc: ?MirProcedureRef,
+
+    capture_slots: []const CallableSetCaptureSlot,
+    capture_shape_key: CaptureShapeKey,
+};
+```
+
+The runtime `proc_value` and `source_proc` identities are consumed by
+compile-time evaluation for the LIR it is currently interpreting. The optional
+`published_*` identities are consumed only when finalization crosses a
+persistence boundary. Runtime descriptors are not imported by later modules and
+are not copied wholesale into `CheckedModuleArtifact`.
+
+`CheckedModuleArtifact.callable_set_descriptors` stores only persisted
+descriptors whose members all have artifact-owned publication identities. A
+checking-finalization dependency-summary pass must not publish every solved
+descriptor into the artifact just because the interpreter needs it. If a solved
+descriptor member has `publication == null`, that is legal while interpreting
+the current lowered program; it is illegal only at a persistence boundary.
+
+The persistence boundaries are:
+
+- a `CallableResultPlan` or materialized finite callable value stored in a
+  checked artifact
+- a promoted callable wrapper body plan
+- a promoted private capture plan
+- an erased callable capture materialization plan stored in
+  `CompileTimePlanStore`
+- a callable binding instance, constant instance, dependency summary, or
+  exported compile-time value that must survive the current lowering run
+
+At those boundaries, each selected finite callable member must either already
+have artifact-owned `published_source_proc` and `published_proc_value`, or the
+finalizer must promote that selected member into a private synthetic checked
+procedure and persist the promoted procedure's artifact-owned identity. It must
+not persist the lowering-run member identity. A selected member with empty
+captures may collapse to an existing procedure only when
+`published_proc_value != null`; being a captureless runtime member whose
+`proc_value.template` happens to be `.checked` or `.synthetic` is not sufficient,
+because that template may be a lowering-run or relation-local identity. If the
+selected member has no `published_proc_value`, finalization must use the
+promotion path even when it has no captures. It must not reject the entire
+lowering-run descriptor merely because another member in the transient descriptor
+has not yet been promoted.
+
+For example:
+
+```roc
+module [make]
+
+make = |n|
+    |x| x + n
+
+add_one = make(1)
+```
+
+When `add_one` is evaluated at compile time, the interpreter needs the transient
+callable-set descriptor for the closure produced by `make(1)` so it can decode
+the finite callable payload in this exact lowered program. That descriptor may
+name a lifted procedure with no checked-artifact identity. The checked artifact
+must not store that lifted procedure identity. If `add_one` is later persisted as
+a callable top-level value, the selected member is promoted to a synthetic
+checked procedure, and only the promoted procedure identity is written to the
+artifact descriptor store.
+
 For example:
 
 ```roc
@@ -3839,6 +3938,44 @@ endpoint's executable value key. If callable representation inside the backing
 differs, the value-transform planner must use a recursive transform that reaches
 those callable leaves explicitly; it must not hide callable conversion inside
 `nominal_reinterpret`.
+
+This rule is not specific to tag-union backings. The backing endpoint may be a
+primitive, record, tuple, tag union, list, `Box(T)`, finite callable set, erased
+callable, or another transparent nominal's published backing endpoint. The
+planner's dispatch shape is:
+
+```zig
+fn planNonIdentityValueTransform(from: Endpoint, to: Endpoint) Transform {
+    const from_payload = resolvedSessionPayload(from.exec_ty.ty);
+    const to_payload = resolvedSessionPayload(to.exec_ty.ty);
+
+    if (from_payload == .nominal and to_payload != .nominal) {
+        if (from_payload.nominal.backing_key == to.exec_ty.key) {
+            return structural_bridge(.nominal_reinterpret);
+        }
+
+        compilerBug("nominal-to-backing transform did not target the published backing");
+    }
+
+    if (from_payload != .nominal and to_payload == .nominal) {
+        if (from.exec_ty.key == to_payload.nominal.backing_key) {
+            return structural_bridge(.nominal_reinterpret);
+        }
+
+        compilerBug("backing-to-nominal transform did not source the published backing");
+    }
+
+    // Ordinary same-shape transforms: record-to-record, tuple-to-tuple,
+    // tag-union-to-tag-union, list-to-list, box-to-box, callable-to-erased, etc.
+}
+```
+
+The code must not spell this as "tag union to nominal" or "nominal to tag union."
+Doing that accidentally treats transparent nominals over records, tuples, lists,
+boxes, primitive values, and callable values as incompatible with their own
+published runtime representation. Builtin transparent nominals follow the same
+rule as user-defined transparent nominals; lowering must not special-case `Bool`
+or any other builtin nominal runtime representation.
 
 List construction and list executable type publication are keyed by the solved
 list-element endpoint, not by any representative element value. Lambda-solved
@@ -4445,6 +4582,68 @@ source declarations. If a `recursive_ref` chain does not terminate at a concrete
 payload in the same `SessionExecutableTypePayloadStore`, that is a compiler bug:
 debug builds assert immediately, and release builds use `unreachable`.
 
+Existing-value transform planning follows the same rule. `recursive_ref` is a
+transparent payload edge, not an incompatible payload case. `planValueTransform`
+must compare canonical executable keys first. If the keys are identical, it
+emits identity using the original endpoints. If the keys differ, it resolves
+`recursive_ref` chains for both the source and target payload refs before it
+dispatches on the concrete payload kind:
+
+```zig
+fn planNonIdentityValueTransform(
+    from: SessionExecutableValueEndpoint,
+    to: SessionExecutableValueEndpoint,
+) ExecutableValueTransformRef {
+    const from_payload = resolvedSessionPayload(from.exec_ty.ty);
+    const to_payload = resolvedSessionPayload(to.exec_ty.ty);
+
+    return switch (from_payload) {
+        .list => |source| switch (to_payload) {
+            .list => |target| planListTransform(from, to, source, target),
+            else => compilerBug("incompatible executable payloads"),
+        },
+        .nominal => |source| switch (to_payload) {
+            .nominal => |target| planNominalTransform(from, to, source, target),
+            .tag_union => |target| planNominalToBackingTransform(from, to, source, target),
+            else => compilerBug("incompatible executable payloads"),
+        },
+        // ...all other concrete payload cases...
+        .recursive_ref,
+        .pending,
+        => compilerBug("resolved payload dispatch reached an unresolved payload"),
+    };
+}
+```
+
+The transform record still stores the original source and target endpoints, not
+the resolved intermediate payload refs. Resolving `recursive_ref` is only how the
+planner chooses the correct structural transform case. The child endpoints
+inside the transform are still selected from the source and target endpoint
+roots and logical child types, so recursive lists, tags, records, boxes, and
+nominals keep their published graph identity.
+
+For example:
+
+```roc
+module [main]
+
+Tree := [Leaf, Branch(List(Tree))]
+
+use_forest = |forest| forest
+
+main =
+    forest = [Tree.Leaf]
+    use_forest(forest)
+```
+
+The `List(Tree)` argument slot may name an element payload ref that is a
+`recursive_ref` back to the reserved `Tree` payload. If the producer list and the
+parameter list need an existing-value transform, the list transform must resolve
+that element payload ref before deciding the element transform. It must not
+report `recursive_ref` versus `nominal` or `recursive_ref` versus `tag_union` as
+an incompatible executable payload. That would be treating a compact graph edge
+as a runtime representation, which is incorrect.
+
 The rule is direction-sensitive. A `nominal_reinterpret` node is not always
 nominal construction; it may also represent a reinterpretation from a transparent
 nominal to its backing endpoint. Lambda-solved MIR decides this from the
@@ -4580,6 +4779,87 @@ representation is known, constructing directly in that representation is the
 only correct implementation. If the target representation is not known by that
 point, the previous stage failed to publish required data; debug builds assert
 and release builds use `unreachable`.
+
+Lambda-solved representation solving must publish a solved structural-child
+index at the same boundary where it publishes the solved root-class table.
+`representation_edges` are the input graph to solving; they are not a release
+lookup structure after solving has completed. Once `RepRootId -> RepresentationClassId`
+has been published, the `RepresentationStore` must also publish:
+
+```zig
+const StructuralChildKind = struct {
+    tag: enum {
+        record_field,
+        tuple_elem,
+        tag_payload,
+        list_elem,
+        box_payload,
+        nominal_backing,
+    },
+    a: u32 = 0,
+    b: u32 = 0,
+};
+
+const SolvedStructuralChildKey = struct {
+    parent_class: RepresentationClassId,
+    kind: StructuralChildKind,
+};
+
+solved_structural_child_roots: HashMap(SolvedStructuralChildKey, RepRootId)
+```
+
+The key uses the solved parent representation class, not a source `TypeId`, not
+a row/name lookup, and not a physical layout id. `record_field`, `tag_payload`,
+and `nominal_backing` use finalized ids from earlier stages; `tuple_elem` uses
+the tuple index; `list_elem` and `box_payload` have no payload fields. This
+table is built in the same solver publication step that commits root classes:
+
+1. Iterate the already-published local structural representation edges.
+2. Convert each edge kind to `StructuralChildKind`; ignore non-structural
+   value-flow edges such as aliases, branch joins, loop phis, mutable versions,
+   function arguments, function returns, and function-callable edges.
+3. Compute `parent_class = classForRoot(edge.from)`.
+4. Compute `child_class = classForRoot(edge.to)`.
+5. Insert `(parent_class, child_kind) -> child_root`.
+6. If the same key is seen again with a child root in the same child class, keep
+   one deterministic canonical root, such as the smallest `RepRootId`.
+7. If the same key is seen with a different child class, that is a compiler bug:
+   debug builds assert and release builds use `unreachable`.
+
+This is required release-path compiler data, not a debug verifier and not a
+memoizing cache. It is the compact published result of representation solving:
+one entry per distinct structural child relation after solved-class merging.
+Executable key generation, capture-slot computation, session executable payload
+construction, value-transform finalization, boxed payload planning, and any
+other post-solve consumer must query this table directly. They must not scan
+`representation_edges`, re-run structural grouping, inspect row names, compare
+layout shapes, or recover child roots from source syntax.
+
+For example, this Roc value has one solved representation class for the outer
+record and one solved child relation for the finalized `f` field:
+
+```roc
+module [wrap]
+
+wrap = |f| { f }
+```
+
+If `f` later flows into `Box(I64 -> I64)`, the callable representation selected
+for the field is observed through the structural child index:
+
+```roc
+module [make]
+
+make = |n|
+    { f: |x| x + n }
+
+boxed = Box.box(make(1))
+```
+
+Post-solve lowering asks for `(class({ f: ... }), record_field(f))` and receives
+the canonical child root whose class contains the actual field value. It does
+not scan the record's edges again and does not compare the field name `f` to
+recover the relationship.
 
 Transform plans must carry stable semantic labels for structural children.
 Record transforms name fields with `RecordFieldLabelId`; tuple transforms name
@@ -21303,6 +21583,219 @@ checking-finalization interpreter entrypoint keyed by the
 value into sealed checked procedure data owned by the requesting artifact, and
 fills the requesting artifact's `CallableBindingInstantiationStore`.
 
+A callable-eval binding is not fully named by its `CallableEvalTemplateId`.
+The `CallableEvalTemplate` row names the compile-time root and checked function
+type for the binding, but the actual thing mono specializes is the private
+entry-wrapper checked procedure template for that root:
+
+```zig
+const CallableEvalTemplate = struct {
+    id: CallableEvalTemplateId,
+    module_idx: u32,
+    pattern: CheckedPatternId,
+    root: ComptimeRootId,
+    source_scheme: CanonicalTypeSchemeKey,
+    checked_fn_root: CheckedTypeId,
+};
+
+const EntryWrapper = struct {
+    id: EntryWrapperId,
+    root: ComptimeRootId,
+    template: ProcedureTemplateRef,
+    checked_fn_root: CheckedTypeId,
+    body_expr: CheckedExprId,
+};
+```
+
+For a local callable-eval binding, mono may resolve
+`CallableEvalTemplate.root` through the local artifact's `EntryWrapperTable`.
+For an imported callable-eval binding, a platform/app callable requirement, or
+any other relation-owned callable-eval binding, mono may resolve that private
+entry wrapper only through the explicit `ImportedTemplateClosureView` published
+with the binding. The closure for a callable-eval binding must therefore include
+all of the following, at minimum:
+
+- the exported `CallableEvalTemplate` row itself
+- the entry-wrapper `ProcedureTemplateRef` selected by
+  `EntryWrapperTable.lookupByRoot(callable_eval_template.root)`
+- that entry wrapper's checked type root and checked type scheme
+- that entry wrapper's resolved value-reference table, static-dispatch plan
+  span, nested-procedure site span, and every ordinary private procedure or
+  constant dependency reachable from those spans
+- module interface capabilities needed while lowering that wrapper
+
+The importer must not treat `CallableEvalTemplateId` as permission to read any
+private entry-wrapper procedure in the imported artifact. The visibility rule is
+the same as for exported procedures and constants: the template is visible only
+if it is exported directly or listed in the imported closure carried by the
+exported binding view or platform/app relation.
+
+For example, this exported binding is a function-valued value, not a direct
+top-level function definition after checking:
+
+```roc
+module [also_id]
+
+private_id = |x| x
+
+also_id = if Bool.true private_id else private_id
+```
+
+An importing module may instantiate it at more than one concrete function type:
+
+```roc
+module [main]
+
+import A
+
+main =
+    n = A.also_id(41)
+    s = A.also_id("ok")
+
+    Str.concat(Num.to_str(n), s)
+```
+
+The importing artifact must create concrete
+`CallableBindingInstantiationRequest` rows for the `I64 -> I64` and
+`Str -> Str` uses. Each request names the stable imported procedure binding and
+the concrete requested function type. Mono then selects the binding's
+callable-eval entry wrapper and must carry the binding's
+`ImportedTemplateClosureView` into specialization:
+
+```zig
+const RootTemplateSelection = struct {
+    template: ProcedureTemplateRef,
+    imported_closure: ?ImportedTemplateClosureView,
+};
+
+fn callableEvalEntryTemplateForRequest(
+    input: MonoInput,
+    request: CallableBindingInstantiationRequest,
+) ?RootTemplateSelection;
+```
+
+For the imported `A.also_id` example, that selection is:
+
+```zig
+.{
+    .template = entry_wrapper.template,
+    .imported_closure = imported_procedure_binding_view.template_closure,
+}
+```
+
+For a platform-required callable value supplied by an app, the same rule uses
+the sealed app relation closure:
+
+```zig
+.{
+    .template = entry_wrapper.template,
+    .imported_closure =
+        platform_required_procedure_use.relation_template_closure,
+}
+```
+
+It is a compiler bug to return only the raw private entry-wrapper
+`ProcedureTemplateRef` for a non-local callable-eval binding. Doing so loses the
+only explicit visibility authorization for the private wrapper and causes later
+mono specialization either to reject the template or to be tempted to scan the
+imported artifact for private definitions. Both outcomes violate the artifact
+boundary. Debug builds must assert immediately if the closure does not list the
+selected entry-wrapper procedure template; release builds use `unreachable` for
+the same invariant violation.
+
+The same closure ownership applies after the concrete
+`CallableBindingInstance` has been sealed. The instance publishes a concrete
+`proc_value`, but that `proc_value` is not a complete imported visibility proof
+by itself. A dependency reservation that starts from
+`CallableBindingInstanceRef` must reserve the instance's `proc_value` together
+with the closure named by `CallableBindingInstantiationKey.binding`:
+
+```zig
+fn reserveCallableBindingInstanceRefDependencies(
+    input: MonoInput,
+    ref: CallableBindingInstanceRef,
+) void {
+    const instance = callableBindingInstanceForRef(input, ref);
+    const closure = closureForCallableBindingInstanceRef(input, ref);
+
+    reserveProcedureCallableDependency(
+        instance.proc_value,
+        closure,
+        .{ .callable_binding_instance = ref.instance },
+    );
+}
+```
+
+`closureForCallableBindingInstanceRef` is pure artifact lookup over already
+published data:
+
+- `binding = .imported` uses
+  `ImportedProcedureBindingView.template_closure`
+- `binding = .platform_required` uses
+  `PlatformRequiredProcedureUse.relation_template_closure`
+- `binding = .top_level` in the root artifact uses no imported closure because
+  the template is local to the lowering artifact
+- `binding = .hosted` and `binding = .promoted` do not name callable-eval
+  templates
+
+No dependency reservation path may attempt to recover this closure from the raw
+procedure template, source declaration, expression index, or module scan. If a
+sealed callable binding instance names a private imported or relation template
+and the corresponding binding closure is unavailable, the checked artifact is
+invalid: debug builds assert immediately and release builds use `unreachable`.
+
+The same rule applies while lowering a checked procedure template that was
+itself selected through an imported or platform/app closure. Direct calls and
+procedure values are both specialization edges. If either edge targets a
+procedure template listed in the current `ImportedTemplateClosureView`, the
+mono queue reservation must carry that current closure:
+
+```zig
+fn reserveCallableProcedure(
+    callable: ProcedureCallableRef,
+    requested_fn_ty: ConcreteSourceTypeRef,
+) MirProcedureRef {
+    const template = checkedTemplateFromCallableTemplate(callable.template);
+    const closure =
+        if (current_template_lookup.imported_closure contains template)
+            current_template_lookup.imported_closure
+        else
+            null;
+
+    queue.reserve(.{
+        .template = template,
+        .callable_template = callable.template,
+        .requested_fn_ty = requested_fn_ty,
+        .imported_closure = closure,
+    });
+}
+```
+
+This matters for ordinary function values, not only calls. For example, an
+exported binding may return a private helper as a value:
+
+```roc
+module [pick]
+
+private_helper = |x| x
+
+pick = |cond|
+    if cond private_helper else private_helper
+```
+
+When an importing module evaluates `A.pick(Bool.true)` at compile time, mono
+lowers the imported `pick` template under `pick`'s closure. The body contains a
+procedure value for `private_helper`. That `proc_value` reservation must inherit
+the current closure because `private_helper` is not exported. Treating only
+`call_proc` as a closure-carrying edge would make function-valued results fail
+or tempt a later stage to rediscover the private helper from source.
+
+Lifted callable owners follow the same rule. If a lifted callable's owner
+specialization belongs to a template listed in the current imported closure,
+reserving that owner must carry the closure. Lifted MIR may split local
+function bodies later, but the visibility permission still comes from the
+checked template closure that allowed the owner template to be lowered.
+
 `ImportedTemplateClosureView` is a serialized semantic closure, not a source
 module. It contains only the checked bodies, checked type roots, checked type
 schemes, checked callable bodies, checked constant bodies, checked procedure
@@ -25944,6 +26437,10 @@ Preserve and clean up the real responsibilities:
 - solve structural representation classes with explicit merge rules for
   primitives, records, tuples, tag unions, `List(T)`, `Box(T)`, nominals,
   functions, and callable slots
+- publish the solved structural-child index keyed by
+  `(RepresentationClassId, StructuralChildKind)` immediately after publishing
+  solved root classes; post-solve consumers must use that index and must not
+  scan `representation_edges` to rediscover child roots
 - solve boxed payload representation requirements only after
   specialization-local clone-instantiation and full type-link resolution
 - publish and consume explicit module-interface representation capability
@@ -29372,6 +29869,10 @@ The cutover is complete only when all of these are true:
 - lambda-solved MIR solves structural representation classes with explicit merge
   rules for primitives, records, tuples, tag unions, `List(T)`, `Box(T)`,
   nominals, functions, and callable slots
+- lambda-solved MIR publishes a solved structural-child index keyed by
+  `(RepresentationClassId, StructuralChildKind)` in the same operation that
+  publishes root classes, and every post-solve structural child lookup consumes
+  that index instead of scanning `representation_edges`
 - row finalization emits explicit `RecordShapeId`, `RecordFieldId`,
   `TagUnionShapeId`, `TagId`, and `TagPayloadId` records before representation
   solving

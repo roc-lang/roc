@@ -491,7 +491,7 @@ fn evaluateConstantRoot(
         .checked_types = &artifact.checked_types,
         .layouts = &lowered.lir_result.layouts,
         .lowered = lowered,
-        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
         .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(allocator),
         .promotion_context = .{
             .source_binding = pattern,
@@ -561,7 +561,7 @@ fn evaluateCallableBindingRoot(
         .finite => blk: {
             const selected_callable = selectFiniteCallableResult(
                 &artifact.comptime_plans,
-                artifact.callable_set_descriptors.descriptors,
+                lowered.callable_set_descriptors,
                 &lowered.lir_result.layouts,
                 result_plan,
                 ret_layout,
@@ -919,7 +919,7 @@ fn ensureConstInstanceRequest(
                 .checked_types = &artifact.checked_types,
                 .layouts = &lowered_request.lowered.lir_result.layouts,
                 .lowered = &lowered_request.lowered,
-                .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+                .callable_set_descriptors = lowered_request.lowered.callable_set_descriptors,
                 .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(allocator),
                 .promotion_context = .{
                     .source_binding = sourceBindingForConstInstanceRequest(artifact, request.key.const_ref),
@@ -1246,7 +1246,7 @@ fn ensureCallableBindingInstanceRequest(
         .finite => blk: {
             const selected_callable = selectFiniteCallableResult(
                 &artifact.comptime_plans,
-                artifact.callable_set_descriptors.descriptors,
+                lowered_request.lowered.callable_set_descriptors,
                 &lowered_request.lowered.lir_result.layouts,
                 result_plan,
                 ret_layout,
@@ -2306,7 +2306,7 @@ fn promoteFiniteCallableResult(
         .artifact = artifact,
         .lowered = lowered,
         .layouts = &lowered.lir_result.layouts,
-        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
         .owner = reserved.promoted_ref,
         .promotion_context = .{
             .source_binding = context.source_binding,
@@ -2410,7 +2410,7 @@ fn publishErasedCallableResult(
         .artifact = artifact,
         .lowered = lowered,
         .layouts = &lowered.lir_result.layouts,
-        .callable_set_descriptors = artifact.callable_set_descriptors.descriptors,
+        .callable_set_descriptors = lowered.callable_set_descriptors,
         .owner = reserved.promoted_ref,
         .promotion_context = .{
             .source_binding = context.source_binding,
@@ -2592,7 +2592,7 @@ fn persistConcreteFiniteAdapterAsSingleton(
     };
     const selected = selectFiniteCallableResult(
         &artifact.comptime_plans,
-        artifact.callable_set_descriptors.descriptors,
+        lowered.callable_set_descriptors,
         &lowered.lir_result.layouts,
         result_plan,
         hidden_physical.layout_idx,
@@ -3022,7 +3022,7 @@ fn materializedFiniteCallableSetValue(
 ) Allocator.Error!checked_artifact.MaterializedFiniteCallableSetValue {
     const selected = selectFiniteCallableResult(
         &capture_builder.artifact.comptime_plans,
-        capture_builder.artifact.callable_set_descriptors.descriptors,
+        capture_builder.callable_set_descriptors,
         &lowered.lir_result.layouts,
         result_plan,
         layout_idx,

@@ -187,6 +187,24 @@ pub const RepresentationEdge = struct {
     kind: RepresentationEdgeKind,
 };
 
+const StructuralChildKind = struct {
+    tag: enum {
+        record_field,
+        tuple_elem,
+        tag_payload,
+        list_elem,
+        box_payload,
+        nominal_backing,
+    },
+    a: u32 = 0,
+    b: u32 = 0,
+};
+
+const SolvedStructuralChildKey = struct {
+    parent_class: RepresentationClassId,
+    kind: StructuralChildKind,
+};
+
 /// Public `RepresentationRequirement` declaration.
 pub const RepresentationRequirement = union(enum) {
     require_box_erased: BoxErasureRequirement,
@@ -573,64 +591,36 @@ fn deinitSessionExecutableTypePayload(
     payload.* = undefined;
 }
 
-fn representationEdgeKindEql(a: RepresentationEdgeKind, b: RepresentationEdgeKind) bool {
-    return switch (a) {
-        .value_alias => switch (b) {
-            .value_alias => true,
-            else => false,
+fn structuralChildKindFromEdgeKind(kind: RepresentationEdgeKind) ?StructuralChildKind {
+    return switch (kind) {
+        .record_field => |field| .{
+            .tag = .record_field,
+            .a = @intFromEnum(field),
         },
-        .value_move => switch (b) {
-            .value_move => true,
-            else => false,
+        .tuple_elem => |index| .{
+            .tag = .tuple_elem,
+            .a = index,
         },
-        .function_arg => |left| switch (b) {
-            .function_arg => |right| left == right,
-            else => false,
+        .tag_payload => |payload| .{
+            .tag = .tag_payload,
+            .a = @intFromEnum(payload),
         },
-        .function_return => switch (b) {
-            .function_return => true,
-            else => false,
+        .list_elem => .{ .tag = .list_elem },
+        .box_payload => .{ .tag = .box_payload },
+        .nominal_backing => |nominal| .{
+            .tag = .nominal_backing,
+            .a = @intFromEnum(nominal.module_name),
+            .b = @intFromEnum(nominal.type_name),
         },
-        .function_callable => switch (b) {
-            .function_callable => true,
-            else => false,
-        },
-        .record_field => |left| switch (b) {
-            .record_field => |right| left == right,
-            else => false,
-        },
-        .tuple_elem => |left| switch (b) {
-            .tuple_elem => |right| left == right,
-            else => false,
-        },
-        .tag_payload => |left| switch (b) {
-            .tag_payload => |right| left == right,
-            else => false,
-        },
-        .list_elem => switch (b) {
-            .list_elem => true,
-            else => false,
-        },
-        .box_payload => switch (b) {
-            .box_payload => true,
-            else => false,
-        },
-        .nominal_backing => |left| switch (b) {
-            .nominal_backing => |right| left.module_name == right.module_name and left.type_name == right.type_name,
-            else => false,
-        },
-        .branch_join => switch (b) {
-            .branch_join => true,
-            else => false,
-        },
-        .loop_phi => switch (b) {
-            .loop_phi => true,
-            else => false,
-        },
-        .mutable_version => switch (b) {
-            .mutable_version => true,
-            else => false,
-        },
+        .value_alias,
+        .value_move,
+        .function_arg,
+        .function_return,
+        .function_callable,
+        .branch_join,
+        .loop_phi,
+        .mutable_version,
+        => null,
     };
 }
 
@@ -1780,6 +1770,8 @@ pub const RepresentationStore = struct {
     callable_class_emissions: []?CallableValueEmissionPlanId = &.{},
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     root_type_infos: std.AutoHashMap(RepRootId, RepresentationRootTypeInfo),
+    solved_structural_child_roots: std.AutoHashMap(SolvedStructuralChildKey, RepRootId),
+    solved_structural_child_roots_published: bool = false,
     representation_edges: std.ArrayList(RepresentationEdge) = .empty,
     representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
@@ -1803,6 +1795,7 @@ pub const RepresentationStore = struct {
             .allocator = allocator,
             .root_kinds = std.AutoHashMap(RepRootId, RepresentationRootKind).init(allocator),
             .root_type_infos = std.AutoHashMap(RepRootId, RepresentationRootTypeInfo).init(allocator),
+            .solved_structural_child_roots = std.AutoHashMap(SolvedStructuralChildKey, RepRootId).init(allocator),
             .session_executable_type_payloads = SessionExecutableTypePayloadStore.init(allocator),
         };
     }
@@ -1874,6 +1867,7 @@ pub const RepresentationStore = struct {
         if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
+        self.solved_structural_child_roots.deinit();
         self.root_type_infos.deinit();
         self.root_kinds.deinit();
         self.* = RepresentationStore.init(self.allocator);
@@ -2012,6 +2006,8 @@ pub const RepresentationStore = struct {
         self.classes_len = 0;
         if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
         self.root_classes = &.{};
+        self.solved_structural_child_roots.clearRetainingCapacity();
+        self.solved_structural_child_roots_published = false;
         if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
         self.callable_class_emissions = &.{};
     }
@@ -2019,7 +2015,7 @@ pub const RepresentationStore = struct {
     pub fn publishRootClasses(
         self: *RepresentationStore,
         root_classes: []RepresentationClassId,
-    ) void {
+    ) std.mem.Allocator.Error!void {
         if (root_classes.len != @as(usize, @intCast(self.roots_len))) {
             debug.invariant(false, "lambda-solved invariant violated: solved root class table length differs from root count");
             unreachable;
@@ -2028,7 +2024,18 @@ pub const RepresentationStore = struct {
             debug.invariant(false, "lambda-solved invariant violated: solved root classes were published twice");
             unreachable;
         }
+        if (self.solved_structural_child_roots_published) {
+            debug.invariant(false, "lambda-solved invariant violated: solved structural child roots were published twice");
+            unreachable;
+        }
         self.root_classes = root_classes;
+        errdefer {
+            self.root_classes = &.{};
+            self.solved_structural_child_roots.clearRetainingCapacity();
+            self.solved_structural_child_roots_published = false;
+        }
+        try self.publishSolvedStructuralChildRoots();
+        self.solved_structural_child_roots_published = true;
     }
 
     pub fn classForRoot(self: *const RepresentationStore, root: RepRootId) RepresentationClassId {
@@ -2049,20 +2056,31 @@ pub const RepresentationStore = struct {
         parent: RepRootId,
         kind: RepresentationEdgeKind,
     ) ?RepRootId {
+        if (!self.solved_structural_child_roots_published) {
+            debug.invariant(false, "lambda-solved invariant violated: solved structural child roots are not published");
+            unreachable;
+        }
+        const child_kind = structuralChildKindFromEdgeKind(kind) orelse {
+            debug.invariant(false, "lambda-solved invariant violated: solved structural child root lookup used a non-structural edge kind");
+            unreachable;
+        };
         const parent_class = self.classForRoot(parent);
-        var found: ?RepRootId = null;
-        var found_class: ?RepresentationClassId = null;
+        return self.solved_structural_child_roots.get(.{
+            .parent_class = parent_class,
+            .kind = child_kind,
+        });
+    }
 
+    fn publishSolvedStructuralChildRoots(self: *RepresentationStore) std.mem.Allocator.Error!void {
+        self.solved_structural_child_roots.clearRetainingCapacity();
         for (self.representation_edges.items) |edge| {
+            const kind = structuralChildKindFromEdgeKind(edge.kind) orelse continue;
             const from = switch (edge.from) {
                 .local => |root| root,
                 .procedure_public,
                 .procedure_function_root,
                 => continue,
             };
-            if (self.classForRoot(from) != parent_class) continue;
-            if (!representationEdgeKindEql(edge.kind, kind)) continue;
-
             const child = switch (edge.to) {
                 .local => |root| root,
                 .procedure_public,
@@ -2072,22 +2090,26 @@ pub const RepresentationStore = struct {
                     unreachable;
                 },
             };
+            const key: SolvedStructuralChildKey = .{
+                .parent_class = self.classForRoot(from),
+                .kind = kind,
+            };
             const child_class = self.classForRoot(child);
-            if (found_class) |existing_class| {
+            const entry = try self.solved_structural_child_roots.getOrPut(key);
+            if (entry.found_existing) {
+                const existing = entry.value_ptr.*;
+                const existing_class = self.classForRoot(existing);
                 if (existing_class != child_class) {
                     debug.invariant(false, "lambda-solved invariant violated: solved structural projection class is ambiguous");
                     unreachable;
                 }
-                if (@intFromEnum(child) < @intFromEnum(found.?)) {
-                    found = child;
+                if (@intFromEnum(child) < @intFromEnum(existing)) {
+                    entry.value_ptr.* = child;
                 }
             } else {
-                found = child;
-                found_class = child_class;
+                entry.value_ptr.* = child;
             }
         }
-
-        return found;
     }
 
     pub fn publishCallableClassEmission(
