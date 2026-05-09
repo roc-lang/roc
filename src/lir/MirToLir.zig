@@ -5111,6 +5111,23 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
         try self.scratch_lir_expr_ids.append(self.allocator, ensured_arg);
     }
 
+    // If any lowered arg is itself a `runtime_error` (an atomic, noreturn LIR
+    // expression — see `isAtomicExpr`), the entire low-level call is
+    // unreachable: evaluating that arg traps and the op never executes. Replace
+    // the call with a single `runtime_error` carrying the call's ret layout so
+    // backends never see a noreturn expression in a value-position arg slot.
+    // Any accumulated let-bindings for prior args are preserved by `acc.finish`
+    // so their side effects still happen in source order before the trap.
+    for (self.scratch_lir_expr_ids.items[save_expr_len..]) |arg_lir_id| {
+        if (self.lir_store.getExpr(arg_lir_id) == .runtime_error) {
+            const re_result = try self.lir_store.addExpr(
+                .{ .runtime_error = .{ .ret_layout = ret_layout } },
+                region,
+            );
+            return acc.finish(re_result, ret_layout, region);
+        }
+    }
+
     const lir_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_expr_len..]);
     const callable_proc = switch (ll.op) {
         .list_sort_with => blk: {
