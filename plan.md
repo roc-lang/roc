@@ -5407,6 +5407,23 @@ const ProcedureUseTemplate = struct {
     source_fn_ty_payload: ArtifactCheckedTypeRef,
 };
 
+const PlatformRequiredProcedureUse = struct {
+    procedure: ProcedureUseTemplate,
+
+    // Relation-owned authorization closure for the app procedure template(s)
+    // named by `procedure`.
+    relation_template_closure: ImportedTemplateClosureView,
+};
+
+const PlatformRequiredConstUse = struct {
+    const_use: ConstUseTemplate,
+
+    // Relation-owned authorization closure for the app const-eval entry
+    // template named by `const_use`, when the app const is backed by
+    // compile-time evaluation instead of an already-published value graph.
+    relation_template_closure: ImportedTemplateClosureView,
+};
+
 const ResolvedValueRef = union(enum) {
     local_param: ParamId,
     local_value: LocalBindingId,
@@ -5506,7 +5523,19 @@ Mono MIR lowering consumes `ResolvedValueRef` as follows:
   specialization request also carries the `ConcreteSourceTypeRef` payload.
 - `platform_required_const` carries `ConstUseTemplate`. Mono MIR treats it like
   an imported constant use owned by the app artifact and addressed through the
-  platform/app relation; it must not synthesize a platform-local procedure.
+  platform/app relation; it must not synthesize a platform-local procedure. If
+  that const requires a `ConstInstantiationRequest`, mono obtains the
+  relation-owned const-eval entry closure from the platform artifact's
+  `PlatformRequiredBindingTable`, just as procedure requirements obtain their
+  procedure closure from the binding table.
+- `platform_required_proc` carries only the procedure-use identity and
+  requested function type payload. The authorization to instantiate private app
+  templates for that use lives in the platform artifact's
+  `PlatformRequiredBindingTable`, not in each resolved value-reference record.
+  Mono MIR must recover the relation template closure by the explicit
+  `RequiredAppProcedureRef` in the `ProcedureUseTemplate.binding`, never by
+  scanning app exports, matching procedure names, or granting access to every
+  private template in the relation artifact.
 - `platform_required_declaration` is allowed only in standalone platform
   artifacts that publish requirement declarations for checking, docs, or glue
   metadata without an app-specific relation. Executable platform artifacts must
@@ -17234,6 +17263,40 @@ post-check lowering APIs. Later stages may consume narrowed views of the
 artifact, but those views must be derived from this artifact and must not scan
 or mutate raw checked modules to rebuild missing semantic data.
 
+The checked artifact owns the `ModuleEnv` storage that backs source-visible
+debug verification and any still-needed source/CIR lookup at the artifact
+boundary. There must be exactly one owner of that storage at a time. Republishing
+an artifact for the same module, such as app co-finalization or
+platform/app-relation finalization, must transfer the existing `ModuleEnvStorage`
+into the replacement artifact. It must not:
+
+- publish the replacement artifact with a borrowed raw `*ModuleEnv` while the
+  previous artifact still owns the allocation
+- deinitialize the previous artifact's `ModuleEnvStorage` after the replacement
+  artifact has stored the same pointer
+- copy only the `ModuleEnv` pointer out of a compiled/cached storage variant and
+  drop the backing serialized buffer
+- keep a second `module_env` owner next to a published checked artifact
+
+The correct republish sequence is:
+
+1. Read the existing artifact's `ModuleEnvStorage` as the storage that the
+   replacement artifact will own.
+2. Build the replacement `CheckedModuleArtifact` using that same storage variant,
+   not a downgraded raw pointer.
+3. Deinitialize the old artifact's published tables while retaining/releasing its
+   `ModuleEnvStorage` without freeing it.
+4. Store the replacement artifact. Any separate module-state `module_env` handle
+   must either be cleared or treated as a non-owning alias; it must not deinit
+   the storage while a checked artifact owns it.
+
+This is not a release optimization. It is an ownership invariant. Violating it
+can leave the published artifact with a dangling `ModuleEnv`, causing debug
+verifiers to read corrupt CIR node lists or later source tooling to inspect freed
+memory. Debug builds should assert this transfer discipline where practical;
+release builds rely on the ownership types and use `unreachable` for impossible
+compiler-invariant paths.
+
 Checking finalization order:
 
 1. Finish type solving and collect all user-facing diagnostics.
@@ -17337,9 +17400,15 @@ Checking finalization order:
     copied from the relation. A platform-required binding for a non-function
     value stores a `PlatformRequiredValueUse.const_value` that points at the app
     `ConstRef` plus the relation's exact requested source type. A binding for a
-    function value stores a `PlatformRequiredValueUse.procedure_value` that
-    points at the sealed app `TopLevelProcedureBindingRef` or concrete
-    callable-binding instance required by the platform's requested function type.
+    function value stores a `PlatformRequiredValueUse.procedure_value` whose
+    nested `ProcedureUseTemplate` points at the sealed app
+    `TopLevelProcedureBindingRef` or concrete callable-binding instance required
+    by the platform's requested function type, and whose
+    `relation_template_closure` authorizes exactly the app checked procedure
+    templates needed to instantiate that requirement. This closure is relation
+    data, not export data: platform-required app functions are allowed to be
+    ordinary top-level app values rather than normal app exports, and their
+    private helpers must be reachable only through the relation closure.
     No binding may be created from a raw app name, pattern lookup, generated
     wrapper name, unsealed `pending_callable_root`, or app-artifact
     `checked_types.rootForKey(platform_requested_type)` lookup. The platform root
@@ -21406,8 +21475,27 @@ const TopLevelValueRef = struct {
 };
 
 const PlatformRequiredValueUse = union(enum) {
-    const_value: ConstUseTemplate,
-    procedure_value: ProcedureUseTemplate,
+    const_value: PlatformRequiredConstUse,
+    procedure_value: PlatformRequiredProcedureUse,
+};
+
+const PlatformRequiredConstUse = struct {
+    const_use: ConstUseTemplate,
+
+    // The exact imported-template closure that authorizes mono MIR to
+    // instantiate the app const-eval entry template and private procedure
+    // templates required by this relation row.
+    relation_template_closure: ImportedTemplateClosureView,
+};
+
+const PlatformRequiredProcedureUse = struct {
+    procedure: ProcedureUseTemplate,
+
+    // The exact imported-template closure that authorizes mono MIR to
+    // instantiate the app procedure template(s) required by this relation row.
+    // This is built while both the sealed app artifact and the platform
+    // requirement relation are known. It is not derived from normal exports.
+    relation_template_closure: ImportedTemplateClosureView,
 };
 
 const PlatformRequiredValueKind = enum {
@@ -21460,10 +21548,168 @@ promoted procedure table. A required value can be a non-function constant or a
 procedure value:
 
 - non-function required values use `PlatformRequiredValueUse.const_value` and
-  point at an app `ConstRef` plus the exact requested source type
+  point at an app `ConstRef` plus the exact requested source type, plus the
+  relation-owned `ImportedTemplateClosureView` that authorizes instantiating the
+  app const-eval entry template and its private dependencies when the const is
+  not already a sealed value graph
 - function required values use `PlatformRequiredValueUse.procedure_value` and
   point at a sealed app procedure binding or concrete callable-binding instance
-  at the platform-requested function type
+  at the platform-requested function type, plus the relation-owned
+  `ImportedTemplateClosureView` that authorizes instantiating the app template
+  and its private dependencies
+
+`relation_artifacts` do not make every private app template visible. They make
+the sealed app artifact available for data lookups after, and only after, an
+earlier relation record has named the specific app value being used. Template
+visibility is still controlled by explicit closures. A platform-required
+function is often not a normal app export:
+
+```roc
+platform "demo"
+    requires {} {
+        make_glue : List(Types) -> Str
+    }
+    exposes []
+    packages {}
+    provides { make_glue_for_host: "make_glue" }
+
+make_glue_for_host : List(Types) -> Str
+make_glue_for_host = |types| make_glue(types)
+```
+
+```roc
+app [main!] { pf: platform "demo.roc" }
+
+import pf.Types exposing [Types]
+
+main! = || {}
+
+make_glue : List(Types) -> Str
+make_glue = |types| format_types(types)
+
+format_types : List(Types) -> Str
+format_types = |types| Str.join_with(List.map(types, Type.name), ",")
+```
+
+The relation may legally bind the platform requirement `make_glue` to the app
+top-level value `make_glue` even if `make_glue` is not a normal exported app
+entrypoint and `format_types` is a private helper. Mono lowering of the platform
+root must instantiate the app template for `make_glue`, and the imported
+template closure must include `format_types` because it is required by that
+template body. The correct authority is the relation row's
+`PlatformRequiredProcedureUse.relation_template_closure`.
+
+That closure is not limited to procedure templates. It is the complete
+same-artifact template closure needed to lower the required value. If the body
+of a required app procedure reads a private top-level constant, the closure must
+also include the private `ConstRef`. If that constant is backed by const
+evaluation, the closure must include:
+
+- the `ConstRef` row itself
+- the const source type root and source type scheme
+- the checked const body referenced by the const-eval template
+- the const-eval entry procedure template
+- any nested procedure site table used by that const body
+- any resolved value reference table used by that const body
+- any static-dispatch plan table used by that const body
+- every private procedure template reached through the const body or through the
+  const-eval entry procedure
+- every private same-artifact `ConstRef` reached recursively from those
+  procedure or const bodies
+
+For example:
+
+```roc
+app [main!] { pf: platform "demo.roc" }
+
+main! = || {}
+
+make_glue : List(Types) -> Str
+make_glue = |types| header <> "\n" <> format_types(types)
+
+header : Str
+header = render_header("roc_platform_abi.h")
+
+render_header : Str -> Str
+render_header = |name| "#ifndef ${name}\n#define ${name}\n#endif\n"
+
+format_types : List(Types) -> Str
+format_types = |types| Str.join_with(List.map(types, Type.name), ",")
+```
+
+If `make_glue` satisfies a platform requirement, its
+`PlatformRequiredProcedureUse.relation_template_closure` must authorize
+`make_glue`, `format_types`, private const `header`, `header`'s const-eval entry
+template, and private helper `render_header`. Mono MIR must not discover
+`header` by scanning app declarations or by treating the whole relation artifact
+as visible. It may instantiate `header` only because the relation closure lists
+that exact `ConstRef`. It may instantiate `render_header` only because the
+closure reached it from `header`'s const-eval data.
+
+It is a compiler bug for mono MIR to treat the app relation artifact as if all
+app templates were visible merely because the platform/app relation exists. That
+would replace an explicit checked relation with private-template recovery. The
+allowed template lookup cases are exactly:
+
+- the requested template is a normal exported procedure template of an ordinary
+  import or relation artifact
+- the requested template is listed in the `ImportedTemplateClosureView` carried
+  by the exported/imported binding being specialized
+- the requested template is listed in the `relation_template_closure` carried by
+  the matching platform-required procedure binding
+- the requested template is the entry template of an exported const-eval template
+  whose export view explicitly names that template
+
+Any other private template lookup after checking is a compiler invariant
+violation: debug assertion in debug builds and `unreachable` in release builds.
+
+The same explicit-closure rule applies to required constants. A required
+constant is allowed to be an app top-level value that is not a normal app export,
+and it may be backed by a const-eval entry template that calls private helpers:
+
+```roc
+platform "demo"
+    requires {} {
+        header : Str
+    }
+    exposes []
+    packages {}
+    provides { header_for_host: "header" }
+
+header_for_host : Str
+header_for_host = header
+```
+
+```roc
+app [main!] { pf: platform "demo.roc" }
+
+main! = || {}
+
+header : Str
+header = render_header("roc_platform_abi.h")
+
+render_header : Str -> Str
+render_header = |name| "#ifndef ${name}\n#define ${name}\n#endif\n"
+```
+
+The platform/app relation must bind `header` to the app `ConstRef` and publish a
+`PlatformRequiredConstUse.relation_template_closure` containing the const-eval
+entry template and the private helper template for `render_header`. If the const
+has already been reduced to a target-independent value graph, the closure may be
+empty because no executable const-eval entry template will be requested. Mono
+MIR still gets that decision from the explicit const template state and relation
+closure, not from app export scanning or source-name lookup.
+
+The required-constant closure and required-procedure closure use the same
+recursive builder. Starting from a procedure template, the builder follows only
+its published resolved-value-reference table. Starting from a const template,
+the builder follows only its published const-eval metadata. The builder records
+same-artifact procedure and const dependencies into a single
+`ImportedTemplateClosureView`; it does not inspect source syntax, top-level
+declaration order, export names, or CIR expressions. Imported values reached by
+the body remain authorized by their own imported artifact views; a relation
+closure for the app artifact does not grant private visibility into any third
+artifact.
 
 The relation table is the authority for the platform-requested source type
 payload. Platform/app relation construction must never ask the app artifact for a
@@ -21538,14 +21784,33 @@ looking up a platform-local procedure, by constructing a generated
 `platform_required_wrapper`, or by re-searching the app exports.
 
 For procedure requirements, `PlatformRequiredValueUse.procedure_value` carries a
-`ProcedureUseTemplate` whose `source_fn_ty_payload` is copied from the matching
-`PlatformRequirementRelation.requested_source_ty_payload`. For constant
-requirements, `PlatformRequiredValueUse.const_value` carries a `ConstUseTemplate`
-whose `requested_source_ty_payload` is copied from the same relation row. This is
-the only payload later stages use for the requirement. The app artifact provides
-only the app value identity (`TopLevelValueRef`, `TopLevelProcedureBindingRef`,
-`ConstRef`, or concrete callable-binding instance), not the platform requested
-type payload.
+`PlatformRequiredProcedureUse`. Its nested `ProcedureUseTemplate` has
+`source_fn_ty_payload` copied from the matching
+`PlatformRequirementRelation.requested_source_ty_payload`; its
+`relation_template_closure` is built from the sealed app binding selected for
+the relation. For a direct app function, the closure starts from that exact
+checked procedure template. For a synthetic/promoted callable procedure, the
+closure starts from the promoted wrapper's checked template. For a generalized
+callable-binding top-level value, relation construction must force or consume the
+already-sealed `CallableBindingInstantiationRequest` for the platform-requested
+function type and carry the closure for that concrete instance; it must not store
+only the generalized callable-eval template and hope executable lowering can
+rediscover the concrete procedure later.
+
+For constant requirements, `PlatformRequiredValueUse.const_value` carries a
+`PlatformRequiredConstUse`. Its nested `ConstUseTemplate` has
+`requested_source_ty_payload` copied from the same relation row; its
+`relation_template_closure` is built from the sealed app const template selected
+for the relation. If the const template is an eval template, this closure starts
+from the exact eval entry template and recursively includes private procedure
+templates reached through the const-eval body. If the const template is already a
+value graph, the closure is allowed to be empty because no executable const
+entrypoint exists.
+
+This is the only payload later stages use for the requirement. The app artifact
+provides only the app value identity (`TopLevelValueRef`,
+`TopLevelProcedureBindingRef`, `ConstRef`, or concrete callable-binding
+instance), not the platform requested type payload.
 
 Executable platform artifacts must also publish relation artifact views into
 checking finalization and every MIR-family lowering request. These relation

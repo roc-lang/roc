@@ -6613,8 +6613,8 @@ fn classifyRequiredValueRef(
     };
 
     return switch (binding.value_use) {
-        .const_value => |const_use| .{ .platform_required_const = const_use },
-        .procedure_value => |proc_use| .{ .platform_required_proc = proc_use },
+        .const_value => |const_use| .{ .platform_required_const = const_use.const_use },
+        .procedure_value => |proc_use| .{ .platform_required_proc = proc_use.procedure },
     };
 }
 
@@ -7880,10 +7880,22 @@ pub const PlatformRequiredDeclarationTable = struct {
     }
 };
 
+/// Public `PlatformRequiredProcedureUse` declaration.
+pub const PlatformRequiredProcedureUse = struct {
+    procedure: ProcedureUseTemplate,
+    relation_template_closure: ImportedTemplateClosureView = .{},
+};
+
+/// Public `PlatformRequiredConstUse` declaration.
+pub const PlatformRequiredConstUse = struct {
+    const_use: ConstUseTemplate,
+    relation_template_closure: ImportedTemplateClosureView = .{},
+};
+
 /// Public `PlatformRequiredValueUse` declaration.
 pub const PlatformRequiredValueUse = union(enum) {
-    const_value: ConstUseTemplate,
-    procedure_value: ProcedureUseTemplate,
+    const_value: PlatformRequiredConstUse,
+    procedure_value: PlatformRequiredProcedureUse,
 };
 
 /// Public `PlatformRequirementRelationInput` declaration.
@@ -7917,6 +7929,10 @@ pub const PlatformAppRelation = struct {
     bindings: []const PlatformRequiredBindingInput,
 
     pub fn deinit(self: *PlatformAppRelation, allocator: Allocator) void {
+        for (self.bindings) |*binding| {
+            var value_use = binding.value_use;
+            deinitPlatformRequiredValueUse(allocator, &value_use);
+        }
         allocator.free(self.relations);
         allocator.free(self.bindings);
         self.* = .{
@@ -8119,7 +8135,13 @@ pub const PlatformRequiredBindingTable = struct {
         }
 
         const bindings = try allocator.alloc(PlatformRequiredBinding, active_relation.bindings.len);
-        errdefer allocator.free(bindings);
+        var initialized_bindings: usize = 0;
+        errdefer {
+            for (bindings[0..initialized_bindings]) |*owned_binding| {
+                deinitPlatformRequiredValueUse(allocator, &owned_binding.value_use);
+            }
+            allocator.free(bindings);
+        }
 
         for (active_relation.bindings, 0..) |binding, i| {
             const declaration = declarations.lookupByDeclarationId(binding.declaration) orelse {
@@ -8178,14 +8200,16 @@ pub const PlatformRequiredBindingTable = struct {
                 .app_value = binding.app_value,
                 .requested_source_ty = checked_relation.requested_source_ty,
                 .checked_relation = binding.checked_relation,
-                .value_use = platformRequiredValueUseWithRelation(binding.value_use, checked_relation),
+                .value_use = try clonePlatformRequiredValueUseWithRelation(allocator, binding.value_use, checked_relation),
             };
+            initialized_bindings += 1;
         }
 
         return .{ .bindings = bindings };
     }
 
     pub fn deinit(self: *PlatformRequiredBindingTable, allocator: Allocator) void {
+        for (self.bindings) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
         allocator.free(self.bindings);
         self.* = .{};
     }
@@ -8321,20 +8345,27 @@ fn validatePlatformBindingRelation(
     }
 }
 
-fn platformRequiredValueUseWithRelation(
+fn clonePlatformRequiredValueUseWithRelation(
+    allocator: Allocator,
     value_use: PlatformRequiredValueUse,
     relation: PlatformRequirementRelation,
-) PlatformRequiredValueUse {
+) Allocator.Error!PlatformRequiredValueUse {
     return switch (value_use) {
         .const_value => |const_use| .{ .const_value = .{
-            .const_ref = const_use.const_ref,
-            .requested_source_ty_template = relation.requested_source_ty,
-            .requested_source_ty_payload = relation.requested_source_ty_payload,
+            .const_use = .{
+                .const_ref = const_use.const_use.const_ref,
+                .requested_source_ty_template = relation.requested_source_ty,
+                .requested_source_ty_payload = relation.requested_source_ty_payload,
+            },
+            .relation_template_closure = try cloneImportedTemplateClosure(allocator, const_use.relation_template_closure),
         } },
         .procedure_value => |proc_use| .{ .procedure_value = .{
-            .binding = proc_use.binding,
-            .source_fn_ty_template = relation.requested_source_ty,
-            .source_fn_ty_payload = relation.requested_source_ty_payload,
+            .procedure = .{
+                .binding = proc_use.procedure.binding,
+                .source_fn_ty_template = relation.requested_source_ty,
+                .source_fn_ty_payload = relation.requested_source_ty_payload,
+            },
+            .relation_template_closure = try cloneImportedTemplateClosure(allocator, proc_use.relation_template_closure),
         } },
     };
 }
@@ -8358,7 +8389,11 @@ pub fn buildPlatformAppRelation(
     const relations = try allocator.alloc(PlatformRequirementRelationInput, declarations.len);
     errdefer allocator.free(relations);
     const bindings = try allocator.alloc(PlatformRequiredBindingInput, declarations.len);
-    errdefer allocator.free(bindings);
+    var initialized_bindings: usize = 0;
+    errdefer {
+        for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+        allocator.free(bindings);
+    }
 
     const requirement_context = platformRequirementContextKey(platform_declaration_artifact);
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
@@ -8417,14 +8452,31 @@ pub fn buildPlatformAppRelation(
                         unreachable;
                     },
                 };
+                const binding_body = app_artifact.top_level_procedure_bindings.get(procedure_binding).body;
+                var template_closure = try buildProcedureBindingClosure(
+                    allocator,
+                    app_artifact.key,
+                    &app_artifact.checked_types,
+                    &app_artifact.checked_procedure_templates,
+                    &app_artifact.const_templates,
+                    &app_artifact.resolved_value_refs,
+                    &app_artifact.top_level_procedure_bindings,
+                    &app_artifact.callable_eval_templates,
+                    binding_body,
+                );
+                errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+
                 break :blk .{ .procedure_value = .{
-                    .binding = .{ .platform_required = .{
-                        .artifact = app_artifact.key,
-                        .app_value = app_value_ref,
-                        .procedure_binding = procedure_binding,
-                    } },
-                    .source_fn_ty_template = requested_source_ty,
-                    .source_fn_ty_payload = null,
+                    .procedure = .{
+                        .binding = .{ .platform_required = .{
+                            .artifact = app_artifact.key,
+                            .app_value = app_value_ref,
+                            .procedure_binding = procedure_binding,
+                        } },
+                        .source_fn_ty_template = requested_source_ty,
+                        .source_fn_ty_payload = null,
+                    },
+                    .relation_template_closure = template_closure,
                 } };
             } else blk: {
                 const const_ref = switch (app_value.value) {
@@ -8439,13 +8491,29 @@ pub fn buildPlatformAppRelation(
                         unreachable;
                     },
                 };
+                var template_closure = try buildImportedConstTemplateClosure(
+                    allocator,
+                    app_artifact.key,
+                    &app_artifact.checked_types,
+                    &app_artifact.checked_procedure_templates,
+                    &app_artifact.const_templates,
+                    &app_artifact.resolved_value_refs,
+                    &app_artifact.top_level_procedure_bindings,
+                    const_ref,
+                );
+                errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+
                 break :blk .{ .const_value = .{
-                    .const_ref = const_ref,
-                    .requested_source_ty_template = requested_source_ty,
-                    .requested_source_ty_payload = null,
+                    .const_use = .{
+                        .const_ref = const_ref,
+                        .requested_source_ty_template = requested_source_ty,
+                        .requested_source_ty_payload = null,
+                    },
+                    .relation_template_closure = template_closure,
                 } };
             },
         };
+        initialized_bindings += 1;
     }
 
     return .{
@@ -11817,6 +11885,7 @@ pub const ExportedProcedureTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        const_templates: *const ConstTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
     ) Allocator.Error!ExportedProcedureTemplateTable {
@@ -11845,6 +11914,7 @@ pub const ExportedProcedureTemplateTable = struct {
                 artifact_key,
                 checked_types,
                 checked_templates,
+                const_templates,
                 resolved_value_refs,
                 top_level_bindings,
                 template,
@@ -11882,6 +11952,7 @@ fn buildImportedTemplateClosure(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    const_templates: *const ConstTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     template_ref: canonical.ProcedureTemplateRef,
@@ -11892,6 +11963,7 @@ fn buildImportedTemplateClosure(
         artifact_key,
         checked_types,
         checked_templates,
+        const_templates,
         resolved_value_refs,
         top_level_bindings,
     );
@@ -11908,7 +11980,9 @@ fn buildImportedTemplateClosure(
         .checked_bodies = try builder.checked_bodies.toOwnedSlice(allocator),
         .checked_type_roots = try builder.checked_type_roots.toOwnedSlice(allocator),
         .checked_type_schemes = try builder.checked_type_schemes.toOwnedSlice(allocator),
+        .checked_const_bodies = try builder.checked_const_bodies.toOwnedSlice(allocator),
         .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
+        .const_templates = try builder.const_templates.toOwnedSlice(allocator),
         .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
         .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
         .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
@@ -11921,12 +11995,15 @@ const ImportedTemplateClosureBuilder = struct {
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    const_templates_table: *const ConstTemplateTable,
     resolved_value_refs_table: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     checked_bodies: std.ArrayList(ArtifactCheckedBodyRef),
     checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef),
     checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef),
+    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef),
     checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
+    const_templates: std.ArrayList(ConstRef),
     nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
     resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
     static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
@@ -11936,6 +12013,7 @@ const ImportedTemplateClosureBuilder = struct {
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        const_templates: *const ConstTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
     ) ImportedTemplateClosureBuilder {
@@ -11944,12 +12022,15 @@ const ImportedTemplateClosureBuilder = struct {
             .artifact_key = artifact_key,
             .checked_types = checked_types,
             .checked_templates = checked_templates,
+            .const_templates_table = const_templates,
             .resolved_value_refs_table = resolved_value_refs,
             .top_level_bindings = top_level_bindings,
             .checked_bodies = .empty,
             .checked_type_roots = .empty,
             .checked_type_schemes = .empty,
+            .checked_const_bodies = .empty,
             .checked_procedure_templates = .empty,
+            .const_templates = .empty,
             .nested_proc_sites = .empty,
             .resolved_value_refs = .empty,
             .static_dispatch_plans = .empty,
@@ -11960,7 +12041,9 @@ const ImportedTemplateClosureBuilder = struct {
         self.static_dispatch_plans.deinit(self.allocator);
         self.resolved_value_refs.deinit(self.allocator);
         self.nested_proc_sites.deinit(self.allocator);
+        self.const_templates.deinit(self.allocator);
         self.checked_procedure_templates.deinit(self.allocator);
+        self.checked_const_bodies.deinit(self.allocator);
         self.checked_type_schemes.deinit(self.allocator);
         self.checked_type_roots.deinit(self.allocator);
         self.checked_bodies.deinit(self.allocator);
@@ -12005,6 +12088,14 @@ const ImportedTemplateClosureBuilder = struct {
             if (existing.body == ref.body and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
         }
         try self.checked_bodies.append(self.allocator, ref);
+    }
+
+    fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
+        const ref = ArtifactCheckedConstBodyRef{ .artifact = self.artifact_key, .body = body };
+        for (self.checked_const_bodies.items) |existing| {
+            if (existing.body == ref.body and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+        }
+        try self.checked_const_bodies.append(self.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
@@ -12081,6 +12172,45 @@ const ImportedTemplateClosureBuilder = struct {
                 const template = self.checked_templates.get(dependency_ref.template);
                 try self.appendTemplate(dependency_ref, template);
             }
+            if (self.constRefForResolvedValueRef(self.resolved_value_refs_table.records[raw].ref)) |dependency_ref| {
+                try self.appendConstTemplate(dependency_ref);
+            }
+        }
+    }
+
+    fn appendConstTemplate(
+        self: *ImportedTemplateClosureBuilder,
+        const_ref: ConstRef,
+    ) Allocator.Error!void {
+        for (self.const_templates.items) |existing| {
+            if (constRefEql(existing, const_ref)) return;
+        }
+        try self.const_templates.append(self.allocator, const_ref);
+
+        if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.artifact_key.bytes)) return;
+
+        const scheme = self.checked_types.schemeForKey(const_ref.source_scheme) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("checked artifact invariant violated: const template references missing checked type scheme", .{});
+            }
+            unreachable;
+        };
+        try self.appendCheckedTypeRoot(scheme.root);
+        try self.appendCheckedTypeScheme(const_ref.source_scheme);
+
+        const template = self.const_templates_table.get(const_ref);
+        switch (template.state) {
+            .eval_template => |eval| {
+                try self.appendCheckedConstBody(eval.body);
+                try self.appendNestedProcSites(eval.nested_proc_sites);
+                try self.appendResolvedValueRefs(eval.resolved_value_refs);
+                try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
+                try self.appendProcedureDependencies(eval.resolved_value_refs);
+                const entry_template = self.checked_templates.get(eval.entry_template.template);
+                try self.appendTemplate(eval.entry_template, entry_template);
+            },
+            .value_graph_template => {},
+            .reserved => checkedArtifactInvariant("imported template closure reached unsealed const template", .{}),
         }
     }
 
@@ -12102,6 +12232,19 @@ const ImportedTemplateClosureBuilder = struct {
             .platform_required => |required| self.templateForTopLevelBinding(required.procedure_binding),
             .promoted => null,
             .imported => null,
+        };
+    }
+
+    fn constRefForResolvedValueRef(
+        self: *ImportedTemplateClosureBuilder,
+        ref: ResolvedValueRef,
+    ) ?ConstRef {
+        _ = self;
+        return switch (ref) {
+            .top_level_const,
+            .platform_required_const,
+            => |const_use| const_use.const_ref,
+            else => null,
         };
     }
 
@@ -12131,100 +12274,40 @@ fn buildImportedConstTemplateClosure(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
+    checked_templates: *const CheckedProcedureTemplateTable,
+    const_templates: *const ConstTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_bindings: *const TopLevelProcedureBindingTable,
     const_ref: ConstRef,
-    template: ConstTemplate,
 ) Allocator.Error!ImportedTemplateClosureView {
-    const const_templates = try singleton(allocator, ConstRef, const_ref);
-    errdefer freeConstSlice(allocator, const_templates);
-
-    const scheme = checked_types.schemeForKey(const_ref.source_scheme) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: exported const template references missing checked type scheme", .{});
-        }
-        unreachable;
-    };
-    const checked_type_roots = try singleton(allocator, ArtifactCheckedTypeRef, .{
-        .artifact = artifact_key,
-        .ty = scheme.root,
-    });
-    errdefer freeConstSlice(allocator, checked_type_roots);
-
-    const checked_type_schemes = try singleton(allocator, ArtifactCheckedTypeSchemeRef, .{
-        .artifact = artifact_key,
-        .scheme = scheme.id,
-    });
-    errdefer freeConstSlice(allocator, checked_type_schemes);
-
-    const checked_const_bodies: []const ArtifactCheckedConstBodyRef = switch (template.state) {
-        .eval_template => |eval| try singleton(allocator, ArtifactCheckedConstBodyRef, .{
-            .artifact = artifact_key,
-            .body = eval.body,
-        }),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, checked_const_bodies);
-
-    const checked_procedure_templates: []const ArtifactProcedureTemplateRef = switch (template.state) {
-        .eval_template => |eval| try singleton(allocator, ArtifactProcedureTemplateRef, eval.entry_template),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, checked_procedure_templates);
-
-    const nested_proc_sites: []const ArtifactNestedProcSiteTableRef = switch (template.state) {
-        .eval_template => |eval| if (eval.nested_proc_sites.len == 0)
-            &.{}
-        else
-            try singleton(allocator, ArtifactNestedProcSiteTableRef, .{
-                .artifact = artifact_key,
-                .table = eval.nested_proc_sites,
-            }),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, nested_proc_sites);
-
-    const resolved_value_refs: []const ArtifactResolvedValueRefTableRef = switch (template.state) {
-        .eval_template => |eval| if (eval.resolved_value_refs.len == 0)
-            &.{}
-        else
-            try singleton(allocator, ArtifactResolvedValueRefTableRef, .{
-                .artifact = artifact_key,
-                .table = eval.resolved_value_refs,
-            }),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, resolved_value_refs);
-
-    const static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = switch (template.state) {
-        .eval_template => |eval| if (eval.static_dispatch_plans.len == 0)
-            &.{}
-        else
-            try singleton(allocator, ArtifactStaticDispatchPlanTableRef, .{
-                .artifact = artifact_key,
-                .table = eval.static_dispatch_plans,
-            }),
-        .value_graph_template => &.{},
-        .reserved => checkedArtifactInvariant("exported constant template was not sealed before export publication", .{}),
-    };
-    errdefer freeConstSlice(allocator, static_dispatch_plans);
+    var builder = ImportedTemplateClosureBuilder.init(
+        allocator,
+        artifact_key,
+        checked_types,
+        checked_templates,
+        const_templates,
+        resolved_value_refs,
+        top_level_bindings,
+    );
+    defer builder.deinit();
 
     const interface_capabilities = try singleton(allocator, ArtifactModuleInterfaceCapabilitiesRef, .{
         .artifact = artifact_key,
     });
     errdefer freeConstSlice(allocator, interface_capabilities);
 
+    try builder.appendConstTemplate(const_ref);
+
     return .{
-        .checked_type_roots = checked_type_roots,
-        .checked_type_schemes = checked_type_schemes,
-        .checked_const_bodies = checked_const_bodies,
-        .checked_procedure_templates = checked_procedure_templates,
-        .const_templates = const_templates,
-        .nested_proc_sites = nested_proc_sites,
-        .resolved_value_refs = resolved_value_refs,
-        .static_dispatch_plans = static_dispatch_plans,
+        .checked_bodies = try builder.checked_bodies.toOwnedSlice(allocator),
+        .checked_type_roots = try builder.checked_type_roots.toOwnedSlice(allocator),
+        .checked_type_schemes = try builder.checked_type_schemes.toOwnedSlice(allocator),
+        .checked_const_bodies = try builder.checked_const_bodies.toOwnedSlice(allocator),
+        .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
+        .const_templates = try builder.const_templates.toOwnedSlice(allocator),
+        .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
+        .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
+        .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
         .interface_capabilities = interface_capabilities,
     };
 }
@@ -12273,6 +12356,60 @@ fn deinitImportedTemplateClosure(
     closure.* = .{};
 }
 
+fn cloneImportedTemplateClosure(
+    allocator: Allocator,
+    closure: ImportedTemplateClosureView,
+) Allocator.Error!ImportedTemplateClosureView {
+    var out = ImportedTemplateClosureView{};
+    errdefer deinitImportedTemplateClosure(allocator, &out);
+
+    out.checked_bodies = try cloneConstSlice(allocator, ArtifactCheckedBodyRef, closure.checked_bodies);
+    out.checked_type_roots = try cloneConstSlice(allocator, ArtifactCheckedTypeRef, closure.checked_type_roots);
+    out.checked_type_schemes = try cloneConstSlice(allocator, ArtifactCheckedTypeSchemeRef, closure.checked_type_schemes);
+    out.checked_callable_bodies = try cloneConstSlice(allocator, ArtifactCheckedCallableBodyRef, closure.checked_callable_bodies);
+    out.checked_const_bodies = try cloneConstSlice(allocator, ArtifactCheckedConstBodyRef, closure.checked_const_bodies);
+    out.checked_procedure_templates = try cloneConstSlice(allocator, ArtifactProcedureTemplateRef, closure.checked_procedure_templates);
+    out.callable_eval_templates = try cloneConstSlice(allocator, ArtifactCallableEvalTemplateRef, closure.callable_eval_templates);
+    out.const_templates = try cloneConstSlice(allocator, ConstRef, closure.const_templates);
+    out.promoted_procedures = try cloneConstSlice(allocator, PromotedProcedureRef, closure.promoted_procedures);
+    out.semantic_instantiation_procedures = try cloneConstSlice(allocator, SemanticInstantiationProcedureId, closure.semantic_instantiation_procedures);
+    out.promoted_callable_wrappers = try cloneConstSlice(allocator, ArtifactPromotedCallableWrapperRef, closure.promoted_callable_wrappers);
+    out.promoted_callable_body_plans = try cloneConstSlice(allocator, ArtifactPromotedCallableBodyPlanRef, closure.promoted_callable_body_plans);
+    out.private_capture_roots = try cloneConstSlice(allocator, PrivateCaptureId, closure.private_capture_roots);
+    out.private_capture_nodes = try cloneConstSlice(allocator, ArtifactPrivateCaptureNodeRef, closure.private_capture_nodes);
+    out.private_capture_const_templates = try cloneConstSlice(allocator, ConstRef, closure.private_capture_const_templates);
+    out.callable_result_plans = try cloneConstSlice(allocator, ArtifactCallableResultPlanRef, closure.callable_result_plans);
+    out.callable_promotion_plans = try cloneConstSlice(allocator, ArtifactCallablePromotionPlanRef, closure.callable_promotion_plans);
+    out.const_reification_plans = try cloneConstSlice(allocator, ArtifactConstGraphReificationPlanRef, closure.const_reification_plans);
+    out.nested_proc_sites = try cloneConstSlice(allocator, ArtifactNestedProcSiteTableRef, closure.nested_proc_sites);
+    out.resolved_value_refs = try cloneConstSlice(allocator, ArtifactResolvedValueRefTableRef, closure.resolved_value_refs);
+    out.static_dispatch_plans = try cloneConstSlice(allocator, ArtifactStaticDispatchPlanTableRef, closure.static_dispatch_plans);
+    out.method_registry_entries = try cloneConstSlice(allocator, MethodRegistryEntryRef, closure.method_registry_entries);
+    out.interface_capabilities = try cloneConstSlice(allocator, ArtifactModuleInterfaceCapabilitiesRef, closure.interface_capabilities);
+
+    return out;
+}
+
+fn cloneConstSlice(
+    allocator: Allocator,
+    comptime T: type,
+    slice: []const T,
+) Allocator.Error![]const T {
+    if (slice.len == 0) return &.{};
+    return try allocator.dupe(T, slice);
+}
+
+fn deinitPlatformRequiredValueUse(
+    allocator: Allocator,
+    value_use: *PlatformRequiredValueUse,
+) void {
+    switch (value_use.*) {
+        .const_value => |*const_use| deinitImportedTemplateClosure(allocator, &const_use.relation_template_closure),
+        .procedure_value => |*procedure| deinitImportedTemplateClosure(allocator, &procedure.relation_template_closure),
+    }
+    value_use.* = undefined;
+}
+
 /// Public `ImportedProcedureBindingBody` declaration.
 pub const ImportedProcedureBindingBody = union(enum) {
     direct_template: DirectProcedureBinding,
@@ -12302,6 +12439,7 @@ pub const ExportedProcedureBindingTable = struct {
         published_exports: []const CIR.Def.Idx,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        const_templates: *const ConstTemplateTable,
         top_level_values: *const TopLevelValueTable,
         procedure_bindings: *const TopLevelProcedureBindingTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
@@ -12330,6 +12468,7 @@ pub const ExportedProcedureBindingTable = struct {
                 artifact_key,
                 checked_types,
                 checked_templates,
+                const_templates,
                 resolved_value_refs,
                 procedure_bindings,
                 callable_eval_templates,
@@ -12370,6 +12509,7 @@ fn buildProcedureBindingClosure(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    const_templates: *const ConstTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
@@ -12382,6 +12522,7 @@ fn buildProcedureBindingClosure(
                 artifact_key,
                 checked_types,
                 checked_templates,
+                const_templates,
                 resolved_value_refs,
                 top_level_bindings,
                 template_ref,
@@ -12392,6 +12533,7 @@ fn buildProcedureBindingClosure(
                 artifact_key,
                 checked_types,
                 checked_templates,
+                const_templates,
                 resolved_value_refs,
                 top_level_bindings,
                 synthetic.template,
@@ -12636,8 +12778,11 @@ pub const ExportedConstTemplateTable = struct {
         published_exports: []const CIR.Def.Idx,
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
+        checked_templates: *const CheckedProcedureTemplateTable,
         top_level_values: *const TopLevelValueTable,
         const_templates: *const ConstTemplateTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+        top_level_bindings: *const TopLevelProcedureBindingTable,
     ) Allocator.Error!ExportedConstTemplateTable {
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
         errdefer {
@@ -12656,8 +12801,11 @@ pub const ExportedConstTemplateTable = struct {
                 allocator,
                 artifact_key,
                 checked_types,
+                checked_templates,
+                const_templates,
+                resolved_value_refs,
+                top_level_bindings,
                 const_ref,
-                template,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
             try templates.append(allocator, .{
@@ -14120,6 +14268,14 @@ pub const CheckedModuleArtifact = struct {
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
+        self.deinitInternal(allocator, true);
+    }
+
+    pub fn deinitRetainingModuleEnv(self: *CheckedModuleArtifact, allocator: Allocator) void {
+        self.deinitInternal(allocator, false);
+    }
+
+    fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
         self.comptime_values.deinit(allocator);
         self.semantic_instantiation_procedures.deinit(allocator);
         self.callable_binding_instances.deinit(allocator);
@@ -14162,7 +14318,11 @@ pub const CheckedModuleArtifact = struct {
         allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
         self.canonical_names.deinit();
-        self.module_env.deinit();
+        if (deinit_module_env) {
+            self.module_env.deinit();
+        } else {
+            self.module_env = undefined;
+        }
     }
 
     pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
@@ -14673,15 +14833,15 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
         .const_value => |const_use| {
             std.debug.assert(std.mem.eql(
                 u8,
-                &const_use.const_ref.artifact.bytes,
+                &const_use.const_use.const_ref.artifact.bytes,
                 &binding.app_value.artifact.bytes,
             ));
-            const owner = constRefTopLevelOwner(const_use.const_ref) orelse {
+            const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
                 std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
             };
             std.debug.assert(owner.pattern == binding.app_value.pattern);
         },
-        .procedure_value => |proc_use| switch (proc_use.binding) {
+        .procedure_value => |proc_use| switch (proc_use.procedure.binding) {
             .platform_required => |required| {
                 std.debug.assert(std.mem.eql(
                     u8,
@@ -14689,6 +14849,12 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
                     &binding.app_value.artifact.bytes,
                 ));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
+                if (proc_use.relation_template_closure.interface_capabilities.len == 0) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform-required procedure use has no relation template closure",
+                        .{},
+                    );
+                }
             },
             .top_level,
             .imported,
@@ -15986,6 +16152,7 @@ pub fn publishFromTypedModule(
         artifact_key,
         checked_types,
         &checked_procedure_templates,
+        &const_templates,
         &resolved_value_refs,
         &top_level_procedure_bindings,
     );
@@ -15997,6 +16164,7 @@ pub fn publishFromTypedModule(
         exports,
         checked_types,
         &checked_procedure_templates,
+        &const_templates,
         &top_level_values,
         &top_level_procedure_bindings,
         &callable_eval_templates,
@@ -16011,8 +16179,11 @@ pub fn publishFromTypedModule(
         exports,
         artifact_key,
         checked_types,
+        &checked_procedure_templates,
         &top_level_values,
         &const_templates,
+        &resolved_value_refs,
+        &top_level_procedure_bindings,
     );
     errdefer exported_const_templates.deinit(allocator);
 

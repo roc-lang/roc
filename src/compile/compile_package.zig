@@ -1313,6 +1313,24 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) !CheckedArtifact.CheckedModuleArtifact {
+        return publishCheckedArtifactFromCheckedModuleWithStorage(
+            gpa,
+            env,
+            .{ .checked_source = env },
+            imported_envs,
+            imported_artifacts,
+            publication,
+        );
+    }
+
+    pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        module_env_storage: CheckedArtifact.ModuleEnvStorage,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) !CheckedArtifact.CheckedModuleArtifact {
         var source_modules = try gpa.alloc(CheckedModuleSource, imported_envs.len + 1);
         defer gpa.free(source_modules);
         for (imported_envs, 0..) |imported_env, i| {
@@ -1331,7 +1349,7 @@ pub const PackageEnv = struct {
             &typed_modules,
             checked_module_idx,
             .{
-                .module_env_storage = .{ .checked_source = env },
+                .module_env_storage = module_env_storage,
                 .imports = imported_artifacts,
                 .relation_artifacts = publication.relation_artifacts,
                 .platform_requirement_context = publication.platform_requirement_context,

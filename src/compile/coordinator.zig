@@ -203,6 +203,14 @@ pub const ModuleState = struct {
         return null;
     }
 
+    fn moduleEnvStorage(self: *ModuleState) ?check.CheckedArtifact.ModuleEnvStorage {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| return artifact.module_env;
+            return .{ .checked_source = semantic.module_env };
+        }
+        return null;
+    }
+
     fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*artifact| return artifact;
@@ -236,6 +244,17 @@ pub const ModuleState = struct {
             return;
         }
         std.debug.panic("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
+    }
+
+    fn replaceRepublishedCheckedArtifact(self: *ModuleState, artifact: check.CheckedArtifact.CheckedModuleArtifact) void {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*existing| {
+                existing.deinitRetainingModuleEnv(existing.canonical_names.allocator);
+            }
+            semantic.checked_artifact = artifact;
+            return;
+        }
+        std.debug.panic("compile.coordinator.ModuleState.replaceRepublishedCheckedArtifact missing semantic state for {s}", .{self.name});
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator) void {
@@ -807,20 +826,27 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
+        const module_env_storage = mod.moduleEnvStorage() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env storage for {s}", .{mod.name});
+            }
+            unreachable;
+        };
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod);
         defer self.gpa.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
         defer self.gpa.free(imported_artifacts);
 
-        var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModule(
+        var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             self.gpa,
             env,
+            module_env_storage,
             imported_envs,
             imported_artifacts,
             publication,
         );
         errdefer artifact.deinit(self.gpa);
-        mod.replaceCheckedArtifact(artifact);
+        mod.replaceRepublishedCheckedArtifact(artifact);
     }
 
     const RootModuleRef = struct {

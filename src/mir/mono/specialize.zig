@@ -354,7 +354,7 @@ pub fn run(
             @intCast(root_index),
         ) orelse continue;
         const template_ref = try name_resolver.procedureTemplateRef(seed.template);
-        const template_lookup = checkedTemplateForKey(input, template_ref, null);
+        const template_lookup = checkedTemplateForKey(input, template_ref, seed.imported_closure);
         var root_type_instantiator = TypeInstantiator.init(
             allocator,
             input,
@@ -371,6 +371,7 @@ pub fn run(
             .template = template_ref,
             .requested_fn_ty = materialized_fn_ty,
             .reason = seed.reason,
+            .imported_closure = seed.imported_closure,
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, mirProcedureRefFromReserved(reserved));
@@ -584,7 +585,18 @@ fn checkedTemplateForKey(
                 .template = related.checked_procedure_templates.get(template_ref.template),
             };
         }
-        debug.invariant(false, "mono specialization invariant violated: relation template was not exported or present in the relation closure");
+        if (access_closure) |closure| {
+            debug.invariantFmt(
+                false,
+                "mono specialization invariant violated: relation template {d} was not exported or present in the relation closure with {d} procedure templates",
+                .{ @intFromEnum(template_ref.template), closure.checked_procedure_templates.len },
+            );
+        }
+        debug.invariantFmt(
+            false,
+            "mono specialization invariant violated: relation template {d} was not exported and no relation closure was supplied",
+            .{@intFromEnum(template_ref.template)},
+        );
         unreachable;
     }
 
@@ -628,6 +640,12 @@ const EntrypointSeed = struct {
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     metadata: mir_ids.RootMetadata,
     reason: MonoSpecializationReason,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
+};
+
+const RootTemplateSelection = struct {
+    template: canonical.ProcedureTemplateRef,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 fn specializationSeedForEntrypoint(
@@ -645,20 +663,21 @@ fn specializationSeedForEntrypoint(
                 input.root.artifact.checked_types.view(),
                 root.checked_type,
             );
-            const template = templateForRoot(input, root, &program.concrete_source_types, requested_fn_ty) orelse break :root_seed null;
+            const selection = templateForRoot(input, root, &program.concrete_source_types, requested_fn_ty) orelse break :root_seed null;
             break :root_seed .{
-                .template = template,
+                .template = selection.template,
                 .requested_fn_ty = requested_fn_ty,
                 .metadata = rootMetadataFromChecked(root),
                 .reason = .{ .root = root },
+                .imported_closure = selection.imported_closure,
             };
         },
         .const_instance => |request| const_seed: {
-            const template = constEvalEntryTemplateForRequest(input, request) orelse {
+            const selection = constEvalEntryTemplateForRequest(input, request) orelse {
                 invariantViolation("mono specialization compile-time const instance did not name an eval template");
             };
             break :const_seed .{
-                .template = template,
+                .template = selection.template,
                 .requested_fn_ty = try compileTimeEntryFunctionTypeForReturn(
                     allocator,
                     input,
@@ -668,6 +687,7 @@ fn specializationSeedForEntrypoint(
                 ),
                 .metadata = compileTimeMetadata(order, .compile_time_constant),
                 .reason = .{ .const_instance = request },
+                .imported_closure = selection.imported_closure,
             };
         },
         .callable_binding_instance => |request| callable_seed: {
@@ -771,20 +791,76 @@ fn compileTimeFunctionTypeForRequest(
 fn constEvalEntryTemplateForRequest(
     input: Input,
     request: checked_artifact.ConstInstantiationRequest,
-) ?canonical.ProcedureTemplateRef {
+) ?RootTemplateSelection {
     const templates = constTemplatesForKey(input, request.key.const_ref.artifact) orelse {
         debug.invariant(false, "mono specialization invariant violated: const instance template artifact was not available");
         unreachable;
     };
     const template = templates.get(request.key.const_ref);
     return switch (template.state) {
-        .eval_template => |eval| eval.entry_template,
+        .eval_template => |eval| .{
+            .template = eval.entry_template,
+            .imported_closure = relationClosureForConstRef(input, request.key.const_ref) orelse
+                exportedClosureForConstRef(input, request.key.const_ref),
+        },
         .value_graph_template => null,
         .reserved => {
             debug.invariant(false, "mono specialization invariant violated: const instance reached unsealed template");
             unreachable;
         },
     };
+}
+
+fn relationClosureForConstRef(
+    input: Input,
+    target_const: checked_artifact.ConstRef,
+) ?checked_artifact.ImportedTemplateClosureView {
+    for (input.root.artifact.platform_required_bindings.bindings) |binding| {
+        const closure = switch (binding.value_use) {
+            .const_value => |platform_const| platform_const.relation_template_closure,
+            .procedure_value => |procedure| procedure.relation_template_closure,
+        };
+        if (importedClosureContainsConstRef(closure, target_const)) return closure;
+    }
+    return null;
+}
+
+fn importedClosureContainsConstRef(
+    closure: checked_artifact.ImportedTemplateClosureView,
+    target_const: checked_artifact.ConstRef,
+) bool {
+    for (closure.const_templates) |listed| {
+        if (constRefEql(listed, target_const)) return true;
+    }
+    return false;
+}
+
+fn exportedClosureForConstRef(
+    input: Input,
+    target_const: checked_artifact.ConstRef,
+) ?checked_artifact.ImportedTemplateClosureView {
+    if (std.mem.eql(u8, &input.root.artifact.key.bytes, &target_const.artifact.bytes)) return null;
+
+    for (input.imports) |imported| {
+        if (!std.mem.eql(u8, &imported.key.bytes, &target_const.artifact.bytes)) continue;
+        for (imported.exported_const_templates.templates) |exported| {
+            if (constRefEql(exported.const_ref, target_const)) return exported.template_closure;
+        }
+    }
+    for (input.root.relation_artifacts) |related| {
+        if (!std.mem.eql(u8, &related.key.bytes, &target_const.artifact.bytes)) continue;
+        for (related.exported_const_templates.templates) |exported| {
+            if (constRefEql(exported.const_ref, target_const)) return exported.template_closure;
+        }
+    }
+    return null;
+}
+
+fn constRefEql(a: checked_artifact.ConstRef, b: checked_artifact.ConstRef) bool {
+    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+        std.meta.eql(a.owner, b.owner) and
+        a.template == b.template and
+        std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
 }
 
 fn callableEvalEntryTemplateForRequest(
@@ -2074,7 +2150,18 @@ const TypeInstantiator = struct {
         }
 
         const backing_root = try self.publishedNominalBackingRootForRefs(nominal_key, arg_refs, arg_keys) orelse {
-            invariantViolation("mono nominal materialization has no published instantiated nominal backing");
+            debug.invariantFmt(
+                false,
+                "mono nominal materialization has no published instantiated nominal backing for {s}.{s} (module {d} type {d}) with {d} args",
+                .{
+                    self.program.canonical_names.moduleNameText(nominal_key.module_name),
+                    self.program.canonical_names.typeNameText(nominal_key.type_name),
+                    @intFromEnum(nominal_key.module_name),
+                    @intFromEnum(nominal_key.type_name),
+                    arg_keys.len,
+                },
+            );
+            unreachable;
         };
         return backing_root;
     }
@@ -8391,8 +8478,30 @@ const BodyLowerer = struct {
 
         return switch (use.binding) {
             .imported => |imported| self.importedClosureForImportedBinding(imported, template),
+            .platform_required => |required| self.importedClosureForPlatformRequiredBinding(required, template),
             else => null,
         };
+    }
+
+    fn importedClosureForPlatformRequiredBinding(
+        self: *const BodyLowerer,
+        required: checked_artifact.RequiredAppProcedureRef,
+        template: canonical.ProcedureTemplateRef,
+    ) ?checked_artifact.ImportedTemplateClosureView {
+        for (self.input.root.artifact.platform_required_bindings.bindings) |binding| {
+            const proc_use = switch (binding.value_use) {
+                .procedure_value => |procedure| procedure,
+                .const_value => continue,
+            };
+            if (!checked_artifact.procedureBindingRefEql(
+                proc_use.procedure.binding,
+                .{ .platform_required = required },
+            )) continue;
+            if (importedClosureContainsProcedureTemplate(proc_use.relation_template_closure, template)) {
+                return proc_use.relation_template_closure;
+            }
+        }
+        return null;
     }
 
     fn importedClosureForImportedBinding(
@@ -9126,25 +9235,28 @@ fn templateForRoot(
     root: checked_artifact.RootRequest,
     concrete_source_types: *const ConcreteSourceType.Store,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
-) ?canonical.ProcedureTemplateRef {
-    if (root.procedure_template) |template| return template;
+) ?RootTemplateSelection {
+    if (root.procedure_template) |template| return .{ .template = template };
 
     const artifact = input.root.artifact;
     const requested_key = concrete_source_types.key(requested_fn_ty);
     switch (root.source) {
         .def => |def_idx| {
-            if (artifact.checked_procedure_templates.lookupByDef(def_idx)) |template| return template;
+            if (artifact.checked_procedure_templates.lookupByDef(def_idx)) |template| return .{ .template = template };
             const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse return null;
             return switch (top_level.value) {
                 .const_ref => null,
-                .procedure_binding => |binding_ref| templateFromRootTopLevelBinding(
-                    input,
-                    input.root.artifact.key,
-                    &artifact.top_level_procedure_bindings,
-                    binding_ref,
-                    .{ .top_level = binding_ref },
-                    requested_key,
-                ),
+                .procedure_binding => |binding_ref| blk: {
+                    const template = templateFromRootTopLevelBinding(
+                        input,
+                        input.root.artifact.key,
+                        &artifact.top_level_procedure_bindings,
+                        binding_ref,
+                        .{ .top_level = binding_ref },
+                        requested_key,
+                    ) orelse break :blk null;
+                    break :blk .{ .template = template };
+                },
             };
         },
         .required_binding => |binding_id| {
@@ -9158,7 +9270,13 @@ fn templateForRoot(
             };
             return switch (binding.value_use) {
                 .const_value => null,
-                .procedure_value => |proc_use| templateForProcedureUse(input, proc_use, requested_key),
+                .procedure_value => |proc_use| blk: {
+                    const template = templateForProcedureUse(input, proc_use.procedure, requested_key) orelse break :blk null;
+                    break :blk .{
+                        .template = template,
+                        .imported_closure = proc_use.relation_template_closure,
+                    };
+                },
             };
         },
         .expr, .statement => return null,
