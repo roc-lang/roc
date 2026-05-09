@@ -66,9 +66,6 @@ let
   # if only the package passed with `-i` is shown, nothing depends on it
   # ===============================
 
-  # remove www folder from checkmate crate since it's not built with nix
-  removedWWW = fs.difference docsAddedBack ../crates/compiler/checkmate/www;
-
   # potential packages/folders that could be removed 
   # repl_* -> I don't think nix will build those
 
@@ -76,7 +73,7 @@ let
     root = repoRoot;
     # to debug you can switch to
     # fileset = fs.traceVal <file set>
-    fileset = removedWWW;
+    fileset = docsAddedBack;
   };
 
 in
