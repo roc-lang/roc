@@ -1189,21 +1189,13 @@ pub const PackageEnv = struct {
             const module_env = imported.module_env;
 
             if (std.mem.indexOfScalar(u8, import_name, '.')) |_| {
-                const base_module_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
-                    import_name[dot_idx + 1 ..]
-                else
-                    import_name;
-                const base_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
                 const qualified_ident = try env.insertIdent(base.Ident.for_text(import_name));
-                const entry = Can.AutoImportedType{
+                const entry: Can.AutoImportedType = .{
                     .env = module_env,
-                    .statement_idx = statementIdxForImportedModule(module_env, base_module_name),
-                    .qualified_type_ident = base_ident,
+                    .statement_idx = null,
+                    .qualified_type_ident = qualified_ident,
                     .is_package_qualified = true,
                 };
-                if (!module_envs_map.contains(base_ident)) {
-                    try module_envs_map.put(base_ident, entry);
-                }
                 if (!module_envs_map.contains(qualified_ident)) {
                     try module_envs_map.put(qualified_ident, entry);
                 }

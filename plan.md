@@ -333,6 +333,77 @@ It must not own:
 Checked CIR may keep source dispatch because it is checked source structure.
 Every stage after `mono MIR` must be dispatch-free.
 
+### Import Resolution Boundary
+
+Import resolution is part of the checked-source boundary. Before `Check.init`
+starts, every `CIR.Import.Idx` in the module being checked must already point at
+the exact resolved module slot that checking will use for external declarations,
+qualified lookups, exposed types, and imported values. An unresolved import at
+`Check.init` is a build-graph/canonicalization bug, not something checking may
+recover from.
+
+Package-qualified imports have exactly one import identity: the full qualified
+module name written by the source import after package shorthand resolution. For
+example:
+
+```roc
+app [make_glue] { pf: platform "../platform/main.roc" }
+
+import pf.Types exposing [Types]
+import pf.File exposing [File]
+
+make_glue : List(Types) -> Try(List(File), Str)
+make_glue = |types| ...
+```
+
+The import identity for the first import is `pf.Types`. Canonicalization may
+introduce `Types` as the local module alias for qualified value lookups and may
+introduce the exposed `Types` type into the current scope, but it must not
+publish a second available module/import named plain `Types` for this app
+module. A bare `Types` import would have no package owner and would be
+impossible to resolve correctly later.
+
+This distinction is required because the platform package may also have a real
+local module named `Types`:
+
+```roc
+platform ""
+    requires { make_glue : List(Types) -> Try(List(File), Str) }
+    exposes [Types, File]
+    packages {}
+    provides { make_glue_for_host: "make_glue" }
+
+import Types exposing [Types]
+import File exposing [File]
+```
+
+Inside the platform package, `Types` is a local import. Inside the app/glue spec,
+`pf.Types` is an external package-qualified import. Those are different import
+identities even though both expose a type named `Types`.
+
+The canonicalization input map for available imported modules must therefore be
+keyed by the canonical module identity that can become a `CIR.Import.Idx`.
+
+- Builtin auto-imports may be keyed by source-visible builtin type names such as
+  `Bool`, `Str`, and `I64`, because those all resolve to the already-published
+  `Builtin` import.
+- Local imports are keyed by their local module name, such as `Types`, because
+  that is the exact import identity in the current package.
+- Package-qualified imports are keyed by their full qualified module name, such
+  as `pf.Types`. They must not also be keyed by the basename `Types`.
+
+When source exposes a type from a package-qualified import, the exposed type
+binding must remember the original `Import.Idx` for the full qualified import.
+The type annotation `List(Types)` above resolves through the exposed type
+binding and ultimately points at `pf.Types`; it must not synthesize or resolve a
+new import named `Types`.
+
+The type checker's import preflight is the final assertion for this boundary:
+if `CIR.imports` contains `Types` in the app example above, canonicalization
+published the wrong import identity. The correct fix is to remove the wrong
+publication, not to make type checking search for `pf.Types` by basename and not
+to add a fallback in the coordinator.
+
 ### Mono MIR
 
 Mono MIR is the first post-check MIR stage.
@@ -15375,16 +15446,47 @@ root that still requires compile-time callable evaluation may be temporarily
 represented as `pending_callable_root`, but only inside checking finalization:
 
 The compile-time dependency summary table is sparse over `CompileTimeRootId`.
-It must contain a filled summary for every selected concrete compile-time or
-test root request. It must not require summaries for unselected pending roots,
-such as generic top-level constants that have no concrete request in the current
-artifact publication. Those pending roots may remain in `CompileTimeRootTable`
-for diagnostics, exported templates, or future concrete instantiation, but they
-are not executable roots during this publication. If a selected root has no
-dependency summary, that is a compiler bug. If a non-selected pending root has no
-summary, that is expected and must not be papered over by inserting an empty
+It must contain a filled summary for every selected concrete compile-time root
+request: compile-time constants, compile-time callable results, concrete
+`ConstInstantiationRequest`s, and concrete `CallableBindingInstantiationRequest`s.
+It must not require summaries for unselected pending roots, such as generic
+top-level constants that have no concrete request in the current artifact
+publication. Those pending roots may remain in `CompileTimeRootTable` for
+diagnostics, exported templates, or future concrete instantiation, but they are
+not executable roots during this publication. If a selected compile-time root has
+no dependency summary, that is a compiler bug. If a non-selected pending root has
+no summary, that is expected and must not be papered over by inserting an empty
 summary, because an empty summary would incorrectly claim that the root has no
 availability or concrete dependencies.
+
+`expect` declarations are different. A source `expect` is represented in
+`CompileTimeRootTable` so it can share checked body/type publication and an entry
+wrapper shape, but it is not a compile-time constant-evaluation root during
+ordinary artifact publication. It has `CompileTimeRootPayload.expect` from the
+start, and its `dependency_summary_request` may remain unfilled when compiling,
+building, gluing, or otherwise publishing a non-test artifact. The `roc test`
+driver selects `.test_expect` root requests later and lowers them as runtime test
+entrypoints through the ordinary checked-artifact pipeline:
+
+```roc
+expect parse_args("Str, U64") == ["Str", "U64"]
+```
+
+The root above must not force compile-time finalization to evaluate or summarize
+the test body when compiling the module as a glue spec or app. It becomes a
+runnable test root only when the test runner explicitly selects `.test_expect`
+requests. Therefore verifier logic must distinguish:
+
+- selected `.compile_time` roots, which require filled dependency summaries and
+  concrete payloads
+- `.test_expect` roots, which require the static `.expect` payload but do not
+  require a compile-time dependency summary during artifact publication
+- unselected pending compile-time roots, which may remain pending and summary-less
+
+Treating a `.test_expect` root as a selected compile-time root is a compiler bug:
+it makes ordinary builds evaluate test-only code and incorrectly requires a
+compile-time dependency summary that no compile-time finalization path should
+produce for that build.
 
 ```zig
 const TopLevelProcedureBindingRef = enum(u32) { _ };

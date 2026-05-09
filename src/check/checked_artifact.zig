@@ -587,7 +587,7 @@ fn compileTimeRootHasRootRequest(
     root: CompileTimeRoot,
 ) bool {
     for (requests) |request| {
-        if (request.abi != .compile_time and request.abi != .test_expect) continue;
+        if (request.abi != .compile_time) continue;
         if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
         if (!rootSourceMatches(root.source, request.source)) continue;
         return true;
@@ -14255,6 +14255,13 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
+            if (root.kind == .expect) {
+                switch (root.payload) {
+                    .expect => {},
+                    else => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                }
+                continue;
+            }
             const has_request = compileTimeRootHasRootRequest(self.root_requests.requests, root);
             if (has_request) {
                 _ = self.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request);
