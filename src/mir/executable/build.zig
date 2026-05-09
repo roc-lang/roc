@@ -6501,25 +6501,32 @@ const BodyBuilder = struct {
             .structural_eq => |eq| blk: {
                 const lhs = try self.lowerExpr(eq.lhs);
                 const rhs = try self.lowerExpr(eq.rhs);
+                const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    result_ty,
                     self.output.freshValueRef(),
                     .{ .structural_eq = .{
                         .lhs = lhs,
                         .rhs = rhs,
+                        .result_bool = self.boolDiscriminantsForType(result_ty),
                     } },
                 );
             },
             .low_level => |low_level| blk: {
                 if (builtin.mode == .Debug) self.verifyLowLevelValueFlow(low_level.value_flow);
                 const args = try self.lowerExprIds(low_level.args);
+                const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    result_ty,
                     self.output.freshValueRef(),
                     .{ .low_level = .{
                         .op = low_level.op,
                         .rc_effect = low_level.rc_effect,
                         .args = args,
+                        .predicate_result = if (lowLevelReturnsPredicate(low_level.op))
+                            self.boolDiscriminantsForType(result_ty)
+                        else
+                            null,
                     } },
                 );
             },
@@ -6538,7 +6545,7 @@ const BodyBuilder = struct {
                 const true_expr = try self.addBoolTagExpr(result_ty, true);
                 break :blk try self.output.addExpr(result_ty, self.output.freshValueRef(), .{ .if_ = .{
                     .cond = lowered_child,
-                    .true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(lowered_child).ty),
+                    .true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(lowered_child).ty).true_discriminant,
                     .then_body = false_expr,
                     .else_body = true_expr,
                 } });
@@ -6572,7 +6579,7 @@ const BodyBuilder = struct {
                 const else_body = try self.lowerExpr(if_.else_body);
                 const result_ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);
                 const transformed = try self.wrapIfBranches(if_.join_info, then_body, else_body, result_ty);
-                const true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(cond).ty);
+                const true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(cond).ty).true_discriminant;
                 break :blk try self.output.addExpr(
                     result_ty,
                     self.output.freshValueRef(),
@@ -6718,7 +6725,7 @@ const BodyBuilder = struct {
                 const cond = try self.lowerExpr(if_.cond);
                 const then_body = try self.lowerIfBranchAtType(if_.then_body, if_.join_info, .then_, expected_ty);
                 const else_body = try self.lowerIfBranchAtType(if_.else_body, if_.join_info, .else_, expected_ty);
-                const true_discriminant = self.boolTrueDiscriminant(self.output.getExpr(cond).ty);
+                const true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(cond).ty).true_discriminant;
                 break :blk try self.output.addExpr(
                     expected_ty,
                     self.output.freshValueRef(),
@@ -6783,7 +6790,7 @@ const BodyBuilder = struct {
     const SourceMatchDecisionRow = struct {
         branch: Ast.BranchId,
         degenerate: bool,
-        guard: ?Ast.ExprId,
+        guard: ?Ast.BoolCondition,
         body: Ast.ExprId,
         tests: []const PendingPatternTest,
         bindings: []const Ast.PatternBinding,
@@ -6964,21 +6971,12 @@ const BodyBuilder = struct {
         };
     }
 
-    fn boolTrueDiscriminant(self: *const BodyBuilder, ty: Type.TypeId) u16 {
-        return switch (self.program.types.getType(ty)) {
-            .link => |next| self.boolTrueDiscriminant(next),
-            .nominal => |nominal| self.boolTrueDiscriminant(nominal.backing),
-            .tag_union => |tag_union| blk: {
-                for (tag_union.tags) |tag| {
-                    if (tag.payloads.len != 0) continue;
-                    const label = self.program.row_shapes.tag(tag.tag).label;
-                    if (std.mem.eql(u8, self.program.canonical_names.tagLabelText(label), "True")) {
-                        break :blk @intCast(self.program.row_shapes.tag(tag.tag).logical_index);
-                    }
-                }
-                executableInvariant("executable Bool condition had no zero-payload True tag");
-            },
-            else => executableInvariant("executable Bool condition expected ordinary Bool tag-union type"),
+    fn boolDiscriminantsForType(self: *const BodyBuilder, ty: Type.TypeId) Ast.BoolDiscriminants {
+        const false_tag = self.boolTagForType(ty, false);
+        const true_tag = self.boolTagForType(ty, true);
+        return .{
+            .false_discriminant = @intCast(self.program.row_shapes.tag(false_tag.tag).logical_index),
+            .true_discriminant = @intCast(self.program.row_shapes.tag(true_tag.tag).logical_index),
         };
     }
 
@@ -7049,7 +7047,7 @@ const BodyBuilder = struct {
             .reassign => |reassign| self.executableExprReturnsValue(reassign.body),
             .expr => |expr| self.executableExprReturnsValue(expr),
             .debug => |expr| self.executableExprReturnsValue(expr),
-            .expect => |expr| self.executableExprReturnsValue(expr),
+            .expect => |condition| self.executableExprReturnsValue(condition.expr),
             .crash,
             .return_,
             .break_,
@@ -7523,7 +7521,7 @@ const BodyBuilder = struct {
                 else => false,
             },
             .guard => |left| switch (b) {
-                .guard => |right| left == right,
+                .guard => |right| left.expr == right.expr and left.true_discriminant == right.true_discriminant,
                 else => false,
             },
         };
@@ -8546,7 +8544,13 @@ const BodyBuilder = struct {
         }
         const pat = try self.lowerPatScopedWithType(branch.pat, scrutinee_ty, &saved);
         defer self.restoreBindings(&saved, 0);
-        const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
+        const guard = if (branch.guard) |guard| blk: {
+            const expr_id = try self.lowerExpr(guard);
+            break :blk Ast.BoolCondition{
+                .expr = expr_id,
+                .true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(expr_id).ty).true_discriminant,
+            };
+        } else null;
         return try self.output.addBranch(.{
             .pat = pat,
             .guard = guard,
@@ -8600,7 +8604,13 @@ const BodyBuilder = struct {
         }
         const pat = try self.lowerPatScopedWithType(branch.pat, scrutinee_ty, &saved);
         defer self.restoreBindings(&saved, 0);
-        const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
+        const guard = if (branch.guard) |guard| blk: {
+            const expr_id = try self.lowerExpr(guard);
+            break :blk Ast.BoolCondition{
+                .expr = expr_id,
+                .true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(expr_id).ty).true_discriminant,
+            };
+        } else null;
         const body = if (self.lambdaExprCanCompleteNormally(branch.body)) blk: {
             const use_id = self.contextualMatchBranchConsumerUse(join_id, branch_index) orelse {
                 executableInvariant("executable contextual source_match branch has no published consumer-use plan");
@@ -8740,7 +8750,13 @@ const BodyBuilder = struct {
             },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
             .debug => |expr| .{ .debug = try self.lowerExpr(expr) },
-            .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
+            .expect => |expr| blk: {
+                const lowered = try self.lowerExpr(expr);
+                break :blk .{ .expect = .{
+                    .expr = lowered,
+                    .true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(lowered).ty).true_discriminant,
+                } };
+            },
             .crash => |literal| .{ .crash = literal },
             .return_ => |return_| blk: {
                 break :blk .{ .return_ = try self.lowerReturnValue(return_.expr, return_.return_info) };
@@ -8758,7 +8774,13 @@ const BodyBuilder = struct {
                 } };
             },
             .while_ => |while_| .{ .while_ = .{
-                .cond = try self.lowerExpr(while_.cond),
+                .cond = blk: {
+                    const lowered = try self.lowerExpr(while_.cond);
+                    break :blk .{
+                        .expr = lowered,
+                        .true_discriminant = self.boolDiscriminantsForType(self.output.getExpr(lowered).ty).true_discriminant,
+                    };
+                },
                 .body = try self.lowerExpr(while_.body),
             } },
         });
@@ -11504,6 +11526,23 @@ fn sessionEndpointIsTransformChildForScope(
 fn sessionEndpointOwnerIsTransformChild(owner: repr.SessionExecutableValueEndpointOwner) bool {
     return switch (owner) {
         .transform_child => true,
+        else => false,
+    };
+}
+
+fn lowLevelReturnsPredicate(op: base.LowLevel) bool {
+    return switch (op) {
+        .str_is_eq,
+        .str_contains,
+        .str_caseless_ascii_equals,
+        .str_starts_with,
+        .str_ends_with,
+        .num_is_eq,
+        .num_is_gt,
+        .num_is_gte,
+        .num_is_lt,
+        .num_is_lte,
+        => true,
         else => false,
     };
 }

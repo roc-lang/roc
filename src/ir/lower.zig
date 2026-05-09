@@ -189,6 +189,18 @@ const IrBuilder = struct {
         });
     }
 
+    fn lowerPredicateToBlock(self: *IrBuilder, condition: Exec.Ast.BoolCondition) LowerResourceError!Ast.BlockId {
+        var stmts = std.ArrayList(Ast.StmtId).empty;
+        defer stmts.deinit(self.allocator);
+
+        const predicate = try self.lowerExprAsPredicate(condition.expr, condition.true_discriminant, &stmts);
+
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(stmts.items),
+            .term = .{ .value = predicate },
+        });
+    }
+
     fn lowerExprToTerm(
         self: *IrBuilder,
         expr_id: Exec.Ast.ExprId,
@@ -315,15 +327,7 @@ const IrBuilder = struct {
                 } }, stmts);
             },
             .tag_payload => |payload| try self.lowerTagPayload(expr, payload, stmts),
-            .low_level => |low_level| blk: {
-                const args = try self.lowerVarSpanFromExprSpan(low_level.args, stmts);
-                defer if (args.len > 0) self.allocator.free(args);
-                break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
-                    .op = low_level.op,
-                    .rc_effect = low_level.rc_effect,
-                    .args = try self.output.store.addVarSpan(args),
-                } }, stmts);
-            },
+            .low_level => |low_level| try self.lowerLowLevelExpr(expr, low_level, stmts),
             .return_ => |child| try self.lowerExpr(child, stmts),
             .if_ => |if_| try self.lowerIfExpr(expr, if_, stmts),
             .call_direct => |call| try self.lowerCallDirect(expr, call, stmts),
@@ -373,12 +377,12 @@ const IrBuilder = struct {
         if_: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        const cond = try self.lowerExpr(if_.cond, stmts);
+        const cond = try self.lowerExprAsPredicate(if_.cond, if_.true_discriminant, stmts);
         const then_block = try self.lowerExprToBlock(if_.then_body);
         const else_block = try self.lowerExprToBlock(if_.else_body);
         const result = try self.freshVar(try self.layoutForType(expr.ty));
         const branches = [_]Ast.Branch{.{
-            .value = if_.true_discriminant,
+            .value = 1,
             .block = then_block,
         }};
         try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
@@ -497,10 +501,140 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         const lhs = try self.lowerExpr(eq.lhs, stmts);
         const rhs = try self.lowerExpr(eq.rhs, stmts);
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .structural_eq = .{
-            .lhs = lhs,
-            .rhs = rhs,
+        const predicate = try self.boolStructuralEq(lhs, rhs, stmts);
+        return try self.lowerPredicateResult(expr.value, expr.ty, predicate, eq.result_bool, stmts);
+    }
+
+    fn lowerLowLevelExpr(
+        self: *IrBuilder,
+        expr: Exec.Ast.Expr,
+        low_level: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        if (lowLevelReturnsPredicate(low_level.op)) {
+            const result_bool = low_level.predicate_result orelse
+                irInvariant("IR lowering predicate low-level operation omitted Bool discriminants");
+            const predicate = try self.lowerLowLevelPredicate(low_level, stmts);
+            return try self.lowerPredicateResult(expr.value, expr.ty, predicate, result_bool, stmts);
+        }
+
+        const args = try self.lowerVarSpanFromExprSpan(low_level.args, stmts);
+        defer if (args.len > 0) self.allocator.free(args);
+        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_low_level = .{
+            .op = low_level.op,
+            .rc_effect = low_level.rc_effect,
+            .args = try self.output.store.addVarSpan(args),
         } }, stmts);
+    }
+
+    fn lowerLowLevelPredicate(
+        self: *IrBuilder,
+        low_level: anytype,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const args = try self.lowerVarSpanFromExprSpan(low_level.args, stmts);
+        defer if (args.len > 0) self.allocator.free(args);
+        return try self.bindAnonymous(.{ .canonical = .bool }, .{ .call_low_level = .{
+            .op = low_level.op,
+            .rc_effect = low_level.rc_effect,
+            .args = try self.output.store.addVarSpan(args),
+        } }, stmts);
+    }
+
+    fn lowerExprAsPredicate(
+        self: *IrBuilder,
+        expr_id: Exec.Ast.ExprId,
+        true_discriminant: u16,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const expr = self.input.ast.getExpr(expr_id);
+        return switch (expr.data) {
+            .low_level => |low_level| if (lowLevelReturnsPredicate(low_level.op))
+                try self.lowerLowLevelPredicate(low_level, stmts)
+            else
+                try self.boolPredicateForValue(try self.lowerExpr(expr_id, stmts), expr.ty, true_discriminant, stmts),
+            .structural_eq => |eq| blk: {
+                const lhs = try self.lowerExpr(eq.lhs, stmts);
+                const rhs = try self.lowerExpr(eq.rhs, stmts);
+                break :blk try self.boolStructuralEq(lhs, rhs, stmts);
+            },
+            else => try self.boolPredicateForValue(try self.lowerExpr(expr_id, stmts), expr.ty, true_discriminant, stmts),
+        };
+    }
+
+    fn lowerPredicateResult(
+        self: *IrBuilder,
+        value_ref: Exec.Ast.ExecutableValueRef,
+        result_ty: Exec.Type.TypeId,
+        predicate: Ast.Var,
+        result_bool: Exec.Ast.BoolDiscriminants,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        const result_layout = try self.layoutForType(result_ty);
+        const true_value = try self.bindAnonymous(result_layout, .{ .make_union = .{
+            .discriminant = result_bool.true_discriminant,
+            .payload = null,
+            .payload_bridge_plan = null,
+        } }, stmts);
+        const false_value = try self.bindAnonymous(result_layout, .{ .make_union = .{
+            .discriminant = result_bool.false_discriminant,
+            .payload = null,
+            .payload_bridge_plan = null,
+        } }, stmts);
+        const result = try self.freshVar(result_layout);
+        const branches = [_]Ast.Branch{.{
+            .value = 1,
+            .block = try self.valueBlock(true_value),
+        }};
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{
+            .cond = predicate,
+            .branches = try self.output.store.addBranchSpan(&branches),
+            .default_block = try self.valueBlock(false_value),
+            .join = result,
+        } }));
+        try self.value_env.put(value_ref, result);
+        return result;
+    }
+
+    fn boolPredicateForValue(
+        self: *IrBuilder,
+        value: Ast.Var,
+        ty: Exec.Type.TypeId,
+        true_discriminant: u16,
+        stmts: *std.ArrayList(Ast.StmtId),
+    ) LowerResourceError!Ast.Var {
+        if (self.typeIsPrimitiveBool(ty)) return value;
+        const shape = self.boolTagUnionShapeForType(ty);
+        const discriminant = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .get_union_id = .{
+            .value = value,
+            .source = self.discriminantSourceForTagUnionShape(shape),
+        } }, stmts);
+        const expected = try self.bindAnonymous(.{ .canonical = .u16 }, .{ .lit = .{
+            .int = true_discriminant,
+        } }, stmts);
+        return try self.boolLowLevel(.num_is_eq, discriminant, expected, stmts);
+    }
+
+    fn typeIsPrimitiveBool(self: *const IrBuilder, ty: Exec.Type.TypeId) bool {
+        return switch (self.input.types.getType(self.resolveLayoutType(ty))) {
+            .primitive => |prim| prim == .bool,
+            else => false,
+        };
+    }
+
+    fn boolTagUnionShapeForType(self: *const IrBuilder, ty: Exec.Type.TypeId) mir.MonoRow.TagUnionShapeId {
+        return switch (self.input.types.getType(self.resolveLayoutType(ty))) {
+            .nominal => |nominal| self.boolTagUnionShapeForType(nominal.backing),
+            .tag_union => |tag_union| tag_union.shape,
+            else => irInvariant("IR lowering expected Bool condition/result to be an ordinary tag union"),
+        };
+    }
+
+    fn valueBlock(self: *IrBuilder, value: Ast.Var) LowerResourceError!Ast.BlockId {
+        return try self.output.store.addBlock(.{
+            .stmts = Ast.Span(Ast.StmtId).empty(),
+            .term = .{ .value = value },
+        });
     }
 
     fn lowerCallableMatch(
@@ -749,7 +883,7 @@ const IrBuilder = struct {
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!void {
         try stmts.append(self.allocator, try self.output.store.addStmt(.{ .while_ = .{
-            .cond = try self.lowerExprToBlock(while_.cond),
+            .cond = try self.lowerPredicateToBlock(while_.cond),
             .body = try self.lowerExprToBlock(while_.body),
         } }));
     }
@@ -952,7 +1086,7 @@ const IrBuilder = struct {
         }
 
         if (leaf.guard) |guard_expr| {
-            const guard = try self.lowerExpr(guard_expr, stmts);
+            const guard = try self.lowerExprAsPredicate(guard_expr.expr, guard_expr.true_discriminant, stmts);
             const true_block = try self.decisionLeafBodyBlock(leaf, result);
             self.restoreValueBindings(saved.items);
             saved.clearRetainingCapacity();
@@ -1270,7 +1404,7 @@ const IrBuilder = struct {
                 const expected = try self.u64Literal(@intCast(expected_len), stmts);
                 break :blk try self.boolLowLevel(.num_is_gte, len, expected, stmts);
             },
-            .guard => |guard_expr| try self.lowerExpr(guard_expr, stmts),
+            .guard => |guard_expr| try self.lowerExprAsPredicate(guard_expr.expr, guard_expr.true_discriminant, stmts),
         };
     }
 
@@ -1510,8 +1644,8 @@ const IrBuilder = struct {
                 const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .debug = value }));
             },
-            .expect => |expr| {
-                const value = try self.lowerExpr(expr, stmts);
+            .expect => |condition| {
+                const value = try self.lowerExprAsPredicate(condition.expr, condition.true_discriminant, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .expect = value }));
             },
             .return_ => |expr| {
@@ -2145,6 +2279,23 @@ fn primitiveLayout(prim: Exec.Type.Prim) layout_mod.Idx {
         .f64 => .f64,
         .dec => .dec,
         .erased => .opaque_ptr,
+    };
+}
+
+fn lowLevelReturnsPredicate(op: base.LowLevel) bool {
+    return switch (op) {
+        .str_is_eq,
+        .str_contains,
+        .str_caseless_ascii_equals,
+        .str_starts_with,
+        .str_ends_with,
+        .num_is_eq,
+        .num_is_gt,
+        .num_is_gte,
+        .num_is_lt,
+        .num_is_lte,
+        => true,
+        else => false,
     };
 }
 

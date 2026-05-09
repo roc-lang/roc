@@ -4350,6 +4350,7 @@ const BodyLowerer = struct {
             .box => |payload_ty| try self.lowerBoxInspectIntrinsic(ret_ty, arg_expr, arg_info, payload_ty),
             .record => |record| try self.lowerRecordInspectIntrinsic(ret_ty, arg_expr, arg_info, record.fields),
             .tag_union => |tag_union| try self.lowerTagUnionInspectIntrinsic(ret_ty, arg_expr, arg_info, tag_union.tags),
+            .func => try self.lowerStringLiteralExpr(ret_ty, "<fn>"),
             else => invariantViolation("Str.inspect intrinsic reached unsupported mono argument type"),
         };
     }
@@ -6660,13 +6661,21 @@ const BodyLowerer = struct {
 
         var lowered_stmts = std.ArrayList(Ast.StmtId).empty;
         defer lowered_stmts.deinit(self.allocator);
+        var can_reach_final = true;
         for (statements) |statement_id| {
             const statement = self.checkedStatement(statement_id);
             if (self.localProcDeclForStatement(statement) != null) continue;
             try self.lowerStmtInto(statement_id, &lowered_stmts);
+            if (!self.checkedStatementCanCompleteNormally(statement_id)) {
+                can_reach_final = false;
+                break;
+            }
         }
 
-        const final = try self.lowerExprWithExpected(final_expr, final_expected_ty);
+        const final = if (can_reach_final)
+            try self.lowerExprWithExpected(final_expr, final_expected_ty)
+        else
+            try self.program.ast.addExpr(ty, .runtime_error);
 
         const generated_count = generated_local_fns.items.len;
         const normal_count = lowered_stmts.items.len;
@@ -6682,6 +6691,156 @@ const BodyLowerer = struct {
             .stmts = stmt_span,
             .final_expr = final,
         } });
+    }
+
+    fn checkedStatementCanCompleteNormally(
+        self: *const BodyLowerer,
+        statement_id: checked_artifact.CheckedStatementId,
+    ) bool {
+        const statement = self.checkedStatement(statement_id);
+        return switch (statement.data) {
+            .decl => |decl| self.checkedExprCanCompleteNormally(decl.expr),
+            .var_ => |var_| self.checkedExprCanCompleteNormally(var_.expr),
+            .reassign => |reassign| self.checkedExprCanCompleteNormally(reassign.expr),
+            .dbg => |expr| self.checkedExprCanCompleteNormally(expr),
+            .expr => |expr| self.checkedExprCanCompleteNormally(expr),
+            .expect => |expr| self.checkedExprCanCompleteNormally(expr),
+            .for_ => |for_| self.checkedExprCanCompleteNormally(for_.expr),
+            .while_ => |while_| self.checkedExprCanCompleteNormally(while_.cond),
+            .crash,
+            .return_,
+            .break_,
+            .runtime_error,
+            => false,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            => true,
+            .pending => invariantViolation("mono body lowering reached pending checked statement while checking completion"),
+        };
+    }
+
+    fn checkedExprCanCompleteNormally(
+        self: *const BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) bool {
+        const expr = self.checkedExpr(expr_id);
+        return switch (expr.data) {
+            .runtime_error,
+            .crash,
+            .return_,
+            => false,
+            .block => |block| self.checkedBlockCanCompleteNormally(block.statements, block.final_expr),
+            .if_ => |if_| self.checkedIfCanCompleteNormally(if_.branches, if_.final_else),
+            .match_ => |match_| self.checkedExprCanCompleteNormally(match_.cond) and
+                self.checkedAnyMatchBranchCanCompleteNormally(match_.branches),
+            .call => |call| self.checkedExprCanCompleteNormally(call.func) and
+                self.checkedExprSpanCanCompleteNormally(call.args),
+            .record => |record| (record.ext == null or self.checkedExprCanCompleteNormally(record.ext.?)) and
+                self.checkedRecordFieldsCanCompleteNormally(record.fields),
+            .list => |items| self.checkedExprSpanCanCompleteNormally(items),
+            .tuple => |items| self.checkedExprSpanCanCompleteNormally(items),
+            .tag => |tag| self.checkedExprSpanCanCompleteNormally(tag.args),
+            .str => |segments| self.checkedExprSpanCanCompleteNormally(segments),
+            .run_low_level => |run_low_level| self.checkedExprSpanCanCompleteNormally(run_low_level.args),
+            .nominal => |nominal| self.checkedExprCanCompleteNormally(nominal.backing_expr),
+            .closure => |closure| self.checkedExprCanCompleteNormally(closure.lambda),
+            .lambda => |lambda| self.checkedExprCanCompleteNormally(lambda.body),
+            .binop => |binop| self.checkedExprCanCompleteNormally(binop.lhs) and
+                self.checkedExprCanCompleteNormally(binop.rhs),
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            .expect,
+            => |child| self.checkedExprCanCompleteNormally(child),
+            .field_access => |access| self.checkedExprCanCompleteNormally(access.receiver),
+            .structural_eq => |eq| self.checkedExprCanCompleteNormally(eq.lhs) and
+                self.checkedExprCanCompleteNormally(eq.rhs),
+            .tuple_access => |access| self.checkedExprCanCompleteNormally(access.tuple),
+            .for_ => |for_| self.checkedExprCanCompleteNormally(for_.expr),
+            .hosted_lambda => true,
+            .num,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .dec_small,
+            .typed_int,
+            .typed_frac,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            .ellipsis,
+            .anno_only,
+            => true,
+            .pending => invariantViolation("mono body lowering reached pending checked expression while checking completion"),
+        };
+    }
+
+    fn checkedBlockCanCompleteNormally(
+        self: *const BodyLowerer,
+        statements: []const checked_artifact.CheckedStatementId,
+        final_expr: checked_artifact.CheckedExprId,
+    ) bool {
+        for (statements) |statement_id| {
+            if (!self.checkedStatementCanCompleteNormally(statement_id)) return false;
+        }
+        return self.checkedExprCanCompleteNormally(final_expr);
+    }
+
+    fn checkedIfCanCompleteNormally(
+        self: *const BodyLowerer,
+        branches: []const checked_artifact.CheckedIfBranch,
+        final_else: checked_artifact.CheckedExprId,
+    ) bool {
+        var any_body_completes = false;
+        for (branches) |branch| {
+            if (!self.checkedExprCanCompleteNormally(branch.cond)) return false;
+            if (self.checkedExprCanCompleteNormally(branch.body)) any_body_completes = true;
+        }
+        return any_body_completes or self.checkedExprCanCompleteNormally(final_else);
+    }
+
+    fn checkedAnyMatchBranchCanCompleteNormally(
+        self: *const BodyLowerer,
+        branches: []const checked_artifact.CheckedMatchBranch,
+    ) bool {
+        for (branches) |branch| {
+            if (branch.guard) |guard| {
+                if (!self.checkedExprCanCompleteNormally(guard)) continue;
+            }
+            if (self.checkedExprCanCompleteNormally(branch.value)) return true;
+        }
+        return false;
+    }
+
+    fn checkedExprSpanCanCompleteNormally(
+        self: *const BodyLowerer,
+        exprs: []const checked_artifact.CheckedExprId,
+    ) bool {
+        for (exprs) |expr_id| {
+            if (!self.checkedExprCanCompleteNormally(expr_id)) return false;
+        }
+        return true;
+    }
+
+    fn checkedRecordFieldsCanCompleteNormally(
+        self: *const BodyLowerer,
+        fields: []const checked_artifact.CheckedRecordExprField,
+    ) bool {
+        for (fields) |field| {
+            if (!self.checkedExprCanCompleteNormally(field.value)) return false;
+        }
+        return true;
     }
 
     fn lowerStmtInto(

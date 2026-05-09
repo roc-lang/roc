@@ -151,7 +151,7 @@ pub const ListRestPattern = struct {
 /// Public `Branch` declaration.
 pub const Branch = struct {
     pat: PatId,
-    guard: ?ExprId = null,
+    guard: ?BoolCondition = null,
     body: ExprId,
     degenerate: bool = false,
 };
@@ -376,14 +376,26 @@ pub const PatternTest = union(enum) {
     str_literal: ProgramLiteralId,
     list_len_exact: u32,
     list_len_at_least: u32,
-    guard: ExprId,
+    guard: BoolCondition,
+};
+
+/// Published Bool tag discriminants for materializing a predicate as a Roc value.
+pub const BoolDiscriminants = struct {
+    false_discriminant: u16,
+    true_discriminant: u16,
+};
+
+/// Published Bool condition expression and its ordinary `True` tag discriminant.
+pub const BoolCondition = struct {
+    expr: ExprId,
+    true_discriminant: u16,
 };
 
 /// Public `DecisionLeaf` declaration.
 pub const DecisionLeaf = struct {
     branch: BranchId,
     degenerate: bool,
-    guard: ?ExprId = null,
+    guard: ?BoolCondition = null,
     body: ExprId,
     fallback: ?DecisionNodeId = null,
     bindings: Span(PatternBinding),
@@ -439,6 +451,7 @@ pub const Expr = struct {
         structural_eq: struct {
             lhs: ExprId,
             rhs: ExprId,
+            result_bool: BoolDiscriminants,
         },
         bridge: struct {
             bridge: BridgeId,
@@ -466,6 +479,7 @@ pub const Expr = struct {
             op: base.LowLevel,
             rc_effect: base.LowLevel.RcEffect,
             args: Span(ExprId),
+            predicate_result: ?BoolDiscriminants = null,
         },
         source_match: SourceMatch,
         value_transform_tag_union: struct {
@@ -518,7 +532,7 @@ pub const Stmt = union(enum) {
     },
     expr: ExprId,
     debug: ExprId,
-    expect: ExprId,
+    expect: BoolCondition,
     crash: ProgramLiteralId,
     return_: ExprId,
     break_,
@@ -528,7 +542,7 @@ pub const Stmt = union(enum) {
         body: ExprId,
     },
     while_: struct {
-        cond: ExprId,
+        cond: BoolCondition,
         body: ExprId,
     },
 };

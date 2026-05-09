@@ -487,6 +487,29 @@ lookup, or string matching after checking. If a checked artifact that can lower
 wrapper template available through its explicit artifact/import views, that is a
 compiler bug.
 
+`Str.inspect` of a function value is deliberately opaque. A function value has
+callable identity, argument/result types, and possibly captures, but none of
+that is a source value representation that `Str.inspect` should expose or walk.
+The specialized `Builtin.Str.inspect` wrapper for any fixed-arity function type
+therefore returns the literal `"<fn>"`:
+
+```roc
+f = |x| x + 1
+
+main = {
+    dbg f
+    f(5)
+}
+```
+
+The `dbg f` statement above must emit exactly one debug event with `"<fn>"` and
+then continue by calling `f(5)`. Mono must not reject function-typed inspect
+arguments, inspect capture records, inspect callable-set members, inspect boxed
+erased callable payloads, or ask later stages to recover a printable form from a
+runtime closure. The function-value inspect rule is a typed
+`Builtin.Str.inspect : (A1, ..., AN -> R) -> Str` specialization whose body is a
+literal, not a backend fallback and not a source-syntax exception.
+
 `Str.inspect(T)` lowering must be graph-shaped, not tree-shaped. This is the
 compiled-program analogue of Cor/LSS readback: LSS recursively reads the runtime
 value and only descends into the active payloads it sees; it does not expand the
@@ -3045,6 +3068,48 @@ memoized lowering result for the raw lambda-solved variable expression id would
 bypass that environment lookup and silently turn a source value copy into a
 mutable-slot alias. The correct construction is explicit executable declaration
 identity plus environment-sensitive variable lowering.
+
+Mono block lowering must also respect non-returning control flow before later
+stages see the body. Checking may type a block with a flexible result when an
+earlier statement is known to diverge, because the source final expression is
+unreachable. Mono must not then lower that unreachable final expression under the
+procedure return type or under the block's contextual expected type.
+
+For example:
+
+```roc
+main = {
+    crash "boom"
+    0
+}
+```
+
+The checked final expression `0` exists because checking still validates the
+whole source block, but it does not produce a runtime value. Mono lowers the
+`crash "boom"` statement, marks the rest of the block as unreachable, skips any
+remaining runtime statements and the final expression, and uses a
+compiler-internal unreachable/runtime-error terminal with the block's required
+mono result type as the block final expression. Later IR/LIR control-flow
+lowering will see the explicit crash statement before that terminal, so the
+terminal is not executed. It is present only to keep the typed expression graph
+total.
+
+This is not dead-code optimization and not a fallback. It consumes explicit
+checked control-flow nodes (`crash`, `return`, `break`, `runtime_error`, and
+recursively non-completing blocks/branches) to prevent unreachable source tails
+from creating bogus type requirements after checking. A statement that cannot
+complete normally must stop mono's runtime statement lowering for that block.
+The same rule applies to source blocks such as:
+
+```roc
+main = {
+    return 1
+    "unreachable"
+}
+```
+
+inside a function body, and to branch-local blocks whose first runtime statement
+is non-returning.
 
 The same contextual memoization rule applies when lowering lifted MIR to
 lambda-solved MIR. Lifted `ExprId` values are expression occurrences, not stable
@@ -17860,6 +17925,23 @@ not contain a first-class primitive Bool representation. In particular:
   may use a machine predicate or integer comparison internally while lowering a
   branch, but if the result is a first-class Roc value, the result is the Bool
   tag union.
+- A low-level predicate result is not a Roc `Bool`. IR/LIR may use an internal
+  scalar predicate local only as a control-flow condition. When a numeric
+  comparison, string comparison, structural equality, or any other low-level
+  predicate-producing operation is the producer of a source value, IR must
+  immediately materialize the ordinary Bool tag union by selecting between
+  zero-payload `False` and `True` tag constructions using the row-finalized Bool
+  discriminants carried by executable MIR. That internal predicate local must
+  not be stored in a Roc value endpoint, returned from a procedure, passed to
+  user code, exposed in a constant graph, or treated as `Bool` by a backend.
+- Bool-consuming host-effect/control-flow operations such as source `expect`,
+  source `match` guards, and `while` conditions must consume an explicit
+  predicate derived from the Bool tag union. They must not use "nonzero means
+  true" on the Bool value's runtime bytes, because the full Bool endpoint's
+  `True` discriminant is whatever the row-finalized Bool shape says it is.
+  Lowering may derive an internal scalar predicate by reading the Bool
+  discriminant and comparing it with the published `True` discriminant; that
+  predicate is an internal branch condition, not a Roc value representation.
 - `!` may be represented as a high-level semantic `bool_not` node only until the
   stage that owns the resolved Bool row shape. At or before IR lowering it must
   become an ordinary discriminant switch/test plus ordinary tag construction.
@@ -17877,6 +17959,97 @@ discriminant directly. IR must not look up tag labels, compare canonical-name
 ids, assume that `True` is discriminant `1`, or rediscover Bool semantics from
 type shape. This keeps row-label ownership in the MIR-family boundary that still
 owns the executable row-shape and canonical-name stores.
+
+Executable MIR must publish every Bool-to-predicate and predicate-to-Bool
+boundary explicitly. The executable AST owns the following concrete records:
+
+```zig
+pub const BoolDiscriminants = struct {
+    false_discriminant: u16,
+    true_discriminant: u16,
+};
+
+pub const BoolCondition = struct {
+    expr: ExprId,
+    true_discriminant: u16,
+};
+```
+
+`BoolDiscriminants` means "this operation returns the ordinary Roc `Bool` tag
+union whose `False` and `True` constructors have these row-finalized
+discriminants." It is attached to predicate-producing expression nodes that
+produce first-class Roc values, for example:
+
+```zig
+structural_eq: struct {
+    lhs: ExprId,
+    rhs: ExprId,
+    result_bool: BoolDiscriminants,
+},
+
+low_level: struct {
+    op: base.LowLevel,
+    rc_effect: base.LowLevel.RcEffect,
+    args: Span(ExprId),
+    predicate_result: ?BoolDiscriminants,
+},
+```
+
+`predicate_result` is non-null exactly for low-level operations whose semantic
+result type is Roc `Bool`, such as numeric comparisons, string comparisons,
+byte comparisons, and containment/prefix/suffix predicates. IR may lower the
+machine predicate first, but if the expression result is used as a Roc value it
+must immediately construct the ordinary Bool tag union by selecting between
+zero-payload union values using `false_discriminant` and `true_discriminant`.
+
+`BoolCondition` means "this expression is an ordinary Roc Bool value, and this
+is the row-finalized discriminant that represents `True` for the endpoint being
+consumed." It is attached to every executable control predicate that consumes a
+Bool value, for example:
+
+```zig
+expect: BoolCondition,
+
+while_: struct {
+    cond: BoolCondition,
+    body: ExprId,
+},
+
+pub const DecisionLeaf = struct {
+    body: ExprId,
+    guard: ?BoolCondition,
+};
+
+pub const PatternTest = union(enum) {
+    guard: BoolCondition,
+    // other ordinary row-finalized pattern tests...
+};
+```
+
+IR consumes `BoolCondition` by reading the ordinary tag-union discriminant from
+`expr` and comparing it with `true_discriminant`. It may then use the comparison
+result as an internal branch predicate. That internal predicate is not a Roc
+value, must not be stored in user-visible value slots, and must not survive as a
+first-class Bool representation in LIR or any backend.
+
+An executable `if_` keeps its condition expression and the same explicit
+`true_discriminant`:
+
+```zig
+if_: struct {
+    cond: ExprId,
+    true_discriminant: u16,
+    then_body: ExprId,
+    else_body: ExprId,
+},
+```
+
+This is intentionally redundant with the resolved type information available in
+the executable program. The redundancy is explicit semantic data, not a cache:
+it prevents IR and later stages from recovering Bool tag identity by looking at
+source labels, canonical-name stores, or layout heuristics. The stage that owns
+row-finalized tag ids publishes the discriminants once; later stages consume
+only the published numbers.
 
 The reification plan is built from the resolved source type, the selected
 layout, and sealed callable representation data. All are required:
