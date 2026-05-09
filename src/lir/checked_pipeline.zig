@@ -389,11 +389,11 @@ pub const LoweredProgram = struct {
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
-    callable_set_descriptors: []const canonical.CanonicalCallableSetDescriptor = &.{},
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
-        deinitCanonicalCallableSetDescriptors(self.lir_result.store.allocator, self.callable_set_descriptors);
+        deinitRuntimeCallableSetDescriptors(self.lir_result.store.allocator, self.callable_set_descriptors);
         for (self.erased_callable_code_map) |entry| {
             if (entry.exec_arg_tys.len > 0) {
                 self.lir_result.store.allocator.free(entry.exec_arg_tys);
@@ -489,7 +489,7 @@ pub fn lowerArtifactsToLir(
         allocator,
         callable_set_descriptors.descriptors,
     );
-    errdefer deinitCanonicalCallableSetDescriptors(allocator, runtime_callable_set_descriptors);
+    errdefer deinitRuntimeCallableSetDescriptors(allocator, runtime_callable_set_descriptors);
     try publishErasedFnAbisForLowering(
         allocator,
         artifacts.root.artifact,
@@ -893,17 +893,17 @@ fn callableSetDescriptorsForLowering(
 fn cloneRuntimeCallableSetDescriptors(
     allocator: Allocator,
     descriptors: []const repr.CanonicalCallableSetDescriptor,
-) Allocator.Error![]const canonical.CanonicalCallableSetDescriptor {
+) Allocator.Error![]const repr.CanonicalCallableSetDescriptor {
     if (descriptors.len == 0) return &.{};
-    const cloned = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, descriptors.len);
+    const cloned = try allocator.alloc(repr.CanonicalCallableSetDescriptor, descriptors.len);
     var initialized: usize = 0;
     errdefer {
-        deinitCanonicalCallableSetDescriptorContents(allocator, cloned[0..initialized]);
+        deinitRuntimeCallableSetDescriptorContents(allocator, cloned[0..initialized]);
         allocator.free(cloned);
     }
 
     for (descriptors, 0..) |descriptor, i| {
-        const members = try allocator.alloc(canonical.CanonicalCallableSetMember, descriptor.members.len);
+        const members = try allocator.alloc(repr.CanonicalCallableSetMember, descriptor.members.len);
         var member_i: usize = 0;
         errdefer {
             for (members[0..member_i]) |member| {
@@ -916,10 +916,13 @@ fn cloneRuntimeCallableSetDescriptors(
                 .member = member.member,
                 .proc_value = member.proc_value,
                 .source_proc = member.source_proc,
+                .published_proc_value = member.published_proc_value,
+                .published_source_proc = member.published_source_proc,
+                .target_instance = member.target_instance,
                 .capture_slots = if (member.capture_slots.len == 0)
                     &.{}
                 else
-                    try allocator.dupe(canonical.CallableSetCaptureSlot, member.capture_slots),
+                    try allocator.dupe(repr.CallableSetCaptureSlot, member.capture_slots),
                 .capture_shape_key = member.capture_shape_key,
             };
             member_i += 1;
@@ -933,17 +936,17 @@ fn cloneRuntimeCallableSetDescriptors(
     return cloned;
 }
 
-fn deinitCanonicalCallableSetDescriptors(
+fn deinitRuntimeCallableSetDescriptors(
     allocator: Allocator,
-    descriptors: []const canonical.CanonicalCallableSetDescriptor,
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
 ) void {
-    deinitCanonicalCallableSetDescriptorContents(allocator, descriptors);
+    deinitRuntimeCallableSetDescriptorContents(allocator, descriptors);
     if (descriptors.len > 0) allocator.free(descriptors);
 }
 
-fn deinitCanonicalCallableSetDescriptorContents(
+fn deinitRuntimeCallableSetDescriptorContents(
     allocator: Allocator,
-    descriptors: []const canonical.CanonicalCallableSetDescriptor,
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
 ) void {
     for (descriptors) |descriptor| {
         for (descriptor.members) |member| {

@@ -6365,8 +6365,9 @@ const BodyBuilder = struct {
             },
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record);
+                const projected_ty = self.recordFieldTypeForProjection(self.output.getExpr(record).ty, access.field);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    projected_ty,
                     self.output.freshValueRef(),
                     .{ .access = .{
                         .record = record,
@@ -6444,8 +6445,9 @@ const BodyBuilder = struct {
             },
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple);
+                const projected_ty = self.tupleElemTypeForProjection(self.output.getExpr(tuple).ty, access.elem_index);
                 break :blk try self.output.addExpr(
-                    try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                    projected_ty,
                     self.output.freshValueRef(),
                     .{ .tuple_access = .{
                         .tuple = tuple,
@@ -7865,6 +7867,34 @@ const BodyBuilder = struct {
             if (field.field == field_id) return field.ty;
         }
         executableInvariant("executable record-rest projection field was absent from result record type");
+    }
+
+    fn recordFieldTypeForProjection(
+        self: *BodyBuilder,
+        record_ty: Type.TypeId,
+        field_id: MonoRow.RecordFieldId,
+    ) Type.TypeId {
+        return switch (self.program.types.getType(record_ty)) {
+            .record => |record| self.recordFieldType(record, field_id),
+            .nominal => |nominal| self.recordFieldTypeForProjection(nominal.backing, field_id),
+            else => executableInvariant("executable record projection source did not have a record type"),
+        };
+    }
+
+    fn tupleElemTypeForProjection(
+        self: *BodyBuilder,
+        tuple_ty: Type.TypeId,
+        elem_index: u32,
+    ) Type.TypeId {
+        return switch (self.program.types.getType(tuple_ty)) {
+            .tuple => |items| blk: {
+                const index: usize = @intCast(elem_index);
+                if (index >= items.len) executableInvariant("executable tuple projection index exceeded tuple arity");
+                break :blk items[index];
+            },
+            .nominal => |nominal| self.tupleElemTypeForProjection(nominal.backing, elem_index),
+            else => executableInvariant("executable tuple projection source did not have a tuple type"),
+        };
     }
 
     fn payloadRecordTypeForPattern(

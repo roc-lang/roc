@@ -482,6 +482,7 @@ const Lowerer = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         field_index: u16,
+        field_bridge_plan: ?ir.Ast.BridgePlanId,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
         const source_layout = self.store.getLocal(source).layout_idx;
@@ -491,7 +492,8 @@ const Lowerer = struct {
             lirInvariant("lir.lower_ir field access from zst source expected zst target");
         }
         const field_layout = self.structFieldLayout(source_layout, field_index);
-        if (target_layout == field_layout) {
+        const field_bridge_is_direct = if (field_bridge_plan) |plan| self.input.store.getBridgePlan(plan) == .direct else true;
+        if (target_layout == field_layout and field_bridge_is_direct) {
             if (self.isZstLayout(target_layout)) return try self.assignZst(target, next);
             return try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
@@ -504,7 +506,11 @@ const Lowerer = struct {
         }
 
         const raw_field = try self.store.addLocal(.{ .layout_idx = field_layout });
-        const after_extract = try self.lowerPhysicalSlotInto(target, raw_field, next);
+        const after_extract = if (field_bridge_plan) |plan|
+            try self.lowerBridgePlanInto(target, raw_field, plan, next)
+        else
+            try self.lowerPhysicalSlotInto(target, raw_field, next);
+        if (self.isZstLayout(field_layout)) return after_extract;
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = raw_field,
             .op = .{ .field = .{
@@ -838,6 +844,7 @@ const Lowerer = struct {
                 target,
                 try self.lowerVar(field.record),
                 field.field_index,
+                field.field_bridge_plan,
                 next,
             ),
             .nominal_reinterpret => |backing| try self.lowerNominalReinterpretInto(target, try self.lowerVar(backing), next),
@@ -1063,7 +1070,7 @@ const Lowerer = struct {
                 .layout_idx = self.structFieldLayout(source_layout, i),
             });
             current = try self.lowerBridgePlanInto(field_values[i], source_field, child_plans[i], current);
-            current = try self.lowerFieldRefInto(source_field, source, @intCast(i), current);
+            current = try self.lowerFieldRefInto(source_field, source, @intCast(i), null, current);
         }
         return current;
     }
@@ -1279,6 +1286,14 @@ const Lowerer = struct {
             } });
         }
 
+        if (self.listStorageEquivalent(target_layout, source_layout)) {
+            return try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .list_reinterpret = .{ .backing_ref = source } },
+                .next = next,
+            } });
+        }
+
         if (self.erasedHandlePointerEquivalent(target_layout, source_layout)) {
             return try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
@@ -1312,9 +1327,15 @@ const Lowerer = struct {
         if (@import("builtin").mode == .Debug) {
             const target_tag = self.layouts.getLayout(target_layout).tag;
             const source_tag = self.layouts.getLayout(source_layout).tag;
+            const target_elem = self.nonZstListElementLayout(target_layout);
+            const source_elem = self.nonZstListElementLayout(source_layout);
+            const target_elem_index: i64 = if (target_elem) |elem| @intFromEnum(elem) else -1;
+            const source_elem_index: i64 = if (source_elem) |elem| @intFromEnum(elem) else -1;
+            const target_elem_tag = if (target_elem) |elem| @tagName(self.layouts.getLayout(elem).tag) else "zst";
+            const source_elem_tag = if (source_elem) |elem| @tagName(self.layouts.getLayout(elem).tag) else "zst";
             std.debug.panic(
-                "lir.lower_ir physical recursive slot bridge expected direct, box, or unbox layout relation: target_layout={} target_tag={s} source_layout={} source_tag={s}",
-                .{ target_layout, @tagName(target_tag), source_layout, @tagName(source_tag) },
+                "lir.lower_ir physical recursive slot bridge expected direct, box, unbox, or list storage-equivalent layout relation: target_layout={} target_tag={s} target_elem={d} target_elem_tag={s} source_layout={} source_tag={s} source_elem={d} source_elem_tag={s}",
+                .{ target_layout, @tagName(target_tag), target_elem_index, target_elem_tag, source_layout, @tagName(source_tag), source_elem_index, source_elem_tag },
             );
         }
         unreachable;
@@ -1325,6 +1346,7 @@ const Lowerer = struct {
         const source_layout = self.store.getLocal(source).layout_idx;
         return target_layout == source_layout or
             self.rawLayoutValueEquivalent(target_layout, source_layout) or
+            self.listStorageEquivalent(target_layout, source_layout) or
             self.erasedHandlePointerEquivalent(target_layout, source_layout) or
             self.boxLayoutContains(source_layout, target_layout) or
             self.boxLayoutContains(target_layout, source_layout);
@@ -1338,6 +1360,33 @@ const Lowerer = struct {
             if (value == a) return true;
         }
         return false;
+    }
+
+    fn listStorageEquivalent(self: *const Lowerer, a: layout_mod.Idx, b: layout_mod.Idx) bool {
+        if (!self.isListLikeLayout(a) or !self.isListLikeLayout(b)) return false;
+        return self.physicalStorageEquivalent(a, b, self.layouts.resolved_list_layouts.items.len + 1);
+    }
+
+    fn physicalStorageEquivalent(self: *const Lowerer, a: layout_mod.Idx, b: layout_mod.Idx, remaining: usize) bool {
+        if (a == b) return true;
+        if (self.rawLayoutValueEquivalent(a, b)) return true;
+        if (self.erasedHandlePointerEquivalent(a, b)) return true;
+        if (remaining == 0) return false;
+
+        if (!self.isListLikeLayout(a) or !self.isListLikeLayout(b)) return false;
+        const a_elem = self.nonZstListElementLayout(a);
+        const b_elem = self.nonZstListElementLayout(b);
+        if (a_elem == null or b_elem == null) return a_elem == null and b_elem == null;
+        return self.physicalStorageEquivalent(a_elem.?, b_elem.?, remaining - 1);
+    }
+
+    fn nonZstListElementLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) ?layout_mod.Idx {
+        const list_layout = self.layouts.getLayout(layout_idx);
+        return switch (list_layout.tag) {
+            .list => if (self.isZstLayout(list_layout.data.list)) null else list_layout.data.list,
+            .list_of_zst => null,
+            else => null,
+        };
     }
 
     fn erasedHandlePointerEquivalent(self: *const Lowerer, a: layout_mod.Idx, b: layout_mod.Idx) bool {

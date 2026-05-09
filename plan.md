@@ -602,6 +602,47 @@ child `TypeId`. The annotation and value-flow metadata can still be used to
 verify that the projected value is the expected semantic child, but they are not
 allowed to allocate a second executable type graph for that child.
 
+Concretely, executable MIR to IR lowering for aggregate projections has this
+shape:
+
+```zig
+fn lower_record_access(expr: LambdaSolvedExpr, access: RecordAccess) ExprId {
+    const lowered_record = lower_expr(access.record);
+    const record_ty = output.expr(lowered_record).ty;
+    const projected_ty = record_field_type_from_parent(record_ty, access.field);
+
+    debug_assert_same_projection_class(expr.value_info, lowered_record, access.field);
+
+    return output.add_expr(projected_ty, .access{
+        .record = lowered_record,
+        .field = access.field,
+    });
+}
+
+fn lower_tuple_access(expr: LambdaSolvedExpr, access: TupleAccess) ExprId {
+    const lowered_tuple = lower_expr(access.tuple);
+    const tuple_ty = output.expr(lowered_tuple).ty;
+    const projected_ty = tuple_elem_type_from_parent(tuple_ty, access.elem_index);
+
+    debug_assert_same_projection_class(expr.value_info, lowered_tuple, access.elem_index);
+
+    return output.add_expr(projected_ty, .tuple_access{
+        .tuple = lowered_tuple,
+        .elem_index = access.elem_index,
+    });
+}
+```
+
+`lower_record_access` must not spell `projected_ty` as
+`lowerExecutableValueType(expr.ty, expr.value_info)`. That re-lowers the child
+from the projection result root and can allocate a different recursive
+executable type graph than the parent aggregate already owns. If the parent
+record's field is `List(raw Tree)` and the result annotation lowers to
+`List(Tree)` through a separate graph, LIR later sees a field projection from
+`List(struct)` to `List(scalar)` or another unrelated pair and correctly refuses
+to bridge it. The correct fix is to keep the projection typed by the parent's
+field slot, not to add a layout fallback in LIR.
+
 Executable type lowering must memoize every completed source type root it lowers,
 not only roots that are currently active for recursion. The active-recursion map
 prevents infinite descent while a recursive graph is being built; the completed
@@ -3414,6 +3455,30 @@ const RuntimeCallableSetMember = struct {
 };
 ```
 
+In implementation, this runtime descriptor table should stay in the
+lambda-solved descriptor shape instead of being converted to the persisted
+checked-artifact descriptor shape:
+
+```zig
+const LoweredProgram = struct {
+    lir_result: LowerIr.Result,
+
+    // Owned clone of the lambda-solved runtime descriptor table. This is
+    // intentionally not []const CanonicalNames.CanonicalCallableSetDescriptor,
+    // because the persisted checked-artifact descriptor cannot represent
+    // lowering-run-only members and cannot carry optional published identity.
+    callable_set_descriptors: []const mir.LambdaSolved.Representation.CanonicalCallableSetDescriptor,
+};
+```
+
+The clone from lambda-solved to `LoweredProgram` must deep-copy every member
+field, including `published_proc_value` and `published_source_proc`. A clone that
+copies only `member`, `proc_value`, `source_proc`, `capture_slots`, and
+`capture_shape_key` is wrong: it silently erases exactly the metadata required
+at persistence boundaries and forces later code either to persist the
+lowering-run identity or to rediscover publication by inspecting procedure
+templates. Both are forbidden.
+
 The runtime `proc_value` and `source_proc` identities are consumed by
 compile-time evaluation for the LIR it is currently interpreting. The optional
 `published_*` identities are consumed only when finalization crosses a
@@ -3451,6 +3516,60 @@ selected member has no `published_proc_value`, finalization must use the
 promotion path even when it has no captures. It must not reject the entire
 lowering-run descriptor merely because another member in the transient descriptor
 has not yet been promoted.
+
+The compile-time finalizer must therefore use two separate descriptor lookup
+families:
+
+```zig
+// Runtime selection while interpreting this exact lowered LIR.
+fn runtimeCallableSetDescriptor(
+    descriptors: []const RuntimeCallableSetDescriptor,
+    key: CallableSetKey,
+) *const RuntimeCallableSetDescriptor;
+
+fn runtimeCallableSetMember(
+    descriptor: *const RuntimeCallableSetDescriptor,
+    member: CallableSetMemberId,
+) *const RuntimeCallableSetMember;
+
+// Persisted dependency collection after finalization has written artifact-owned
+// descriptors into CheckedModuleArtifact.
+fn persistedCallableSetDescriptor(
+    descriptors: []const CanonicalNames.CanonicalCallableSetDescriptor,
+    key: CallableSetKey,
+) *const CanonicalNames.CanonicalCallableSetDescriptor;
+```
+
+The runtime lookup family is used only with
+`LoweredProgram.callable_set_descriptors` when decoding an interpreter result or
+materializing captures from that result. The persisted lookup family is used
+only for already-published artifact data such as dependency summaries and
+imported values. These families must not share the same return type, because
+their member identities have different lifetime and persistence guarantees.
+
+When a finite callable result is selected:
+
+```zig
+fn selectedFiniteCallableRequiresPromotion(selected: SelectedFiniteCallableResult) bool {
+    if (selected.planned_member.capture_slots.len != 0) return true;
+    if (selected.runtime_member.capture_slots.len != 0) return true;
+    if (selected.runtime_member.published_proc_value == null) return true;
+
+    // Debug-only assertion: published proc/source identity must be present as a
+    // pair. Release lowering can use unreachable for this compiler bug.
+    assert(selected.runtime_member.published_source_proc != null);
+    return false;
+}
+
+fn closedFiniteCallableLeaf(selected: SelectedFiniteCallableResult) ProcedureCallableRef {
+    return selected.runtime_member.published_proc_value orelse compilerBug();
+}
+```
+
+This is the only legal no-promotion path. The finalizer must never decide
+"already an existing procedure" by looking at
+`runtime_member.proc_value.template`. That field is the lowering-run identity and
+is intentionally allowed to be unpublishable.
 
 For example:
 
@@ -26866,6 +26985,58 @@ are primitives, it is `direct`. Lowering an identity value transform to
 unconditional `.direct` is a compiler bug because it asks LIR or the backend to
 guess whether two layout nodes with the same semantic source type are physically
 interchangeable.
+
+LIR's `list_reinterpret` decision must be structural and exact. It is not
+permitted to reinterpret arbitrary `List(A)` as `List(B)`. A list
+reinterpretation is legal only when both stack values are list layouts and their
+heap element layouts are physically storage-equivalent:
+
+```zig
+fn physical_storage_equivalent(a: LayoutId, b: LayoutId) bool {
+    if (a == b) return true;
+
+    // A raw recursive layout node and its committed value layout have the same
+    // runtime bytes; only the compiler's view of the recursive slot differs.
+    if (raw_value_layout_pair(a, b)) return true;
+
+    // Boxed erased callable handles and opaque host handles have the same
+    // pointer-shaped stack representation only when earlier stages published
+    // that exact erased-handle equivalence.
+    if (erased_handle_pointer_equivalent(a, b)) return true;
+
+    if (is_list_layout(a) and is_list_layout(b)) {
+        const a_elem = non_zst_list_element_layout(a);
+        const b_elem = non_zst_list_element_layout(b);
+        if (a_elem == null or b_elem == null) return a_elem == null and b_elem == null;
+        return physical_storage_equivalent(a_elem.?, b_elem.?);
+    }
+
+    return false;
+}
+```
+
+This recursive check is release-correctness code, not a debug verifier. It is
+needed because a recursive list can contain an element layout that is itself a
+raw/value recursive pair, and the outer list layout may not appear directly in
+the raw/value commit table. For example:
+
+```roc
+Tree := [Leaf, Branch(List(Tree))]
+
+main =
+    tree = Tree.Branch([Tree.Leaf])
+    match tree {
+        Tree.Branch(children) -> children
+        Tree.Leaf -> []
+    }
+```
+
+The `children` payload slot may be a `List(raw Tree)` while the branch body
+expects a `List(Tree)`. The list header is the same runtime value, and each heap
+element is storage-equivalent through the raw/value recursive `Tree` pair, so
+the correct LIR bridge is `list_reinterpret`. Emitting `.direct` is wrong
+because the layout ids differ. Reinterpreting `List(I64)` as `List(Str)` is also
+wrong because the heap element layouts are not physically storage-equivalent.
 
 `singleton_to_tag_union` and `tag_union_to_singleton` bridge nodes follow the
 same rule. An absent child transform means "semantic identity for the selected

@@ -647,7 +647,7 @@ const SelectedFiniteCallableResult = struct {
     result_plan_id: checked_artifact.CallableResultPlanId,
     result_plan: checked_artifact.FiniteCallableResultPlan,
     planned_member: checked_artifact.CallableResultMemberPlan,
-    descriptor_member: *const check.CanonicalNames.CanonicalCallableSetMember,
+    descriptor_member: *const repr.CanonicalCallableSetMember,
     payload_layout: layout_mod.Idx,
     payload_value: Value,
 };
@@ -1672,11 +1672,11 @@ const ConcreteDependencyCollector = struct {
     ) Allocator.Error!void {
         switch (self.artifact.comptime_plans.callableResult(result_plan_id)) {
             .finite => |finite| {
-                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("concrete dependency collection reached finite callable result without descriptor");
                 };
                 for (finite.members) |member_plan| {
-                    const member = callableSetMember(descriptor, member_plan.member) orelse {
+                    const member = persistedCallableSetMember(descriptor, member_plan.member) orelse {
                         compileTimeFinalizationInvariant("concrete dependency collection reached missing callable-set member");
                     };
                     try self.appendProcedureCallable(member.proc_value);
@@ -1739,7 +1739,7 @@ const ConcreteDependencyCollector = struct {
         switch (code) {
             .direct_proc_value => |direct| try self.appendProcedureCallable(direct.proc_value),
             .finite_set_adapter => |adapter| {
-                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, adapter.callable_set_key) orelse {
+                const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, adapter.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("concrete dependency collection reached erased finite adapter without descriptor");
                 };
                 for (descriptor.members) |member| try self.appendProcedureCallable(member.proc_value);
@@ -1773,10 +1773,10 @@ const ConcreteDependencyCollector = struct {
             .pure_const => |pure| try self.appendConstInstance(pure.const_instance),
             .pure_value => {},
             .finite_callable_set => |finite| {
-                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set without descriptor");
                 };
-                const member = callableSetMember(descriptor, finite.selected_member) orelse {
+                const member = persistedCallableSetMember(descriptor, finite.selected_member) orelse {
                     compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set with missing member");
                 };
                 try self.appendProcedureCallable(member.proc_value);
@@ -2092,10 +2092,10 @@ const ComptimeGraphCloner = struct {
                 } };
             },
             .finite_callable_set => |finite| blk: {
-                const descriptor = callableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
+                const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("constant value graph clone reached finite callable set without descriptor");
                 };
-                const member = callableSetMember(descriptor, finite.selected_member) orelse {
+                const member = persistedCallableSetMember(descriptor, finite.selected_member) orelse {
                     compileTimeFinalizationInvariant("constant value graph clone reached finite callable set with missing member");
                 };
                 try self.dependencies.appendProcedureCallable(member.proc_value);
@@ -2175,7 +2175,7 @@ const ComptimeGraphCloner = struct {
 
 fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
-    descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
     layouts: *const layout_mod.Store,
     result_plan_id: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
@@ -2202,10 +2202,10 @@ fn selectFiniteCallableResult(
         compileTimeFinalizationInvariant("compile-time callable result selected a member outside the result plan");
     };
 
-    const descriptor = callableSetDescriptor(descriptors, finite.callable_set_key) orelse {
+    const descriptor = runtimeCallableSetDescriptor(descriptors, finite.callable_set_key) orelse {
         compileTimeFinalizationInvariant("compile-time callable result descriptor was not preserved");
     };
-    const member = callableSetMember(descriptor, planned_member.member) orelse {
+    const member = runtimeCallableSetMember(descriptor, planned_member.member) orelse {
         compileTimeFinalizationInvariant("compile-time callable result selected missing descriptor member");
     };
     if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
@@ -2253,12 +2253,11 @@ fn selectedFiniteCallableRequiresPromotion(
 ) bool {
     if (selected.planned_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.capture_slots.len != 0) return true;
-    return switch (selected.descriptor_member.proc_value.template) {
-        .lifted => true,
-        .checked,
-        .synthetic,
-        => false,
-    };
+    if (selected.descriptor_member.published_proc_value == null) return true;
+    if (selected.descriptor_member.published_source_proc == null) {
+        compileTimeFinalizationInvariant("finite callable descriptor published procedure identity was not paired with published source procedure");
+    }
+    return false;
 }
 
 fn closedFiniteCallableLeafFromSelectedCallableResult(
@@ -2270,7 +2269,8 @@ fn closedFiniteCallableLeafFromSelectedCallableResult(
     if (selected.descriptor_member.capture_slots.len != 0) {
         compileTimeFinalizationInvariant("finite callable descriptor member unexpectedly had captures");
     }
-    return selected.descriptor_member.proc_value;
+    return selected.descriptor_member.published_proc_value orelse
+        compileTimeFinalizationInvariant("finite callable result tried to persist a runtime-only procedure identity");
 }
 
 fn promoteFiniteCallableResult(
@@ -2320,6 +2320,8 @@ fn promoteFiniteCallableResult(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("promoted callable selected member capture schema disagrees with result plan");
     }
+    const published_member_proc = selected.descriptor_member.published_proc_value orelse
+        compileTimeFinalizationInvariant("promoted finite callable selected member had no artifact-owned member procedure");
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
         if (slot.slot != @as(u32, @intCast(i))) {
             compileTimeFinalizationInvariant("promoted callable selected member capture slots are not canonical");
@@ -2336,7 +2338,7 @@ fn promoteFiniteCallableResult(
         .source_fn_ty = selected.result_plan.source_fn_ty,
         .callable_set_key = selected.result_plan.callable_set_key,
         .member = selected.planned_member.member,
-        .member_proc = selected.descriptor_member.proc_value,
+        .member_proc = published_member_proc,
         .member_target = member_target,
         .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
         .member_capture_shape = selected.descriptor_member.capture_shape_key,
@@ -3031,7 +3033,11 @@ fn materializedFiniteCallableSetValue(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("materialized finite erased capture selected member capture schema disagrees with result plan");
     }
-    if (capture_builder.dependencies) |dependencies| try dependencies.appendProcedureCallable(selected.descriptor_member.proc_value);
+    if (capture_builder.dependencies) |dependencies| {
+        const published_member_proc = selected.descriptor_member.published_proc_value orelse
+            compileTimeFinalizationInvariant("materialized finite callable set tried to persist a runtime-only procedure identity");
+        try dependencies.appendProcedureCallable(published_member_proc);
+    }
     const captures = try allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, selected.planned_member.capture_slots.len);
     errdefer allocator.free(captures);
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
@@ -3899,7 +3905,7 @@ const PrivateCaptureBuilder = struct {
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     layouts: *const layout_mod.Store,
-    callable_set_descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     owner: ?checked_artifact.PromotedProcedureRef,
     promotion_context: ?PromotedCallablePublicationContext,
     dependencies: ?*ConcreteDependencyCollector = null,
@@ -4648,7 +4654,27 @@ fn callableResultMember(
     return null;
 }
 
-fn callableSetDescriptor(
+fn runtimeCallableSetDescriptor(
+    descriptors: []const repr.CanonicalCallableSetDescriptor,
+    key: check.CanonicalNames.CanonicalCallableSetKey,
+) ?*const repr.CanonicalCallableSetDescriptor {
+    for (descriptors) |*descriptor| {
+        if (mir.LambdaSolved.Representation.callableSetKeyEql(descriptor.key, key)) return descriptor;
+    }
+    return null;
+}
+
+fn runtimeCallableSetMember(
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    member_id: check.CanonicalNames.CallableSetMemberId,
+) ?*const repr.CanonicalCallableSetMember {
+    for (descriptor.members) |*member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
+}
+
+fn persistedCallableSetDescriptor(
     descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     key: check.CanonicalNames.CanonicalCallableSetKey,
 ) ?*const check.CanonicalNames.CanonicalCallableSetDescriptor {
@@ -4658,7 +4684,7 @@ fn callableSetDescriptor(
     return null;
 }
 
-fn callableSetMember(
+fn persistedCallableSetMember(
     descriptor: *const check.CanonicalNames.CanonicalCallableSetDescriptor,
     member_id: check.CanonicalNames.CallableSetMemberId,
 ) ?*const check.CanonicalNames.CanonicalCallableSetMember {
@@ -4757,7 +4783,7 @@ const ComptimeReifier = struct {
     checked_types: *const checked_artifact.CheckedTypeStore,
     layouts: *const layout_mod.Store,
     lowered: ?*const lir.CheckedPipeline.LoweredProgram = null,
-    callable_set_descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
+    callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     active_schemas: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId),
     promotion_context: ?PromotedCallablePublicationContext = null,
     dependencies: ?*ConcreteDependencyCollector = null,
@@ -4990,7 +5016,7 @@ const ComptimeReifier = struct {
         result_plan: checked_artifact.CallableResultPlanId,
         selected: SelectedFiniteCallableResult,
     ) Allocator.Error!checked_artifact.CallableLeafInstance {
-        if (selected.planned_member.capture_slots.len == 0) {
+        if (!selectedFiniteCallableRequiresPromotion(selected)) {
             return .{ .finite = .{ .proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected) } };
         }
 
