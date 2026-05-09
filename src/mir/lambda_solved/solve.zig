@@ -825,7 +825,8 @@ const ProcedureInstanceRegistry = struct {
         solver.existing_public_roots = if (record.has_public_roots) record.public_roots else null;
         const body = try solver.lowerDef(input_proc.body);
         const roots = solver.public_roots orelse lambdaInvariant("lambda-solved MIR built a procedure without public roots");
-        try solver.appendExecutableDependencyRequirements(record.owner, roots);
+        const lowered_record = self.procRecord(instance);
+        try solver.appendExecutableDependencyRequirements(lowered_record.owner, roots);
         const completed_record = &self.records.items[@intFromEnum(instance)];
         completed_record.body = body;
         completed_record.public_roots = roots;
@@ -10374,6 +10375,9 @@ const BodySolver = struct {
 
     fn lowerExpr(self: *BodySolver, expr_id: Lifted.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
+        if (expr.data == .low_level) {
+            return try self.lowerLowLevelSubgraph(expr_id);
+        }
         const can_use_expr_map = exprCanUseExprMap(expr);
         if (can_use_expr_map) {
             if (self.expr_map.get(expr_id)) |existing| return existing;
@@ -10699,7 +10703,7 @@ const BodySolver = struct {
                     .forced_target = proc_value.forced_target,
                 } };
             },
-            .low_level => |low_level| try self.lowerLowLevel(value, expr.source_ty, low_level),
+            .low_level => unreachable,
             .block => unreachable,
             .tuple => |items| blk: {
                 const lowered_items = try self.lowerExprSpanWithValues(items);
@@ -11089,6 +11093,11 @@ const BodySolver = struct {
         values: repr.Span(repr.ValueInfoId),
     };
 
+    const LowLevelLowerFrame = struct {
+        expr: Lifted.Ast.ExprId,
+        expanded: bool,
+    };
+
     fn publishCallValueRequestedFunctionEdges(
         self: *BodySolver,
         call_site: repr.CallSiteInfoId,
@@ -11163,13 +11172,85 @@ const BodySolver = struct {
         };
     }
 
-    fn lowerLowLevel(
+    fn lowerLowLevelSubgraph(self: *BodySolver, root_expr: Lifted.Ast.ExprId) Allocator.Error!Ast.ExprId {
+        var lowered = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(self.allocator);
+        defer lowered.deinit();
+
+        var stack = std.ArrayList(LowLevelLowerFrame).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .expr = root_expr, .expanded = false });
+
+        while (stack.pop()) |frame| {
+            if (lowered.contains(frame.expr)) continue;
+            const input_expr = self.input.getExpr(frame.expr);
+            switch (input_expr.data) {
+                .low_level => |low_level| {
+                    if (!frame.expanded) {
+                        try stack.append(self.allocator, .{ .expr = frame.expr, .expanded = true });
+                        const args = self.input.sliceExprSpan(low_level.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const arg_expr = args[i];
+                            if (self.input.getExpr(arg_expr).data == .low_level and !lowered.contains(arg_expr)) {
+                                try stack.append(self.allocator, .{ .expr = arg_expr, .expanded = false });
+                            }
+                        }
+                        continue;
+                    }
+
+                    const ty = try self.type_importer.importType(input_expr.ty);
+                    const value = try self.newValue(ty, input_expr.source_ty);
+                    const lowered_args = try self.lowerLowLevelArgSpanWithValues(low_level.args, &lowered);
+                    const data = try self.lowerLowLevelWithArgs(value, input_expr.source_ty, low_level, lowered_args);
+                    const lowered_expr = try self.output.addExpr(ty, input_expr.source_ty, value, data);
+                    try lowered.put(frame.expr, lowered_expr);
+                },
+                else => {
+                    const lowered_expr = try self.lowerExpr(frame.expr);
+                    try lowered.put(frame.expr, lowered_expr);
+                },
+            }
+        }
+
+        return lowered.get(root_expr) orelse lambdaInvariant("lambda-solved iterative low-level lowering did not publish root expression");
+    }
+
+    fn lowerLowLevelArgSpanWithValues(
+        self: *BodySolver,
+        span: Lifted.Ast.Span(Lifted.Ast.ExprId),
+        lowered_low_levels: *const std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
+    ) Allocator.Error!LoweredExprSpan {
+        const input_items = self.input.sliceExprSpan(span);
+        if (input_items.len == 0) return .{
+            .exprs = Ast.Span(Ast.ExprId).empty(),
+            .values = repr.Span(repr.ValueInfoId).empty(),
+        };
+        const exprs = try self.allocator.alloc(Ast.ExprId, input_items.len);
+        defer self.allocator.free(exprs);
+        const values = try self.allocator.alloc(repr.ValueInfoId, input_items.len);
+        defer self.allocator.free(values);
+        for (input_items, 0..) |expr, i| {
+            if (self.input.getExpr(expr).data == .low_level) {
+                exprs[i] = lowered_low_levels.get(expr) orelse lambdaInvariant("lambda-solved iterative low-level lowering reached unlowered low-level argument");
+            } else {
+                exprs[i] = try self.lowerExpr(expr);
+            }
+            values[i] = self.exprValue(exprs[i]);
+        }
+        return .{
+            .exprs = try self.output.addExprSpan(exprs),
+            .values = try self.value_store.addValueSpan(values),
+        };
+    }
+
+    fn lowerLowLevelWithArgs(
         self: *BodySolver,
         result_value: repr.ValueInfoId,
         result_source_ty: canonical.CanonicalTypeKey,
         low_level: anytype,
+        lowered_args: LoweredExprSpan,
     ) Allocator.Error!Ast.Expr.Data {
-        const lowered_args = try self.lowerExprSpanWithValues(low_level.args);
         const source_constraint_ty = try self.type_importer.importType(low_level.source_constraint_ty);
         const arg_values = self.value_store.sliceValueSpan(lowered_args.values);
         var value_flow_edges = std.ArrayList(repr.LowLevelValueFlowEdge).empty;

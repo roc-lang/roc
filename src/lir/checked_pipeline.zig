@@ -56,11 +56,338 @@ pub const ArtifactState = enum {
     checking_finalization,
 };
 
+/// Public `RuntimeRecordFieldSchema` declaration.
+pub const RuntimeRecordFieldSchema = struct {
+    name: []const u8,
+    logical_index: u32,
+};
+
+/// Public `RuntimeRecordSchema` declaration.
+pub const RuntimeRecordSchema = struct {
+    type_name: []const u8,
+    fields: []const RuntimeRecordFieldSchema,
+
+    /// Returns the row-finalized logical field index for a named field.
+    pub fn fieldLogicalIndex(self: RuntimeRecordSchema, field_name: []const u8) ?u32 {
+        for (self.fields) |field| {
+            if (std.mem.eql(u8, field.name, field_name)) return field.logical_index;
+        }
+        return null;
+    }
+};
+
+/// Public `RuntimeTagSchema` declaration.
+pub const RuntimeTagSchema = struct {
+    name: []const u8,
+    discriminant: u16,
+};
+
+/// Public `RuntimeTagUnionSchema` declaration.
+pub const RuntimeTagUnionSchema = struct {
+    type_name: []const u8,
+    tags: []const RuntimeTagSchema,
+
+    /// Returns the row-finalized discriminant for a named tag.
+    pub fn tagDiscriminant(self: RuntimeTagUnionSchema, tag_name: []const u8) ?u16 {
+        for (self.tags) |tag| {
+            if (std.mem.eql(u8, tag.name, tag_name)) return tag.discriminant;
+        }
+        return null;
+    }
+};
+
+/// Public `RuntimeValueSchemaStore` declaration.
+pub const RuntimeValueSchemaStore = struct {
+    allocator: Allocator,
+    records: std.ArrayList(RuntimeRecordSchema),
+    tag_unions: std.ArrayList(RuntimeTagUnionSchema),
+
+    /// Initializes an empty runtime value schema store.
+    pub fn init(allocator: Allocator) RuntimeValueSchemaStore {
+        return .{
+            .allocator = allocator,
+            .records = .empty,
+            .tag_unions = .empty,
+        };
+    }
+
+    /// Builds runtime schemas from executable MIR's row-finalized type store.
+    pub fn fromExecutable(
+        allocator: Allocator,
+        program: *const mir.Executable.Build.Program,
+    ) Allocator.Error!RuntimeValueSchemaStore {
+        var store = RuntimeValueSchemaStore.init(allocator);
+        errdefer store.deinit();
+
+        try store.appendFromExecutable(program);
+
+        return store;
+    }
+
+    /// Builds runtime schemas from lambda-solved MIR's row-finalized type store.
+    pub fn fromLambdaSolved(
+        allocator: Allocator,
+        program: *const mir.LambdaSolved.Solve.Program,
+    ) Allocator.Error!RuntimeValueSchemaStore {
+        var store = RuntimeValueSchemaStore.init(allocator);
+        errdefer store.deinit();
+
+        for (program.types.nodes.items) |node| {
+            switch (node) {
+                .nominal => |nominal| try store.appendLambdaSolvedNominalSchema(program, nominal),
+                else => {},
+            }
+        }
+
+        return store;
+    }
+
+    /// Appends executable-only schemas after executable MIR has been built.
+    pub fn appendFromExecutable(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.Executable.Build.Program,
+    ) Allocator.Error!void {
+        for (program.types.types.items) |content| {
+            switch (content) {
+                .nominal => |nominal| try self.appendExecutableNominalSchema(program, nominal),
+                else => {},
+            }
+        }
+    }
+
+    /// Releases owned schema storage.
+    pub fn deinit(self: *RuntimeValueSchemaStore) void {
+        for (self.records.items) |schema| {
+            self.allocator.free(schema.type_name);
+            for (schema.fields) |field| self.allocator.free(field.name);
+            self.allocator.free(schema.fields);
+        }
+        for (self.tag_unions.items) |schema| {
+            self.allocator.free(schema.type_name);
+            for (schema.tags) |tag| self.allocator.free(tag.name);
+            self.allocator.free(schema.tags);
+        }
+        self.records.deinit(self.allocator);
+        self.tag_unions.deinit(self.allocator);
+        self.* = RuntimeValueSchemaStore.init(self.allocator);
+    }
+
+    /// Looks up a record schema by nominal type name.
+    pub fn record(self: *const RuntimeValueSchemaStore, type_name: []const u8) RuntimeRecordSchema {
+        for (self.records.items) |schema| {
+            if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked pipeline invariant violated: runtime value schema missing record type '{s}'", .{type_name});
+        }
+        unreachable;
+    }
+
+    /// Looks up a tag-union schema by nominal type name.
+    pub fn tagUnion(self: *const RuntimeValueSchemaStore, type_name: []const u8) RuntimeTagUnionSchema {
+        for (self.tag_unions.items) |schema| {
+            if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked pipeline invariant violated: runtime value schema missing tag union type '{s}'", .{type_name});
+        }
+        unreachable;
+    }
+
+    fn appendExecutableNominalSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.Executable.Build.Program,
+        nominal: anytype,
+    ) Allocator.Error!void {
+        _ = nominal.source_ty;
+        const raw_type_name = program.canonical_names.typeNameText(nominal.nominal.type_name);
+        const type_name = runtimeSchemaTypeDisplayName(raw_type_name);
+        switch (program.types.getType(nominal.backing)) {
+            .record => |record_payload| try self.appendRecordSchema(program, type_name, record_payload),
+            .tag_union => |tag_union| try self.appendTagUnionSchema(program, type_name, tag_union),
+            else => {},
+        }
+    }
+
+    fn appendLambdaSolvedNominalSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.LambdaSolved.Solve.Program,
+        nominal: mir.LambdaSolved.Type.Nominal,
+    ) Allocator.Error!void {
+        _ = nominal.source_ty;
+        _ = nominal.is_opaque;
+        _ = nominal.args;
+        const raw_type_name = program.canonical_names.typeNameText(nominal.nominal.type_name);
+        const type_name = runtimeSchemaTypeDisplayName(raw_type_name);
+        const backing_root = program.types.unlinkConst(nominal.backing);
+        switch (program.types.getNode(backing_root)) {
+            .content => |content| switch (content) {
+                .record => |record_payload| try self.appendLambdaSolvedRecordSchema(program, type_name, record_payload.fields),
+                .tag_union => |tag_union| try self.appendLambdaSolvedTagUnionSchema(program, type_name, tag_union.tags),
+                else => {},
+            },
+            .nominal => |backing_nominal| try self.appendLambdaSolvedNominalSchema(program, backing_nominal),
+            else => {},
+        }
+    }
+
+    fn appendRecordSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.Executable.Build.Program,
+        type_name: []const u8,
+        record_payload: mir.Executable.Type.RecordType,
+    ) Allocator.Error!void {
+        for (self.records.items) |existing| {
+            if (std.mem.eql(u8, existing.type_name, type_name)) return;
+        }
+
+        const type_name_copy = try self.allocator.dupe(u8, type_name);
+        errdefer self.allocator.free(type_name_copy);
+        const fields = try self.allocator.alloc(RuntimeRecordFieldSchema, record_payload.fields.len);
+        var initialized_fields: usize = 0;
+        errdefer {
+            for (fields[0..initialized_fields]) |field| self.allocator.free(field.name);
+            self.allocator.free(fields);
+        }
+        for (record_payload.fields, 0..) |field, i| {
+            const info = program.row_shapes.recordField(field.field);
+            const name = program.canonical_names.recordFieldLabelText(info.label);
+            fields[i] = .{
+                .name = try self.allocator.dupe(u8, name),
+                .logical_index = info.logical_index,
+            };
+            initialized_fields += 1;
+        }
+
+        try self.records.append(self.allocator, .{
+            .type_name = type_name_copy,
+            .fields = fields,
+        });
+    }
+
+    fn appendTagUnionSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.Executable.Build.Program,
+        type_name: []const u8,
+        tag_union: mir.Executable.Type.TagUnionType,
+    ) Allocator.Error!void {
+        for (self.tag_unions.items) |existing| {
+            if (std.mem.eql(u8, existing.type_name, type_name)) return;
+        }
+
+        const type_name_copy = try self.allocator.dupe(u8, type_name);
+        errdefer self.allocator.free(type_name_copy);
+        const tags = try self.allocator.alloc(RuntimeTagSchema, tag_union.tags.len);
+        var initialized_tags: usize = 0;
+        errdefer {
+            for (tags[0..initialized_tags]) |tag| self.allocator.free(tag.name);
+            self.allocator.free(tags);
+        }
+        for (tag_union.tags, 0..) |tag, i| {
+            const info = program.row_shapes.tag(tag.tag);
+            const name = program.canonical_names.tagLabelText(info.label);
+            tags[i] = .{
+                .name = try self.allocator.dupe(u8, name),
+                .discriminant = @intCast(info.logical_index),
+            };
+            initialized_tags += 1;
+        }
+
+        try self.tag_unions.append(self.allocator, .{
+            .type_name = type_name_copy,
+            .tags = tags,
+        });
+    }
+
+    fn appendLambdaSolvedRecordSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.LambdaSolved.Solve.Program,
+        type_name: []const u8,
+        field_span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Field),
+    ) Allocator.Error!void {
+        for (self.records.items) |existing| {
+            if (std.mem.eql(u8, existing.type_name, type_name)) return;
+        }
+
+        const source_fields = program.types.sliceFields(field_span);
+        const type_name_copy = try self.allocator.dupe(u8, type_name);
+        errdefer self.allocator.free(type_name_copy);
+        const fields = try self.allocator.alloc(RuntimeRecordFieldSchema, source_fields.len);
+        var initialized_fields: usize = 0;
+        errdefer {
+            for (fields[0..initialized_fields]) |field| self.allocator.free(field.name);
+            self.allocator.free(fields);
+        }
+        for (source_fields, 0..) |field, i| {
+            const name = program.canonical_names.recordFieldLabelText(field.name);
+            fields[i] = .{
+                .name = try self.allocator.dupe(u8, name),
+                .logical_index = @intCast(i),
+            };
+            initialized_fields += 1;
+        }
+
+        try self.records.append(self.allocator, .{
+            .type_name = type_name_copy,
+            .fields = fields,
+        });
+    }
+
+    fn appendLambdaSolvedTagUnionSchema(
+        self: *RuntimeValueSchemaStore,
+        program: *const mir.LambdaSolved.Solve.Program,
+        type_name: []const u8,
+        tag_span: mir.LambdaSolved.Type.Span(mir.LambdaSolved.Type.Tag),
+    ) Allocator.Error!void {
+        for (self.tag_unions.items) |existing| {
+            if (std.mem.eql(u8, existing.type_name, type_name)) return;
+        }
+
+        const source_tags = program.types.sliceTags(tag_span);
+        const type_name_copy = try self.allocator.dupe(u8, type_name);
+        errdefer self.allocator.free(type_name_copy);
+        const tags = try self.allocator.alloc(RuntimeTagSchema, source_tags.len);
+        var initialized_tags: usize = 0;
+        errdefer {
+            for (tags[0..initialized_tags]) |tag| self.allocator.free(tag.name);
+            self.allocator.free(tags);
+        }
+        for (source_tags, 0..) |tag, i| {
+            const name = program.canonical_names.tagLabelText(tag.name);
+            tags[i] = .{
+                .name = try self.allocator.dupe(u8, name),
+                .discriminant = @intCast(i),
+            };
+            initialized_tags += 1;
+        }
+
+        try self.tag_unions.append(self.allocator, .{
+            .type_name = type_name_copy,
+            .tags = tags,
+        });
+    }
+};
+
+fn runtimeSchemaTypeDisplayName(raw_name: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
+        const without_builtin = raw_name["Builtin.".len..];
+        if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+            return without_builtin["Num.".len..];
+        }
+        return without_builtin;
+    }
+    if (std.mem.startsWith(u8, raw_name, "Num.")) {
+        return raw_name["Num.".len..];
+    }
+    return raw_name;
+}
+
 /// Public `LoweredProgram` declaration.
 pub const LoweredProgram = struct {
     lir_result: LowerIr.Result,
     main_proc: LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
+    runtime_value_schemas: RuntimeValueSchemaStore,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
@@ -77,6 +404,7 @@ pub const LoweredProgram = struct {
         if (self.compile_time_payloads.len > 0) {
             self.lir_result.store.allocator.free(self.compile_time_payloads);
         }
+        self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
     }
 };
@@ -186,6 +514,9 @@ pub fn lowerArtifactsToLir(
     );
     defer if (compile_time_layout_request_keys.len > 0) allocator.free(compile_time_layout_request_keys);
 
+    var runtime_value_schemas = try RuntimeValueSchemaStore.fromLambdaSolved(allocator, &solved);
+    errdefer runtime_value_schemas.deinit();
+
     var executable = try mir.Executable.Build.run(
         allocator,
         solved,
@@ -205,6 +536,8 @@ pub fn lowerArtifactsToLir(
 
     var erased_code_origins = try collectExecutableErasedCallableCodeOrigins(allocator, &executable);
     errdefer deinitExecutableErasedCallableCodeOrigins(allocator, erased_code_origins);
+
+    try runtime_value_schemas.appendFromExecutable(&executable);
 
     const executable_for_ir = executable;
     executable = mir.Executable.Build.Program.init(allocator);
@@ -242,6 +575,7 @@ pub fn lowerArtifactsToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[0],
         .target_usize = target.target_usize,
+        .runtime_value_schemas = runtime_value_schemas,
         .compile_time_payloads = compile_time_payloads,
         .erased_callable_code_map = erased_callable_code_map,
     };

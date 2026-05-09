@@ -392,6 +392,39 @@ keyed by the canonical module identity that can become a `CIR.Import.Idx`.
 - Package-qualified imports are keyed by their full qualified module name, such
   as `pf.Types`. They must not also be keyed by the basename `Types`.
 
+The same import identity rule applies to post-check lowering view construction.
+If canonicalization/type checking for a module had access to builtin
+auto-imports, then post-check lowering for that module must receive the
+published `Builtin` checked artifact in its `ImportedModuleView` list, even when
+the source did not write `import Builtin`. `Try`, `List`, `Box`, `Str`, `Bool`,
+numeric types, and builtin method wrappers are all ordinary imported checked
+artifact data from the lowering perspective.
+
+For example:
+
+```roc
+make_glue : List(Types) -> Try(List(File), Str)
+make_glue = |types| ...
+```
+
+This annotation mentions `List`, `Try`, and `Str` without an explicit
+`import Builtin`. Canonicalization resolves those through the builtin
+auto-import table. When glue/eval/compile lowering later creates:
+
+```zig
+ArtifactSet{
+    .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+    .imports = imported_artifacts,
+}
+```
+
+`imported_artifacts` must already contain `CheckedArtifact.importedView(Builtin)`.
+Mono must not compensate for a missing Builtin view by searching `ModuleEnv`,
+re-reading the builtin source, comparing nominal names by prefix, or treating
+`Builtin.Try` specially. Missing `Builtin` in a post-check artifact set is a
+public pipeline bug. The correct fix is at the artifact-set builder used by the
+caller, not inside MIR.
+
 When source exposes a type from a package-qualified import, the exposed type
 binding must remember the original `Import.Idx` for the full qualified import.
 The type annotation `List(Types)` above resolves through the exposed type
@@ -1304,6 +1337,66 @@ const MonoSpecializationKey = struct {
 // payload itself. The statement header and annotation are explicit checked-CIR
 // data available during checking finalization, so using them is still explicit
 // semantic publication. It is not post-check source reconstruction.
+//
+// The declaration identity itself must come from the checked nominal payload on
+// the declaration statement's solved type root, not from re-interning the raw
+// header spelling. The header still owns the formal type parameter list, and the
+// declaration annotation still owns the representation template, but the nominal
+// origin/name pair must be the same origin/name pair that checked type
+// occurrences carry everywhere else.
+//
+// This distinction is observable for auto-imported builtin types. In Roc
+// source, the builtin declaration is written with an unqualified header:
+//
+// ```roc
+// Try(ok, err) := [Ok(ok), Err(err)]
+// ```
+//
+// However, user modules that refer to `Try` receive an auto-imported nominal
+// identity whose type name is the canonical builtin identity, for example
+// `Builtin.Try`, with origin module `Builtin`. If checked-artifact publication
+// stored the declaration under the header text `Try` while occurrences stored
+// `Builtin.Try`, mono would later have two incompatible keys for the same
+// nominal:
+//
+// ```roc
+// make_glue : List(Types) -> Try(List(File), Str)
+// make_glue = |types| ...
+// ```
+//
+// The return type occurrence in the consumer is
+// `Builtin.Try(List(File), Str)`. Mono must find the `Builtin.Try(ok, err)`
+// declaration template in the Builtin artifact and instantiate it to
+// `[Ok(List(File)), Err(Str)]`. It must not strip a prefix, try both names,
+// compare tag shapes, or repair the mismatch in mono. Those would all be
+// post-check recovery. The correct long-term architecture is that checking
+// finalization publishes exactly one canonical nominal declaration identity,
+// and every occurrence uses that same identity.
+//
+// Therefore, declaration publication works like this:
+//
+// 1. Read the checked type root associated with the declaration statement.
+// 2. Require that root's payload to be nominal. If it is not nominal, checking
+//    finalization has violated an invariant.
+// 3. Copy the declaration identity from that nominal payload:
+//    `(origin_module, type_name, builtin classification, opacity)`.
+// 4. Read formal parameters from the statement header.
+// 5. Read the representation template from the declaration annotation.
+// 6. Publish one `CheckedNominalDeclaration` keyed by the copied nominal
+//    identity.
+//
+// For `Builtin.Try`, the published declaration key is the solved nominal
+// identity `Builtin.Try`, even though the source header says `Try`. For an
+// ordinary module declaration such as:
+//
+// ```roc
+// Tree(a) := [Leaf(a), Branch(Tree(a), Tree(a))]
+// ```
+//
+// the same rule applies: if checked type occurrences carry `Tree`, the
+// published declaration key is `Tree`; if a nested declaration's solved nominal
+// identity is `Tree.Forest`, the declaration key is `Tree.Forest`. Later stages
+// never derive nominal identity from syntax.
 //
 // For this example, the `Forest` declaration annotation is the tag union
 // `[Empty, More(Tree, Forest)]`. Even if the type-store variable associated with
@@ -6204,6 +6297,38 @@ It must not:
 - emit source/executable duplicate records
 - decide static dispatch targets
 - decide executable direct-call signatures
+- use recursive call stack depth proportional to source expression depth when
+  lowering ordinary expression spines
+
+Lambda-solved body lowering must be stack-safe for deep but ordinary Roc source.
+Large glue scripts naturally produce long expression spines, especially chains of
+low-level calls such as generated string concatenation:
+
+```roc
+generated =
+    "header"
+        .concat(section_a)
+        .concat(section_b)
+        .concat(section_c)
+        .concat(section_d)
+```
+
+After canonicalization and mono/lifted lowering, this can become a deeply nested
+low-level expression tree shaped like:
+
+```text
+str_concat(str_concat(str_concat(str_concat("header", section_a), section_b), section_c), section_d)
+```
+
+That is valid source and must not overflow the compiler stack. Lambda-solved MIR
+must lower contiguous low-level expression subgraphs with an explicit worklist
+and postorder publication of lowered child expressions. The worklist consumes
+the lifted MIR nodes and publishes the same lambda-solved expression/value-flow
+records that ordinary recursive lowering would have published; it is only a
+stack-safety implementation strategy. It must not change low-level operation
+order, regroup associative operations, flatten semantic value flow, or infer any
+missing facts. Non-low-level child expressions may still use ordinary lowering,
+but a chain of low-level nodes must not consume one host stack frame per node.
 
 Lambda-solved MIR output must make callable metadata explicit in its types,
 procedure metadata, and `proc_value` capture payloads. The executable MIR stage
@@ -12440,6 +12565,42 @@ pub fn callErasedI64ToI64(boxed: RocBox, roc_ops: *RocOps, arg0: i64) i64 {
     return ret;
 }
 ```
+
+Generated C glue must publish the same shape. Because the erased-call function
+pointer mentions `struct RocOps*`, the C header must forward-declare
+`struct RocOps` before `RocErasedCallableFn`, not only later in the hosted
+function section:
+
+```c
+struct RocOps;
+
+typedef void (*RocErasedCallableFn)(
+    struct RocOps* ops,
+    uint8_t* ret,
+    const uint8_t* args,
+    uint8_t* capture
+);
+
+typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
+
+typedef struct {
+    RocErasedCallableFn callable_fn_ptr;
+    RocErasedCallableOnDrop on_drop;
+} RocErasedCallablePayload;
+
+typedef uint8_t* RocErasedCallable;
+
+#define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16
+#define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16
+#define ROC_ERASED_CALLABLE_CAPTURE_OFFSET \
+    ((sizeof(RocErasedCallablePayload) + 15u) & ~15u)
+#define ROC_ERASED_CALLABLE_PAYLOAD_SIZE(capture_size) \
+    (ROC_ERASED_CALLABLE_CAPTURE_OFFSET + (capture_size))
+```
+
+The later hosted-function infrastructure section may repeat `struct RocOps;`,
+because a repeated C forward declaration is the same declaration. It must not
+put the first `RocOps` declaration after the erased-callable typedefs.
 
 A no-capture function still uses the uniform erased-call function type and
 ignores the capture pointer:
@@ -22129,6 +22290,266 @@ the Roc glue spec itself. That execution receives the constructed
 `GlueInputCatalog` as ordinary Roc values. The glue spec interpreter and
 backends follow the regular LIR/runtime rules; they do not get access to
 `ModuleEnv` or checked artifacts.
+
+#### Glue Roc Value Materialization
+
+`roc glue` must not materialize the `List(Types)` argument with handwritten
+host-language structs that guess Roc record field order. Roc record field order
+after checking/lowering is not a property of source spelling, target-language
+alphabetical ordering comments, or `extern struct` declaration order. The only
+correct runtime order is the committed LIR layout for the exact `make_glue`
+specialization being executed.
+
+For example, the platform glue schema contains:
+
+```roc
+ModuleTypeInfo := {
+    functions : List(FunctionInfo),
+    hosted_functions : List(HostedFunctionInfo),
+    main_type : Str,
+    name : Str,
+}
+
+HostedFunctionInfo := {
+    arg_fields : List(RecordFieldInfo),
+    arg_type_ids : List(U64),
+    index : U64,
+    name : Str,
+    ret_fields : List(RecordFieldInfo),
+    ret_type_id : U64,
+    type_str : Str,
+}
+
+Types := {
+    entrypoints : List(EntryPoint),
+    modules : List(ModuleTypeInfo),
+    provides_entries : List(ProvidesEntry),
+    type_table : List(TypeRepr),
+}
+```
+
+A handwritten Zig struct like this is forbidden:
+
+```zig
+const ModuleTypeInfoRoc = extern struct {
+    functions: RocList,
+    hosted_functions: RocList,
+    main_type: RocStr,
+    name: RocStr,
+};
+```
+
+That struct is only correct if its field order accidentally matches the exact
+lowered LIR layout. If the checked record payload for `ModuleTypeInfo` commits
+the string field before the two list fields, the same bytes are interpreted as
+different Roc values. One concrete failure mode is that the interpreter reads a
+`List(HostedFunctionInfo)` as a `List(FunctionInfo)`, uses the smaller
+`FunctionInfo` element stride, and then reads the middle of a
+`HostedFunctionInfo` record as a `Str`.
+
+The long-term design is a layout-directed glue value writer:
+
+```zig
+const GlueRocValueWriter = struct {
+    layouts: *const layout.Store,
+    schemas: *const GlueSchemaStore,
+    roc_ops: *RocOps,
+
+    fn writeRecordField(
+        self: *GlueRocValueWriter,
+        record_base: [*]u8,
+        record_layout: layout.Idx,
+        schema: GlueRecordSchemaId,
+        field_name: []const u8,
+        value: GlueRuntimeValue,
+    ) void;
+
+    fn listOfRecords(
+        self: *GlueRocValueWriter,
+        list_layout: layout.Idx,
+        elem_schema: GlueRecordSchemaId,
+        rows: []const GlueCatalogRow,
+    ) RocList;
+};
+```
+
+The writer owns these rules:
+
+- It receives the exact LIR argument layout selected for
+  `make_glue : List(Types) -> Try(List(File), Str)`.
+- It derives the `Types` element layout from that LIR `List(Types)` layout.
+- It derives nested field layouts by field name through a runtime value schema
+  published by the checked-artifact-to-LIR pipeline for the exact lowered glue
+  specialization. That schema is built from row-finalized MIR types while
+  nominal names still exist, then extended with any executable-only runtime
+  schemas before IR/LIR discard names. It is not built from source declaration
+  order.
+- It writes each record field at
+  `layout_store.getStructFieldOffsetByOriginalIndex(record_struct_idx,
+  row_finalized_logical_field_index)`.
+- It allocates list backing storage with the element size and alignment from
+  the exact LIR element layout, then fills each element at `index * elem_size`.
+- It writes tag-union values using the exact LIR tag-union payload layout and
+  discriminant offset. `TypeRepr`, `Try`, `Bool`, and all other tag unions are
+  ordinary tag unions; glue must not special-case Bool or any other nominal
+  tag union.
+- It may use runtime structs for universal primitives whose ABI is fixed
+  independently of record shape, such as `RocStr`, `RocList`, and integer
+  scalars.
+- It must not use target-language `extern struct` definitions for Roc records
+  in the glue input or glue result path unless those structs are generated from
+  the exact committed layout and field-offset table for that specialization.
+
+The output side follows the same rule. When the glue spec returns
+`Try(List(File), Str)`, result extraction must inspect the exact LIR return
+layout:
+
+```zig
+const result_layout = proc.ret_layout;
+const try_info = layouts.getTagUnionInfo(layouts.getLayout(result_layout));
+const discriminant = try_info.data.readDiscriminant(@ptrCast(&result_bytes));
+```
+
+For the `Ok` branch, glue derives the `List(File)` payload layout from the
+`Try` variant payload layout, derives the `File` element record layout from the
+list, and reads `name` and `content` through the runtime value schema's
+row-finalized `File` field indices. It must not cast the payload to:
+
+```zig
+const FileRoc = extern struct { content: RocStr, name: RocStr };
+```
+
+unless that struct was generated from the exact committed LIR offsets. A
+manually-written `FileRoc` is another competing source of runtime layout truth.
+
+Result extraction must also copy Roc-owned strings into compiler-owned host
+memory before storing them in the glue command's result list. This is required
+even when the surrounding result buffer remains live, because `RocStr` has a
+small-string representation where `asSlice()` points inside the `RocStr` value
+itself. Code like this is forbidden:
+
+```zig
+const name = writer.readValue(name_slot.ptr, RocStr);
+file.name = name.asSlice();
+```
+
+If `name` is a small string such as `"roc_platform_abi.h"`, that slice points
+into the local copied `name` variable, not into stable result storage. The
+correct extraction copies immediately:
+
+```zig
+const name = writer.readValue(name_slot.ptr, RocStr);
+file.name = try allocator.dupe(u8, name.asSlice());
+```
+
+The same rule applies to `File.content` and to the `Err(Str)` payload. The glue
+command owns those copied host slices and frees them when the extracted result
+is released. This is still layout-directed extraction; the copy is only a
+lifetime boundary between Roc runtime values and compiler-owned host strings.
+
+The schema consumed by `GlueRocValueWriter` is not the raw checked declaration
+schema. Checked declaration payload order answers "what fields did this type
+annotation spell, and in what annotation order?" It does not answer "which
+logical field index did row-finalized MIR commit for the runtime record layout?"
+Those are deliberately different questions.
+
+For example, a checked declaration may publish:
+
+```roc
+ModuleTypeInfo := {
+    functions : List(FunctionInfo),
+    hosted_functions : List(HostedFunctionInfo),
+    main_type : Str,
+    name : Str,
+}
+```
+
+but the final row-finalized executable type may assign logical field index `0`
+to `main_type`, `1` to `functions`, `2` to `hosted_functions`, and `3` to
+`name`. LIR struct field `original_index` is that row-finalized logical index,
+not the source annotation position. A glue writer that uses checked declaration
+position `0` for `functions` will write a `RocList` into the bytes for a `Str`.
+The LIR interpreter will then read the record with the correct runtime layout
+and eventually decode garbage as a string. This is the exact class of bug this
+boundary is meant to make impossible.
+
+The checked-artifact-to-LIR pipeline therefore publishes a
+`RuntimeValueSchemaStore` alongside the lowered LIR program. It is produced from
+lambda-solved MIR first, because lambda-solved MIR still contains both:
+
+- nominal type names such as `Types`, `ModuleTypeInfo`, `Try`, and `File`;
+- the row-finalized record/tag order that later stages use as logical field and
+  discriminant indices.
+
+Executable MIR may add compiler-generated runtime schemas that did not appear as
+ordinary lambda-solved nominal types, so the store is extended from executable
+MIR before IR/LIR release field/tag names. The schema has this conceptual
+shape:
+
+```zig
+const RuntimeValueSchemaStore = struct {
+    records: []RuntimeRecordSchema,
+    tag_unions: []RuntimeTagUnionSchema,
+};
+
+const RuntimeRecordSchema = struct {
+    type_name: []const u8,
+    fields: []const RuntimeRecordField,
+};
+
+const RuntimeRecordField = struct {
+    name: []const u8,
+    logical_index: u32,
+};
+
+const RuntimeTagUnionSchema = struct {
+    type_name: []const u8,
+    tags: []const RuntimeTag,
+};
+
+const RuntimeTag = struct {
+    name: []const u8,
+    discriminant: u16,
+};
+```
+
+`RuntimeValueSchemaStore` is built by walking lambda-solved `Type.Node.nominal`
+values. For every nominal whose backing is a record, it records the nominal type
+name and each backing field's row-finalized logical index. For every nominal
+whose backing is a tag union, it records the nominal type name and each backing
+tag's row-finalized discriminant. It then walks executable MIR `Type.Content`
+values and adds any remaining nominal record/tag schemas. It clones the required
+names before MIR is released, because IR and LIR intentionally do not own
+field/tag names.
+
+The `type_name` stored in this schema uses the same glue display-name
+normalization as `GlueTypeRepr`: canonical builtin names such as `Builtin.Try`
+and `Builtin.Num.I64` are exposed to glue materialization as `Try` and `I64`.
+This is not a lookup fallback. It is the legacy glue ABI's published type-name
+spelling, applied once while publishing `RuntimeValueSchemaStore`. Glue writers
+must use those published schema names consistently; they must not try both
+qualified and unqualified names later.
+
+Glue still builds the semantic input catalog from checked artifacts. That
+catalog says which modules, functions, hosted functions, entrypoints, and type
+representations must be passed to the Roc glue spec. The runtime value schema is
+only the bridge from named catalog fields/tags to committed runtime offsets.
+This split keeps both responsibilities explicit:
+
+- checked artifacts publish semantic glue content;
+- row-finalized executable MIR publishes runtime field/tag indices;
+- LIR publishes committed byte layouts;
+- glue value materialization consumes all three and never recovers any of them.
+
+If a required schema, field, tag, or layout is missing after checking/lowering,
+that is a compiler bug: debug builds assert at the first invalid read and
+release builds use `unreachable`.
+
+This design keeps the old source-compatible Roc glue specs while removing the
+incorrect ABI shortcut. The Roc glue spec still receives ordinary Roc values of
+type `List(Types)`; the difference is that those values are now materialized by
+the same committed layout tables the interpreter and backends use, rather than
+by handwritten target structs.
 
 ### Interpreter Shim Runtime Image Boundary
 

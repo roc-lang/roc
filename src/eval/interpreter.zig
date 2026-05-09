@@ -588,6 +588,23 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
     };
 
+    const DebugValuePathStep = union(enum) {
+        box_payload: layout_mod.Idx,
+        list_elem: struct {
+            index: usize,
+            elem_layout: layout_mod.Idx,
+        },
+        struct_field: struct {
+            sorted_index: usize,
+            semantic_index: u16,
+            field_layout: layout_mod.Idx,
+        },
+        tag_payload: struct {
+            tag_index: usize,
+            payload_layout: layout_mod.Idx,
+        },
+    };
+
     fn setLocalChecked(
         self: *LirInterpreter,
         frame: *Frame,
@@ -625,6 +642,21 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         visited: *std.ArrayList(DebugVisitedValue),
     ) void {
+        var path_buf: [96]DebugValuePathStep = undefined;
+        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0);
+    }
+
+    fn debugAssertValueMatchesLayoutAt(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        visited: *std.ArrayList(DebugVisitedValue),
+        path_buf: []DebugValuePathStep,
+        path_len: usize,
+    ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
 
@@ -634,11 +666,12 @@ pub const Interpreter = struct {
                 if (layout_idx == .str) {
                     const str = valueToRocStr(value);
                     if (!str.isSmallStr() and str.len() > 0 and str.bytes == null) {
-                        self.debugValueShapePanic(
+                        self.debugValueShapePanicAt(
                             proc_id,
                             stmt_id,
                             local_id,
                             layout_idx,
+                            path_buf[0..path_len],
                             "non-small RocStr had null bytes pointer",
                         );
                     }
@@ -646,11 +679,12 @@ pub const Interpreter = struct {
             },
             .zst, .box_of_zst => return,
             .box => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanic(
+                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
                     proc_id,
                     stmt_id,
                     local_id,
                     layout_idx,
+                    path_buf[0..path_len],
                     "boxed value had null data pointer",
                 );
 
@@ -664,42 +698,52 @@ pub const Interpreter = struct {
                 visited.append(self.evalAllocator(), key) catch {
                     self.invariantFailed("LIR/interpreter invariant violated: out of memory while validating value shape", .{});
                 };
-                self.debugAssertValueMatchesLayout(
+                var next_len = path_len;
+                if (next_len < path_buf.len) {
+                    path_buf[next_len] = .{ .box_payload = layout_val.data.box };
+                    next_len += 1;
+                }
+                self.debugAssertValueMatchesLayoutAt(
                     proc_id,
                     stmt_id,
                     local_id,
                     .{ .ptr = data_ptr },
                     layout_val.data.box,
                     visited,
+                    path_buf,
+                    next_len,
                 );
             },
             .erased_callable => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanic(
+                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
                     proc_id,
                     stmt_id,
                     local_id,
                     layout_idx,
+                    path_buf[0..path_len],
                     "boxed erased callable had null payload pointer",
                 );
                 _ = builtins.erased_callable.payloadPtr(data_ptr);
             },
             .list => {
                 if (value.isZst()) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "list value used ZST sentinel instead of RocList bytes",
                     );
                 }
                 const list = valueToRocList(value);
                 if (list.len() > 0 and list.bytes == null) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "non-empty list had null bytes pointer",
                     );
                 }
@@ -710,33 +754,45 @@ pub const Interpreter = struct {
                 if (elem_size == 0) return;
 
                 for (0..list.len()) |i| {
-                    self.debugAssertValueMatchesLayout(
+                    var next_len = path_len;
+                    if (next_len < path_buf.len) {
+                        path_buf[next_len] = .{ .list_elem = .{
+                            .index = i,
+                            .elem_layout = elem_layout,
+                        } };
+                        next_len += 1;
+                    }
+                    self.debugAssertValueMatchesLayoutAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         .{ .ptr = list.bytes.? + i * elem_size },
                         elem_layout,
                         visited,
+                        path_buf,
+                        next_len,
                     );
                 }
             },
             .list_of_zst => {
                 if (value.isZst()) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "list_of_zst value used ZST sentinel instead of RocList bytes",
                     );
                 }
                 const list = valueToRocList(value);
                 if (list.len() > 0 and list.capacity_or_alloc_ptr == 0) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "non-empty list_of_zst had zero capacity marker",
                     );
                 }
@@ -746,34 +802,47 @@ pub const Interpreter = struct {
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.data.struct_.idx, @intCast(i));
-                    self.debugAssertValueMatchesLayout(
+                    var next_len = path_len;
+                    if (next_len < path_buf.len) {
+                        path_buf[next_len] = .{ .struct_field = .{
+                            .sorted_index = i,
+                            .semantic_index = field.index,
+                            .field_layout = field.layout,
+                        } };
+                        next_len += 1;
+                    }
+                    self.debugAssertValueMatchesLayoutAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         value.offset(field_offset),
                         field.layout,
                         visited,
+                        path_buf,
+                        next_len,
                     );
                 }
             },
             .tag_union => {
                 if (value.isZst() and self.helper.sizeOf(layout_idx) > 0) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "tag union value used ZST sentinel for nonzero tag layout",
                     );
                 }
                 const disc = self.helper.readTagDiscriminant(value, layout_idx);
                 const tag_union_info = self.layout_store.getTagUnionInfo(layout_val);
                 if (disc >= tag_union_info.variants.len) {
-                    self.debugValueShapePanic(
+                    self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
                         local_id,
                         layout_idx,
+                        path_buf[0..path_len],
                         "tag union discriminant was out of range",
                     );
                 }
@@ -781,25 +850,64 @@ pub const Interpreter = struct {
                 const payload_layout = tag_union_info.variants.get(disc).payload_layout;
                 if (self.helper.sizeOf(payload_layout) == 0) return;
 
-                self.debugAssertValueMatchesLayout(
+                var next_len = path_len;
+                if (next_len < path_buf.len) {
+                    path_buf[next_len] = .{ .tag_payload = .{
+                        .tag_index = disc,
+                        .payload_layout = payload_layout,
+                    } };
+                    next_len += 1;
+                }
+                self.debugAssertValueMatchesLayoutAt(
                     proc_id,
                     stmt_id,
                     local_id,
                     value,
                     payload_layout,
                     visited,
+                    path_buf,
+                    next_len,
                 );
             },
             .closure => {
-                self.debugValueShapePanic(
+                self.debugValueShapePanicAt(
                     proc_id,
                     stmt_id,
                     local_id,
                     layout_idx,
+                    path_buf[0..path_len],
                     "closure value reached interpreter recursive validator unexpectedly",
                 );
             },
         }
+    }
+
+    fn debugValueShapePanicAt(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        layout_idx: layout_mod.Idx,
+        path: []const DebugValuePathStep,
+        comptime reason: []const u8,
+    ) noreturn {
+        if (comptime builtin.target.os.tag != .freestanding) {
+            debugPrint("LIR/interpreter value path:", .{});
+            for (path) |step| {
+                switch (step) {
+                    .box_payload => |payload_layout| debugPrint(" .box(layout={d})", .{@intFromEnum(payload_layout)}),
+                    .list_elem => |list| debugPrint(" [{d}:layout={d}]", .{ list.index, @intFromEnum(list.elem_layout) }),
+                    .struct_field => |field| debugPrint(" .field(sorted={d}, semantic={d}, layout={d})", .{ field.sorted_index, field.semantic_index, @intFromEnum(field.field_layout) }),
+                    .tag_payload => |tag| debugPrint(" .tag_payload(index={d}, layout={d})", .{ tag.tag_index, @intFromEnum(tag.payload_layout) }),
+                }
+            }
+            debugPrint("\n", .{});
+            var visited_layouts = std.ArrayList(u32).empty;
+            defer visited_layouts.deinit(self.evalAllocator());
+            debugPrint("LIR/interpreter local layout tree:\n", .{});
+            self.debugPrintLayoutShapeLines(self.store.getLocal(local_id).layout_idx, 0, &visited_layouts);
+        }
+        self.debugValueShapePanic(proc_id, stmt_id, local_id, layout_idx, reason);
     }
 
     fn debugValueShapePanic(
@@ -1014,7 +1122,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst => {},
+            .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
             .box => self.debugPrintLayoutShapeLines(layout_val.data.box, indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.data.list, indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.data.closure.captures_layout_idx, indent + 1, visited),

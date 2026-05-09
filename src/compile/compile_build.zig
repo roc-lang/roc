@@ -2135,19 +2135,17 @@ pub const BuildEnv = struct {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
+        try appendImportedArtifactViewIfMissing(
+            &views,
+            allocator,
+            root_artifact.key,
+            &self.builtin_modules.checked_artifact,
+        );
+
         for (modules) |module| {
             const artifact = module.semantic.checked_artifact orelse continue;
-            if (checkedArtifactKeysEqual(artifact.key, root_artifact.key)) continue;
             if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
-
-            var seen = false;
-            for (views.items) |view| {
-                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
 
         return views.toOwnedSlice(allocator);
@@ -2189,6 +2187,19 @@ pub const BuildEnv = struct {
         b: check.CheckedArtifact.CheckedModuleArtifactKey,
     ) bool {
         return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn appendImportedArtifactViewIfMissing(
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        if (checkedArtifactKeysEqual(artifact.key, root_key)) return;
+        for (views.items) |view| {
+            if (checkedArtifactKeysEqual(view.key, artifact.key)) return;
+        }
+        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
     }
 
     fn rootRelationContainsArtifact(

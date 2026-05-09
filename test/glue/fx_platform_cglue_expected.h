@@ -57,6 +57,32 @@ typedef struct {
 _Static_assert(sizeof(RocList) == 24, "RocList must be 24 bytes");
 _Static_assert(_Alignof(RocList) == 8, "RocList must be 8-byte aligned");
 
+/**
+ * RocErasedCallable - Box(function) erased callable payload pointer
+ *
+ * The payload starts with RocErasedCallablePayload and then inline capture bytes
+ * at ROC_ERASED_CALLABLE_CAPTURE_OFFSET.
+ */
+struct RocOps;
+
+typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);
+typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
+typedef struct {
+    RocErasedCallableFn callable_fn_ptr;
+    RocErasedCallableOnDrop on_drop;
+} RocErasedCallablePayload;
+typedef uint8_t* RocErasedCallable;
+#define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16
+#define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16
+#define ROC_ERASED_CALLABLE_CAPTURE_OFFSET ((sizeof(RocErasedCallablePayload) + 15u) & ~15u)
+#define ROC_ERASED_CALLABLE_PAYLOAD_SIZE(capture_size) (ROC_ERASED_CALLABLE_CAPTURE_OFFSET + (capture_size))
+static inline RocErasedCallablePayload* roc_erased_callable_payload_ptr(RocErasedCallable callable) {
+    return (RocErasedCallablePayload*)callable;
+}
+static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callable) {
+    return callable == 0 ? 0 : callable + ROC_ERASED_CALLABLE_CAPTURE_OFFSET;
+}
+
 // =============================================================================
 // Hosted Function Infrastructure
 // =============================================================================
@@ -85,17 +111,27 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
 /**
  * Total number of hosted functions in this platform
  */
-#define HOSTED_FUNCTION_COUNT 5
+#define HOSTED_FUNCTION_COUNT 15
 
 /**
  * Index constants for each hosted function
  * Use these with the HostedFunctions struct to access specific functions
  */
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
-#define HOSTED_IDX_HOST_GET_GREETING 1
-#define HOSTED_IDX_STDERR_LINE 2
-#define HOSTED_IDX_STDIN_LINE 3
-#define HOSTED_IDX_STDOUT_LINE 4
+#define HOSTED_IDX_HOST_BOXED_ADD 1
+#define HOSTED_IDX_HOST_BOXED_DROP_REPORT 2
+#define HOSTED_IDX_HOST_BOXED_NESTED_RECORD 3
+#define HOSTED_IDX_HOST_BOXED_RECURSIVE_TREE 4
+#define HOSTED_IDX_HOST_CALL_BOXED 5
+#define HOSTED_IDX_HOST_GET_GREETING 6
+#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 7
+#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 8
+#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 9
+#define HOSTED_IDX_HOST_STORE_BOXED 10
+#define HOSTED_IDX_HOST_STORED_BOXED_CALL 11
+#define HOSTED_IDX_STDERR_LINE 12
+#define HOSTED_IDX_STDIN_LINE 13
+#define HOSTED_IDX_STDOUT_LINE 14
 
 // =============================================================================
 // Argument Structures
@@ -123,6 +159,92 @@ _Static_assert(_Alignof(BuilderPrint_valueArgs) >= 1, "BuilderPrint_valueArgs mu
  */
 
 /**
+ * Arguments for Host.boxed_add!
+ * Roc signature: I64 => Box(I64 -> I64)
+ * C function name: host_boxed_add
+ * Return type: RocErasedCallable
+ */
+typedef struct {
+    int64_t arg0;  // I64
+} HostBoxed_addArgs;
+
+_Static_assert(sizeof(HostBoxed_addArgs) > 0, "HostBoxed_addArgs must have non-zero size");
+_Static_assert(_Alignof(HostBoxed_addArgs) >= 1, "HostBoxed_addArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_boxed_add(struct RocOps* ops, HostBoxed_addArgs* args, void* ret) {
+ *     // args->arg0 is int64_t (I64)
+ *     // Set return value: *((RocErasedCallable*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.boxed_nested_record!
+ * Roc signature: Str => Box(I64 -> I64)
+ * C function name: host_boxed_nested_record
+ * Return type: RocErasedCallable
+ */
+typedef struct {
+    RocStr arg0;  // Str
+} HostBoxed_nested_recordArgs;
+
+_Static_assert(sizeof(HostBoxed_nested_recordArgs) > 0, "HostBoxed_nested_recordArgs must have non-zero size");
+_Static_assert(_Alignof(HostBoxed_nested_recordArgs) >= 1, "HostBoxed_nested_recordArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_boxed_nested_record(struct RocOps* ops, HostBoxed_nested_recordArgs* args, void* ret) {
+ *     // args->arg0 is RocStr (Str)
+ *     // Set return value: *((RocErasedCallable*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.boxed_recursive_tree!
+ * Roc signature: Tree => Box(I64 -> I64)
+ * C function name: host_boxed_recursive_tree
+ * Return type: RocErasedCallable
+ */
+typedef struct {
+    void* arg0;  // Tree
+} HostBoxed_recursive_treeArgs;
+
+_Static_assert(sizeof(HostBoxed_recursive_treeArgs) > 0, "HostBoxed_recursive_treeArgs must have non-zero size");
+_Static_assert(_Alignof(HostBoxed_recursive_treeArgs) >= 1, "HostBoxed_recursive_treeArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_boxed_recursive_tree(struct RocOps* ops, HostBoxed_recursive_treeArgs* args, void* ret) {
+ *     // args->arg0 is void* (Tree)
+ *     // Set return value: *((RocErasedCallable*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.call_boxed!
+ * Roc signature: Box(I64 -> I64), I64 => I64
+ * C function name: host_call_boxed
+ * Return type: int64_t
+ */
+typedef struct {
+    RocErasedCallable arg0;  // Box(I64 -> I64)
+    int64_t arg1;  // I64
+} HostCall_boxedArgs;
+
+_Static_assert(sizeof(HostCall_boxedArgs) > 0, "HostCall_boxedArgs must have non-zero size");
+_Static_assert(_Alignof(HostCall_boxedArgs) >= 1, "HostCall_boxedArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_call_boxed(struct RocOps* ops, HostCall_boxedArgs* args, void* ret) {
+ *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
+ *     // args->arg1 is int64_t (I64)
+ *     // Set return value: *((int64_t*)ret) = result;
+ * }
+ */
+
+/**
  * Arguments for Host.get_greeting!
  * Roc signature: Host => Str
  * C function name: host_get_greeting
@@ -140,6 +262,69 @@ _Static_assert(_Alignof(HostGet_greetingArgs) >= 1, "HostGet_greetingArgs must b
  * void hosted_host_get_greeting(struct RocOps* ops, HostGet_greetingArgs* args, void* ret) {
  *     // args->arg0 is void* (Host)
  *     // Set return value: *((RocStr*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.roundtrip_boxed!
+ * Roc signature: Box(I64 -> I64) => Box(I64 -> I64)
+ * C function name: host_roundtrip_boxed
+ * Return type: RocErasedCallable
+ */
+typedef struct {
+    RocErasedCallable arg0;  // Box(I64 -> I64)
+} HostRoundtrip_boxedArgs;
+
+_Static_assert(sizeof(HostRoundtrip_boxedArgs) > 0, "HostRoundtrip_boxedArgs must have non-zero size");
+_Static_assert(_Alignof(HostRoundtrip_boxedArgs) >= 1, "HostRoundtrip_boxedArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_roundtrip_boxed(struct RocOps* ops, HostRoundtrip_boxedArgs* args, void* ret) {
+ *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
+ *     // Set return value: *((RocErasedCallable*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.store_boxed!
+ * Roc signature: Box(I64 -> I64) => {}
+ * C function name: host_store_boxed
+ * Return type: void
+ */
+typedef struct {
+    RocErasedCallable arg0;  // Box(I64 -> I64)
+} HostStore_boxedArgs;
+
+_Static_assert(sizeof(HostStore_boxedArgs) > 0, "HostStore_boxedArgs must have non-zero size");
+_Static_assert(_Alignof(HostStore_boxedArgs) >= 1, "HostStore_boxedArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_store_boxed(struct RocOps* ops, HostStore_boxedArgs* args, void* ret) {
+ *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
+ *     // No return value (void)
+ * }
+ */
+
+/**
+ * Arguments for Host.stored_boxed_call!
+ * Roc signature: I64 => I64
+ * C function name: host_stored_boxed_call
+ * Return type: int64_t
+ */
+typedef struct {
+    int64_t arg0;  // I64
+} HostStored_boxed_callArgs;
+
+_Static_assert(sizeof(HostStored_boxed_callArgs) > 0, "HostStored_boxed_callArgs must have non-zero size");
+_Static_assert(_Alignof(HostStored_boxed_callArgs) >= 1, "HostStored_boxed_callArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_stored_boxed_call(struct RocOps* ops, HostStored_boxed_callArgs* args, void* ret) {
+ *     // args->arg0 is int64_t (I64)
+ *     // Set return value: *((int64_t*)ret) = result;
  * }
  */
 
@@ -198,10 +383,20 @@ _Static_assert(_Alignof(StdoutLineArgs) >= 1, "StdoutLineArgs must be aligned");
  */
 typedef struct {
     HostedFn Builder_print_value;  // index 0, C name: builder_print_value
-    HostedFn Host_get_greeting;  // index 1, C name: host_get_greeting
-    HostedFn Stderr_line;  // index 2, C name: stderr_line
-    HostedFn Stdin_line;  // index 3, C name: stdin_line
-    HostedFn Stdout_line;  // index 4, C name: stdout_line
+    HostedFn Host_boxed_add;  // index 1, C name: host_boxed_add
+    HostedFn Host_boxed_drop_report;  // index 2, C name: host_boxed_drop_report
+    HostedFn Host_boxed_nested_record;  // index 3, C name: host_boxed_nested_record
+    HostedFn Host_boxed_recursive_tree;  // index 4, C name: host_boxed_recursive_tree
+    HostedFn Host_call_boxed;  // index 5, C name: host_call_boxed
+    HostedFn Host_get_greeting;  // index 6, C name: host_get_greeting
+    HostedFn Host_release_stored_boxed;  // index 7, C name: host_release_stored_boxed
+    HostedFn Host_reset_boxed_drop_report;  // index 8, C name: host_reset_boxed_drop_report
+    HostedFn Host_roundtrip_boxed;  // index 9, C name: host_roundtrip_boxed
+    HostedFn Host_store_boxed;  // index 10, C name: host_store_boxed
+    HostedFn Host_stored_boxed_call;  // index 11, C name: host_stored_boxed_call
+    HostedFn Stderr_line;  // index 12, C name: stderr_line
+    HostedFn Stdin_line;  // index 13, C name: stdin_line
+    HostedFn Stdout_line;  // index 14, C name: stdout_line
 } HostedFunctions;
 
 #ifdef __cplusplus

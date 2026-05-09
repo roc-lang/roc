@@ -1926,18 +1926,13 @@ fn appendCheckedNominalDeclarationFromStatement(
         checkedArtifactInvariant("nominal declaration referenced a missing checked type root", .{});
     }
 
+    const statement_nominal = switch (payloads.items[statement_root_index]) {
+        .nominal => |nominal| nominal,
+        else => checkedArtifactInvariant("nominal declaration statement root was not a nominal checked type", .{}),
+    };
+
     const module_env = module.moduleEnvConst();
     const header = module_env.store.getTypeHeader(header_idx);
-    const expected_name = try names.internTypeIdent(module.identStoreConst(), header.relative_name);
-    const expected_origin = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
-    const published_builtin: ?CheckedBuiltinNominal = if (payloads.items[statement_root_index] == .nominal) blk: {
-        const nominal = payloads.items[statement_root_index].nominal;
-        if (nominal.name == expected_name and nominal.origin_module == expected_origin) {
-            break :blk nominal.builtin;
-        }
-        break :blk null;
-    } else null;
-
     const header_args = module_env.store.sliceTypeAnnos(header.args);
 
     const formal_args = if (header_args.len == 0) &.{} else blk: {
@@ -1971,13 +1966,14 @@ fn appendCheckedNominalDeclarationFromStatement(
     );
 
     const nominal_payload = CheckedTypePayload{ .nominal = .{
-        .name = expected_name,
-        .origin_module = expected_origin,
-        .builtin = published_builtin,
-        .is_opaque = is_opaque,
+        .name = statement_nominal.name,
+        .origin_module = statement_nominal.origin_module,
+        .builtin = statement_nominal.builtin,
+        .is_opaque = statement_nominal.is_opaque,
         .backing = backing,
         .args = formal_args,
     } };
+    _ = is_opaque;
     formal_args_owned = false;
 
     const declaration_root = try appendNominalDeclarationRootPayload(
