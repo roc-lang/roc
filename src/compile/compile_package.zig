@@ -299,6 +299,7 @@ pub const TypeCheckOutput = struct {
 
 /// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
+    available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
@@ -1261,6 +1262,7 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const CheckedArtifact.ImportedModuleView,
         target: roc_target.RocTarget,
         io: ?Io,
     ) !TypeCheckOutput {
@@ -1304,6 +1306,7 @@ pub const PackageEnv = struct {
                 .platform_requirement_context = null,
                 .platform_app_relation = null,
                 .explicit_roots = &.{},
+                .available_artifacts = available_artifacts,
             },
         );
         errdefer checked_artifact.deinit(gpa);
@@ -1362,6 +1365,7 @@ pub const PackageEnv = struct {
             .{
                 .module_env_storage = module_env_storage,
                 .imports = imported_artifacts,
+                .available_artifacts = publication.available_artifacts,
                 .relation_artifacts = publication.relation_artifacts,
                 .platform_requirement_context = publication.platform_requirement_context,
                 .platform_app_relation = publication.platform_app_relation,
@@ -1450,6 +1454,12 @@ pub const PackageEnv = struct {
             }
         }
 
+        const available_artifacts = try self.gpa.alloc(CheckedArtifact.ImportedModuleView, imported_artifacts.items.len);
+        defer self.gpa.free(available_artifacts);
+        for (imported_artifacts.items, 0..) |imported, i| {
+            available_artifacts[i] = imported.view;
+        }
+
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var typecheck_output = try typeCheckModule(
             self.gpa,
@@ -1457,6 +1467,7 @@ pub const PackageEnv = struct {
             self.builtin_modules.builtin_module.env,
             imported_envs.items,
             imported_artifacts.items,
+            available_artifacts,
             self.target,
             self.io,
         );

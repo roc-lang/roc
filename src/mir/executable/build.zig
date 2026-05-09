@@ -305,6 +305,12 @@ const ErasedAdapterRequirement = struct {
     published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan = &.{},
 };
 
+const ErasedAdapterPayloadOwner = union(enum) {
+    solve_session: repr.RepresentationSolveSessionId,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    none,
+};
+
 const ErasedDirectProcAdapterRequirement = struct {
     code: canonical.ErasedDirectProcCodeRef,
     sig_key: repr.ErasedFnSigKey,
@@ -313,6 +319,38 @@ const ErasedDirectProcAdapterRequirement = struct {
     solve_session: repr.RepresentationSolveSessionId,
     arg_transforms: []const repr.ValueTransformBoundaryId = &.{},
 };
+
+fn erasedAdapterRequirementPayloadOwner(requirement: anytype) ErasedAdapterPayloadOwner {
+    if (requirement.payload_solve_session) |session| return .{ .solve_session = session };
+    if (requirement.payload_artifact_owner) |artifact| return .{ .artifact = artifact };
+    if (requirement.artifact_descriptor_owner) |artifact| return .{ .artifact = artifact };
+    return .none;
+}
+
+fn erasedAdapterPayloadOwnerEql(a: ErasedAdapterPayloadOwner, b: ErasedAdapterPayloadOwner) bool {
+    return switch (a) {
+        .solve_session => |a_session| switch (b) {
+            .solve_session => |b_session| a_session == b_session,
+            else => false,
+        },
+        .artifact => |a_artifact| switch (b) {
+            .artifact => |b_artifact| artifactKeyEql(a_artifact, b_artifact),
+            else => false,
+        },
+        .none => switch (b) {
+            .none => true,
+            else => false,
+        },
+    };
+}
+
+fn erasedAdapterRequirementIdentityEql(a: anytype, b: anytype) bool {
+    return erasedAdapterKeyEql(a.key, b.key) and
+        erasedAdapterPayloadOwnerEql(
+            erasedAdapterRequirementPayloadOwner(a),
+            erasedAdapterRequirementPayloadOwner(b),
+        );
+}
 
 const ConstInstanceAdapterVisitKey = struct {
     owner: [32]u8,
@@ -1383,9 +1421,9 @@ fn appendErasedAdapterRequirement(
     requirement: ErasedAdapterRequirement,
 ) Allocator.Error!void {
     var owned_requirement = requirement;
-    errdefer deinitErasedAdapterRequirement(allocator, &owned_requirement);
+    defer deinitErasedAdapterRequirement(allocator, &owned_requirement);
     for (adapters.items) |*existing| {
-        if (!erasedAdapterKeyEql(existing.key, owned_requirement.key)) continue;
+        if (!erasedAdapterRequirementIdentityEql(existing.*, owned_requirement)) continue;
         if (existing.payload_solve_session == null) {
             existing.payload_solve_session = owned_requirement.payload_solve_session;
         } else if (owned_requirement.payload_solve_session) |owner| {
@@ -2686,7 +2724,7 @@ fn lowerErasedPromotedWrapperBody(
         erased.hidden_capture_arg,
     );
 
-    const code_proc = executableProcForErasedCode(program, erased.code);
+    const code_proc = executableProcForErasedCode(program, erased.code, materialization.owner);
     const packed_ty = try program.types.addType(.{ .erased_fn = .{
         .sig_key = erased.sig_key,
         .capture_shape = signature.specialization_key.capture_shape_key,
@@ -3686,7 +3724,7 @@ fn applyCallableToErasedValueTransform(
             const packed_value = program.ast.freshValueRef();
             const packed_expr = try program.ast.addExpr(result_ty, packed_value, .{ .packed_erased_fn = .{
                 .sig_key = finite.adapter_key.erased_fn_sig_key,
-                .code = executableProcForErasedAdapter(program, finite.adapter_key),
+                .code = executableProcForErasedAdapter(program, finite.adapter_key, .{ .artifact = materialization.owner }),
                 .capture = hidden_capture,
                 .capture_ty = hidden_capture_ty,
                 .capture_shape = finite.adapter_key.capture_shape_key,
@@ -5260,7 +5298,7 @@ fn lowerMaterializedErasedCallableValue(
     const value = program.ast.freshValueRef();
     const packed_fn = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = .{
         .sig_key = erased.sig_key,
-        .code = executableProcForErasedCode(program, erased.code),
+        .code = executableProcForErasedCode(program, erased.code, materialization.owner),
         .capture = capture_ref,
         .capture_ty = erased_ty.capture_ty,
         .capture_shape = erased_ty.capture_shape,
@@ -5275,10 +5313,11 @@ fn lowerMaterializedErasedCallableValue(
 fn executableProcForErasedCode(
     program: *const Program,
     code: canonical.ErasedCallableCodeRef,
+    owner: checked_artifact.CheckedModuleArtifactKey,
 ) Ast.ExecutableProcId {
     return switch (code) {
         .direct_proc_value => |direct| executableProcForErasedDirectProcAdapter(program, direct),
-        .finite_set_adapter => |adapter| executableProcForErasedAdapter(program, adapter),
+        .finite_set_adapter => |adapter| executableProcForErasedAdapter(program, adapter, .{ .artifact = owner }),
     };
 }
 
@@ -5306,9 +5345,14 @@ fn executableProcForSpecializationKey(
 fn executableProcForErasedAdapter(
     program: *const Program,
     adapter: repr.ErasedAdapterKey,
+    owner: ErasedAdapterPayloadOwner,
 ) Ast.ExecutableProcId {
     for (program.erased_adapter_procs.items) |proc| {
-        if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
+        if (erasedAdapterKeyEql(proc.key, adapter) and
+            erasedAdapterPayloadOwnerEql(erasedAdapterRequirementPayloadOwner(proc), owner))
+        {
+            return proc.executable_proc;
+        }
     }
     executableInvariant("executable erased callable referenced an unreserved finite-set adapter");
 }
@@ -6067,7 +6111,7 @@ const BodyBuilder = struct {
                     .specialization_key = try self.executableSpecializationKey(),
                     .value = .{ .hosted_fn = .{
                         .args = args,
-                        .ret_ty = try self.type_lowerer.lowerType(hosted.ret_ty),
+                        .ret_ty = try self.lowerExecutableValueType(hosted.ret_ty, self.proc_instance.public_roots.ret),
                         .hosted = hosted.hosted,
                     } },
                 };
@@ -6127,7 +6171,14 @@ const BodyBuilder = struct {
         adapter: repr.ErasedAdapterKey,
     ) Ast.ExecutableProcId {
         for (self.erased_adapter_procs) |proc| {
-            if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
+            if (erasedAdapterKeyEql(proc.key, adapter) and
+                erasedAdapterPayloadOwnerEql(
+                    erasedAdapterRequirementPayloadOwner(proc),
+                    .{ .solve_session = self.proc_instance.solve_session },
+                ))
+            {
+                return proc.executable_proc;
+            }
         }
         executableInvariant("executable finite-set erase plan referenced an unreserved erased adapter");
     }
@@ -6324,6 +6375,16 @@ const BodyBuilder = struct {
         return try self.lowerSessionExecutableTypeKey(payload_key);
     }
 
+    fn lowerBindingType(self: *BodyBuilder, bind: LambdaSolved.Ast.TypedSymbol) Allocator.Error!Type.TypeId {
+        return try self.lowerBindingInfoType(bind.binding_info);
+    }
+
+    fn lowerBindingInfoType(self: *BodyBuilder, binding_info: repr.BindingInfoId) Allocator.Error!Type.TypeId {
+        const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
+        const value_info = self.value_store.values.items[@intFromEnum(binding.value)];
+        return try self.lowerExecutableValueType(value_info.logical_ty, binding.value);
+    }
+
     fn lowerFnArgSpan(self: *BodyBuilder, span: LambdaSolved.Ast.Span(LambdaSolved.Ast.TypedSymbol)) Allocator.Error!Ast.Span(Ast.TypedValue) {
         const capture_arg = try self.lowerCaptureRecordArg();
         self.capture_record_arg = capture_arg;
@@ -6338,9 +6399,8 @@ const BodyBuilder = struct {
         for (input_items, 0..) |param, i| {
             const value = self.output.freshValueRef();
             try self.env.put(param.binding_info, value);
-            const binding = self.value_store.bindings.items[@intFromEnum(param.binding_info)];
             output_items[i] = .{
-                .ty = try self.lowerExecutableValueType(param.ty, binding.value),
+                .ty = try self.lowerBindingType(param),
                 .value = value,
             };
         }
@@ -6358,9 +6418,8 @@ const BodyBuilder = struct {
         for (input_items, 0..) |param, i| {
             const value = self.output.freshValueRef();
             try self.env.put(param.binding_info, value);
-            const binding = self.value_store.bindings.items[@intFromEnum(param.binding_info)];
             output_items[i] = .{
-                .ty = try self.lowerExecutableValueType(param.ty, binding.value),
+                .ty = try self.lowerBindingType(param),
                 .value = value,
             };
         }
@@ -6428,6 +6487,25 @@ const BodyBuilder = struct {
                 var stmt_ids = std.ArrayList(Ast.StmtId).empty;
                 defer stmt_ids.deinit(self.allocator);
                 const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, value);
+                const transformed_ty = self.output.requireValueType(transformed);
+                if (transformed_ty != expected_ty) {
+                    const boundary_from_ty = try self.lowerSessionExecutableEndpointType(boundary.from_endpoint);
+                    const boundary_to_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
+                    executableInvariantFmt(
+                        "executable variable transform produced value type {} but occurrence expected type {}; boundary from type {}, to type {}; expr={}, occurrence_info={}, binding={}, alias_source={}, transformed_value={}",
+                        .{
+                            @intFromEnum(transformed_ty),
+                            @intFromEnum(expected_ty),
+                            @intFromEnum(boundary_from_ty),
+                            @intFromEnum(boundary_to_ty),
+                            @intFromEnum(expr_id),
+                            @intFromEnum(expr.value_info),
+                            @intFromEnum(var_.binding_info),
+                            @intFromEnum(alias_source),
+                            @intFromEnum(transformed),
+                        },
+                    );
+                }
                 const final_expr = try self.output.addValueRefExpr(expected_ty, transformed);
                 if (stmt_ids.items.len == 0) break :blk final_expr;
                 break :blk try self.output.addExpr(expected_ty, self.output.getExpr(final_expr).value, .{ .block = .{
@@ -6517,8 +6595,9 @@ const BodyBuilder = struct {
                 break :blk try self.finishProjectionExpr(access.projection_info, expr.value_info, projected_ty, raw_value, raw_expr);
             },
             .let_ => |let_| blk: {
-                const body = try self.lowerExpr(let_.body);
-                const bind_value = try self.output.freshTypedValueRef(self.output.getExpr(body).ty);
+                const bind_ty = try self.lowerBindingType(let_.bind);
+                const body = try self.lowerExprAtType(let_.body, bind_ty);
+                const bind_value = try self.output.freshTypedValueRef(bind_ty);
                 const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
@@ -6772,8 +6851,9 @@ const BodyBuilder = struct {
                 );
             },
             .let_ => |let_| blk: {
-                const body = try self.lowerExpr(let_.body);
-                const bind_value = try self.output.freshTypedValueRef(self.output.getExpr(body).ty);
+                const bind_ty = try self.lowerBindingType(let_.bind);
+                const body = try self.lowerExprAtType(let_.body, bind_ty);
+                const bind_value = try self.output.freshTypedValueRef(bind_ty);
                 const previous = try self.env.fetchPut(let_.bind.binding_info, bind_value);
                 defer {
                     if (previous) |entry| {
@@ -7825,19 +7905,19 @@ const BodyBuilder = struct {
             .bind => |bind| {
                 const source_plan = self.output.getPatternPathValuePlan(path_value);
                 try bindings.append(self.allocator, .{
-                    .binder = bind,
+                    .binder = bind.value,
                     .source = path_value,
-                    .bridge = try self.patternBindingBridge(source_plan.ty, pat.ty),
-                    .ty = pat.ty,
+                    .bridge = try self.patternBindingBridge(source_plan.ty, bind.ty),
+                    .ty = bind.ty,
                 });
             },
             .as => |as| {
                 const source_plan = self.output.getPatternPathValuePlan(path_value);
                 try bindings.append(self.allocator, .{
-                    .binder = as.bind,
+                    .binder = as.bind.value,
                     .source = path_value,
-                    .bridge = try self.patternBindingBridge(source_plan.ty, pat.ty),
-                    .ty = pat.ty,
+                    .bridge = try self.patternBindingBridge(source_plan.ty, as.bind.ty),
+                    .ty = as.bind.ty,
                 });
                 try self.collectPatternDecisionData(as.pattern, path_value, tests, bindings, path_plans);
             },
@@ -8552,14 +8632,22 @@ const BodyBuilder = struct {
             } },
             .as => |as| blk: {
                 const value = try self.bindPatternValue(as.binding_info, saved);
+                const bind_ty = try self.lowerBindingInfoType(as.binding_info);
                 break :blk .{ .as = .{
                     .pattern = try self.lowerPatScopedWithType(as.pattern, ty, saved),
-                    .bind = value,
+                    .bind = .{
+                        .value = value,
+                        .ty = bind_ty,
+                    },
                 } };
             },
             .var_ => |var_| blk: {
                 const value = try self.bindPatternValue(var_.binding_info, saved);
-                break :blk .{ .bind = value };
+                const bind_ty = try self.lowerBindingInfoType(var_.binding_info);
+                break :blk .{ .bind = .{
+                    .value = value,
+                    .ty = bind_ty,
+                } };
             },
             .tag => |tag| blk: {
                 const resolved_tag = self.tagForType(ty, tag.tag);
@@ -8836,8 +8924,9 @@ const BodyBuilder = struct {
         const stmt = self.input.stmts.items[@intFromEnum(stmt_id)];
         return try self.output.addStmt(switch (stmt) {
             .decl => |decl| blk: {
-                const body = try self.lowerExpr(decl.body);
-                const bind_value = self.output.freshValueRef();
+                const bind_ty = try self.lowerBindingType(decl.bind);
+                const body = try self.lowerExprAtType(decl.body, bind_ty);
+                const bind_value = try self.output.freshTypedValueRef(bind_ty);
                 try self.env.put(decl.bind.binding_info, bind_value);
                 break :blk .{ .decl = .{
                     .value = bind_value,
@@ -8845,8 +8934,9 @@ const BodyBuilder = struct {
                 } };
             },
             .var_decl => |decl| blk: {
-                const body = try self.lowerExpr(decl.body);
-                const bind_value = self.output.freshValueRef();
+                const bind_ty = try self.lowerBindingType(decl.bind);
+                const body = try self.lowerExprAtType(decl.body, bind_ty);
+                const bind_value = try self.output.freshTypedValueRef(bind_ty);
                 try self.env.put(decl.bind.binding_info, bind_value);
                 break :blk .{ .decl = .{
                     .value = bind_value,
@@ -8854,8 +8944,9 @@ const BodyBuilder = struct {
                 } };
             },
             .reassign => |reassign| blk: {
-                const body = try self.lowerExpr(reassign.body);
                 const target = self.env.get(reassign.version) orelse executableInvariant("executable reassignment target has no lowered binding value");
+                const target_ty = self.output.requireValueType(target);
+                const body = try self.lowerExprAtType(reassign.body, target_ty);
                 break :blk .{ .reassign = .{
                     .target = target,
                     .body = body,
@@ -9195,7 +9286,10 @@ const BodyBuilder = struct {
         const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
         const uses = self.value_store.sliceConsumerUsePlanSpan(join.contextual_consumer_uses);
         if (uses.len != inputs.len) {
-            executableInvariant("executable contextual if consumer-use count differs from join inputs");
+            executableInvariantFmt(
+                "executable contextual if consumer-use count differs from join inputs: join={} inputs={} uses={}",
+                .{ @intFromEnum(join_id), inputs.len, uses.len },
+            );
         }
         for (inputs, uses) |input, use_id| {
             const source = switch (input.source) {
@@ -9223,7 +9317,10 @@ const BodyBuilder = struct {
         const inputs = self.value_store.sliceJoinInputSpan(join.inputs);
         const uses = self.value_store.sliceConsumerUsePlanSpan(join.contextual_consumer_uses);
         if (uses.len != inputs.len) {
-            executableInvariant("executable contextual match consumer-use count differs from join inputs");
+            executableInvariantFmt(
+                "executable contextual match consumer-use count differs from join inputs: join={} inputs={} uses={}",
+                .{ @intFromEnum(join_id), inputs.len, uses.len },
+            );
         }
         for (inputs, uses) |input, use_id| {
             const source = switch (input.source) {

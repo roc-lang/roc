@@ -32,6 +32,7 @@ fn finalize(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.PublishImportArtifact,
+    available_artifacts: []const checked_artifact.ImportedModuleView,
     relation_artifacts: []const checked_artifact.ImportedModuleView,
 ) anyerror!void {
     const compile_time_roots = try compileTimeRootRequests(allocator, artifact.root_requests.requests);
@@ -42,14 +43,24 @@ fn finalize(
     for (imports, 0..) |import, i| {
         import_views[i] = import.view;
     }
-    const dependency_views = try dependencyArtifactViews(allocator, import_views, relation_artifacts);
+
+    const lowering_imports = try loweringArtifactViews(
+        allocator,
+        artifact,
+        import_views,
+        available_artifacts,
+        relation_artifacts,
+    );
+    defer if (lowering_imports.len > 0) allocator.free(lowering_imports);
+
+    const dependency_views = try dependencyArtifactViews(allocator, lowering_imports, relation_artifacts);
     defer if (dependency_views.len > 0) allocator.free(dependency_views);
 
     var dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
         allocator,
         .{
             .root = checked_artifact.loweringViewWithRelations(artifact, relation_artifacts),
-            .imports = import_views,
+            .imports = lowering_imports,
         },
         .{
             .requests = artifact.root_requests.requests,
@@ -68,7 +79,7 @@ fn finalize(
     defer runtime_env.deinit();
 
     if (compile_time_roots.len == 0) {
-        try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, import_views, relation_artifacts, &runtime_env);
+        try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, lowering_imports, relation_artifacts, &runtime_env);
         try artifact.comptime_values.sealBindings();
         return;
     }
@@ -81,7 +92,7 @@ fn finalize(
             allocator,
             artifact,
             dependency_views,
-            import_views,
+            lowering_imports,
             relation_artifacts,
             &runtime_env,
             root_request,
@@ -97,7 +108,7 @@ fn finalize(
         var lowered_request = try lowerSingleCompileTimeRequest(
             allocator,
             artifact,
-            import_views,
+            lowering_imports,
             relation_artifacts,
             .{ .local_root = root_request },
         );
@@ -145,7 +156,7 @@ fn finalize(
         }
     }
 
-    try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, import_views, relation_artifacts, &runtime_env);
+    try finalizeRuntimeDependencySummaries(allocator, artifact, dependency_views, lowering_imports, relation_artifacts, &runtime_env);
 
     try artifact.comptime_values.sealBindings();
 }
@@ -443,6 +454,47 @@ fn dependencyArtifactViews(
     return try views.toOwnedSlice(allocator);
 }
 
+fn loweringArtifactViews(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    import_views: []const checked_artifact.ImportedModuleView,
+    available_artifacts: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
+) Allocator.Error![]checked_artifact.ImportedModuleView {
+    var views = std.ArrayList(checked_artifact.ImportedModuleView).empty;
+    errdefer views.deinit(allocator);
+
+    for (import_views) |view| {
+        try appendDependencyArtifactView(&views, allocator, view);
+    }
+
+    var keys = std.ArrayList(checked_artifact.CheckedModuleArtifactKey).empty;
+    defer keys.deinit(allocator);
+
+    for (artifact.platform_required_bindings.bindings) |binding| {
+        const relation_artifact = artifactViewForKey(relation_artifacts, binding.app_value.artifact) orelse {
+            compileTimeFinalizationInvariant("platform relation binding referenced an unavailable relation artifact");
+        };
+        try checked_artifact.appendPlatformRelationDependencyArtifactKeysFromView(
+            allocator,
+            &keys,
+            relation_artifact,
+            binding,
+        );
+    }
+
+    for (keys.items) |key| {
+        if (checkedArtifactKeyEql(key, artifact.key)) continue;
+        if (artifactViewForKey(relation_artifacts, key) != null) continue;
+        const view = artifactViewForKey(import_views, key) orelse artifactViewForKey(available_artifacts, key) orelse {
+            compileTimeFinalizationInvariant("relation closure referenced a checked artifact that was not published to finalization availability");
+        };
+        try appendDependencyArtifactView(&views, allocator, view);
+    }
+
+    return try views.toOwnedSlice(allocator);
+}
+
 fn appendDependencyArtifactView(
     views: *std.ArrayList(checked_artifact.ImportedModuleView),
     allocator: Allocator,
@@ -452,6 +504,23 @@ fn appendDependencyArtifactView(
         if (std.mem.eql(u8, &existing.key.bytes, &candidate.key.bytes)) return;
     }
     try views.append(allocator, candidate);
+}
+
+fn artifactViewForKey(
+    views: []const checked_artifact.ImportedModuleView,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.ImportedModuleView {
+    for (views) |view| {
+        if (checkedArtifactKeyEql(view.key, key)) return view;
+    }
+    return null;
+}
+
+fn checkedArtifactKeyEql(
+    a: checked_artifact.CheckedModuleArtifactKey,
+    b: checked_artifact.CheckedModuleArtifactKey,
+) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
 }
 
 fn orderCompileTimeRootRequests(
@@ -1534,7 +1603,6 @@ fn importedProcedureBindingRefEql(
     b: checked_artifact.ImportedProcedureBindingRef,
 ) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
-        a.module_idx == b.module_idx and
         a.def == b.def and
         a.pattern == b.pattern;
 }

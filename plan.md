@@ -1,5 +1,41 @@
 # MIR Architecture Cutover Plan
 
+## Ironclad Reporting And Sentinel Rule
+
+Compiler implementation data must never use sentinel/default values that can be
+mistaken for real information. If a value is only valid after a successful
+producer writes it, initialize the storage to `undefined`, carry explicit
+presence/state metadata, and make every consumer prove the producer ran before
+reading it. A crash or invariant violation must be reported as the crash or
+invariant violation that actually happened; it must never be disguised by
+reading a default field that was only present to make a struct convenient to
+initialize.
+
+The eval test harness bug uncovered during this cutover is the cautionary
+example. The harness initialized every backend result row to `NOT_IMPLEMENTED`.
+When mono specialization crashed before interpreter/dev/Wasm execution began,
+the child never produced backend results, but the summary still printed the
+default backend rows:
+
+```text
+CRASH issue 8555: method call syntax list.first() with match on Result
+      interpreter:    NOT_IMPLEMENTED
+      dev:            NOT_IMPLEMENTED
+      wasm:           NOT_IMPLEMENTED
+      llvm:           NOT_IMPLEMENTED
+```
+
+That report was false. The feature was not "not implemented" in all backends;
+the compiler had crashed during mono lowering before any backend ran. The correct
+design is for backend rows to be absent unless backend execution actually
+produced them, and for the crash report to say that compilation/lowering crashed.
+
+This rule applies everywhere in the compiler, not just tests. If we find a
+sentinel/default value being used as a placeholder for semantic data, lowering
+data, backend data, cache data, ownership/refcount data, or report data, we must
+stop immediately and remove it. The fix is explicit producer ownership and
+explicit presence/state, not another sentinel value with a better name.
+
 ## Objective
 
 Replace the old competing-source architecture with a MIR-family lowering
@@ -454,6 +490,64 @@ decide this by checking whether the import text contains a dot, by trying bare
 `leaf` first and then retrying `Simple.leaf`, by adding a second import keyed by
 `Simple`, or by treating package-qualified type modules differently from local
 type modules after the explicit import view has been built.
+
+The same explicit import view must publish the type-module main type binding.
+For example:
+
+```roc
+app [main!] { pf: platform "./platform/main.roc" }
+
+import pf.Builder
+import pf.Stdout
+
+my_builder : Builder
+my_builder = Builder.new("test")
+
+main! = || Stdout.line!(Builder.get_value(my_builder))
+```
+
+`Builder` is the local source alias for the imported module identity
+`pf.Builder`. Canonicalization must introduce both:
+
+- a module alias `Builder -> pf.Builder` for qualified value lookups such as
+  `Builder.new`
+- an external type binding `Builder -> pf.Builder`'s published main type
+  declaration, using the exact `type_module_decl_node` from
+  `AvailableImportView`
+
+This is not a second import identity and not a basename entry in the available
+module map. It is a scoped type binding derived from the already-resolved import
+view. If the imported module is a type module but its main declaration is not
+published in `type_module_decl_node`, canonicalization must report a source
+diagnostic before checking begins. It must not manufacture a placeholder
+declaration index.
+
+Nested associated types from imported type modules follow the same rule. For
+example:
+
+```roc
+app [main!] { pf: platform "./platform/main.roc" }
+
+import pf.Host
+
+sum_tree : Host.Tree -> I64
+sum_tree = |tree|
+    match tree {
+        Host.Tree.Leaf(n) => n
+        Host.Tree.Node(left, right) =>
+            sum_tree(Box.unbox(left)) + sum_tree(Box.unbox(right))
+    }
+```
+
+`Host.Tree` and `Host.Tree.Node(...)` must resolve through the `Host` source
+alias to the single import identity `pf.Host`, then through the imported
+module's published associated-type entries for `Tree`. Parser tokens for
+qualified suffixes may include their leading punctuation, such as `.Tree`; that
+is parser syntax, not semantic identity. Canonicalization must normalize those
+tokens to the canonical associated-type name before looking up the imported
+module's exposed node. It must never use a numeric placeholder such as node `0`,
+retry a different spelling, scan the imported source, or let a malformed
+external type survive into checking or checked-artifact publication.
 
 The same import identity rule applies to post-check lowering view construction.
 If canonicalization/type checking for a module had access to builtin
@@ -4883,8 +4977,9 @@ the selected endpoint top-down through direct construction and control-flow
 results:
 
 1. A root consumer such as a procedure return, call argument, capture slot,
-   join result, aggregate field, tag payload, tuple element, list element, box
-   payload, or nominal backing selects an executable endpoint.
+   binding write, reassignment write, join result, aggregate field, tag payload,
+   tuple element, list element, box payload, or nominal backing selects an
+   executable endpoint.
 2. If the consumed expression is a direct constructor, lambda-solved records a
    `ConsumerUsePlan` for that edge with `construct_directly`, then derives each
    nested child endpoint from the selected parent endpoint and records nested
@@ -4947,6 +5042,32 @@ construction child and contextual control-flow result that is being lowered into
 the selected endpoint. It must not propagate that provenance into independent
 subexpressions such as conditions, scrutinees, guards, callee expressions, or
 statements whose values are not being consumed by the contextual endpoint.
+
+Binding and reassignment writes are consumer endpoints owned by the binding
+slot, not by the surrounding expression. When executable MIR lowers:
+
+```roc
+{
+    result = if True { [1, 2] } else { [3, 4] }
+
+    match result {
+        [a, b] => a + b
+        _ => 0
+    }
+}
+```
+
+the `if` expression assigned to `result` is not lowered as a standalone producer.
+It is lowered under the executable endpoint selected for the `result` binding
+slot. Lambda-solved MIR must therefore publish contextual branch-result
+`ConsumerUsePlan`s for the `if` branches using the binding endpoint as the
+expected endpoint. The same rule applies to `var` declarations, reassignment
+writes, and expression-level `let` bindings. Parent endpoint provenance does not
+flow into unrelated binding writes in the same block; a binding write uses the
+binding's own endpoint and provenance context. Only the block final expression,
+`let` rest expression, return expression, aggregate child, call argument, or
+other value actually consumed by the parent endpoint receives the parent
+consumer provenance.
 
 This matters for callable values inside aggregates. In a call such as
 `apply_boxed([|x| x + 1])`, where `apply_boxed` expects a promoted-wrapper
@@ -6009,10 +6130,10 @@ wrapper boundary required an erased callable somewhere under that projected
 value. For example:
 
 ```roc
-make_boxed : {} -> Box(({ inner : Box((I64 -> I64)) } -> I64))
+make_boxed : {} -> Box(({ inner : Box(I64 -> I64) } -> I64))
 make_boxed = |_| Box.box(|record| Box.unbox(record.inner)(1))
 
-apply_record : { inner : Box((I64 -> I64)) } -> I64
+apply_record : { inner : Box(I64 -> I64) } -> I64
 apply_record = Box.unbox(make_boxed({}))
 
 main : I64
@@ -12754,6 +12875,42 @@ capture payload store by looking at the first member, by searching all sessions
 for a matching key, by reading `ErasedFnSigKey`, or by rebuilding the
 callable-set payload from the adapter body.
 
+The executable adapter procedure identity is therefore the pair
+`(ErasedAdapterKey, ErasedAdapterPayloadOwner)`, not `ErasedAdapterKey` alone.
+Two solve sessions may independently require the same canonical adapter key
+because they reached the same source function type, callable-set key, erased ABI,
+and capture shape in different specialization contexts. That is valid. The
+adapter key names the semantic callable-set/ABI boundary; the payload owner names
+the concrete published executable payload store whose branch transforms and
+hidden capture payloads the adapter body must use. Executable MIR must reserve
+separate adapter procedures for different payload owners unless it has an
+explicit earlier-stage proof that the payload owner is identical.
+
+For example:
+
+```roc
+make_boxed_adder : I64 -> Box(I64 -> I64)
+make_boxed_adder = |n| Box.box(|x| x + n)
+
+use_a : I64
+use_a = Box.unbox(make_boxed_adder(1))(41)
+
+use_b : I64
+use_b = Box.unbox(make_boxed_adder(2))(41)
+```
+
+Both `Box.box` sites can require the same canonical erased adapter key for the
+same source function type and ABI, but they are reached through separate
+specialization/value-flow solve sessions. If executable MIR deduplicates only by
+`ErasedAdapterKey`, one session's branch-transform ids and hidden-capture
+payload refs can be incorrectly reused while lowering the other session's
+adapter body. That is a compiler bug. The `packed_erased_fn` operation emitted
+inside a session-local body must select the adapter procedure by
+`(adapter_key, current_solve_session)`. A `packed_erased_fn` materialized from a
+checked artifact or promoted compile-time value must select by
+`(adapter_key, owning_checked_artifact_key)`. It must never pick "the first
+adapter with this key."
+
 `member_targets[i]` corresponds exactly to descriptor member `i`. The target key
 is the executable specialization key for that member's selected procedure body.
 The adapter verifier must assert in debug builds that:
@@ -15865,6 +16022,43 @@ replace it. Until then, the required behavior is plain automatic reference
 counting from explicit LIR value uses, explicit LIR writes, explicit call
 boundaries, explicit low-level RC-effect records, and refcounted layout
 metadata.
+
+Zero-sized payloads do not make their runtime containers zero-cost for ARC.
+`List({})` and `Box({})` are ordinary refcounted Roc container values whose
+element or boxed payload has zero runtime bytes. The committed layouts commonly
+named `.list_of_zst` and `.box_of_zst` must therefore be classified as
+refcounted layouts for ARC ownership, helper planning, aggregate child walking,
+call argument token accounting, and final cleanup. Their child helper plan has
+no element/payload child to visit, but the outer list or box allocation still
+has a refcount header and must be `decref`ed when its local dies.
+
+For example:
+
+```roc
+zst_value = {}
+
+zst_list : List({})
+zst_list = List.append(List.append([zst_value], zst_value), zst_value)
+
+zst_repeat : List({})
+zst_repeat = List.repeat(zst_value, 3)
+
+main =
+    if List.len(zst_list) == 3 && List.len(zst_repeat) == 3 {
+        "ok"
+    } else {
+        "bad"
+    }
+```
+
+The elements occupy no bytes, but both `zst_list` and `zst_repeat` may own
+runtime list allocations. LIR ARC must own and release both locals exactly as it
+would for `List(I64)`. It is a compiler bug for a layout query to answer
+"not refcounted" merely because the payload or element layout is ZST. The only
+ZST value that is not refcounted is the bare payload value itself, such as `{}`.
+Backends and the interpreter must not compensate for a missing ARC statement by
+special-casing ZST containers; they must mechanically execute the explicit LIR
+`incref` and `decref` statements emitted from this layout metadata.
 
 ARC insertion must be stack-safe for deep but ordinary Roc source and for large
 generated Roc sources such as glue scripts. It must not recurse once per LIR
@@ -22765,7 +22959,8 @@ canonical name id, including:
 
 - `CheckedTypePayload.alias.name` and `.origin_module`
 - `CheckedTypePayload.nominal.name` and `.origin_module`
-- record type fields and record expressions
+- record type fields, record expressions, record destructuring patterns, and
+  record pattern binders
 - tag-union type tags, tag expressions, tag patterns, and tag-payload metadata
 - method names in checked expressions, static dispatch plans, constraints, and
   method registry keys
@@ -22962,6 +23157,240 @@ Those views are read-only projections. They must not contain mutable pointers
 that allow later stages to patch `ModuleEnv`, hosted indices,
 platform-required bindings, compile-time values, or interface capability
 records.
+
+### Checked Artifact Availability Registry
+
+Publishing a checked artifact and making that artifact available to post-check
+lowering are two separate responsibilities.
+
+The compiler must maintain an in-memory checked artifact availability registry
+for the current build:
+
+```zig
+const CheckedArtifactAvailabilityRegistry = struct {
+    // Does not own checked artifacts. It only maps exact checked artifact keys
+    // to the module storage that already owns the corresponding artifact.
+    by_key: HashMap(CheckedModuleArtifactKey.bytes, CheckedArtifactLocation),
+
+    fn publish(location: CheckedArtifactLocation, artifact: *const CheckedModuleArtifact) void;
+    fn unpublish(location: CheckedArtifactLocation, old_key: CheckedModuleArtifactKey) void;
+    fn lookup(key: CheckedModuleArtifactKey) ?ImportedModuleView;
+};
+
+const CheckedArtifactLocation = struct {
+    package: PackageIdentity,
+    module: ModuleIdentityWithinPackage,
+};
+```
+
+This registry is not a cache. It does not serialize, deserialize, clone, or own
+artifacts. It is a key-index over artifacts the build has already published. It
+exists because the post-check lowering boundary names dependencies by exact
+`CheckedModuleArtifactKey`, and key lookup is the only correct way to assemble
+the corresponding read-only views.
+
+Whenever a module's checked artifact is published or republished, the build
+coordinator must:
+
+1. remove the old key for that module, if any
+2. store the new artifact in the module's normal owning storage
+3. publish the new key in `CheckedArtifactAvailabilityRegistry`
+
+Registry lookup must verify that the located module still owns an artifact whose
+current key equals the requested key. A stale key left over from republishing is
+a coordinator bug in debug builds and `unreachable` in release builds; lowering
+must never silently accept the module's current artifact for an old key.
+
+The registry is part of post-check input assembly, not part of semantic
+lowering. MIR, IR, LIR, ARC, backends, and the interpreter must never query
+build packages or source files directly. They receive only the explicit
+`LoweringModuleView`, `ImportedModuleView`, and relation artifact views assembled
+before lowering starts.
+
+Checked-artifact publication must also receive an explicit read-only
+availability view set for checking finalization:
+
+```zig
+const PublishInputs = struct {
+    imports: Span(PublishImportArtifact),
+    available_artifacts: Span(ImportedModuleView),
+    relation_artifacts: Span(ImportedModuleView),
+    compile_time_finalizer: CompileTimeFinalizer,
+};
+```
+
+`available_artifacts` is the publication-time projection of
+`CheckedArtifactAvailabilityRegistry`. It is not persisted in the artifact and
+it is not a lowering input by itself. It is the exact-key lookup universe the
+compile-time finalizer may use while assembling the real lowering input for one
+request. The finalizer must still include an artifact in `lowering_imports` only
+because some already-published checked artifact datum names that artifact's
+exact key.
+
+This is required because compile-time finalization can run while publishing or
+republishing an artifact. At that moment the finalizer has direct import views
+and relation artifact views, but direct imports are not necessarily the complete
+set of artifacts named by those views' published closures. For example, a
+platform artifact may be republished with an app relation artifact; the app
+relation artifact can name `Message.msg` in its exported procedure closure even
+though `Message` is not a direct import of the platform module. The finalizer
+must use the relation closure's exact `CheckedModuleArtifactKey` for `Message`
+to request the matching `ImportedModuleView` from `available_artifacts`.
+
+The compile-time finalizer's lowering input assembly is:
+
+1. Start with the root artifact's direct `imports`.
+2. Add `relation_artifacts` only to `LoweringModuleView.relation_artifacts`;
+   relation artifacts are not ordinary imports of the root.
+3. For each platform/app relation binding, call
+   `appendPlatformRelationDependencyArtifactKeysFromView` on the relation
+   artifact view and the published relation row.
+4. For each key from that closure:
+   - skip the root artifact key
+   - skip keys already present in `relation_artifacts`
+   - reuse a direct import view when the key is already a direct import
+   - otherwise look up the exact key in `available_artifacts`
+5. If the key is absent from `available_artifacts`, this is a compiler bug:
+   debug assertion in debug builds and `unreachable` in release builds.
+
+This keeps compile-time finalization on the same explicit-data rule as normal
+executable lowering. It does not scan packages, source files, import strings, or
+module names from inside MIR. It only follows exact keys published by checked
+artifacts and relation rows.
+
+During checking finalization, type projection for compile-time dependency
+summaries must use the complete post-check dependency view set:
+
+```zig
+const dependency_views =
+    lowering_imports ++ lowering_root.relation_artifacts;
+```
+
+This matters because a constant or procedure used through a platform/app
+relation can be owned by the relation artifact itself. The relation artifact is
+not an ordinary import of the platform root, but it is still an explicit
+checked artifact view passed to lowering. If a dependency-summary finalizer must
+project a checked type payload for a relation-owned constant, nominal backing,
+or concrete source type, it must search both ordinary imports and relation
+artifacts by exact `CheckedModuleArtifactKey`.
+
+Runnable mono lowering of a constant use must likewise prefer the requesting
+artifact's sealed const instance but may consume the producer artifact's sealed
+instance when the exact `ConstInstantiationKey` already exists there:
+
+```zig
+const instance =
+    const_instance(root_artifact.key, key)
+        orelse const_instance(const_use.const_ref.artifact, key)
+        orelse compiler_bug();
+```
+
+This is not imported-module LIR re-execution and not a runtime thunk. It is
+using an already-published, already-sealed compile-time value from the artifact
+that owns the constant. For example:
+
+```roc
+app [main!] { pf: platform "./platform/main.roc" }
+
+import pf.Stdout
+import "../../CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc" as data : Str
+
+main! = || {
+    byte_count = Str.count_utf8_bytes(data)
+    Stdout.line!("bytes: ${Str.inspect(byte_count)}")
+}
+```
+
+The file import `data` is a producer-owned constant. When the platform relation
+lowers `main!`, the executable root is the platform artifact, the app artifact
+is a relation artifact, and `data` is neither a direct import of the platform
+nor a runtime global. The correct post-check behavior is to use the exact
+producer artifact key from `data`'s `ConstRef`, find the already-sealed
+`ConstInstantiationKey` in that producer artifact if present, and otherwise use
+checking finalization to publish the needed instance in the requesting artifact
+before runnable lowering begins.
+
+Executable platform lowering uses the registry as follows:
+
+1. Start from the executable root artifact.
+2. Add ordinary direct import views for the executable root.
+3. Add every platform/app relation artifact explicitly named by the root's
+   `PlatformRequiredBindingTable`.
+4. For each platform/app relation row, inspect only the relation row's
+   `relation_template_closure`, the relation artifact's
+   `direct_import_artifact_keys`, and the exported closure data for the exact
+   relation artifact value named by `TopLevelValueRef`.
+5. For every checked artifact key named there, request the matching
+   `ImportedModuleView` from `CheckedArtifactAvailabilityRegistry`.
+
+This is still explicit-data lowering. The registry lookup answers "the artifact
+with this exact key is already published here." It must not answer "maybe this
+module name is close enough," "scan source imports until something matches," or
+"use the current artifact for this module even though its key changed."
+
+For example:
+
+```roc
+app [process_string] { pf: platform "./platform/main.roc" }
+
+import Message
+
+process_string : Str -> Str
+process_string = |input| {
+    msg = Message.msg()
+    "${msg}${input}"
+}
+```
+
+```roc
+Message :: {}.{
+    msg : {} -> Str
+    msg = |{}| "Got the following from the host: "
+}
+```
+
+If `process_string` satisfies a platform requirement, the executable root is the
+platform artifact, and the app artifact is a relation artifact. The app body
+contains an imported procedure reference to `Message.msg`. Post-check lowering
+must receive the `Message` artifact view because the app artifact's published
+data names `Message`'s exact checked artifact key. The input assembler reaches
+that key from explicit checked data: the platform relation row names the app
+`TopLevelValueRef` for `process_string`, the app relation artifact's exported
+procedure/template closure for that value names the `Message` checked procedure
+template, and the registry maps that exact key to the already-published
+`Message` artifact. It is not valid for mono MIR to rediscover `Message` by
+scanning the app source, and it is not valid for the platform lowering path to
+omit `Message` merely because `Message` is not a direct import of the platform
+module.
+
+For direct procedure bindings, the relation dependency collector must include
+both:
+
+- the relation row's copied `PlatformRequiredProcedureUse.relation_template_closure`
+- the selected app exported procedure template closure for the same app
+  `TopLevelValueRef`
+
+Those closures should normally contain the same private/imported dependencies
+for ordinary top-level functions. If they differ, the union is still the correct
+post-check input assembly because both closures are explicit checked-artifact
+data for the same relation-selected value. The relation row gives the platform
+permission to use the value; the app exported template closure is the closure
+mono actually consumes when it instantiates the app template. Later stages must
+not try to repair a missing dependency by scanning the app's declarations.
+
+For callable-eval procedure bindings, the exported procedure binding closure is
+the selected callable value closure and remains authoritative. For required
+constants, the exported const template closure for the exact `ConstRef` must be
+included in addition to the relation row's copied constant closure. This is
+necessary because a required constant may be represented either as a sealed value
+graph or as an executable const-eval entry template with private/imported
+dependencies.
+
+Build systems may assemble the registry from coordinator-owned modules or from
+the transferred package scheduler state, but the observable contract is the
+same: any artifact key explicitly named by a published artifact, imported
+template closure, or platform/app relation must be resolvable to exactly one
+published checked artifact view before MIR lowering begins.
 
 Downstream modules import `ImportedModuleView`. They do not inspect another
 module's unchecked source, checked expression bodies, opaque backing syntax, or
@@ -23520,6 +23949,44 @@ this plan.
 
 `HostedOrderKey` gives deterministic ordering for hosted procedure tables and
 generated ABI lists. It is not stored by writing an index into checked CIR.
+
+Hosted dispatch indices are not module-local. A platform host receives one
+hosted-function dispatch array for the whole platform ABI, and every hosted call
+emitted into LIR must use the index in that platform-global array. For example,
+if a platform exposes type modules like this:
+
+```roc
+Builder := {}.{
+    print_value! : Builder => {}
+}
+
+Stderr := [].{
+    line! : Str => {}
+}
+
+Stdout := [].{
+    line! : Str => {}
+}
+```
+
+then the generated host dispatch array is ordered by the fully qualified hosted
+ABI names across all platform modules, not separately inside `Builder`,
+`Stderr`, and `Stdout`. A call to `Stdout.line!("hello")` must therefore use
+the global index for `Stdout.line!`; it must not use index `0` just because
+`Stdout.line!` is the first hosted function in the `Stdout` module artifact.
+Using module-local indices would incorrectly call whatever hosted function is at
+slot `0` in the platform-global host array, such as `Builder.print_value!`.
+
+The checked artifact for each module still publishes its own `HostedProcTable`
+rows because each hosted procedure is owned by one checked module. Each row must
+publish a stable `HostedOrderKey` derived during checking finalization from
+explicit module identity and explicit hosted ABI name. When lowering an
+executable that uses a platform, the lowering input must make the relevant
+platform module artifacts available, and the hosted dispatch catalog for that
+executable is the deterministic merge of those explicit hosted rows by
+`HostedOrderKey`. Later stages and backends consume only the resulting hosted
+dispatch index or hosted descriptor; they must not scan CIR for hosted lambdas,
+recover module names from syntax, or use declaration order as semantic truth.
 
 The final architecture must delete or make non-authoritative any
 `e_hosted_lambda.index`-style field. If a syntax node still carries a placeholder
@@ -30275,6 +30742,26 @@ IR/LIR:
   `incref` and `decref`
 - backends execute explicit LIR RC statements and perform no ordinary RC
   analysis
+- backend call lowering treats argument placement as one simultaneous ABI
+  assignment from original sources to parameter registers. If any register
+  argument source reads through a general register, and that register is also a
+  parameter-register destination for the same call, the backend call builder
+  must first materialize the source value or address into a stable caller-frame
+  slot before emitting any parameter-register move. This rule applies equally to
+  direct function-pointer calls, indirect calls, and relocatable/symbol calls.
+  For example, a generated helper call equivalent to
+
+  ```zig
+  try builder.addMemArg(value_ptr_reg, 0);  // bytes
+  try builder.addMemArg(value_ptr_reg, 8);  // len
+  try builder.addMemArg(value_ptr_reg, 16); // capacity
+  try builder.callRelocatable("roc_builtins_list_incref", allocator, &relocs);
+  ```
+
+  must not emit `arg0 = [value_ptr_reg]` and then read `arg1` through the
+  clobbered `arg0` register. The stable-source materialization is ordinary ABI
+  lowering, not RC analysis, not a semantic fallback, and not a source recovery
+  mechanism.
 
 ## Required Behavioral Tests
 
@@ -31733,5 +32220,8 @@ The cutover is complete only when all of these are true:
 - LIR/backends do not know about source methods
 - backends do not perform ordinary reference-counting analysis and only execute
   explicit LIR RC statements
+- every backend call-builder path, including relocatable/symbol calls, stabilizes
+  register-backed memory/address argument sources before assigning parameter
+  registers
 - semantic audits forbid the deleted families
 - guarded eval and glue gates pass

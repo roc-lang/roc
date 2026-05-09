@@ -140,8 +140,11 @@ const TestOutcome = struct {
     status: Status,
     message: ?[]const u8 = null,
     timings: EvalTimings = .{},
-    /// Per-backend details (interpreter, dev, wasm, llvm). Populated by inspect-string execution.
-    backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS,
+    /// True only after backend execution has produced every backend row.
+    has_backend_details: bool,
+    /// Per-backend details (interpreter, dev, wasm, llvm). Valid only when
+    /// `has_backend_details` is true.
+    backends: [NUM_BACKENDS]BackendDetail,
     /// The expected Str.inspect string (for inspect_str tests), or null.
     expected_str: ?[]const u8 = null,
 
@@ -163,7 +166,8 @@ const TestResult = struct {
     message: ?[]const u8,
     duration_ns: u64,
     timings: EvalTimings,
-    backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS,
+    has_backend_details: bool,
+    backends: [NUM_BACKENDS]BackendDetail,
     expected_str: ?[]const u8 = null,
 };
 
@@ -184,6 +188,7 @@ const WireHeader = extern struct {
     wasm_ns: u64,
     llvm_ns: u64,
     duration_ns: u64,
+    has_backend_details: u8,
     message_len: u32,
     expected_str_len: u32,
     backend_value_lens: [NUM_BACKENDS]u32,
@@ -353,7 +358,12 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
         const timings = switch (tc.expected) {
             .inspect_str => blk: {
                 var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
-                    return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors" };
+                    return .{
+                        .status = .fail,
+                        .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
+                        .has_backend_details = false,
+                        .backends = undefined,
+                    };
                 };
                 defer compiled.deinit(allocator);
                 break :blk EvalTimings{
@@ -364,7 +374,12 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
             },
             .crash, .problem_and_crash => blk: {
                 var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
-                    return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors" };
+                    return .{
+                        .status = .fail,
+                        .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors",
+                        .has_backend_details = false,
+                        .backends = undefined,
+                    };
                 };
                 defer compiled.deinit(allocator);
                 break :blk EvalTimings{
@@ -375,7 +390,12 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
             },
             .problem => blk: {
                 var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports) catch {
-                    return .{ .status = .pass, .timings = .{} };
+                    return .{
+                        .status = .pass,
+                        .timings = .{},
+                        .has_backend_details = false,
+                        .backends = undefined,
+                    };
                 };
                 defer resources.deinit(allocator);
                 break :blk EvalTimings{
@@ -385,16 +405,34 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                 };
             },
         };
-        return .{ .status = .skip, .timings = timings };
+        return .{
+            .status = .skip,
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
     }
 
     const outcome = runSingleTestInner(allocator, tc) catch |err| {
-        return .{ .status = .fail, .message = @errorName(err) };
+        return .{
+            .status = .fail,
+            .message = @errorName(err),
+            .has_backend_details = false,
+            .backends = undefined,
+        };
     };
 
     // Any skipped backend means the test didn't get full coverage — report as skip.
     if (outcome.status == .pass and hasAnySkip(tc.skip)) {
-        return .{ .status = .skip, .message = outcome.message, .timings = outcome.timings };
+        var backends: [NUM_BACKENDS]BackendDetail = undefined;
+        if (outcome.has_backend_details) backends = outcome.backends;
+        return .{
+            .status = .skip,
+            .message = outcome.message,
+            .timings = outcome.timings,
+            .has_backend_details = outcome.has_backend_details,
+            .backends = backends,
+        };
     }
     return outcome;
 }
@@ -442,13 +480,19 @@ fn runInspectTest(
         helpers.devEvaluatorInspectedStr, // llvm placeholder
     };
 
-    var backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS;
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
     var first_ok: ?[]const u8 = null;
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) continue;
-        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) continue;
+        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
+        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
         if (skips[i]) {
             backends[i] = .{ .status = .skip };
             continue;
@@ -508,9 +552,20 @@ fn runInspectTest(
     };
 
     if (any_failure) {
-        return .{ .status = .fail, .timings = final_timings, .backends = backends, .expected_str = display_expected };
+        return .{
+            .status = .fail,
+            .timings = final_timings,
+            .has_backend_details = true,
+            .backends = backends,
+            .expected_str = display_expected,
+        };
     }
-    return .{ .status = .pass, .timings = final_timings, .backends = backends };
+    return .{
+        .status = .pass,
+        .timings = final_timings,
+        .has_backend_details = true,
+        .backends = backends,
+    };
 }
 
 fn runTestProblem(
@@ -523,7 +578,12 @@ fn runTestProblem(
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
         const elapsed = timer.read();
-        return .{ .status = .pass, .timings = .{ .parse_ns = elapsed } };
+        return .{
+            .status = .pass,
+            .timings = .{ .parse_ns = elapsed },
+            .has_backend_details = false,
+            .backends = undefined,
+        };
     };
     defer resources.deinit(allocator);
 
@@ -538,9 +598,20 @@ fn runTestProblem(
         .typecheck_ns = resources.main.typecheck_ns,
     };
     if (has_problems) {
-        return .{ .status = .pass, .timings = timings };
+        return .{
+            .status = .pass,
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
     }
-    return .{ .status = .fail, .message = "expected problems but none found", .timings = timings };
+    return .{
+        .status = .fail,
+        .message = "expected problems but none found",
+        .timings = timings,
+        .has_backend_details = false,
+        .backends = undefined,
+    };
 }
 
 fn runCrashTest(
@@ -571,6 +642,8 @@ fn runCrashTest(
                 .canonicalize_ns = compiled.resources.canonicalize_ns,
                 .typecheck_ns = compiled.resources.typecheck_ns,
             },
+            .has_backend_details = false,
+            .backends = undefined,
         };
     }
 
@@ -592,6 +665,8 @@ fn runCrashTest(
                 .canonicalize_ns = compiled.resources.canonicalize_ns,
                 .typecheck_ns = compiled.resources.typecheck_ns,
             },
+            .has_backend_details = false,
+            .backends = undefined,
         };
     }
 
@@ -613,12 +688,18 @@ fn runCrashTest(
         helpers.devEvaluatorInspectedStr, // llvm placeholder
     };
 
-    var backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS;
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) continue;
-        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) continue;
+        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
+        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
         if (skips[i]) {
             backends[i] = .{ .status = .skip };
             continue;
@@ -666,9 +747,19 @@ fn runCrashTest(
     };
 
     if (any_failure) {
-        return .{ .status = .fail, .timings = final_timings, .backends = backends };
+        return .{
+            .status = .fail,
+            .timings = final_timings,
+            .has_backend_details = true,
+            .backends = backends,
+        };
     }
-    return .{ .status = .pass, .timings = final_timings, .backends = backends };
+    return .{
+        .status = .pass,
+        .timings = final_timings,
+        .has_backend_details = true,
+        .backends = backends,
+    };
 }
 
 fn canDiagnosticIsError(diag: anytype) bool {
@@ -706,14 +797,17 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         .wasm_ns = outcome.timings.wasm_ns,
         .llvm_ns = outcome.timings.llvm_ns,
         .duration_ns = duration_ns,
+        .has_backend_details = if (outcome.has_backend_details) 1 else 0,
         .message_len = if (outcome.message) |m| @intCast(m.len) else 0,
         .expected_str_len = if (outcome.expected_str) |e| @intCast(e.len) else 0,
         .backend_value_lens = undefined,
     };
-    for (0..NUM_BACKENDS) |i| {
-        header.backend_statuses[i] = @intFromEnum(outcome.backends[i].status);
-        header.backend_durations[i] = outcome.backends[i].duration_ns;
-        header.backend_value_lens[i] = if (outcome.backends[i].value) |v| @intCast(v.len) else 0;
+    if (outcome.has_backend_details) {
+        for (0..NUM_BACKENDS) |i| {
+            header.backend_statuses[i] = @intFromEnum(outcome.backends[i].status);
+            header.backend_durations[i] = outcome.backends[i].duration_ns;
+            header.backend_value_lens[i] = if (outcome.backends[i].value) |v| @intCast(v.len) else 0;
+        }
     }
 
     // Write header
@@ -722,8 +816,10 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
     // Write variable-length strings
     if (outcome.message) |m| harness.writeAll(fd, m);
     if (outcome.expected_str) |e| harness.writeAll(fd, e);
-    for (outcome.backends) |bd| {
-        if (bd.value) |v| harness.writeAll(fd, v);
+    if (outcome.has_backend_details) {
+        for (outcome.backends) |bd| {
+            if (bd.value) |v| harness.writeAll(fd, v);
+        }
     }
 }
 
@@ -737,14 +833,17 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     const message = harness.readStr(buf, &offset, header.message_len, gpa);
     const expected_str = harness.readStr(buf, &offset, header.expected_str_len, gpa);
 
+    const has_backend_details = header.has_backend_details != 0;
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
-    for (0..NUM_BACKENDS) |i| {
-        const value = harness.readStr(buf, &offset, header.backend_value_lens[i], gpa);
-        backends[i] = .{
-            .status = @enumFromInt(header.backend_statuses[i]),
-            .value = value,
-            .duration_ns = header.backend_durations[i],
-        };
+    if (has_backend_details) {
+        for (0..NUM_BACKENDS) |i| {
+            const value = harness.readStr(buf, &offset, header.backend_value_lens[i], gpa);
+            backends[i] = .{
+                .status = @enumFromInt(header.backend_statuses[i]),
+                .value = value,
+                .duration_ns = header.backend_durations[i],
+            };
+        }
     }
 
     return .{
@@ -760,6 +859,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
             .wasm_ns = header.wasm_ns,
             .llvm_ns = header.llvm_ns,
         },
+        .has_backend_details = has_backend_details,
         .backends = backends,
         .expected_str = expected_str,
     };
@@ -776,23 +876,29 @@ fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
     const duration = timer.read();
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    if (outcome.has_backend_details) backends = outcome.backends;
     return .{
         .status = outcome.status,
         .message = outcome.message,
         .duration_ns = duration,
         .timings = outcome.timings,
-        .backends = outcome.backends,
+        .has_backend_details = outcome.has_backend_details,
+        .backends = backends,
         .expected_str = outcome.expected_str,
     };
 }
 
 fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
     // Re-pack into the existing wire format (outcome + duration).
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    if (result.has_backend_details) backends = result.backends;
     const outcome = TestOutcome{
         .status = result.status,
         .message = result.message,
         .timings = result.timings,
-        .backends = result.backends,
+        .has_backend_details = result.has_backend_details,
+        .backends = backends,
         .expected_str = result.expected_str,
     };
     serializeOutcome(fd, outcome, result.duration_ns);
@@ -807,9 +913,12 @@ fn dupeOptional(gpa: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
 }
 
 fn stabilizeResult(gpa: std.mem.Allocator, result: TestResult) TestResult {
-    var stable_backends = result.backends;
-    for (&stable_backends) |*backend| {
-        backend.value = dupeOptional(gpa, backend.value);
+    var stable_backends: [NUM_BACKENDS]BackendDetail = undefined;
+    if (result.has_backend_details) {
+        stable_backends = result.backends;
+        for (&stable_backends) |*backend| {
+            backend.value = dupeOptional(gpa, backend.value);
+        }
     }
 
     return .{
@@ -817,13 +926,28 @@ fn stabilizeResult(gpa: std.mem.Allocator, result: TestResult) TestResult {
         .message = dupeOptional(gpa, result.message),
         .duration_ns = result.duration_ns,
         .timings = result.timings,
+        .has_backend_details = result.has_backend_details,
         .backends = stable_backends,
         .expected_str = dupeOptional(gpa, result.expected_str),
     };
 }
 
-const default_result: TestResult = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
-const timeout_result: TestResult = .{ .status = .timeout, .message = null, .duration_ns = 0, .timings = .{} };
+const default_result: TestResult = .{
+    .status = .crash,
+    .message = null,
+    .duration_ns = 0,
+    .timings = .{},
+    .has_backend_details = false,
+    .backends = undefined,
+};
+const timeout_result: TestResult = .{
+    .status = .timeout,
+    .message = null,
+    .duration_ns = 0,
+    .timings = .{},
+    .has_backend_details = false,
+    .backends = undefined,
+};
 
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
@@ -938,6 +1062,10 @@ fn printHelp() void {
 fn writeFailureDetail(r: TestResult) void {
     if (r.expected_str) |es| {
         std.debug.print("        expected:       {s}\n", .{es});
+    }
+    if (!r.has_backend_details) {
+        std.debug.print("        backend results: not produced; compilation/lowering did not complete\n", .{});
+        return;
     }
     for (r.backends, 0..) |bd, i| {
         const name = BACKEND_NAMES[i];
@@ -1159,7 +1287,9 @@ pub fn main() !void {
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
-    @memset(results, .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} });
+    for (results) |*result| {
+        result.* = default_result;
+    }
 
     var wall_timer = Timer.start() catch unreachable;
 
@@ -1233,8 +1363,10 @@ pub fn main() !void {
         if (r.message) |msg| {
             gpa.free(msg);
         }
-        for (r.backends) |bd| {
-            if (bd.value) |v| gpa.free(v);
+        if (r.has_backend_details) {
+            for (r.backends) |bd| {
+                if (bd.value) |v| gpa.free(v);
+            }
         }
         if (r.expected_str) |es| gpa.free(es);
     }

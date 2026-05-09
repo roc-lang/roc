@@ -5817,7 +5817,8 @@ const BodyLowerer = struct {
         symbol_name: canonical.ExternalSymbolNameId,
     ) Allocator.Error!Hosted.Proc {
         for (self.template_lookup.hosted_procs.procs) |hosted| {
-            if (!canonical.procedureValueRefEql(hosted.proc, proc)) continue;
+            const lowering_proc = try self.name_resolver.procedureValueRef(hosted.proc);
+            if (!canonical.procedureValueRefEql(lowering_proc, proc)) continue;
             if (hosted.external_symbol_name != symbol_name) {
                 invariantViolation("mono body lowering found hosted procedure metadata with a mismatched external symbol name");
             }
@@ -5826,11 +5827,67 @@ const BodyLowerer = struct {
                     self.template_lookup.artifact,
                     hosted.external_symbol_name,
                 ),
-                .dispatch_index = hosted.deterministic_index,
+                .dispatch_index = self.hostedGlobalDispatchIndex(self.template_lookup.artifact, hosted),
             };
         }
 
         invariantViolation("mono body lowering expected hosted procedure metadata published in the checked artifact");
+    }
+
+    fn hostedGlobalDispatchIndex(
+        self: *BodyLowerer,
+        target_artifact: checked_artifact.CheckedModuleArtifactKey,
+        target: checked_artifact.HostedProc,
+    ) u32 {
+        var index: u32 = 0;
+        var found = false;
+
+        self.countHostedDispatchEntriesBefore(target_artifact, target, self.input.root.artifact.key, &self.input.root.artifact.hosted_procs, &index, &found);
+        for (self.input.imports) |view| {
+            self.countHostedDispatchEntriesBefore(target_artifact, target, view.key, view.hosted_procs, &index, &found);
+        }
+        for (self.input.root.relation_artifacts) |view| {
+            self.countHostedDispatchEntriesBefore(target_artifact, target, view.key, view.hosted_procs, &index, &found);
+        }
+
+        if (!found) {
+            invariantViolation("mono body lowering could not find hosted procedure in the global hosted dispatch catalog");
+        }
+        return index;
+    }
+
+    fn countHostedDispatchEntriesBefore(
+        self: *BodyLowerer,
+        target_artifact: checked_artifact.CheckedModuleArtifactKey,
+        target: checked_artifact.HostedProc,
+        candidate_artifact: checked_artifact.CheckedModuleArtifactKey,
+        candidates: *const checked_artifact.HostedProcTable,
+        index: *u32,
+        found: *bool,
+    ) void {
+        _ = self;
+        for (candidates.procs) |candidate| {
+            if (std.mem.eql(u8, &candidate_artifact.bytes, &target_artifact.bytes) and
+                candidate.def_idx == target.def_idx)
+            {
+                found.* = true;
+                continue;
+            }
+            if (hostedDispatchOrderLess(candidate, target)) {
+                index.* += 1;
+            }
+        }
+    }
+
+    fn hostedDispatchOrderLess(
+        candidate: checked_artifact.HostedProc,
+        target: checked_artifact.HostedProc,
+    ) bool {
+        return switch (std.mem.order(u8, candidate.order_key, target.order_key)) {
+            .lt => true,
+            .gt => false,
+            .eq => @intFromEnum(candidate.def_idx) < @intFromEnum(target.def_idx),
+        };
     }
 
     fn lowerLambdaDef(
@@ -6086,6 +6143,28 @@ const BodyLowerer = struct {
                 call.args,
                 null,
             ),
+            .dispatch_call => |plan| blk: {
+                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
+                break :blk try self.staticDispatchResultTypeInFreshInstantiation(
+                    plan orelse invariantViolation("checked dispatch call reached mono without a StaticDispatchCallPlan"),
+                    expected_ret,
+                );
+            },
+            .method_eq => |plan| blk: {
+                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
+                break :blk try self.staticDispatchResultTypeInFreshInstantiation(
+                    plan orelse invariantViolation("checked method equality reached mono without a StaticDispatchCallPlan"),
+                    expected_ret,
+                );
+            },
+            .type_dispatch_call => |plan| blk: {
+                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
+                break :blk try self.staticDispatchResultTypeInFreshInstantiation(
+                    plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan"),
+                    expected_ret,
+                );
+            },
+            .list => |items| try self.listResultTypeFromKnownItems(fallback_checked_ty, items),
             else => try self.concreteTypeInfoForChecked(fallback_checked_ty),
         };
     }
@@ -6187,6 +6266,29 @@ const BodyLowerer = struct {
             else => return null,
         };
         return self.local_symbol_types.get(binder);
+    }
+
+    fn concreteTypeForConstLookupExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?ConcreteTypeInfo {
+        const expr = self.checkedExpr(expr_id);
+        const ref_id = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved orelse return null,
+            .lookup_external => |lookup| lookup orelse return null,
+            .lookup_required => |lookup| lookup orelse return null,
+            else => return null,
+        };
+        const record = self.resolvedValueRef(ref_id);
+        const const_use = switch (record.ref) {
+            .top_level_const,
+            .imported_const,
+            => |use| use,
+            .platform_required_const => |required| required.const_use,
+            else => return null,
+        };
+        const payload = const_use.requested_source_ty_payload orelse return null;
+        return try self.concreteTypeInfoForChecked(payload);
     }
 
     fn concreteTypeForPatternBinder(
@@ -6556,14 +6658,27 @@ const BodyLowerer = struct {
             .local_proc => |local| try self.lowerLocalProcLookup(ty, local.binder, expected.source_ref),
             .top_level_const,
             .imported_const,
-            .platform_required_const,
             => |const_use| try self.lowerConstUse(expected, const_use, record.checked_ty),
+            .platform_required_const => |required| try self.lowerConstUse(expected, required.const_use, record.checked_ty),
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
-            .platform_required_proc,
             .promoted_top_level_proc,
             => |proc_use| proc_value_blk: {
+                const requested_fn_ty = expected.source_ref;
+                if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
+                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
+                }
+                const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
+                break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
+                    .proc = try self.reserveCallableProcedure(callable, requested_fn_ty, .{ .proc_value = record.expr }),
+                    .published_proc = publishedMirProcedureRefForCallable(callable),
+                    .captures = Ast.Span(Ast.CaptureArg).empty(),
+                    .fn_ty = ty,
+                } });
+            },
+            .platform_required_proc => |required| proc_value_blk: {
+                const proc_use = required.procedure;
                 const requested_fn_ty = expected.source_ref;
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
@@ -6744,22 +6859,23 @@ const BodyLowerer = struct {
         };
         const concrete_ref = try self.type_instantiator.concreteRefForTemplateType(requested_payload);
         const concrete_producer = try self.concreteConstProducer(const_use.const_ref);
-        const requested_key = if (concrete_producer) |producer|
-            producer.key
-        else
-            self.program.concrete_source_types.key(concrete_ref);
-        if (concrete_producer == null and !std.mem.eql(u8, &requested_key.bytes, &expected.source_ty.bytes)) {
+        const requested_key = self.program.concrete_source_types.key(concrete_ref);
+        if (!std.mem.eql(u8, &requested_key.bytes, &expected.source_ty.bytes)) {
             invariantViolation("mono body lowering constant use concrete payload key disagrees with expected source type");
         }
         const key = checked_artifact.ConstInstantiationKey{
             .const_ref = const_use.const_ref,
             .requested_source_ty = requested_key,
         };
-        const instance = constInstanceForKey(self.input, self.input.root.artifact.key, key) orelse {
+        const instance = constInstanceForKey(self.input, self.input.root.artifact.key, key) orelse
+            constInstanceForKey(self.input, const_use.const_ref.artifact, key) orelse {
             switch (self.input.mode) {
                 .comptime_dependency_summary => {
                     if (concrete_producer) |producer| {
                         try self.publishConcreteConstProducerType(producer);
+                        if (!std.mem.eql(u8, &producer.key.bytes, &requested_key.bytes)) {
+                            try self.publishConcreteConstDependencyType(concrete_ref);
+                        }
                     } else {
                         try self.publishConcreteConstDependencyType(concrete_ref);
                     }
@@ -6815,7 +6931,10 @@ const BodyLowerer = struct {
         };
         if (artifact_sink.checked_types.rootForKey(producer.key) != null) return;
 
-        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, self.input.imports);
+        var dependency_views = try self.inputDependencyViews();
+        defer dependency_views.deinit(self.allocator);
+
+        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, dependency_views.views);
         defer projector.deinit();
 
         if (std.mem.eql(u8, &producer.artifact.bytes, &artifact_sink.key.bytes)) {
@@ -6823,10 +6942,26 @@ const BodyLowerer = struct {
             return;
         }
 
-        for (self.input.imports) |imported| {
+        for (dependency_views.views) |imported| {
             if (!std.mem.eql(u8, &imported.key.bytes, &producer.artifact.bytes)) continue;
             if (try projector.projectImportedCheckedTypeForKey(imported, producer.key)) |_| return;
             invariantViolation("compile-time dependency summary concrete const producer type was missing from the imported artifact");
+        }
+        if (@import("builtin").mode == .Debug) {
+            const import0 = if (dependency_views.views.len > 0) dependency_views.views[0].key.bytes else [_]u8{0} ** 32;
+            const import1 = if (dependency_views.views.len > 1) dependency_views.views[1].key.bytes else [_]u8{0} ** 32;
+            const import2 = if (dependency_views.views.len > 2) dependency_views.views[2].key.bytes else [_]u8{0} ** 32;
+            std.debug.panic(
+                "compile-time dependency summary concrete const producer referenced an unknown import: producer={any} root={any} imports={d} import0={any} import1={any} import2={any}",
+                .{
+                    producer.artifact.bytes,
+                    artifact_sink.key.bytes,
+                    dependency_views.views.len,
+                    import0,
+                    import1,
+                    import2,
+                },
+            );
         }
         invariantViolation("compile-time dependency summary concrete const producer referenced an unknown import");
     }
@@ -6842,7 +6977,10 @@ const BodyLowerer = struct {
         const root = self.program.concrete_source_types.root(concrete_ref);
         if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
 
-        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, self.input.imports);
+        var dependency_views = try self.inputDependencyViews();
+        defer dependency_views.deinit(self.allocator);
+
+        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, dependency_views.views);
         defer projector.deinit();
 
         switch (root.source) {
@@ -6858,7 +6996,7 @@ const BodyLowerer = struct {
                     if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
                     invariantViolation("compile-time dependency summary concrete artifact type was missing from the artifact sink");
                 }
-                for (self.input.imports) |imported| {
+                for (dependency_views.views) |imported| {
                     if (!std.mem.eql(u8, &imported.key.bytes, &artifact_ref.artifact.bytes)) continue;
                     if (try projector.projectImportedCheckedTypeForKey(imported, root.key)) |_| return;
                     invariantViolation("compile-time dependency summary concrete imported type was missing from the imported artifact");
@@ -6866,6 +7004,33 @@ const BodyLowerer = struct {
                 invariantViolation("compile-time dependency summary concrete artifact type referenced an unknown import");
             },
         }
+    }
+
+    const InputDependencyViews = struct {
+        views: []const checked_artifact.ImportedModuleView,
+        owned: []checked_artifact.ImportedModuleView = &.{},
+
+        fn deinit(self: *InputDependencyViews, allocator: Allocator) void {
+            if (self.owned.len > 0) allocator.free(self.owned);
+            self.* = .{ .views = &.{} };
+        }
+    };
+
+    fn inputDependencyViews(self: *BodyLowerer) Allocator.Error!InputDependencyViews {
+        if (self.input.root.relation_artifacts.len == 0) {
+            return .{ .views = self.input.imports };
+        }
+
+        const views = try self.allocator.alloc(
+            checked_artifact.ImportedModuleView,
+            self.input.imports.len + self.input.root.relation_artifacts.len,
+        );
+        @memcpy(views[0..self.input.imports.len], self.input.imports);
+        @memcpy(views[self.input.imports.len..], self.input.root.relation_artifacts);
+        return .{
+            .views = views,
+            .owned = views,
+        };
     }
 
     fn lowerList(
@@ -6899,6 +7064,40 @@ const BodyLowerer = struct {
                     };
                 },
                 else => invariantViolation("mono body lowering expected concrete list type for list literal"),
+            }
+        }
+    }
+
+    fn listResultTypeFromKnownItems(
+        self: *BodyLowerer,
+        checked_list_ty: checked_artifact.CheckedTypeId,
+        items: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!ConcreteTypeInfo {
+        if (items.len == 0) return try self.concreteTypeInfoForChecked(checked_list_ty);
+
+        const elem_template = try self.checkedListElementTemplate(checked_list_ty);
+        for (items) |item| {
+            const item_ty = (try self.knownConcreteResultTypeForExpr(item)) orelse continue;
+            try self.type_instantiator.unifyTemplateWithConcrete(elem_template, item_ty.source_ref);
+        }
+        return try self.concreteTypeInfoForChecked(checked_list_ty);
+    }
+
+    fn checkedListElementTemplate(
+        self: *BodyLowerer,
+        checked_list_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        var current = checked_list_ty;
+        while (true) {
+            switch (self.type_instantiator.templatePayload(current)) {
+                .alias => |alias| current = alias.backing,
+                .nominal => |nominal| {
+                    if (nominal.builtin != .list or nominal.args.len != 1) {
+                        invariantViolation("mono body lowering expected checked list type for list literal result query");
+                    }
+                    return nominal.args[0];
+                },
+                else => invariantViolation("mono body lowering expected checked list type for list literal result query"),
             }
         }
     }
@@ -7270,7 +7469,7 @@ const BodyLowerer = struct {
                         .required, .sub_pattern => |field_pattern| field_pattern,
                         .rest => invariantViolation("mono body lowering requires published decision-plan metadata for record-rest declaration/reassignment patterns"),
                     };
-                    const label = destruct.label;
+                    const label = try self.recordFieldLabel(destruct.label);
                     const field_info = try self.concreteRecordFieldInfo(source_info.source_ref, label);
                     const field_expr = try self.program.ast.addExprWithSource(field_info.ty, field_info.source_ty, .{ .access = .{
                         .record = source_expr,
@@ -7430,7 +7629,7 @@ const BodyLowerer = struct {
                     if (try self.concreteRecordFieldRefInFieldsMaybe(current, record.fields, field_name)) |field_ref| return field_ref;
                     current = try self.type_instantiator.concreteChildRef(current, record.ext);
                 },
-                else => invariantViolation("mono body lowering expected concrete record type for record field"),
+                else => invariantViolation("mono body lowering expected concrete record type"),
             }
         }
     }
@@ -7706,6 +7905,7 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!?ConcreteTypeInfo {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
+        if (try self.concreteTypeForConstLookupExpr(expr_id)) |const_ty| return const_ty;
         if (try self.exprPublishesClosedConcreteType(expr_id)) {
             const expr = self.checkedExpr(expr_id);
             return try self.concreteTypeInfoForChecked(expr.ty);
@@ -7896,6 +8096,58 @@ const BodyLowerer = struct {
         defer self.type_instantiator = previous_instantiator;
 
         return try self.lowerStaticDispatchInCurrentInstantiation(expected, plan_id);
+    }
+
+    fn staticDispatchResultTypeInFreshInstantiation(
+        self: *BodyLowerer,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+        expected_ret: ConcreteTypeInfo,
+    ) Allocator.Error!ConcreteTypeInfo {
+        var dispatch_instantiator = TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            self.type_instantiator.template_types,
+            self.name_resolver,
+            self.type_instantiator.template_artifact,
+        );
+        defer dispatch_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &dispatch_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id, expected_ret);
+    }
+
+    fn staticDispatchResultTypeInCurrentInstantiation(
+        self: *BodyLowerer,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+        expected_ret: ConcreteTypeInfo,
+    ) Allocator.Error!ConcreteTypeInfo {
+        const plan = self.staticDispatchPlan(plan_id);
+        try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected_ret.source_ref);
+
+        const dispatcher_info = try self.staticDispatchDispatcherType(plan);
+        try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
+        try self.bindStaticDispatchKnownArgumentTypes(plan, dispatcher_info);
+
+        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_info.ty);
+        const method = try self.methodName(plan.method);
+        const target = try self.lookupMethodTarget(owner, method);
+
+        if (target) |method_target| {
+            const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
+        } else switch (plan.result_mode) {
+            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .equality => |equality| {
+                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
+            },
+        }
+
+        const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
+        return try self.returnTypeFromConcreteFunction(requested_fn_ty);
     }
 
     fn lowerStaticDispatchInCurrentInstantiation(
@@ -8386,7 +8638,7 @@ const BodyLowerer = struct {
                 for (destructs) |destruct| {
                     switch (destruct.kind) {
                         .required, .sub_pattern => |field_pattern| {
-                            const label = destruct.label;
+                            const label = try self.recordFieldLabel(destruct.label);
                             const field_info = try self.concreteRecordFieldInfo(expected.source_ref, label);
                             fields[field_count] = .{
                                 .field = label,
@@ -8928,9 +9180,9 @@ const BodyLowerer = struct {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
-            .platform_required_proc,
             .promoted_top_level_proc,
             => |proc_use| proc_use,
+            .platform_required_proc => |required| required.procedure,
             else => null,
         };
     }
@@ -9103,8 +9355,7 @@ const BodyLowerer = struct {
         for (self.input.imports) |view| {
             if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
+                if (binding.binding.def == imported.def and
                     binding.binding.pattern == imported.pattern and
                     importedClosureContainsProcedureTemplate(binding.template_closure, template))
                 {
@@ -9115,8 +9366,7 @@ const BodyLowerer = struct {
         for (self.input.root.relation_artifacts) |view| {
             if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
+                if (binding.binding.def == imported.def and
                     binding.binding.pattern == imported.pattern and
                     importedClosureContainsProcedureTemplate(binding.template_closure, template))
                 {
@@ -9213,8 +9463,7 @@ const BodyLowerer = struct {
         for (self.input.imports) |view| {
             if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
+                if (binding.binding.def == imported.def and
                     binding.binding.pattern == imported.pattern)
                 {
                     return switch (binding.body) {
@@ -9234,8 +9483,7 @@ const BodyLowerer = struct {
         for (self.input.root.relation_artifacts) |view| {
             if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
             for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
+                if (binding.binding.def == imported.def and
                     binding.binding.pattern == imported.pattern)
                 {
                     return switch (binding.body) {
@@ -9252,7 +9500,17 @@ const BodyLowerer = struct {
                 }
             }
         }
-        invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "mono body lowering could not find imported procedure binding in published artifact views: artifact={any} def={d} pattern={d}",
+                .{
+                    imported.artifact.bytes,
+                    @intFromEnum(imported.def),
+                    @intFromEnum(imported.pattern),
+                },
+            );
+        }
+        unreachable;
     }
 
     fn callableFromCallableBindingInstance(
@@ -10019,7 +10277,6 @@ fn importedProcedureBindingRefEql(
     b: checked_artifact.ImportedProcedureBindingRef,
 ) bool {
     return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
-        a.module_idx == b.module_idx and
         a.def == b.def and
         a.pattern == b.pattern;
 }

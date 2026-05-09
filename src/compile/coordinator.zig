@@ -520,6 +520,10 @@ pub const Coordinator = struct {
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
     cross_package_dependents: std.StringHashMap(std.ArrayList(ModuleRef)),
 
+    /// Exact-key index for checked artifacts published during this build. This
+    /// does not own artifacts; it points at the module storage that owns them.
+    checked_artifact_index: std.AutoHashMap([32]u8, ModuleRef),
+
     /// Whether to run hosted compiler transformation after canonicalization.
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
@@ -581,6 +585,7 @@ pub const Coordinator = struct {
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
+            .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .enable_hosted_transform = false,
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -643,6 +648,8 @@ pub const Coordinator = struct {
             entry.value_ptr.deinit(self.gpa);
         }
         self.cross_package_dependents.deinit();
+
+        self.checked_artifact_index.deinit();
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
@@ -728,6 +735,32 @@ pub const Coordinator = struct {
                 try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
             }
         }
+        try self.appendRelationClosureDependencyViews(&views, allocator, root_artifact);
+
+        return try views.toOwnedSlice(allocator);
+    }
+
+    fn collectAvailableArtifactViews(
+        self: *Coordinator,
+        allocator: Allocator,
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        try appendAvailableArtifactViewIfMissing(
+            &views,
+            allocator,
+            &self.builtin_modules.checked_artifact,
+        );
+
+        var pkg_iter = self.packages.iterator();
+        while (pkg_iter.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                try appendAvailableArtifactViewIfMissing(&views, allocator, artifact);
+            }
+        }
 
         return try views.toOwnedSlice(allocator);
     }
@@ -740,6 +773,54 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
+    }
+
+    fn appendAvailableArtifactViewIfMissing(
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        for (views.items) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) return;
+        }
+        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+    }
+
+    fn appendRelationClosureDependencyViews(
+        self: *Coordinator,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
+        defer keys.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const relation_artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("compile.coordinator invariant violated: platform relation references unavailable app artifact", .{});
+                }
+                unreachable;
+            };
+            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
+                allocator,
+                &keys,
+                relation_artifact,
+                binding,
+            );
+        }
+
+        for (keys.items) |key| {
+            if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) continue;
+            if (rootRelationContainsArtifact(root_artifact, key)) continue;
+            const artifact = self.checkedArtifactByKey(key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("compile.coordinator invariant violated: platform relation closure references unavailable checked artifact", .{});
+                }
+                unreachable;
+            };
+            try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
+        }
     }
 
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
@@ -836,6 +917,11 @@ pub const Coordinator = struct {
         defer self.gpa.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
         defer self.gpa.free(imported_artifacts);
+        const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
+        defer self.gpa.free(available_artifacts);
+
+        var publication_with_availability = publication;
+        publication_with_availability.available_artifacts = available_artifacts;
 
         var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             self.gpa,
@@ -843,10 +929,12 @@ pub const Coordinator = struct {
             module_env_storage,
             imported_envs,
             imported_artifacts,
-            publication,
+            publication_with_availability,
         );
         errdefer artifact.deinit(self.gpa);
+        self.unregisterCheckedArtifact(mod);
         mod.replaceRepublishedCheckedArtifact(artifact);
+        try self.registerCheckedArtifact(pkg, mod);
     }
 
     const RootModuleRef = struct {
@@ -887,15 +975,62 @@ pub const Coordinator = struct {
             return &self.builtin_modules.checked_artifact;
         }
 
-        var pkg_iter = self.packages.iterator();
-        while (pkg_iter.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
-                if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+        const location = self.checked_artifact_index.get(key.bytes) orelse return null;
+        const pkg = self.packages.get(location.pkg_name) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
             }
+            unreachable;
+        };
+        const mod = pkg.getModule(location.module_id) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
+            }
+            unreachable;
+        };
+        const artifact = mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
+            }
+            unreachable;
+        };
+        if (!std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
+            }
+            unreachable;
         }
+        return artifact;
+    }
 
+    fn unregisterCheckedArtifact(self: *Coordinator, mod: *ModuleState) void {
+        if (mod.checkedArtifact()) |artifact| {
+            _ = self.checked_artifact_index.remove(artifact.key.bytes);
+        }
+    }
+
+    fn registerCheckedArtifact(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        const artifact = mod.checkedArtifact() orelse return;
+        const module_id = moduleIdForPtr(pkg, mod) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
+            }
+            unreachable;
+        };
+        try self.checked_artifact_index.put(artifact.key.bytes, .{
+            .pkg_name = pkg.name,
+            .module_id = module_id,
+        });
+    }
+
+    fn moduleIdForPtr(pkg: *PackageState, mod: *ModuleState) ?ModuleId {
+        for (pkg.modules.items, 0..) |*candidate, raw| {
+            if (@intFromPtr(candidate) == @intFromPtr(mod)) return @intCast(raw);
+        }
         return null;
     }
 
@@ -1362,6 +1497,7 @@ pub const Coordinator = struct {
                 .module_env = mod.moduleEnv().?,
                 .imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod),
                 .imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod),
+                .available_artifacts = try self.collectAvailableArtifactViews(self.gpa),
             },
         });
     }
@@ -1391,8 +1527,11 @@ pub const Coordinator = struct {
         // Take ownership of semantic module data
         mod.replaceModuleEnv(result.semantic.module_env);
         if (result.semantic.checked_artifact) |artifact| {
+            self.unregisterCheckedArtifact(mod);
             mod.replaceCheckedArtifact(artifact);
+            try self.registerCheckedArtifact(pkg, mod);
         } else if (mod.semantic) |*semantic| {
+            self.unregisterCheckedArtifact(mod);
             if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
             semantic.checked_artifact = null;
         }
@@ -2208,11 +2347,13 @@ pub const Coordinator = struct {
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
             task.imported_artifacts,
+            task.available_artifacts,
             self.target,
             self.io,
         ) catch {
             self.gpa.free(task.imported_envs);
             self.gpa.free(task.imported_artifacts);
+            self.gpa.free(task.available_artifacts);
             return .{
                 .type_checked = .{
                     .package_name = task.package_name,
@@ -2251,6 +2392,7 @@ pub const Coordinator = struct {
             // On allocation failure, return result with empty reports
             self.gpa.free(task.imported_envs);
             self.gpa.free(task.imported_artifacts);
+            self.gpa.free(task.available_artifacts);
             return .{
                 .type_checked = .{
                     .package_name = task.package_name,
@@ -2276,6 +2418,7 @@ pub const Coordinator = struct {
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
         self.gpa.free(task.imported_artifacts);
+        self.gpa.free(task.available_artifacts);
 
         const checked_artifact = typecheck_output.takeCheckedArtifact();
 

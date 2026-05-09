@@ -1461,11 +1461,11 @@ const IrBuilder = struct {
             .str_lit,
             => {},
             .as => |as| {
-                try self.pushValueBinding(as.bind, value, saved);
+                try self.pushValueBinding(as.bind.value, value, saved);
                 const child_pat = self.input.ast.pats.items[@intFromEnum(as.pattern)];
                 try self.bindForPatternValues(child_pat, value, stmts, saved);
             },
-            .bind => |bind| try self.pushValueBinding(bind, value, saved),
+            .bind => |bind| try self.pushValueBinding(bind.value, value, saved),
             .nominal => |child| {
                 const child_pat = self.input.ast.pats.items[@intFromEnum(child)];
                 try self.bindForPatternValues(child_pat, value, stmts, saved);

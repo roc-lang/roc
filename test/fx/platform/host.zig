@@ -949,6 +949,7 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: 
 /// Takes Host { name: Str } as first argument, returns Str
 fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *const extern struct { name: RocStr }) callconv(.c) void {
     const name_slice = args.name.asSlice();
+    defer args.name.decref(ops);
 
     // Create the result string: "Hello, <name>!"
     var buf: [256]u8 = undefined;
@@ -1084,6 +1085,7 @@ fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.Ro
 fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { label: RocStr }) callconv(.c) void {
     const capture_label = args.label;
     capture_label.incref(1, ops);
+    defer args.label.decref(ops);
     writeErasedCallable(
         NestedRecordCapture,
         ret,
@@ -1100,15 +1102,32 @@ fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, arg
     );
 }
 
-fn hostTreeIncrefPayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) void {
-    switch (tree.discriminant) {
-        0 => {},
-        1 => {
-            builtins.utils.increfDataPtrC(tree.payload.node.left, 1, ops);
-            builtins.utils.increfDataPtrC(tree.payload.node.right, 1, ops);
+fn hostTreeCloneBox(tree: *const HostTree, ops: *builtins.host_abi.RocOps) ?[*]u8 {
+    const ptr = builtins.utils.allocateWithRefcount(@sizeOf(HostTree), @alignOf(HostTree), true, ops);
+    capturePtrAs(HostTree, ptr).* = hostTreeClonePayload(tree, ops);
+    return ptr;
+}
+
+fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) HostTree {
+    return switch (tree.discriminant) {
+        0 => .{
+            .payload = .{ .leaf = tree.payload.leaf },
+            .discriminant = 0,
+            .padding = [_]u8{0} ** 7,
         },
-        else => ops.crash("host boxed recursive tree capture had invalid discriminant"),
-    }
+        1 => .{
+            .payload = .{ .node = .{
+                .left = hostTreeCloneBox(capturePtrAs(HostTree, tree.payload.node.left), ops),
+                .right = hostTreeCloneBox(capturePtrAs(HostTree, tree.payload.node.right), ops),
+            } },
+            .discriminant = 1,
+            .padding = [_]u8{0} ** 7,
+        },
+        else => blk: {
+            ops.crash("host boxed recursive tree capture had invalid discriminant");
+            break :blk undefined;
+        },
+    };
 }
 
 fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1119,6 +1138,18 @@ fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callcon
             boxed_host_drop_counts.recursive_tree_child_box_releases += 2;
             builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayload, ops);
             builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayload, ops);
+        },
+        else => ops.crash("host boxed recursive tree drop had invalid discriminant"),
+    }
+}
+
+fn hostTreeDropPayloadWithoutReport(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+    const tree = capturePtrAs(HostTree, tree_ptr);
+    switch (tree.discriminant) {
+        0 => {},
+        1 => {
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport, ops);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport, ops);
         },
         else => ops.crash("host boxed recursive tree drop had invalid discriminant"),
     }
@@ -1148,18 +1179,19 @@ fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) ca
 }
 
 fn hostedHostBoxedRecursiveTree(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { tree: HostTree }) callconv(.c) void {
-    hostTreeIncrefPayload(&args.tree, ops);
+    defer hostTreeDropPayloadWithoutReport(@ptrCast(@constCast(&args.tree)), ops);
     writeErasedCallable(
         TreeCapture,
         ret,
         @ptrCast(&hostTreeCallable),
         &hostTreeCaptureOnDrop,
-        .{ .tree = args.tree },
+        .{ .tree = hostTreeClonePayload(&args.tree, ops) },
         ops,
     );
 }
 
 fn hostedHostCallBoxed(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { boxed: ?[*]u8, value: i64 }) callconv(.c) void {
+    defer builtins.erased_callable.decref(args.boxed, ops);
     ret.* = callBoxedI64ToI64(ops, args.boxed, args.value);
 }
 
@@ -1173,6 +1205,7 @@ fn hostedHostReleaseStoredBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, _
 fn hostedHostRoundtripBoxed(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { boxed: ?[*]u8 }) callconv(.c) void {
     if (args.boxed) |boxed| {
         builtins.erased_callable.incref(boxed, 1, ops);
+        builtins.erased_callable.decref(boxed, ops);
     }
     ret.* = args.boxed;
 }
@@ -1188,6 +1221,7 @@ fn hostedHostStoreBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *co
     };
     builtins.erased_callable.incref(boxed, 1, ops);
     stored_boxed_callable = boxed;
+    builtins.erased_callable.decref(boxed, ops);
 }
 
 fn hostedHostStoredBoxedCall(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { value: i64 }) callconv(.c) void {

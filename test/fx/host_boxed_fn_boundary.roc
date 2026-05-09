@@ -28,16 +28,18 @@ run_nested_record! = || {
 
 run_recursive_tree! : () => I64
 run_recursive_tree! = || {
-    tree =
-        Host.Tree.Node(
-            Box.box(Host.Tree.Leaf(5)),
-            Box.box(Host.Tree.Node(
-                Box.box(Host.Tree.Leaf(7)),
-                Box.box(Host.Tree.Leaf(11)),
-            )),
-        )
+    boxed = {
+        tree =
+            Host.Tree.Node(
+                Box.box(Host.Tree.Leaf(5)),
+                Box.box(Host.Tree.Node(
+                    Box.box(Host.Tree.Leaf(7)),
+                    Box.box(Host.Tree.Leaf(11)),
+                )),
+            )
 
-    boxed = Host.boxed_recursive_tree!(tree)
+        Host.boxed_recursive_tree!(tree)
+    }
     f = Box.unbox(boxed)
 
     f(19)
@@ -53,7 +55,7 @@ run_host_consumes_primitive! = || {
 run_host_consumes_nested_record! : () => I64
 run_host_consumes_nested_record! = || {
     record = { label: "abcd", base: 6 }
-    boxed = Box.box(|x| x + record.base + List.len(Str.to_utf8(record.label)))
+    boxed = Box.box(|x| x + record.base + List.len(Str.to_utf8(record.label)).to_i64_wrap())
 
     Host.call_boxed!(boxed, 30)
 }

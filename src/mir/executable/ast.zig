@@ -123,11 +123,17 @@ pub const Pat = struct {
         tuple: Span(PatId),
         as: struct {
             pattern: PatId,
-            bind: ExecutableValueRef,
+            bind: PatternBinder,
         },
-        bind: ExecutableValueRef,
+        bind: PatternBinder,
         wildcard,
     };
+};
+
+/// Public `PatternBinder` declaration.
+pub const PatternBinder = struct {
+    value: ExecutableValueRef,
+    ty: TypeId,
 };
 
 /// Public `TagPayloadPattern` declaration.
@@ -808,8 +814,8 @@ pub const Store = struct {
 
     fn definePatternBindings(self: *Store, pat: Pat) std.mem.Allocator.Error!void {
         switch (pat.data) {
-            .bind => |value| try self.defineValueType(value, pat.ty),
-            .as => |as_pat| try self.defineValueType(as_pat.bind, pat.ty),
+            .bind => |bind| try self.defineValueType(bind.value, bind.ty),
+            .as => |as_pat| try self.defineValueType(as_pat.bind.value, as_pat.bind.ty),
             else => {},
         }
     }

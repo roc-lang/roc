@@ -4459,9 +4459,9 @@ fn introduceItemsAliased(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
-    _: Ident.Idx,
+    alias: Ident.Idx,
     import_region: Region,
-    _: CIR.Import.Idx,
+    module_import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
     const current_scope = self.currentScope();
@@ -4497,7 +4497,27 @@ fn introduceItemsAliased(
 
         // Auto-expose the module's main type for type modules
         switch (module_env.module_kind) {
-            .type_module => {},
+            .type_module => |main_type_ident| {
+                if (module_env.getExposedNodeIndexById(main_type_ident)) |target_node_idx| {
+                    try self.setExternalTypeBinding(
+                        current_scope,
+                        alias,
+                        module_name,
+                        alias,
+                        module_env.getIdent(main_type_ident),
+                        target_node_idx,
+                        module_import_idx,
+                        import_region,
+                        .module_was_found,
+                    );
+                } else {
+                    try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = alias,
+                        .region = import_region,
+                    } });
+                }
+            },
             else => {},
         }
 
@@ -8496,7 +8516,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // Build the type name from all qualifiers except the first (module name)
         // For Imported.Foo.Bar.X: qualifiers=[Imported, Foo, Bar], type="Foo.Bar"
         const type_qualifiers_start = 1;
-        const type_name = if (qualifier_toks.len > type_qualifiers_start)
+        const raw_type_name = if (qualifier_toks.len > type_qualifiers_start)
             self.parse_ir.resolveQualifiedName(
                 Token.Span{
                     .span = DataSpan.init(
@@ -8509,12 +8529,20 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             )
         else
             type_tok_text;
+        const type_name = if (raw_type_name.len > 0 and raw_type_name[0] == '.')
+            raw_type_name[1..]
+        else
+            raw_type_name;
         const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
 
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                break :blk 0;
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = DataSpan.empty() };
             };
 
             const target_ident = auto_imported_type.requireEnv().common.findIdent(type_name) orelse {
@@ -10573,7 +10601,11 @@ fn canonicalizeTypeAnnoBasicType(
         const type_name_text = self.env.getIdent(type_name_ident);
         const target_node_idx = blk: {
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                break :blk 0;
+                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } });
             };
 
             const target_ident = auto_imported_type.requireEnv().common.findIdent(type_name_text) orelse {

@@ -6310,7 +6310,7 @@ const ValueTransformFinalizer = struct {
                 .fn_ => |fn_| fn_.body,
                 .val => |body| body,
                 .run => |run_def| run_def.body,
-                .hosted_fn => lambdaInvariant("lambda-solved consumer-use finalization reached hosted function body"),
+                .hosted_fn => null,
             };
         }
         return null;
@@ -6452,7 +6452,8 @@ const ValueTransformFinalizer = struct {
                 }
             },
             .let_ => |let_| {
-                try self.finalizeExprConstructionUsesAtEndpoint(let_.body, null);
+                const bind_endpoint = try self.bindingEndpoint(let_.bind.binding_info);
+                try self.finalizeExprConstructionUsesAtEndpoint(let_.body, bind_endpoint);
                 try self.finalizeExprConstructionUsesAtEndpointWithProvenance(let_.rest, expected, provenance);
             },
             .block => |block| {
@@ -6728,9 +6729,18 @@ const ValueTransformFinalizer = struct {
     ) Allocator.Error!void {
         const stmt = self.program.ast.stmts.items[@intFromEnum(stmt_id)];
         switch (stmt) {
-            .decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(decl.body, null),
-            .var_decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(decl.body, null),
-            .reassign => |reassign| try self.finalizeExprConstructionUsesAtEndpoint(reassign.body, null),
+            .decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(
+                decl.body,
+                try self.bindingEndpoint(decl.bind.binding_info),
+            ),
+            .var_decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(
+                decl.body,
+                try self.bindingEndpoint(decl.bind.binding_info),
+            ),
+            .reassign => |reassign| try self.finalizeExprConstructionUsesAtEndpoint(
+                reassign.body,
+                try self.bindingEndpoint(reassign.version),
+            ),
             .expr, .debug, .expect => |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null),
             .return_ => |ret| {
                 try self.finalizeReturnConsumerUse(ret.return_info, ret.expr);
@@ -6747,6 +6757,18 @@ const ValueTransformFinalizer = struct {
             .break_,
             => {},
         }
+    }
+
+    fn bindingEndpoint(
+        self: *ValueTransformFinalizer,
+        binding_info: repr.BindingInfoId,
+    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        const binding_index = @intFromEnum(binding_info);
+        if (binding_index >= self.valueStore().bindings.items.len) {
+            lambdaInvariant("lambda-solved consumer-use binding endpoint referenced missing binding");
+        }
+        const binding = self.valueStore().bindings.items[binding_index];
+        return try self.localEndpoint(binding.value);
     }
 
     fn publishConsumerUseWithProvenance(

@@ -552,6 +552,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// that register live if it is also one of the destination parameter regs.
         /// Materialize those sources into caller-frame slots first so later parallel
         /// moves read from stable memory instead of a clobbered base register.
+        ///
+        /// Every public call emission path must run this before resolving deferred
+        /// register arguments. Direct, indirect, and relocatable calls are all one
+        /// simultaneous ABI assignment from original argument sources to parameter
+        /// registers.
         fn stabilizeDeferredMemorySources(self: *Self) !void {
             if (self.reg_arg_count == 0) return;
 
@@ -909,6 +914,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            try self.stabilizeDeferredMemorySources();
 
             // Resolve deferred register args AFTER stack args are stored
             try self.emitDeferredRegArgs();
@@ -2441,6 +2448,34 @@ test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
     try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
     // No scratch needed
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "relocatable call stabilizes memory args before clobbering base param register" {
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var relocs = std.ArrayList(Relocation){};
+    defer relocs.deinit(std.testing.allocator);
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addMemArg(.RDI, 0); // RDI <- [old RDI]
+    try builder.addMemArg(.RDI, 8); // RSI <- [old RDI + 8]
+
+    try builder.callRelocatable("roc_test_target", std.testing.allocator, &relocs);
+
+    // Without stabilization, the first argument would emit `mov rdi, [rdi]`
+    // and the second would then read through the clobbered RDI.
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0x3F) == null);
+    try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x77, 0x08) == null);
+
+    // The original RDI is read into scratch before parameter registers move.
+    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x8B, 0x1F) != null);
+    try std.testing.expectEqual(@as(usize, 1), relocs.items.len);
 }
 
 test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {

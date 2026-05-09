@@ -1898,9 +1898,9 @@ pub const Store = struct {
         switch (l.tag) {
             .scalar => return l.data.scalar.tag == .str,
             .list => return true,
-            .list_of_zst => return false,
+            .list_of_zst => return true,
             .box => return true,
-            .box_of_zst => return false,
+            .box_of_zst => return true,
             .erased_callable => return true,
             .zst => return false,
             .struct_, .tag_union, .closure => {},
@@ -2093,4 +2093,28 @@ test "layout store records explicit resolved list layout facts for boxed lists" 
     try testing.expectEqual(list_idx, store.resolvedListLayoutIdx(boxed_boxed_list_idx).?);
     try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(boxed_scalar_idx));
     try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(.u8));
+}
+
+test "ZST containers are refcounted layouts with no refcounted children" {
+    const testing = std.testing;
+
+    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    defer store.deinit();
+
+    const list_zst_idx = try store.insertLayout(Layout.listOfZst());
+    const box_zst_idx = try store.insertLayout(Layout.boxOfZst());
+
+    try testing.expect(!store.layoutContainsRefcounted(store.getLayout(.zst)));
+    try testing.expect(store.layoutContainsRefcounted(store.getLayout(list_zst_idx)));
+    try testing.expect(store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
+
+    const list_abi = store.builtinListAbi(list_zst_idx);
+    try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
+    try testing.expectEqual(@as(u32, 0), list_abi.elem_size);
+    try testing.expect(!list_abi.contains_refcounted);
+
+    const box_abi = store.builtinBoxAbi(box_zst_idx);
+    try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
+    try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
+    try testing.expect(!box_abi.contains_refcounted);
 }
