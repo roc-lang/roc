@@ -607,28 +607,48 @@ shape:
 
 ```zig
 fn lower_record_access(expr: LambdaSolvedExpr, access: RecordAccess) ExprId {
-    const lowered_record = lower_expr(access.record);
-    const record_ty = output.expr(lowered_record).ty;
-    const projected_ty = record_field_type_from_parent(record_ty, access.field);
+    const projection = value_store.projection(access.projection_info);
+    const record_ty = lower_value_endpoint(projection.source);
+    const lowered_record = lower_expr_at_type(access.record, record_ty);
+    const raw_field_ty = record_field_type_from_parent(record_ty, access.field);
 
-    debug_assert_same_projection_class(expr.value_info, lowered_record, access.field);
-
-    return output.add_expr(projected_ty, .access{
+    const raw_field_value = fresh_value_ref();
+    const raw_field_expr = output.add_expr(raw_field_ty, raw_field_value, .access{
         .record = lowered_record,
         .field = access.field,
+    });
+
+    const result_value = apply_value_transform_boundary(
+        projection.result_transform,
+        raw_field_value,
+    );
+
+    return block_expr(.{
+        decl(raw_field_value, raw_field_expr),
+        value_ref(result_value),
     });
 }
 
 fn lower_tuple_access(expr: LambdaSolvedExpr, access: TupleAccess) ExprId {
-    const lowered_tuple = lower_expr(access.tuple);
-    const tuple_ty = output.expr(lowered_tuple).ty;
-    const projected_ty = tuple_elem_type_from_parent(tuple_ty, access.elem_index);
+    const projection = value_store.projection(access.projection_info);
+    const tuple_ty = lower_value_endpoint(projection.source);
+    const lowered_tuple = lower_expr_at_type(access.tuple, tuple_ty);
+    const raw_elem_ty = tuple_elem_type_from_parent(tuple_ty, access.elem_index);
 
-    debug_assert_same_projection_class(expr.value_info, lowered_tuple, access.elem_index);
-
-    return output.add_expr(projected_ty, .tuple_access{
+    const raw_elem_value = fresh_value_ref();
+    const raw_elem_expr = output.add_expr(raw_elem_ty, raw_elem_value, .tuple_access{
         .tuple = lowered_tuple,
         .elem_index = access.elem_index,
+    });
+
+    const result_value = apply_value_transform_boundary(
+        projection.result_transform,
+        raw_elem_value,
+    );
+
+    return block_expr(.{
+        decl(raw_elem_value, raw_elem_expr),
+        value_ref(result_value),
     });
 }
 ```
@@ -642,6 +662,51 @@ record's field is `List(raw Tree)` and the result annotation lowers to
 `List(struct)` to `List(scalar)` or another unrelated pair and correctly refuses
 to bridge it. The correct fix is to keep the projection typed by the parent's
 field slot, not to add a layout fallback in LIR.
+
+The parent aggregate must also be lowered at the explicit projection-source
+endpoint published in `ProjectionInfo`. A projection is not allowed to lower its
+parent aggregate as an unconstrained producer and then project whatever field
+type that standalone producer happened to choose. The complete executable rule
+is:
+
+```zig
+fn lower_record_access(expr: LambdaSolvedExpr, access: RecordAccess) ExprId {
+    const projection = value_store.projection(access.projection_info);
+    assert(projection.result == expr.value_info);
+    assert(projection.kind == .record_field(access.field));
+
+    const record_ty = lower_value_endpoint(projection.source);
+    const lowered_record = lower_expr_at_type(access.record, record_ty);
+    const raw_field_ty = record_field_type_from_parent(record_ty, access.field);
+
+    const raw_field_value = fresh_value_ref();
+    const raw_field_expr = output.add_expr(raw_field_ty, .access{
+        .record = lowered_record,
+        .field = access.field,
+    });
+
+    const transformed = apply_value_transform_boundary(
+        projection.result_transform,
+        raw_field_value,
+    );
+    assert(value_type(transformed) == lower_value_endpoint(projection.result));
+
+    return block_expr(.{
+        decl(raw_field_value, raw_field_expr),
+        value_ref(transformed),
+    });
+}
+```
+
+The same rule applies to tuple access and tag-payload access. `ProjectionInfo`
+is the authority for the parent aggregate endpoint, and the parent endpoint is
+the authority for the raw projected child type. `ProjectionInfo.result_transform`
+is the authority for converting the raw slot value to the projection expression
+result endpoint. This is required when a projection is used as a call argument,
+return value, branch result, or capture value whose later consumer selected a
+different representation. Without this, the projection can produce a value typed
+at the stored parent slot while the consumer-use boundary expects the projection
+result endpoint, forcing an illegal re-ascription of the projected value.
 
 Executable type lowering must memoize every completed source type root it lowers,
 not only roots that are currently active for recursion. The active-recursion map
@@ -4021,15 +4086,69 @@ layout bridges. They are the only artifact-published mechanism that may describe
 finite-callable-to-erased-callable packing at an explicit `Box(T)` boundary.
 When a transform reaches a callable leaf whose target endpoint is erased, the
 operation must be `callable_to_erased` and its `provenance` must be
-`box_erasure` with a non-empty `BoxErasureProvenance` span. The `finite_value` case
-packs the already-evaluated finite callable-set value as the materialized
-capture for the erased adapter named by the full `ErasedAdapterKey`; the adapter body must
-dispatch with `callable_match`, including singleton sets. The `proc_value` case
-packs an already-resolved procedure value and its sealed executable capture
-materialization for direct erased calls. The `already_erased_callable` case is
-pass-through verification for an input value already represented by exactly the
-published `ErasedCallSigKey`. No transform may introduce erased callable
-representation without explicit `BoxErasureProvenance`.
+`box_erasure` with a non-empty `BoxErasureProvenance` span. The `finite_value`
+case packs the already-evaluated finite callable-set value as the materialized
+capture for the erased adapter named by the full `ErasedAdapterKey`; the adapter
+body must dispatch with `callable_match`, including singleton sets. The
+`proc_value` case packs an already-resolved procedure value and its sealed
+executable capture materialization for direct erased calls. The
+`already_erased_callable` case is runtime-pass-through verification for an input
+value already represented by exactly the published `ErasedCallSigKey`. "Runtime
+pass-through" does not mean "reuse the same typed executable value handle in all
+cases." Executable MIR values are typed by `TypeId`, and `addValueRefExpr` must
+never ascribe a new `TypeId` to an existing value ref.
+
+Therefore, lowering `already_erased_callable` follows this exact rule:
+
+```zig
+fn lower_already_erased_callable_transform(
+    source_value: ExecutableValueRef,
+    from_endpoint: Endpoint,
+    to_endpoint: Endpoint,
+    sig_key: ErasedFnSigKey,
+) ExecutableValueRef {
+    const from_ty = lower_endpoint_type(from_endpoint);
+    const to_ty = lower_endpoint_type(to_endpoint);
+
+    debug_assert(erased_sig(from_ty) == sig_key);
+    debug_assert(erased_sig(to_ty) == sig_key);
+
+    if (from_ty == to_ty) {
+        return source_value;
+    }
+
+    const target_value = fresh_value_ref();
+    const bridge = bridge_plan(.nominal_reinterpret, from_ty, to_ty);
+    emit_decl(target_value, add_expr(to_ty, .bridge{
+        .bridge = bridge,
+        .value = source_value,
+    }));
+    return target_value;
+}
+```
+
+The bridge is a type-state bridge, not a runtime conversion and not a
+compatible-shape repair. It exists because two endpoint types can have the same
+erased call ABI while carrying different executable metadata for where the
+erased callable came from or how its capture was published. For example, a
+host-provided `Box(I64 -> I64)` and a Roc-created `Box(I64 -> I64)` can both
+unbox to the same `ErasedFnSigKey`, but one endpoint may carry no Roc capture
+payload type while the other endpoint carries a published Roc capture payload
+type for final-drop planning. The runtime value is still one erased callable
+payload pointer. The executable value handle still needs the target endpoint's
+`TypeId` before it can be passed into a consumer typed at that endpoint.
+
+This rule also applies to identity transforms. A true identity transform may
+return the source value only when the source and target endpoint keys lower to
+the same executable `TypeId`. If the transform planner believes two endpoints
+are identity but executable lowering sees distinct `TypeId`s for the same
+canonical key, that is a type-interning compiler bug. If the endpoint keys are
+different but runtime storage is intentionally equivalent, the transform must be
+published as a structural bridge such as `nominal_reinterpret`, not as
+`identity`.
+
+No transform may introduce erased callable representation without explicit
+`BoxErasureProvenance`.
 
 Structural bridges still exist, but only as a sub-operation of executable
 value transforms. `ExecutableStructuralBridgePlan` covers representation
@@ -4281,6 +4400,47 @@ results:
    value, lambda-solved records `existing_value` and publishes the exact
    `ValueTransformBoundaryId` from the existing producer endpoint to the
    selected consumer endpoint.
+
+For an `existing_value` consumer-use plan, executable MIR must still lower the
+child at the boundary's `from_endpoint`. The existing-value boundary owns two
+endpoint types:
+
+- `from_endpoint`: the representation in which the child value is evaluated or
+  read exactly once
+- `to_endpoint`: the representation expected by the consuming parent
+
+So the executable lowering shape is:
+
+```zig
+fn lower_existing_value_use(expr: ExprId, boundary_id: ValueTransformBoundaryId) ExprId {
+    const boundary = value_transform_boundary(boundary_id);
+    const source_ty = lower_endpoint_type(boundary.from_endpoint);
+    const target_ty = lower_endpoint_type(boundary.to_endpoint);
+
+    const source_expr = lower_expr_at_type(expr, source_ty);
+    const source_value = materialize_expr_value(source_expr);
+    debug_assert(value_type(source_value) == source_ty);
+
+    const transformed = apply_value_transform_boundary(boundary, source_value);
+    debug_assert(value_type(transformed) == target_ty);
+
+    return value_ref_expr(target_ty, transformed);
+}
+```
+
+It is wrong to implement this as `lowerExprProducer(expr)` followed by the
+boundary transform. A producer-lowered expression may choose its standalone
+`ValueInfoId` endpoint, while the boundary's source endpoint may be a more
+specific procedure-parameter, branch-result, capture-slot, imported-constant, or
+erased-call ABI endpoint. In that case the transform would be applied to a value
+whose typed handle does not match `boundary.from_endpoint`, and the next
+`addValueRefExpr(target_ty, transformed)` would be an illegal re-ascription of
+an existing value.
+
+This does not weaken the "existing value" rule. The child is still evaluated
+once and then transformed. The point is that "evaluate once" means evaluated
+once in the exact source representation named by the explicit boundary, not in
+an unconstrained standalone representation chosen by executable MIR.
 
 Box-erasure provenance is part of the selected consumer endpoint context. If a
 root consumer transform was published with non-empty `box_erasure` provenance,
@@ -10406,7 +10566,9 @@ const ProjectionInfo = struct {
     source: ValueInfoId,
     result: ValueInfoId,
     path: ValueProjectionPath,
-    finalized_slot: ProjectionSlot,
+    source_slot: ProjectionSlot,
+    endpoint_slot: ProjectionSlot,
+    result_transform: ValueTransformBoundaryId,
 };
 
 const ProjectionSlot = union(enum) {
@@ -10424,6 +10586,129 @@ low-level operations that project values must emit `ProjectionInfo` records.
 The projection slot must use row-finalized IDs where rows are involved. It must
 not use field display names, tag display names, physical layout indexes, or a
 synthetic singleton tag shape.
+
+`ProjectionInfo.result_transform` is mandatory. A projection has two distinct
+runtime values from executable MIR's point of view:
+
+- the raw slot value extracted from the already-lowered parent aggregate
+- the projection expression result value consumed by later expressions
+
+Those values often have the same executable endpoint, but they are not allowed
+to be conflated. If the projection result flows to a call argument, return
+value, branch join, capture slot, or `Box(T)` boundary that selected a different
+representation, lambda-solved may solve the projection result endpoint
+differently from the parent aggregate's stored slot endpoint. The projection
+itself must then own the explicit transform from the raw slot endpoint to the
+projection result endpoint.
+
+Executable lowering for a record projection therefore has this shape:
+
+```zig
+fn lower_record_access(expr: Expr, access: RecordAccess) ExprId {
+    const projection = value_store.projection(access.projection_info);
+    assert(projection.result == expr.value_info);
+
+    const parent_ty = lower_value_endpoint(projection.source);
+    const parent_expr = lower_expr_at_type(access.record, parent_ty);
+
+    const raw_slot_ty = record_field_type_from_parent(parent_ty, access.field);
+    const raw_slot_value = fresh_value_ref();
+    const raw_slot_expr = add_expr(raw_slot_ty, raw_slot_value, .access{
+        .record = parent_expr,
+        .field = access.field,
+    });
+
+    const boundary = value_transform_boundary(projection.result_transform);
+    assert(boundary.from_endpoint == projection_slot_endpoint(projection));
+    assert(boundary.to_endpoint == local_value_endpoint(projection.result));
+
+    const result_value = apply_value_transform_boundary(boundary, raw_slot_value);
+    return block_expr(.{
+        decl(raw_slot_value, raw_slot_expr),
+        value_ref(result_value),
+    });
+}
+```
+
+This is not a compatibility repair. The raw access is still typed from the
+parent aggregate, and the parent aggregate is still lowered at
+`ProjectionInfo.source`. The additional boundary is the explicit value-flow edge
+from the stored slot to the projection result. Executable MIR must consume that
+edge; it must not create a bridge from the raw slot type to the projection result
+type by comparing layouts or source types.
+
+The source endpoint owner for a projection transform is explicit:
+
+```zig
+const SessionExecutableValueEndpointOwner = union(enum) {
+    // ...
+    projection_slot: ProjectionInfoId,
+};
+
+const ValueTransformBoundaryKind = union(enum) {
+    // ...
+    projection_result: ProjectionInfoId,
+};
+```
+
+`projection_slot` names the raw stored slot selected by `ProjectionInfo.source`
+and `ProjectionInfo.endpoint_slot`. `source_slot` is the slot from the
+row-finalized source expression. `endpoint_slot` is the slot in the actual
+published executable source endpoint after lambda-solved has entered any
+transparent nominal backing and matched the source slot to that endpoint's
+row-finalized shape. The target endpoint is the ordinary `local_value` endpoint
+for `ProjectionInfo.result`. This keeps the stored aggregate representation and
+the projection result representation explicit and separately verifiable.
+
+Executable MIR must use `endpoint_slot`, not `source_slot`, for the raw access:
+
+```zig
+const projection = value_store.projection(access.projection_info);
+const parent_ty = lower_value_endpoint(projection.source);
+const parent_expr = lower_expr_at_type(access.record, parent_ty);
+
+const endpoint_field = projection.endpoint_slot.record_field;
+const raw_ty = record_field_type_from_parent(parent_ty, endpoint_field);
+const raw_expr = access(parent_expr, endpoint_field);
+```
+
+This is why `endpoint_slot` must be published by lambda-solved MIR. It is not
+acceptable for executable MIR to recover the endpoint field by field-name lookup,
+source-shape comparison, or layout inspection. Lambda-solved already has the
+source endpoint payload while finalizing `ProjectionInfo.result_transform`; it
+must publish the exact finalized endpoint slot it selected at that time.
+
+When the source aggregate endpoint is a transparent nominal executable payload,
+projection derivation first enters the published nominal backing payload. The
+logical type attached to the endpoint may be either the nominal source type or
+the already-backing logical type, depending on which explicit value-flow edge
+produced that endpoint. Both cases are valid only if the executable payload
+itself is the nominal whose published backing is being entered:
+
+```zig
+fn projection_parent_logical_backing(parent: Endpoint, nominal: NominalKey) TypeId {
+    const payload = resolved_payload(parent.exec_ty);
+    assert(payload == .nominal and payload.nominal == nominal);
+
+    switch logical_type(parent.logical_ty) {
+        .nominal(n) => {
+            assert(n.key == nominal);
+            return n.backing;
+        },
+        .record, .tuple, .tag_union, .list, .box, .primitive, .callable => {
+            // Already the logical backing selected by an earlier explicit
+            // nominal_backing edge. The executable payload is still the
+            // authority that this backing is legal.
+            return parent.logical_ty;
+        },
+    }
+}
+```
+
+This is not a syntax recovery path. The nominal key comes from the executable
+payload, and the backing shape comes from the published endpoint payload. If the
+logical backing is not compatible with the projection being derived, the next
+record/tuple/tag/list/box logical-child lookup fails as a compiler invariant.
 
 The value-metadata store must be built at the same time as the
 `RepresentationStore`, by the same `ValueFlowGraphBuilder`, in one traversal per

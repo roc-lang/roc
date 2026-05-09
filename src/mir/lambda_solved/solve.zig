@@ -5831,6 +5831,10 @@ fn sessionExecutableValueEndpointOwnerEql(
             .call_raw_result => |other| call == other,
             else => false,
         },
+        .projection_slot => |projection| switch (b) {
+            .projection_slot => |other| projection == other,
+            else => false,
+        },
         .consumer_use => |owner| switch (b) {
             .consumer_use => |other| consumerUseOwnerEql(owner, other),
             else => false,
@@ -5907,6 +5911,7 @@ fn finalizeValueTransformBoundaries(program: *Program, artifact_views: ArtifactV
             .instance = instance,
         };
         try finalizer.finalizeValueAliases();
+        try finalizer.finalizeProjections();
         try finalizer.finalizeCallSites();
         try finalizer.finalizeCallableConstructions();
         try finalizer.finalizeProcValueErasePlans();
@@ -5968,6 +5973,38 @@ const ValueTransformFinalizer = struct {
                 .transform = transform,
             });
             value.value_alias_transform = boundary;
+        }
+    }
+
+    fn finalizeProjections(self: *ValueTransformFinalizer) Allocator.Error!void {
+        const value_store = self.valueStore();
+        for (value_store.projections.items, 0..) |*projection, raw_projection| {
+            const projection_id: repr.ProjectionInfoId = @enumFromInt(@as(u32, @intCast(raw_projection)));
+            const result_info = value_store.values.items[@intFromEnum(projection.result)];
+            if (!value_store.valueSourceMatchBranchReachable(result_info)) {
+                if (projection.result_transform != null) {
+                    lambdaInvariant("lambda-solved unreachable projection has an executable transform");
+                }
+                continue;
+            }
+            if (projection.result_transform != null) {
+                lambdaInvariant("lambda-solved projection transform was finalized twice");
+            }
+
+            const from = try self.projectionSlotEndpoint(projection_id, projection.*);
+            projection.endpoint_kind = from.kind;
+            const to = try self.localEndpoint(projection.result);
+            const kind: repr.ValueTransformBoundaryKind = .{ .projection_result = projection_id };
+            const transform = try self.appendExistingValueTransform(kind, from.endpoint, to);
+            const boundary = try self.representationStore().appendValueTransformBoundary(.{
+                .kind = kind,
+                .from_value = projection.source,
+                .to_value = projection.result,
+                .from_endpoint = from.endpoint,
+                .to_endpoint = to,
+                .transform = transform,
+            });
+            projection.result_transform = boundary;
         }
     }
 
@@ -6908,18 +6945,79 @@ const ValueTransformFinalizer = struct {
         }
     }
 
+    const ProjectionSlotEndpoint = struct {
+        endpoint: repr.SessionExecutableValueEndpoint,
+        kind: repr.ProjectionKind,
+    };
+
+    fn projectionSlotEndpoint(
+        self: *ValueTransformFinalizer,
+        projection_id: repr.ProjectionInfoId,
+        projection: repr.ProjectionInfo,
+    ) Allocator.Error!ProjectionSlotEndpoint {
+        const parent = try self.localEndpoint(projection.source);
+        var endpoint_kind: repr.ProjectionKind = projection.kind;
+        const owner: repr.ConsumerUseOwner = switch (projection.kind) {
+            .record_field => |field| .{ .record_field = .{
+                .parent = projection.source,
+                .field = field,
+            } },
+            .tuple_elem => |index| .{ .tuple_elem = .{
+                .parent = projection.source,
+                .index = index,
+            } },
+            .tag_payload => |payload| blk: {
+                const tag = self.program.row_shapes.tagPayload(payload).tag;
+                break :blk .{ .tag_payload = .{
+                    .parent = projection.source,
+                    .tag = tag,
+                    .payload = payload,
+                } };
+            },
+        };
+        var endpoint = switch (projection.kind) {
+            .record_field => |field| blk: {
+                const resolved = try self.recordFieldProjectionEndpoint(parent, owner, field);
+                endpoint_kind = .{ .record_field = resolved.field };
+                break :blk resolved.endpoint;
+            },
+            .tuple_elem => |index| try self.tupleElemConsumerEndpoint(parent, owner, index),
+            .tag_payload => |payload| blk: {
+                const resolved = try self.tagPayloadProjectionEndpoint(parent, owner, self.program.row_shapes.tagPayload(payload).tag, payload);
+                endpoint_kind = .{ .tag_payload = resolved.payload };
+                break :blk resolved.endpoint;
+            },
+        };
+        endpoint.owner = .{ .projection_slot = projection_id };
+        return .{ .endpoint = endpoint, .kind = endpoint_kind };
+    }
+
     fn recordFieldConsumerEndpoint(
         self: *ValueTransformFinalizer,
         parent: repr.SessionExecutableValueEndpoint,
         owner: repr.ConsumerUseOwner,
         source_field: MonoRow.RecordFieldId,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        return (try self.recordFieldProjectionEndpoint(parent, owner, source_field)).endpoint;
+    }
+
+    const RecordFieldProjectionEndpoint = struct {
+        endpoint: repr.SessionExecutableValueEndpoint,
+        field: MonoRow.RecordFieldId,
+    };
+
+    fn recordFieldProjectionEndpoint(
+        self: *ValueTransformFinalizer,
+        parent: repr.SessionExecutableValueEndpoint,
+        owner: repr.ConsumerUseOwner,
+        source_field: MonoRow.RecordFieldId,
+    ) Allocator.Error!RecordFieldProjectionEndpoint {
         const payload = self.resolvedSessionPayload(parent.exec_ty.ty);
         var logical_record_ty = parent.logical_ty;
         const record = switch (payload) {
             .record => |record| record,
             .nominal => |nominal| blk: {
-                logical_record_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                logical_record_ty = try self.nominalBackingOrAlreadyBackingLogicalType(parent.logical_ty, nominal.nominal);
                 break :blk switch (self.resolvedSessionPayload(nominal.backing)) {
                     .record => |record| record,
                     else => lambdaInvariant("lambda-solved consumer-use record field nominal endpoint had non-record backing"),
@@ -6931,14 +7029,14 @@ const ValueTransformFinalizer = struct {
         const target_field = self.recordFieldPayloadByLabel(record, label) orelse {
             lambdaInvariant("lambda-solved consumer-use record field missing from expected endpoint");
         };
-        return .{
+        return .{ .endpoint = .{
             .owner = .{ .consumer_use = owner },
             .logical_ty = try self.recordFieldLogicalType(logical_record_ty, target_field.field),
             .exec_ty = .{
                 .ty = target_field.ty,
                 .key = target_field.key,
             },
-        };
+        }, .field = target_field.field };
     }
 
     fn tupleElemConsumerEndpoint(
@@ -6952,7 +7050,7 @@ const ValueTransformFinalizer = struct {
         const elems = switch (payload) {
             .tuple => |elems| elems,
             .nominal => |nominal| blk: {
-                logical_tuple_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                logical_tuple_ty = try self.nominalBackingOrAlreadyBackingLogicalType(parent.logical_ty, nominal.nominal);
                 break :blk switch (self.resolvedSessionPayload(nominal.backing)) {
                     .tuple => |elems| elems,
                     else => lambdaInvariant("lambda-solved consumer-use tuple element nominal endpoint had non-tuple backing"),
@@ -6982,12 +7080,27 @@ const ValueTransformFinalizer = struct {
         source_tag: MonoRow.TagId,
         source_payload: MonoRow.TagPayloadId,
     ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+        return (try self.tagPayloadProjectionEndpoint(parent, owner, source_tag, source_payload)).endpoint;
+    }
+
+    const TagPayloadProjectionEndpoint = struct {
+        endpoint: repr.SessionExecutableValueEndpoint,
+        payload: MonoRow.TagPayloadId,
+    };
+
+    fn tagPayloadProjectionEndpoint(
+        self: *ValueTransformFinalizer,
+        parent: repr.SessionExecutableValueEndpoint,
+        owner: repr.ConsumerUseOwner,
+        source_tag: MonoRow.TagId,
+        source_payload: MonoRow.TagPayloadId,
+    ) Allocator.Error!TagPayloadProjectionEndpoint {
         const payload = self.resolvedSessionPayload(parent.exec_ty.ty);
         var logical_tag_union_ty = parent.logical_ty;
         const tag_union = switch (payload) {
             .tag_union => |tag_union| tag_union,
             .nominal => |nominal| blk: {
-                logical_tag_union_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                logical_tag_union_ty = try self.nominalBackingOrAlreadyBackingLogicalType(parent.logical_ty, nominal.nominal);
                 break :blk switch (self.resolvedSessionPayload(nominal.backing)) {
                     .tag_union => |tag_union| tag_union,
                     else => |backing_payload| lambdaInvariantFmt(
@@ -7015,14 +7128,14 @@ const ValueTransformFinalizer = struct {
             lambdaInvariant("lambda-solved consumer-use tag payload endpoint is not in logical order");
         }
         const child_logical_ty = try self.tagPayloadLogicalType(logical_tag_union_ty, target_tag.tag, payload_index);
-        return .{
+        return .{ .endpoint = .{
             .owner = .{ .consumer_use = owner },
             .logical_ty = child_logical_ty,
             .exec_ty = .{
                 .ty = target_payload.ty,
                 .key = target_payload.key,
             },
-        };
+        }, .payload = target_payload.payload };
     }
 
     fn listElemConsumerEndpoint(
@@ -7035,7 +7148,7 @@ const ValueTransformFinalizer = struct {
         const elem = switch (payload) {
             .list => |elem| elem,
             .nominal => |nominal| blk: {
-                logical_list_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal);
+                logical_list_ty = try self.nominalBackingOrAlreadyBackingLogicalType(parent.logical_ty, nominal.nominal);
                 break :blk switch (self.resolvedSessionPayload(nominal.backing)) {
                     .list => |elem| elem,
                     else => lambdaInvariant("lambda-solved consumer-use list element nominal endpoint had non-list backing"),
@@ -7062,7 +7175,7 @@ const ValueTransformFinalizer = struct {
         return switch (payload) {
             .nominal => |nominal| .{
                 .owner = .{ .consumer_use = owner },
-                .logical_ty = try self.nominalBackingLogicalType(parent.logical_ty, nominal.nominal),
+                .logical_ty = try self.nominalBackingOrAlreadyBackingLogicalType(parent.logical_ty, nominal.nominal),
                 .exec_ty = .{
                     .ty = nominal.backing,
                     .key = nominal.backing_key,
@@ -8380,6 +8493,7 @@ const ValueTransformFinalizer = struct {
             .local_value => |value| value,
             .transform_child,
             .erased_finite_adapter_capture,
+            .projection_slot,
             => {
                 if (provenance.len == 0) {
                     lambdaInvariant("lambda-solved non-local finite callable erasure has no Box(T) provenance");
@@ -8692,6 +8806,26 @@ const ValueTransformFinalizer = struct {
                 break :blk nominal.backing;
             },
             else => lambdaInvariant("lambda-solved nominal transform endpoint has non-nominal logical type"),
+        };
+    }
+
+    fn nominalBackingOrAlreadyBackingLogicalType(
+        self: *ValueTransformFinalizer,
+        logical_ty: Type.TypeVarId,
+        nominal_key: canonical.NominalTypeKey,
+    ) Allocator.Error!Type.TypeVarId {
+        const root = self.program.types.unlinkConst(logical_ty);
+        return switch (self.program.types.getNode(root)) {
+            .nominal => |nominal| blk: {
+                if (nominal.nominal.module_name != nominal_key.module_name or
+                    nominal.nominal.type_name != nominal_key.type_name)
+                {
+                    lambdaInvariant("lambda-solved nominal endpoint logical nominal mismatch");
+                }
+                break :blk nominal.backing;
+            },
+            .content => logical_ty,
+            else => lambdaInvariant("lambda-solved nominal endpoint has unresolved logical type"),
         };
     }
 

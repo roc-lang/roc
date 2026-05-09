@@ -2714,6 +2714,11 @@ fn applyPublishedExecutableValueTransform(
             if (!repr.canonicalExecValueTypeKeyEql(plan.from.key, plan.to.key)) {
                 executableInvariant("executable identity value transform changes representation");
             }
+            const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
+            const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+            if (from_ty != to_ty) {
+                executableInvariant("executable identity value transform did not intern one type for one canonical key");
+            }
             return value;
         },
         .structural_bridge => |structural| {
@@ -2807,12 +2812,28 @@ fn applyPublishedExecutableValueTransform(
             value,
         ),
         .already_erased_callable => |already_erased| {
+            const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
             const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
+            const from_erased_ty = erasedFnType(program, from_ty);
+            if (!repr.erasedFnSigKeyEql(from_erased_ty.sig_key, already_erased.sig_key)) {
+                executableInvariant("already-erased value transform signature differs from source endpoint");
+            }
             const erased_ty = erasedFnType(program, to_ty);
             if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, already_erased.sig_key)) {
                 executableInvariant("already-erased value transform signature differs from target endpoint");
             }
-            return value;
+            if (from_ty == to_ty) return value;
+
+            const bridged_value = program.ast.freshValueRef();
+            const bridged_expr = try program.ast.addExpr(to_ty, bridged_value, .{ .bridge = .{
+                .bridge = try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, from_ty, to_ty),
+                .value = value,
+            } });
+            try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                .value = bridged_value,
+                .body = bridged_expr,
+            } }));
+            return bridged_value;
         },
     }
 }
@@ -6364,16 +6385,23 @@ const BodyBuilder = struct {
                 );
             },
             .access => |access| blk: {
-                const record = try self.lowerExpr(access.record);
-                const projected_ty = self.recordFieldTypeForProjection(self.output.getExpr(record).ty, access.field);
-                break :blk try self.output.addExpr(
+                const record_ty = try self.projectionSourceType(access.projection_info, expr.value_info, .{ .record_field = access.field });
+                const endpoint_field = switch (self.projectionEndpointKind(access.projection_info, expr.value_info, .{ .record_field = access.field })) {
+                    .record_field => |field| field,
+                    else => executableInvariant("executable record projection endpoint slot was not a record field"),
+                };
+                const record = try self.lowerExprAtType(access.record, record_ty);
+                const projected_ty = self.recordFieldTypeForProjection(self.output.getExpr(record).ty, endpoint_field);
+                const raw_value = self.output.freshValueRef();
+                const raw_expr = try self.output.addExpr(
                     projected_ty,
-                    self.output.freshValueRef(),
+                    raw_value,
                     .{ .access = .{
                         .record = record,
-                        .field = access.field,
+                        .field = endpoint_field,
                     } },
                 );
+                break :blk try self.finishProjectionExpr(access.projection_info, expr.value_info, projected_ty, raw_value, raw_expr);
             },
             .let_ => |let_| blk: {
                 const body = try self.lowerExpr(let_.body);
@@ -6432,28 +6460,43 @@ const BodyBuilder = struct {
                 );
             },
             .tag_payload => |payload| blk: {
-                const tag_union = try self.lowerExpr(payload.tag_union);
-                const tag_union_ty = self.output.getExpr(tag_union).ty;
-                break :blk try self.output.addExpr(
-                    self.tagPayloadTypeForPattern(tag_union_ty, payload.payload),
-                    self.output.freshValueRef(),
+                const source_ty = try self.projectionSourceType(payload.projection_info, expr.value_info, .{ .tag_payload = payload.payload });
+                const endpoint_payload = switch (self.projectionEndpointKind(payload.projection_info, expr.value_info, .{ .tag_payload = payload.payload })) {
+                    .tag_payload => |endpoint| endpoint,
+                    else => executableInvariant("executable tag projection endpoint slot was not a tag payload"),
+                };
+                const tag_union = try self.lowerExprAtType(payload.tag_union, source_ty);
+                const lowered_tag_union_ty = self.output.getExpr(tag_union).ty;
+                const projected_ty = self.tagPayloadTypeForPattern(lowered_tag_union_ty, endpoint_payload);
+                const raw_value = self.output.freshValueRef();
+                const raw_expr = try self.output.addExpr(
+                    projected_ty,
+                    raw_value,
                     .{ .tag_payload = .{
                         .tag_union = tag_union,
-                        .payload = payload.payload,
+                        .payload = endpoint_payload,
                     } },
                 );
+                break :blk try self.finishProjectionExpr(payload.projection_info, expr.value_info, projected_ty, raw_value, raw_expr);
             },
             .tuple_access => |access| blk: {
-                const tuple = try self.lowerExpr(access.tuple);
-                const projected_ty = self.tupleElemTypeForProjection(self.output.getExpr(tuple).ty, access.elem_index);
-                break :blk try self.output.addExpr(
+                const tuple_ty = try self.projectionSourceType(access.projection_info, expr.value_info, .{ .tuple_elem = access.elem_index });
+                const endpoint_index = switch (self.projectionEndpointKind(access.projection_info, expr.value_info, .{ .tuple_elem = access.elem_index })) {
+                    .tuple_elem => |index| index,
+                    else => executableInvariant("executable tuple projection endpoint slot was not a tuple element"),
+                };
+                const tuple = try self.lowerExprAtType(access.tuple, tuple_ty);
+                const projected_ty = self.tupleElemTypeForProjection(self.output.getExpr(tuple).ty, endpoint_index);
+                const raw_value = self.output.freshValueRef();
+                const raw_expr = try self.output.addExpr(
                     projected_ty,
-                    self.output.freshValueRef(),
+                    raw_value,
                     .{ .tuple_access = .{
                         .tuple = tuple,
-                        .elem_index = access.elem_index,
+                        .elem_index = endpoint_index,
                     } },
                 );
+                break :blk try self.finishProjectionExpr(access.projection_info, expr.value_info, projected_ty, raw_value, raw_expr);
             },
             .structural_eq => |eq| blk: {
                 const lhs = try self.lowerExpr(eq.lhs);
@@ -6707,7 +6750,6 @@ const BodyBuilder = struct {
             .lower_control_flow_contextually,
             => try self.lowerExprAtType(expr_id, expected_ty),
             .existing_value => |boundary_id| blk: {
-                const lowered = try self.lowerExpr(expr_id);
                 const boundary = self.representation_store.valueTransformBoundary(boundary_id);
                 if (boundary.from_value != plan.child_value) {
                     executableInvariant("executable consumer-use existing transform source value differs from plan child");
@@ -6715,9 +6757,14 @@ const BodyBuilder = struct {
                 if (!sessionExecutableValueEndpointEql(boundary.to_endpoint, plan.expected_endpoint)) {
                     executableInvariant("executable consumer-use existing transform target endpoint differs from plan endpoint");
                 }
+                const source_ty = try self.lowerSessionExecutableEndpointType(boundary.from_endpoint);
+                const lowered = try self.lowerExprAtType(expr_id, source_ty);
                 var stmt_ids = std.ArrayList(Ast.StmtId).empty;
                 defer stmt_ids.deinit(self.allocator);
                 const lowered_value = try self.materializeExprValue(&stmt_ids, lowered);
+                if (self.output.requireValueType(lowered_value) != source_ty) {
+                    executableInvariant("executable consumer-use existing transform did not lower child at boundary source type");
+                }
                 const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, lowered_value);
                 const final_expr = try self.output.addValueRefExpr(expected_ty, transformed);
                 break :blk try self.output.addExpr(expected_ty, transformed, .{ .block = .{
@@ -7867,6 +7914,122 @@ const BodyBuilder = struct {
             if (field.field == field_id) return field.ty;
         }
         executableInvariant("executable record-rest projection field was absent from result record type");
+    }
+
+    fn projectionSourceType(
+        self: *BodyBuilder,
+        projection_id: repr.ProjectionInfoId,
+        result_value: repr.ValueInfoId,
+        expected_kind: repr.ProjectionKind,
+    ) Allocator.Error!Type.TypeId {
+        const index = @intFromEnum(projection_id);
+        if (index >= self.value_store.projections.items.len) {
+            executableInvariant("executable projection referenced missing projection metadata");
+        }
+        const projection = self.value_store.projections.items[index];
+        if (projection.result != result_value) {
+            executableInvariant("executable projection metadata result differs from expression value");
+        }
+        if (!projectionKindEql(projection.kind, expected_kind)) {
+            executableInvariant("executable projection metadata kind differs from expression projection");
+        }
+        const source_info = self.value_store.values.items[@intFromEnum(projection.source)];
+        return try self.lowerExecutableValueType(source_info.logical_ty, projection.source);
+    }
+
+    fn projectionEndpointKind(
+        self: *BodyBuilder,
+        projection_id: repr.ProjectionInfoId,
+        result_value: repr.ValueInfoId,
+        expected_kind: repr.ProjectionKind,
+    ) repr.ProjectionKind {
+        const index = @intFromEnum(projection_id);
+        if (index >= self.value_store.projections.items.len) {
+            executableInvariant("executable projection referenced missing projection metadata");
+        }
+        const projection = self.value_store.projections.items[index];
+        if (projection.result != result_value) {
+            executableInvariant("executable projection metadata result differs from expression value");
+        }
+        if (!projectionKindEql(projection.kind, expected_kind)) {
+            executableInvariant("executable projection metadata kind differs from expression projection");
+        }
+        return projection.endpoint_kind orelse {
+            executableInvariant("executable projection metadata has no finalized endpoint slot");
+        };
+    }
+
+    fn finishProjectionExpr(
+        self: *BodyBuilder,
+        projection_id: repr.ProjectionInfoId,
+        result_value: repr.ValueInfoId,
+        raw_ty: Type.TypeId,
+        raw_value: Ast.ExecutableValueRef,
+        raw_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const index = @intFromEnum(projection_id);
+        if (index >= self.value_store.projections.items.len) {
+            executableInvariant("executable projection referenced missing projection metadata");
+        }
+        const projection = self.value_store.projections.items[index];
+        if (projection.result != result_value) {
+            executableInvariant("executable projection metadata result differs from expression value");
+        }
+        const boundary_id = projection.result_transform orelse {
+            executableInvariant("executable projection metadata has no finalized result transform");
+        };
+        const boundary = self.representation_store.valueTransformBoundary(boundary_id);
+        if (boundary.from_value != projection.source or boundary.to_value != projection.result) {
+            executableInvariant("executable projection result transform boundary values differ from projection metadata");
+        }
+        switch (boundary.kind) {
+            .projection_result => |boundary_projection| {
+                if (boundary_projection != projection_id) {
+                    executableInvariant("executable projection result transform boundary points at a different projection");
+                }
+            },
+            else => executableInvariant("executable projection result transform boundary has non-projection kind"),
+        }
+        const raw_endpoint_ty = try self.lowerSessionExecutableEndpointType(boundary.from_endpoint);
+        if (raw_endpoint_ty != raw_ty) {
+            executableInvariant("executable projection raw slot type differs from projection transform source endpoint");
+        }
+        const result_info = self.value_store.values.items[@intFromEnum(result_value)];
+        const result_ty = try self.lowerExecutableValueType(result_info.logical_ty, result_value);
+        const result_endpoint_ty = try self.lowerSessionExecutableEndpointType(boundary.to_endpoint);
+        if (result_endpoint_ty != result_ty) {
+            executableInvariant("executable projection result transform target endpoint differs from result value endpoint");
+        }
+
+        var stmt_ids = std.ArrayList(Ast.StmtId).empty;
+        defer stmt_ids.deinit(self.allocator);
+        try stmt_ids.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+            .value = raw_value,
+            .body = raw_expr,
+        } }));
+        const transformed = try self.applyValueTransformBoundary(&stmt_ids, boundary, raw_value);
+        const final_expr = try self.output.addValueRefExpr(result_ty, transformed);
+        return try self.output.addExpr(result_ty, transformed, .{ .block = .{
+            .stmts = try self.output.addStmtSpan(stmt_ids.items),
+            .final_expr = final_expr,
+        } });
+    }
+
+    fn projectionKindEql(a: repr.ProjectionKind, b: repr.ProjectionKind) bool {
+        return switch (a) {
+            .record_field => |field| switch (b) {
+                .record_field => |other| field == other,
+                else => false,
+            },
+            .tuple_elem => |index| switch (b) {
+                .tuple_elem => |other| index == other,
+                else => false,
+            },
+            .tag_payload => |payload| switch (b) {
+                .tag_payload => |other| payload == other,
+                else => false,
+            },
+        };
     }
 
     fn recordFieldTypeForProjection(
@@ -10513,6 +10676,11 @@ const BodyBuilder = struct {
                 if (!repr.canonicalExecValueTypeKeyEql(plan.from.exec_ty.key, plan.to.exec_ty.key)) {
                     executableInvariant("executable session identity transform changes representation");
                 }
+                const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
+                const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
+                if (from_ty != to_ty) {
+                    executableInvariant("executable session identity transform did not intern one type for one canonical key");
+                }
                 break :blk value;
             },
             .structural_bridge => |structural| blk: {
@@ -10547,7 +10715,18 @@ const BodyBuilder = struct {
                 if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sig_key)) {
                     executableInvariant("executable already-erased session transform target signature differs from plan");
                 }
-                break :blk value;
+                if (from_ty == to_ty) break :blk value;
+
+                const bridged_value = self.output.freshValueRef();
+                const bridged_expr = try self.output.addExpr(to_ty, bridged_value, .{ .bridge = .{
+                    .bridge = try self.constructionSlotBridge(from_ty, to_ty),
+                    .value = value,
+                } });
+                try stmts.append(self.allocator, try self.output.addStmt(.{ .decl = .{
+                    .value = bridged_value,
+                    .body = bridged_expr,
+                } }));
+                break :blk bridged_value;
             },
         };
     }
@@ -11240,6 +11419,10 @@ fn sessionExecutableValueEndpointOwnerEql(
         },
         .call_raw_result => |call| switch (b) {
             .call_raw_result => |other| call == other,
+            else => false,
+        },
+        .projection_slot => |projection| switch (b) {
+            .projection_slot => |other| projection == other,
             else => false,
         },
         .consumer_use => |owner| switch (b) {

@@ -1060,6 +1060,7 @@ pub const SessionExecutableValueEndpointOwner = union(enum) {
         member: CallableSetMemberRef,
     },
     call_raw_result: CallSiteInfoId,
+    projection_slot: ProjectionInfoId,
     consumer_use: ConsumerUseOwner,
     transform_child: TransformChildEndpoint,
 };
@@ -1588,6 +1589,8 @@ pub const ProjectionInfo = struct {
     result: ValueInfoId,
     root: RepRootId,
     kind: ProjectionKind,
+    endpoint_kind: ?ProjectionKind = null,
+    result_transform: ?ValueTransformBoundaryId = null,
 };
 
 /// Public `CallSiteDispatch` declaration.
@@ -1740,6 +1743,7 @@ pub const ValueTransformBoundaryKind = union(enum) {
     mutable_join: MutableJoinId,
     loop_phi: LoopPhiId,
     aggregate_existing_value: AggregateBoundaryId,
+    projection_result: ProjectionInfoId,
     consumer_use: ConsumerUsePlanId,
 };
 
