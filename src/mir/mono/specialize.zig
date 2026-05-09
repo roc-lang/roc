@@ -10179,10 +10179,7 @@ test "mono specialization queue reserves once" {
     const owned_key = try std.testing.allocator.dupe(u8, requested_key.bytes[0..]);
     try concrete.roots.append(std.testing.allocator, .{
         .key = requested_key,
-        .source = .{
-            .artifact = .{},
-            .ty = @enumFromInt(0),
-        },
+        .source = .{ .local = @enumFromInt(0) },
     });
     try concrete.by_key.put(owned_key, @enumFromInt(0));
 
@@ -10211,10 +10208,7 @@ test "mono specialization queue accepts equivalent payload refs for one key" {
     const requested_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{2} ** 32 };
     try concrete.roots.append(std.testing.allocator, .{
         .key = requested_key,
-        .source = .{
-            .artifact = .{},
-            .ty = @enumFromInt(0),
-        },
+        .source = .{ .local = @enumFromInt(0) },
     });
     try concrete.roots.append(std.testing.allocator, .{
         .key = requested_key,

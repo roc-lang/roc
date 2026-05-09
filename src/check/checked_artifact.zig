@@ -8674,12 +8674,12 @@ pub const ModuleInterfaceCapabilities = struct {
 
         var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
         errdefer {
-            for (boxed_payload_templates.items) |entry| allocator.free(entry.instantiated_args);
+            for (boxed_payload_templates.items) |entry| freeConstSlice(allocator, entry.instantiated_args);
             boxed_payload_templates.deinit(allocator);
         }
         var opaque_atomic_proofs = std.ArrayList(OpaqueAtomicProofEntry).empty;
         errdefer {
-            for (opaque_atomic_proofs.items) |entry| allocator.free(entry.instantiated_args);
+            for (opaque_atomic_proofs.items) |entry| freeConstSlice(allocator, entry.instantiated_args);
             opaque_atomic_proofs.deinit(allocator);
         }
         var exported_nominal_representations = std.ArrayList(ExportedNominalRepresentation).empty;
@@ -8797,13 +8797,13 @@ pub const ModuleInterfaceCapabilities = struct {
     }
 
     pub fn deinit(self: *ModuleInterfaceCapabilities, allocator: Allocator) void {
-        for (self.boxed_payload_templates) |entry| allocator.free(entry.instantiated_args);
-        for (self.opaque_atomic_proofs) |entry| allocator.free(entry.instantiated_args);
-        allocator.free(self.boxed_payload_templates);
-        allocator.free(self.opaque_atomic_proofs);
-        allocator.free(self.hosted_representations);
-        allocator.free(self.platform_representations);
-        allocator.free(self.exported_nominal_representations);
+        for (self.boxed_payload_templates) |entry| freeConstSlice(allocator, entry.instantiated_args);
+        for (self.opaque_atomic_proofs) |entry| freeConstSlice(allocator, entry.instantiated_args);
+        freeConstSlice(allocator, self.boxed_payload_templates);
+        freeConstSlice(allocator, self.opaque_atomic_proofs);
+        freeConstSlice(allocator, self.hosted_representations);
+        freeConstSlice(allocator, self.platform_representations);
+        freeConstSlice(allocator, self.exported_nominal_representations);
         self.* = .{};
     }
 

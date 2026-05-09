@@ -182,7 +182,7 @@ const ModuleState = struct {
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*artifact| artifact.deinit(gpa);
+            if (semantic.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
         }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: checking cached_ast\n", .{self.name});

@@ -625,7 +625,6 @@ const DeadFilesDetector = struct {
             "test_env_pkg.zig", // Typed CIR package root used via build root_source_file
             "module_env_serialization_test_root.zig", // Serialization suite root used via build root_source_file
             "mono_emit_test_root.zig", // Mono emit suite root used via build root_source_file
-            "cor_pipeline_test_root.zig", // Cor pipeline suite root used via build root_source_file
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

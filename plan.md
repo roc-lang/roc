@@ -15284,6 +15284,27 @@ counting from explicit LIR value uses, explicit LIR writes, explicit call
 boundaries, explicit low-level RC-effect records, and refcounted layout
 metadata.
 
+ARC insertion must be stack-safe for deep but ordinary Roc source and for large
+generated Roc sources such as glue scripts. It must not recurse once per LIR
+statement in a straight-line body, once per generated helper, or once per
+statement in a shared branch continuation. The required implementation shape is:
+
+- walk straight-line LIR statement chains with an explicit work buffer or loop
+  over `CFStmtId` values
+- mutate the forward ownership state while walking forward
+- patch rewritten `next` pointers and insert post-statement retains/releases by
+  walking the explicit buffer backward
+- recurse, if the implementation uses recursion at all, only for structural
+  control-flow nesting such as branch bodies, loop bodies, or join bodies
+
+This is a compiler robustness requirement, not an optimization. A source module
+with hundreds or thousands of generated declarations, string operations, or
+expect tests must compile without exhausting the host stack. Stack exhaustion is
+acceptable only for truly pathological control-flow nesting depth after the
+compiler has removed statement-chain recursion. Increasing the process stack
+size, skipping large glue tests, or relying on operating-system stack-overflow
+handlers is not a valid fix.
+
 The uniform Roc call boundary for this plan is:
 
 - Procedure parameters are ordinary live value references available during the
@@ -30482,13 +30503,15 @@ Artifact and tooling behavior:
 End-to-end:
 
 ```sh
-ci/guarded_zig.sh zig build test-cor-pipeline
+ci/guarded_zig.sh zig build test-mir
 ci/guarded_zig.sh zig build test-eval
 ci/guarded_zig.sh zig build test-glue
 ```
 
-If the test name `test-cor-pipeline` remains, its contents must be MIR-family
-pipeline tests, not old-stage contract tests.
+The old `test-cor-pipeline` gate must not be reintroduced. Cor/LSS remains a
+reference implementation for audit comparisons, but the compiler's structural
+pipeline gate is `test-mir`; its contents must be MIR-family pipeline tests, not
+old-stage contract tests.
 
 ## Compiler Bug Handling
 
