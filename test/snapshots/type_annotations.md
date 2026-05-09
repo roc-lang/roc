@@ -6,10 +6,15 @@ type=snippet
 # SOURCE
 ~~~roc
 foo : U64
+
 bar : Thing(_a, _b, _)
+
 baz : (_a, _b, _c)
+
 add_one : (U8, U16 -> U32)
+
 main! : List(String) -> Try({}, _)
+
 tag_tuple : Value((_a, _b, _c))
 
 closed_record_with_comma : {
@@ -22,15 +27,15 @@ open_record_with_comma : {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_annotations.md:2:7:2:12
-UNDECLARED TYPE - type_annotations.md:5:14:5:20
-UNDECLARED TYPE - type_annotations.md:6:13:6:18
+UNDECLARED TYPE - type_annotations.md:3:7:3:12
+UNDECLARED TYPE - type_annotations.md:9:14:9:20
+UNDECLARED TYPE - type_annotations.md:11:13:11:18
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:2:7:2:12:**
+**type_annotations.md:3:7:3:12:**
 ```roc
 bar : Thing(_a, _b, _)
 ```
@@ -41,7 +46,7 @@ bar : Thing(_a, _b, _)
 The type _String_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:5:14:5:20:**
+**type_annotations.md:9:14:9:20:**
 ```roc
 main! : List(String) -> Try({}, _)
 ```
@@ -52,7 +57,7 @@ main! : List(String) -> Try({}, _)
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:6:13:6:18:**
+**type_annotations.md:11:13:11:18:**
 ```roc
 tag_tuple : Value((_a, _b, _c))
 ```

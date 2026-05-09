@@ -6,6 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 a = 'a'
+
 b = 'a'
 ~~~
 # EXPECTED

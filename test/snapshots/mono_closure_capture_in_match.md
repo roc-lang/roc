@@ -15,6 +15,7 @@ func = |x| {
 	}
 	result
 }
+
 answer = func(42)
 ~~~
 # MONO

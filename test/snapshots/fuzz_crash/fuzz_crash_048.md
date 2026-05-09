@@ -111,11 +111,16 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 foo : U64
+
 bar : Thing(a, b, _)
+
 biz : (a, b, c)
+
 add_one : (
 	U8, U16 -> U32)
+
 main! : List(String) -> Try({}, _)
+
 tag_tuple : Value((a, b, c))
 ~~~
 # CANONICALIZE

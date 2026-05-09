@@ -2050,7 +2050,9 @@ D1_Forward := [A].{
 	first = second # Forward ref
 	second = 100
 }
+
 d1_1 = D1_Forward.first # 100
+
 d1_2 = D1_Forward.second # 100
 
 # Test 1.2: Simple backward reference
@@ -2058,7 +2060,9 @@ D1_Backward := [B].{
 	first = 200
 	second = first # Backward ref
 }
+
 d1_3 = D1_Backward.first # 200
+
 d1_4 = D1_Backward.second # 200
 
 # Test 1.3: Multiple items - all orderings
@@ -2068,9 +2072,13 @@ D1_Multi := [C].{
 	c = d + 5 # Forward ref to d
 	d = 20
 }
+
 d1_5 = D1_Multi.a # 35
+
 d1_6 = D1_Multi.b # 10
+
 d1_7 = D1_Multi.c # 25
+
 d1_8 = D1_Multi.d # 20
 
 # ============================================================================
@@ -2085,7 +2093,9 @@ D2_InnerFirst_Qual := [D].{
 
 	outerVal = 42
 }
+
 d2_1 = D2_InnerFirst_Qual.outerVal # 42
+
 d2_2 = D2_InnerFirst_Qual.Inner.innerVal # 42
 
 # Test 2.2: Inner defined BEFORE outer value, inner refs outer (unqualified)
@@ -2096,7 +2106,9 @@ D2_InnerFirst_Unqual := [F].{
 
 	outerVal = 43
 }
+
 d2_3 = D2_InnerFirst_Unqual.outerVal # 43
+
 d2_4 = D2_InnerFirst_Unqual.Inner.innerVal # 43
 
 # Test 2.3: Inner defined AFTER outer value, inner refs outer (qualified)
@@ -2107,7 +2119,9 @@ D2_InnerAfter_Qual := [H].{
 		innerVal = D2_InnerAfter_Qual.outerVal # Backward ref to outer's val (qualified)
 	}
 }
+
 d2_5 = D2_InnerAfter_Qual.outerVal # 44
+
 d2_6 = D2_InnerAfter_Qual.Inner.innerVal # 44
 
 # Test 2.4: Inner defined AFTER outer value, inner refs outer (unqualified)
@@ -2118,7 +2132,9 @@ D2_InnerAfter_Unqual := [J].{
 		innerVal = outerVal # Backward ref to outer's val (unqualified)
 	}
 }
+
 d2_7 = D2_InnerAfter_Unqual.outerVal # 45
+
 d2_8 = D2_InnerAfter_Unqual.Inner.innerVal # 45
 
 # Test 2.5: Outer refs inner (must be qualified, must be forward ref)
@@ -2129,7 +2145,9 @@ D2_OuterRefsInner := [L].{
 		innerVal = 46
 	}
 }
+
 d2_9 = D2_OuterRefsInner.outerVal # 46
+
 d2_10 = D2_OuterRefsInner.Inner.innerVal # 46
 
 # Test 2.6: Outer refs inner (backward ref)
@@ -2140,7 +2158,9 @@ D2_OuterRefsInner_Back := [N].{
 
 	outerVal = D2_OuterRefsInner_Back.Inner.innerVal # Backward ref to inner's val
 }
+
 d2_11 = D2_OuterRefsInner_Back.outerVal # 47
+
 d2_12 = D2_OuterRefsInner_Back.Inner.innerVal # 47
 
 # Test 2.7: Sibling nested types referencing each other - A refs B forward
@@ -2153,7 +2173,9 @@ D2_Siblings_Forward := [P].{
 		valB = 48
 	}
 }
+
 d2_13 = D2_Siblings_Forward.InnerA.valA # 49
+
 d2_14 = D2_Siblings_Forward.InnerB.valB # 48
 
 # Test 2.8: Sibling nested types referencing each other - A refs B backward
@@ -2166,7 +2188,9 @@ D2_Siblings_Backward := [S].{
 		valB = D2_Siblings_Backward.InnerA.valA + 1 # Backward ref to sibling
 	}
 }
+
 d2_15 = D2_Siblings_Backward.InnerA.valA # 50
+
 d2_16 = D2_Siblings_Backward.InnerB.valB # 51
 
 # Test 2.9: Outer, Inner, outer val - complex interleaving
@@ -2179,8 +2203,11 @@ D2_Interleaved := [V].{
 
 	val2 = 20
 }
+
 d2_17 = D2_Interleaved.val1 # 35 (25 + 10)
+
 d2_18 = D2_Interleaved.Inner.innerVal # 25 (20 + 5)
+
 d2_19 = D2_Interleaved.val2 # 20
 
 # ============================================================================
@@ -2199,8 +2226,11 @@ D3_Pattern1 := [X].{
 		}
 	}
 }
+
 d3_1 = D3_Pattern1.val1 # 100
+
 d3_2 = D3_Pattern1.L2.val2 # 200
+
 d3_3 = D3_Pattern1.L2.L3.val3 # 300
 
 # Test 3.2: L2, L3, L3 val, L2 val, L1 val - all forward refs
@@ -2215,6 +2245,7 @@ D3_Pattern2 := [AA].{
 
 	val1 = D3_Pattern2.L2.val2 + 5 # Forward ref to L2 val (qualified)
 }
+
 # This creates circular dependency: val3 = val2 + val1, val2 = val3 + 10, val1 = val2 + 5
 # Should either resolve or error gracefully
 
@@ -2230,8 +2261,11 @@ D3_Pattern3 := [DD].{
 
 	val1 = D3_Pattern3.L2.val2 * 2 # Backward ref to L2 (qualified)
 }
+
 d3_4 = D3_Pattern3.L2.L3.val3 # 1000
+
 d3_5 = D3_Pattern3.L2.val2 # 2000
+
 d3_6 = D3_Pattern3.val1 # 4000
 
 # Test 3.4: L1 val, L3, L2 (out of order), L3 val, L2 val
@@ -2246,8 +2280,11 @@ D3_Pattern4 := [GG].{
 		val2 = D3_Pattern4.L2.L3.val3 + val1 # Backward ref to L3 (qualified), unqualified to L1
 	}
 }
+
 d3_7 = D3_Pattern4.val1 # 5
+
 d3_8 = D3_Pattern4.L2.L3.val3 # 50
+
 d3_9 = D3_Pattern4.L2.val2 # 55
 
 # Test 3.5: All vals before all types
@@ -2262,6 +2299,7 @@ D3_Pattern5 := [JJ].{
 		}
 	}
 }
+
 d3_10 = D3_Pattern5.L2.L3.val3 # 3
 
 # Test 3.6: All types before all vals
@@ -2276,8 +2314,11 @@ D3_Pattern6 := [MM].{
 
 	val1 = 7
 }
+
 d3_11 = D3_Pattern6.val1 # 7
+
 d3_12 = D3_Pattern6.L2.val2 # 14
+
 d3_13 = D3_Pattern6.L2.L3.val3 # 21
 
 # Test 3.7: Sibling access at L2 - L2a and L2b both exist
@@ -2298,7 +2339,9 @@ D3_Siblings := [PP].{
 		}
 	}
 }
+
 d3_14 = D3_Siblings.L2a.L3a.val3a # 20
+
 d3_15 = D3_Siblings.L2b.L3b.val3b # 20
 
 # ============================================================================
@@ -2321,6 +2364,7 @@ D4_Pattern1 := [UU].{
 		}
 	}
 }
+
 d4_1 = D4_Pattern1.L2.L3.L4.val4 # 6
 
 # Test 4.2: L4 val defined first, rest reference it
@@ -2339,9 +2383,13 @@ D4_Pattern2 := [YY].{
 
 	val1 = D4_Pattern2.L2.val2 * 2 # Backward ref (qualified)
 }
+
 d4_2 = D4_Pattern2.L2.L3.L4.val4 # 100
+
 d4_3 = D4_Pattern2.L2.L3.val3 # 200
+
 d4_4 = D4_Pattern2.L2.val2 # 400
+
 d4_5 = D4_Pattern2.val1 # 800
 
 # Test 4.3: Alternating defined/undefined as we go deeper
@@ -2360,9 +2408,13 @@ D4_Pattern3 := [CCC].{
 		}
 	}
 }
+
 d4_6 = D4_Pattern3.val1 # 11
+
 d4_7 = D4_Pattern3.L2.val2 # 10
+
 d4_8 = D4_Pattern3.L2.L3.val3 # 21
+
 d4_9 = D4_Pattern3.L2.L3.L4.val4 # 42
 
 # Test 4.4: Middle level defined last
@@ -2381,7 +2433,9 @@ D4_Pattern4 := [GGG].{
 		val2 = 5 # Defined after L3 and L4 but they ref it
 	}
 }
+
 d4_10 = D4_Pattern4.L2.L3.val3 # 6
+
 d4_11 = D4_Pattern4.L2.L3.L4.val4 # 11
 
 # ============================================================================
@@ -2408,6 +2462,7 @@ D5_Pattern1 := [KKK].{
 		}
 	}
 }
+
 d5_1 = D5_Pattern1.L2.L3.L4.L5.val5 # 10
 
 # Test 5.2: L5 val defined first, everyone refs it
@@ -2430,10 +2485,15 @@ D5_Pattern2 := [PPP].{
 
 	val1 = val2 + 1 # Unqualified
 }
+
 d5_2 = D5_Pattern2.L2.L3.L4.L5.val5 # 999
+
 d5_3 = D5_Pattern2.L2.L3.L4.val4 # 1000
+
 d5_4 = D5_Pattern2.L2.L3.val3 # 1001
+
 d5_5 = D5_Pattern2.L2.val2 # 1002
+
 d5_6 = D5_Pattern2.val1 # 1003
 
 # Test 5.3: Random interleaving at 5 levels
@@ -2456,10 +2516,15 @@ D5_Pattern3 := [UUU].{
 		val2 = D5_Pattern3.L2.L3.L4.val4 + 1 # Forward ref (qualified)
 	}
 }
+
 d5_7 = D5_Pattern3.val1 # 15 (5 + 10)
+
 d5_8 = D5_Pattern3.L2.L3.val3 # 5
+
 d5_9 = D5_Pattern3.L2.L3.L4.val4 # 10 (5 * 2)
+
 d5_10 = D5_Pattern3.L2.val2 # 11 (10 + 1)
+
 d5_11 = D5_Pattern3.L2.L3.L4.L5.val5 # 41 (15 + 11 + 5 + 10)
 
 # ============================================================================
@@ -2485,19 +2550,28 @@ Shadowing := [ZZZ].{
 		}
 	}
 }
+
 shadow1 = Shadowing.val # 1
+
 shadow2 = Shadowing.L2.val # 2
+
 shadow3 = Shadowing.L2.useOuter # 1
+
 shadow4 = Shadowing.L2.useLocal # 2
+
 shadow5 = Shadowing.L2.L3.val # 3
+
 shadow6 = Shadowing.L2.L3.useL1 # 1
+
 shadow7 = Shadowing.L2.L3.useL2 # 2
+
 shadow8 = Shadowing.L2.L3.useL3 # 3
 
 # Test: External code cannot use unqualified names from associated blocks
 External1 := [CCCC].{
 	hidden = 777
 }
+
 # Cannot use "hidden" here - must use External1.hidden
 external1 = External1.hidden # 777
 
@@ -2511,7 +2585,9 @@ Annotated := [DDDD].{
 		alsoTyped = typed + 1 # Unqualified ref to outer
 	}
 }
+
 anno1 = Annotated.typed # 888
+
 anno2 = Annotated.L2.alsoTyped # 889
 ~~~
 # CANONICALIZE
