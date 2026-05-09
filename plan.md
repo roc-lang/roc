@@ -392,6 +392,69 @@ keyed by the canonical module identity that can become a `CIR.Import.Idx`.
 - Package-qualified imports are keyed by their full qualified module name, such
   as `pf.Types`. They must not also be keyed by the basename `Types`.
 
+The import identity is not always the same string as the member lookup prefix
+inside the imported module. The available-import record consumed by
+canonicalization must carry both pieces explicitly:
+
+```zig
+const AvailableImportView = struct {
+    /// The source module's import identity. This is the only key that may become
+    /// a CIR.Import.Idx for this source module. Examples: "Types", "pf.Types",
+    /// "Builtin".
+    import_identity: ModuleIdentity,
+
+    /// The checked/canonicalized module being imported.
+    module: *const ModuleEnv,
+
+    /// Present only when the imported module is a type module. This is the
+    /// exact associated-item prefix used by the imported module's exposed names.
+    /// It is copied from the imported module's checked type-module identity,
+    /// not derived from the import identity string.
+    type_module_member_prefix: ?Ident.Idx,
+
+    /// Present only when the imported module is a type module and the main type
+    /// declaration is exposed.
+    type_module_decl_node: ?u16,
+};
+```
+
+For example:
+
+```roc
+app [Model, main] { pf: platform "./platform/main.roc" }
+
+import pf.Simple
+
+main = {
+    render: |_model| Simple.leaf("hello"),
+    # ...
+}
+```
+
+and the imported file:
+
+```roc
+Simple(model) := [Leaf(Str)].{
+    leaf : Str -> Simple(model)
+    leaf = |s| Leaf(s)
+}
+```
+
+The import identity in the app is `pf.Simple`. That is the identity stored in
+`CIR.Import.Idx`, checked artifact import sets, cache keys, and later
+`ImportedModuleView` lookup. The associated-item lookup prefix is `Simple`,
+because the imported type module exposes `Simple.leaf`, not `pf.Simple.leaf`
+and not bare `leaf`.
+
+Canonicalization must therefore resolve `Simple.leaf("hello")` by using the
+source alias `Simple` to find the `pf.Simple` import identity, then using the
+import view's explicit `type_module_member_prefix = Simple` to look up the
+exported associated value `Simple.leaf` inside the imported module. It must not
+decide this by checking whether the import text contains a dot, by trying bare
+`leaf` first and then retrying `Simple.leaf`, by adding a second import keyed by
+`Simple`, or by treating package-qualified type modules differently from local
+type modules after the explicit import view has been built.
+
 The same import identity rule applies to post-check lowering view construction.
 If canonicalization/type checking for a module had access to builtin
 auto-imports, then post-check lowering for that module must receive the
@@ -3651,24 +3714,146 @@ has not yet been promoted.
 
 1. the runtime callable-set descriptor stays lowering-run-owned and is used only
    to decode the interpreted value and locate the selected member
-2. the `CallableResultMemberPlan.target_key` stored in the checked artifact is
-   converted to an artifact-owned executable specialization key before it is
-   appended to `CompileTimePlanStore`
+2. the `CallableResultMemberPlan.target` stored in the checked artifact is
+   converted into a persisted member-target plan before it is appended to
+   `CompileTimePlanStore`
 
 This conversion must happen for every member in the result plan, including
 inactive members, because `CompileTimePlanStore` is checked-artifact-owned data.
+The target plan is intentionally not always a full `ExecutableSpecializationKey`:
+
+Lambda-solved callable-set members must publish the checked source payload
+refs that make this conversion possible. The runtime member descriptor is not
+allowed to carry only canonical type keys and procedure ids and leave checked
+artifact publication to rediscover payloads later. A canonical type key is an
+identity key; it is not the checked type graph. Therefore the lambda-solved
+member record has this conceptual shape:
+
+```zig
+const CanonicalCallableSetMember = struct {
+    member: CallableMemberId,
+
+    // The callable procedure occurrence selected by representation solving.
+    // Its `source_fn_ty` key identifies the occurrence type.
+    proc_value: ProcedureCallableRef,
+
+    // Concrete source-type payload ref whose key must equal
+    // `proc_value.source_fn_ty`.
+    //
+    // This ref is produced while lambda-solved lowers the proc-value occurrence,
+    // from the run-local `ConcreteSourceType.Store` that was carried forward
+    // from mono/lifted MIR. It is not recovered by searching artifacts for a
+    // root with a matching canonical key.
+    source_fn_ty_payload: ConcreteSourceTypeRef,
+
+    // The actual source procedure body for the member.
+    source_proc: MirProcedureRef,
+
+    // Optional checked-artifact-owned publication identities used when the
+    // member is being persisted into a checked artifact.
+    published_proc_value: ?ProcedureCallableRef,
+    published_source_proc: ?MirProcedureRef,
+
+    // Present exactly when `proc_value.template` is `.lifted`.
+    //
+    // Its key must equal
+    // `proc_value.template.lifted.owner_mono_specialization.requested_mono_fn_ty`.
+    // It is the payload needed to instantiate the owner procedure before the
+    // lifted member body can be reserved. This is required for platform/app
+    // relation cases where the persisted result plan lives in the platform
+    // artifact, but the selected lifted lambda was produced by an app artifact.
+    lifted_owner_source_fn_ty_payload: ?ConcreteSourceTypeRef,
+
+    target_instance: ProcRepresentationInstanceId,
+    capture_slots: Span(CallableSetCaptureSlot),
+    capture_shape_key: CaptureShapeKey,
+};
+```
+
+Checked-artifact publication projects these concrete payload refs into the
+artifact that stores the `CallableResultPlan`, and stores the projected roots in
+`member_proc_source_fn_ty_payload` and
+`member_lifted_owner_source_fn_ty_payload`. This projection consumes explicit
+source refs. It may copy a local concrete payload, a current-artifact payload,
+an imported artifact payload, or a platform-relation artifact payload named by
+the concrete ref. It must not perform a key-only search through available
+artifacts as a substitute for missing metadata. If the explicit concrete ref is
+missing, names an unavailable artifact, or has a key that differs from the
+member's stored source key, that is a compiler bug.
+
+```zig
+const ExecutableSpecializationEndpoint = struct {
+    requested_fn_ty: CanonicalTypeKey,
+    exec_arg_tys: Span(CanonicalExecValueTypeKey),
+    exec_ret_ty: CanonicalExecValueTypeKey,
+    callable_repr_mode: CallableReprMode,
+    capture_shape_key: CaptureShapeKey,
+};
+
+const CallableResultMemberTargetPlan = union(enum) {
+    /// `key.base` is a checked-artifact-owned proc base and may be remapped by
+    /// `ArtifactNameResolver.procBase` when this artifact is lowered later.
+    artifact_owned: ExecutableSpecializationKey,
+
+    /// The exact executable endpoint is known, but the proc base is not
+    /// persistable yet because the member is a lifted/local procedure whose
+    /// concrete proc base is allocated by the future mono reservation that
+    /// lowers `member_proc`.
+    ///
+    /// This is legal only when the paired runtime/persisted member procedure is
+    /// an explicit `CallableProcedureTemplateRef.lifted`. Mono binds the base
+    /// by first reserving that exact `member_proc`, then filling
+    /// `ExecutableSpecializationKey.base` with the reserved procedure's proc
+    /// base while preserving every endpoint field below.
+    member_proc_relative: ExecutableSpecializationEndpoint,
+};
+
+const CallableResultMemberPlan = struct {
+    member: CallableMemberId,
+
+    /// The procedure occurrence to call if this member is selected and promoted.
+    /// Its template names the real source/lifted/synthetic member. Its
+    /// `source_fn_ty` is the callable value occurrence type at this persistence
+    /// boundary, which may be a platform-requested projection of an app member's
+    /// original checked type.
+    member_proc: ProcedureCallableRef,
+
+    /// Checked type root owned by the artifact that stores this result plan.
+    /// Its key must equal `member_proc.source_fn_ty`.
+    ///
+    /// This is deliberately not recovered from `member_proc.template.artifact`.
+    /// In platform/app relation lowering, a source procedure owned by the app
+    /// can be requested at a platform-owned function type after for-clause
+    /// substitution. The app artifact owns the checked body, but the platform
+    /// artifact owns the relation-projected checked type payload.
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+
+    /// Present exactly when `member_proc.template` is `lifted`.
+    ///
+    /// This checked type root is owned by the artifact that stores this result
+    /// plan, and its key must equal
+    /// `member_proc.template.lifted.owner_mono_specialization.requested_mono_fn_ty`.
+    /// It is the source function type used to specialize the owner body before
+    /// the lifted/local member procedure can exist.
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+
+    target: CallableResultMemberTargetPlan,
+    capture_slots: Span(CaptureSlotReificationPlan),
+};
+```
+
 For a member that already has `published_source_proc`, the conversion is direct:
 
 ```zig
-fn artifact_member_target(member: RuntimeCallableSetMember) ExecutableSpecializationKey {
+fn artifact_member_target(member: RuntimeCallableSetMember) CallableResultMemberTargetPlan {
     key = clone(member.runtime_target_key)
     key.base = member.published_source_proc.?.proc.proc_base
-    return key
+    return .{ .artifact_owned = key }
 }
 ```
 
-For a member whose procedure is a lifted local function or closure, the finalizer
-must not persist the lowering-run nested `proc_base`. It must derive an
+For a member whose procedure is a lifted local function or closure owned by the
+same checked artifact currently being finalized, the finalizer may derive an
 artifact-owned lifted identity from explicit lifted data already present on the
 member:
 
@@ -3729,12 +3914,121 @@ fn publish_lifted_member_identity(
 }
 ```
 
-The owner template in that identity is recovered by checked procedure template id,
-not by procedure-name text, source syntax, expression ids, or a lowering-run
-canonical-name lookup. This is valid because the lifted member already carries
+The owner template in that identity is recovered by checked procedure template
+id, not by procedure-name text, source syntax, expression ids, or a lowering-run
+canonical-name lookup. This same-artifact publication is valid because the
+lifted member already carries
 `LiftedProcedureTemplateRef.owner_mono_specialization.template.template`, which
-is the checked artifact's template id; only the lowering-run `proc_base` needs to
-be replaced.
+is the current checked artifact's template id; only the lowering-run `proc_base`
+needs to be replaced.
+
+If the lifted member is owned by an imported or platform-relation artifact, the
+current artifact must not lazily intern the concrete lifted `proc_base` into the
+other artifact. The other artifact may be an immutable imported artifact, and
+the concrete lifted identity includes the current monomorphic owner type, so the
+owning artifact cannot have pre-interned every possible concrete lifted proc
+base during its own publication. Persisting the current lowering run's
+`proc_base` is also forbidden because it belongs to `LoweredProgram`, not to any
+checked artifact.
+
+For this case, `CallableResultMemberPlan.target` must be
+`.member_proc_relative`. The plan stores every executable endpoint field except
+the proc base. The promoted wrapper body must also store the explicit
+`member_proc` (`CallableProcedureTemplateRef.lifted` with its artifact-qualified
+owner template, nested site, and source function type). When mono later lowers
+the promoted wrapper, it performs these steps in order:
+
+1. Reserve `member_proc` through `MonoSpecializationQueue`, using the relation or
+   imported closure already published with the checked artifact.
+2. Receive the concrete lowering-run `MirProcedureRef` for that member.
+3. Rebuild the forced executable target by copying the persisted
+   `.member_proc_relative` endpoint fields and setting `base` to the reserved
+   member procedure's lowering-run `proc_base`.
+4. Attach that complete key to `proc_value.forced_target`.
+
+This does not recover semantic information. The member procedure identity and
+all executable endpoint payload keys were explicit checked-artifact data; the
+only value supplied later is the lowering-run proc base allocated by the mono
+reservation that owns the future body. That proc base cannot be known earlier
+without mutating an imported artifact or persisting a temporary lowering-run id.
+
+For example:
+
+```roc
+platform ""
+    requires {
+        [Model : model] for main : {
+            render : model -> Simple(model)
+        }
+    }
+    exposes [Simple]
+    packages {}
+    provides { render_for_host: "render" }
+
+render_for_host : Box(Model) -> Simple(Model)
+render_for_host = |boxed_model| {
+    model = Box.unbox(boxed_model)
+    main.render(model)
+}
+```
+
+```roc
+app [Model, main] { pf: platform "./platform/main.roc" }
+
+import pf.Simple
+
+Model : { value: I64 }
+
+main = {
+    render: |_model| Simple.leaf("hello"),
+}
+```
+
+The platform-required constant `main` is evaluated while publishing the
+executable platform artifact, but the selected `render` callable is a lifted
+lambda from the app artifact. The platform artifact may persist a promoted
+wrapper for `main.render`, but it must not write the app lambda's temporary
+lowering-run proc base into `CompileTimePlanStore`. The persisted wrapper stores
+the app lifted `member_proc`, requester-owned checked type payload roots, plus
+`.member_proc_relative` endpoint fields. The `member_proc.template` names the
+app lifted lambda; `member_proc.source_fn_ty` is the platform-requested
+`Model -> Simple(Model)` occurrence type after for-clause substitution.
+`member_proc_source_fn_ty_payload` points at that platform-owned requested
+function type. `member_lifted_owner_source_fn_ty_payload` points at the
+platform-owned checked type payload for the app lambda's owner specialization.
+Runtime lowering of the platform artifact reserves that exact app lifted member
+through the relation closure, instantiates the owner body using the explicit
+requester-owned owner payload, and binds the endpoint base to the reserved proc.
+
+This payload ownership is mandatory. A canonical type key is not a checked type
+graph. Mono may compare the key for identity, but it must instantiate from the
+explicit payload root that was published with the persisted member plan. It must
+not assume that the artifact that owns the source body also owns every
+relation-projected checked type root. It must not scan other artifacts looking
+for a root with the same key as a substitute for missing payload metadata. If
+`member_proc_source_fn_ty_payload` or
+`member_lifted_owner_source_fn_ty_payload` is absent when the member kind needs
+it, or if the payload key differs from the stored canonical key, that is a
+compiler bug: debug assertion in debug builds and `unreachable` in release
+builds.
+
+The distinction between `FiniteCallableResultPlan.source_fn_ty` and
+`CallableResultMemberPlan.member_proc.source_fn_ty` is intentional but tightly
+constrained. `FiniteCallableResultPlan.source_fn_ty` is the type of the callable
+slot being persisted in the current artifact. Each member's `member_proc`
+identifies the procedure occurrence to call when that slot is promoted. In the
+ordinary case these keys are identical. They may differ only by an explicit
+checked relation projection, such as an app value satisfying a platform
+for-clause requirement. The finalizer must not reject such a member merely
+because the runtime descriptor's original app-side source key differs from the
+platform-requested field key; it must store the requested occurrence key in
+`member_proc` and keep the member's executable endpoint data explicit.
+
+No-promotion collapse to an existing procedure is legal only when the published
+procedure occurrence has the same source function type as the result plan. If a
+published app procedure is being exposed through a different platform-requested
+occurrence type, finalization must promote it into a requester-owned synthetic
+procedure instead of returning the app occurrence directly.
 
 If a member has no `published_source_proc` and is not `.lifted`, that is a
 compiler bug. A checked or synthetic callable with no publication identity means
@@ -3743,12 +4037,15 @@ debug builds and use `unreachable` in release builds; it must not inspect names
 or guess which procedure was intended.
 
 When mono later lowers a promoted wrapper from a checked artifact, it must remap
-the artifact-owned `member_target.base` through `ArtifactNameResolver.procBase`
-before storing it in the MIR `proc_value.forced_target`. `forced_target.key`
-inside mono/lambda-solved is a lowering-run key; `FinitePromotedWrapperBodyPlan`
-is artifact-owned. Using the stored key without this remap would compare a
-checked-artifact `proc_base` against the current lowering-run `proc_base` and
-would make the selected target instance unreachable.
+an `.artifact_owned` `member_target.base` through
+`ArtifactNameResolver.procBase` before storing it in the MIR
+`proc_value.forced_target`. For a `.member_proc_relative` target, mono must not
+call `ArtifactNameResolver.procBase` on the target because there is no persisted
+artifact proc base. It binds the base from the reserved member procedure instead.
+`forced_target.key` inside mono/lambda-solved is always a lowering-run key;
+`FinitePromotedWrapperBodyPlan` is artifact-owned. Using an artifact-owned key
+without remapping, or treating a relative endpoint as if it had an artifact-owned
+base, would make the selected target instance unreachable.
 
 Every slice stored in `FinitePromotedWrapperBodyPlan` must be artifact-owned.
 The finalizer must clone `member_capture_slots`, `captures`, `params`, and
@@ -3765,7 +4062,9 @@ call_args = promotedWrapperCallArgs(...)
 
 fillPromotedCallableWrapperBody(.{ .finite = .{
     .member_proc = artifact_owned_member_proc,
-    .member_target = artifact_owned_member_target,
+    .member_proc_source_fn_ty_payload = member_proc_source_fn_ty_payload,
+    .member_lifted_owner_source_fn_ty_payload = member_lifted_owner_source_fn_ty_payload,
+    .member_target = persisted_member_target,
     .member_capture_slots = member_capture_slots,
     .captures = captures,
     .params = params,
@@ -10123,6 +10422,289 @@ different from the binding representation, the alias transform must allocate a
 fresh executable value. If the two representations are identical, the alias
 transform may be identity, and `addValueRefExpr` still derives the type from the
 single typed value handle.
+
+Aggregate projections must consume aggregate metadata through explicit value
+aliases before creating a new projection-only value. This is required for code
+like:
+
+```roc
+main = {
+    render: |_model| Simple.leaf("hello"),
+}
+
+render_for_host = |boxed_model| {
+    model = Box.unbox(boxed_model)
+    main.render(model)
+}
+```
+
+Lowering `main.render` often sees a variable or compile-time root occurrence
+whose `ValueInfo` is a `value_alias` to the record value that actually owns the
+aggregate metadata. Lambda-solved MIR must follow that explicit alias chain
+while lowering the projection expression. If the aliased source has record,
+tuple, or tag aggregate metadata, the projection result is the already-published
+aggregate child value. For a function-typed field, that child value already
+carries the callable metadata created when the record was constructed, so finite
+callable-set members remain correct by construction.
+
+This is not a later recovery pass and not a body scan. It is local expression
+lowering consuming explicit `ValueInfo.value_alias_source` and
+`ValueInfo.aggregate` data that earlier lambda-solved lowering produced. If the
+source has no aggregate reachable through explicit aliases, the projection is a
+real runtime projection and lambda-solved publishes a `ProjectionInfo` plus the
+projection representation edge as usual. If the alias chain is cyclic, that is a
+compiler bug.
+
+For compile-time-backed projections whose result type is a function,
+lambda-solved MIR must not wait until executable endpoint publication to
+discover callable identity. A `const_instance` expression is not just an opaque
+runtime value. It is an explicit handle to a sealed `ConstInstanceRef`, and that
+instance points at a sealed `CompileTimeValueStore` schema/value graph. Lambda-
+solved MIR must publish that relationship on the `ValueInfo` at the point where
+the `const_instance` expression is lowered:
+
+```zig
+const ConstBackedValueInfo = struct {
+    // The root constant instance whose compile-time value graph owns these IDs.
+    const_instance: ConstInstanceRef,
+
+    // A schema/value pair inside const_instance.owner's CompileTimeValueStore.
+    // For the root expression these are the evaluated ConstInstance schema and
+    // value. For projections, these are the selected child schema and value.
+    schema: ComptimeSchemaId,
+    value: ComptimeValueId,
+};
+
+const ValueInfo = struct {
+    // ...
+    const_backing: ?ConstBackedValueInfo,
+};
+```
+
+Projection lowering must then consume that explicit `const_backing` metadata
+before falling back to ordinary runtime projection metadata. This is required
+for platform records and other top-level constants whose fields are callable:
+
+```roc
+main = {
+    render: |_model| Simple.leaf("hello"),
+}
+
+render_for_host = |boxed_model| {
+    model = Box.unbox(boxed_model)
+    main.render(model)
+}
+```
+
+In that example, `main` may lower as a `const_instance` rather than as a local
+record construction in the `render_for_host` body. When lambda-solved lowers
+`main.render`, it must:
+
+1. Follow the source value's explicit `value_alias_source` chain, if any.
+2. Find `ValueInfo.const_backing` on the source value.
+3. Resolve the backing `ConstInstanceRef` in the already-published root/import/
+   relation artifact views.
+4. Walk the sealed compile-time schema/value graph for exactly the projected
+   child:
+   - record fields are selected by canonical field-label text after remapping
+     through the owning artifact's name store;
+   - tuple elements are selected by index;
+   - tag payloads are selected by tag-label text and payload logical index;
+   - transparent aliases and nominal wrappers are unwrapped with a bounded
+     iterative loop over the sealed schema/value store.
+5. Create a normal projection `ValueInfo` for the result, publish the normal
+   projection representation edge, and attach the child `const_backing`.
+6. If the child schema/value is a callable leaf, publish callable metadata from
+   that explicit leaf immediately.
+
+For a finite callable leaf, the callable metadata rule is:
+
+```zig
+fn publishConstBackedCallableLeaf(value: ValueInfoId, leaf: CallableLeafInstance) {
+    switch (leaf) {
+        .finite => |finite| {
+            const proc = lifted_proc_for_callable(
+                remap_to_lowering_names(finite.proc_value),
+            );
+            const target_instance = reserve_proc_value(value, proc);
+            addSingletonProcValueCallable(value, proc, target_instance);
+        },
+        .erased_boxed => |erased| {
+            publishAlreadyErasedCallable(value, erased);
+        },
+    }
+}
+```
+
+The checked-artifact dependency summary for every const graph containing a
+finite callable result must include every finite member procedure before the
+const graph can be consumed by mono. This is mandatory even if the current
+runtime path only projects one field or calls one selected member, because the
+constant graph has published a finite callable set and mono is responsible for
+making every member procedure named by that set available to lifted and
+lambda-solved MIR.
+
+For eval-template constants, the dependency summary stored on the sealed
+`ConstInstance` is accumulated while the LIR result is being reified into the
+final `CompileTimeValueStore` graph. It must not be produced by a separate walk
+over the pre-reification `ConstGraphReificationPlan`, because the plan may name
+a finite callable result before compile-time promotion has selected the final
+callable leaf that is actually written to the value graph.
+
+For example:
+
+```roc
+main = {
+    init: {},
+    update: |_, model| model,
+    render: |_model| Simple.leaf("hello"),
+}
+```
+
+If `main.render` is represented in the value graph as a promoted callable leaf,
+the sealed `ConstInstance` dependency summary must name the final promoted
+`ProcedureCallableRef` that the `render` field stores. It is not enough to name
+only the selected member from the finite callable-set result plan, because that
+member may be a local/lifted procedure that is only reachable through the
+promoted wrapper body. Runnable mono lowering of a later projection such as
+`main.render` must be able to reserve the final promoted procedure directly from
+the sealed const instance data.
+
+The dependency accumulation rule is:
+
+```zig
+fn reifyCallableLeaf(result_plan: CallableResultPlanId, runtime_value: Value) {
+    const final_leaf = evaluate_and_maybe_promote(result_plan, runtime_value);
+    write_compile_time_value(.{ .callable = final_leaf });
+    dependency_collector.appendCallableLeafInstance(final_leaf);
+}
+```
+
+The exact API names may differ, but the data flow must not. Reification writes
+the final schema/value node and records the dependency for that same final node
+in one pass. A helper that walks an already-built eval-template reification plan
+to "collect dependencies later" is forbidden, because it can record pre-promotion
+callable members instead of the sealed callable leaf. Debug verifiers may walk
+the finished graph to check the stored summary, but release correctness must
+come from the dependencies published during reification.
+
+```zig
+const ProcedureCallableDependency = struct {
+    proc_value: ProcedureCallableRef,
+
+    // Checked type root owned by the artifact that owns this dependency
+    // summary. Its key must equal proc_value.source_fn_ty.
+    source_fn_ty_payload: CheckedTypeId,
+
+    // Present exactly when proc_value.template is lifted. This checked type root
+    // is also owned by the dependency-summary artifact, and its key must equal
+    // proc_value.template.lifted.owner_mono_specialization.requested_mono_fn_ty.
+    lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+};
+
+fn collectCallableResultPlan(plan: CallableResultPlanId) {
+    switch (store.callableResult(plan)) {
+        .finite => |finite| {
+            for (finite.members) |member| {
+                concrete.append(.{ .procedure_callable_with_payloads = .{
+                    .proc_value = member.member_proc,
+                    .source_fn_ty_payload =
+                        member.member_proc_source_fn_ty_payload,
+                    .lifted_owner_source_fn_ty_payload =
+                        member.member_lifted_owner_source_fn_ty_payload,
+                } });
+                for (member.capture_slots) |capture| {
+                    collectCaptureSlot(capture);
+                }
+            }
+        },
+        .erased => |erased| {
+            collectErasedCodeAndCapture(erased);
+        },
+    }
+}
+```
+
+If a const-backed callable leaf reaches lambda-solved and its remapped
+`ProcedureCallableRef` is absent from lifted MIR, the bug is upstream: mono did
+not consume the checked-artifact dependency summary correctly, or checked
+artifact finalization failed to publish the finite member procedure dependency.
+Lambda-solved must not repair this by scanning source declarations or by
+inventing a procedure reservation after lifting.
+
+Procedure body identity and callable occurrence type are related but not the
+same field. A lifted procedure body is owned by a concrete owner
+monomorphization and nested site:
+
+```zig
+const LiftedBodyIdentity = struct {
+    proc: ProcedureValueRef,
+    template: CallableProcedureTemplateRef, // lifted owner + site
+};
+```
+
+The callable occurrence that produces a value also has a source function type:
+
+```zig
+const ProcedureCallableRef = struct {
+    template: CallableProcedureTemplateRef,
+    source_fn_ty: CanonicalTypeKey,
+};
+```
+
+For ordinary direct procedure values, the lifted body's callable source type and
+the occurrence source type are the same concrete key. For promoted callable
+wrappers, especially wrappers with an explicit forced executable target, the
+wrapper value may carry the wrapper's callable surface type while the lifted
+body table contains the selected member body's own source type. The forced
+target and wrapper call plan are explicit data; lambda-solved must not use the
+occurrence source type to rediscover a body.
+
+Therefore lambda-solved procedure-body lookup must first use the full
+`MirProcedureRef`. If that exact key is absent, it may resolve a body only by the
+explicit body identity `(ProcedureValueRef, CallableProcedureTemplateRef)` and
+only if that identity has exactly one lifted procedure in the input program.
+The occurrence `source_fn_ty` remains attached to the value-flow/callable
+representation for the call surface. The selected procedure body comes from the
+unique lifted procedure row. Zero matches or multiple matches are compiler bugs:
+debug builds assert loudly, release builds use `unreachable`.
+
+This is not compatible-shape repair and not source recovery. It is a separation
+between two explicit pieces of MIR data:
+
+- the body to lower: procedure value plus checked/lifted/synthetic template;
+- the callable occurrence surface: source function type plus any forced
+  executable target.
+
+The payload-carrying dependency is required for lifted procedures. A lifted
+procedure's callable identity contains an owner monomorphization key:
+
+```zig
+CallableProcedureTemplateRef.lifted.owner_mono_specialization.requested_mono_fn_ty
+```
+
+In platform/app relation lowering, that owner source function type may be a
+relation-projected checked type owned by the platform artifact, even when the
+procedure template body is owned by the app artifact. Mono must therefore
+reserve the lifted owner procedure from the explicit checked payload stored in
+the dependency summary. It must not look up
+`requested_mono_fn_ty` in the procedure template artifact by key and hope it is
+present there. A missing `lifted_owner_source_fn_ty_payload` on a lifted finite
+member is a checked-artifact publication bug.
+
+The exact API names may differ, but the data dependency must not. The callable
+identity comes from the sealed compile-time value graph, not from syntax, not
+from a declaration scan, and not from executable endpoint publication.
+Executable endpoint publication depends on callable emission plans; using an
+endpoint to synthesize missing callable metadata is circular and forbidden.
+
+This is also not a later recovery pass and not a body scan. It is local
+expression lowering consuming explicit `ConstInstanceRef` and
+`CompileTimeValueStore` data published by checked-artifact finalization. If a
+schema/value pair is pending, mismatched, out of range, or points at a callable
+procedure that was not published into the lifted MIR procedure table, that is a
+compiler bug. The only permitted handling is a debug assertion in debug builds
+and `unreachable` in release builds.
 
 The source endpoint for a materialized alias is the binding value's published
 executable endpoint, not a recomputation from the binding's bare logical type.
@@ -17408,7 +17990,10 @@ const ErasedCaptureSlotReificationRef = struct {
 
 const CallableResultMemberPlan = struct {
     member: CallableMemberId,
-    target_key: ExecutableSpecializationKey,
+    member_proc: ProcedureCallableRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+    target: CallableResultMemberTargetPlan,
     capture_slots: Span(CaptureSlotReificationPlan),
 };
 
@@ -18534,6 +19119,62 @@ memory. Debug builds should assert this transfer discipline where practical;
 release builds rely on the ownership types and use `unreachable` for impossible
 compiler-invariant paths.
 
+Checked type/body publication must be driven by explicit lowering-visible roots,
+not by treating every raw CIR node as an exported post-check boundary. A raw CIR
+node can still exist for source tooling, debug regions, and pre-MIR checking
+bookkeeping without being a checked-artifact payload root. Publication must copy
+the checked types and checked body nodes needed by:
+
+- checked procedure templates
+- entry wrappers
+- intrinsic wrappers
+- hosted wrappers
+- compile-time constant and callable roots
+- platform-required bindings and relation artifacts
+- static-dispatch plans
+- resolved value references
+- top-level value table entries
+- exported type/procedure/constant schemas
+- nested procedure-site bodies reachable from those roots
+
+Publication must not blindly sweep `module.nodeCount()` and canonicalize every
+raw expression, pattern, and statement type as if it were lowering-visible. That
+kind of sweep can accidentally publish checker-internal sentinels that were
+never meant to cross the post-check boundary, and it gives later stages a second
+source of truth for values that already have explicit artifact records.
+
+Top-level definition binding patterns are a concrete example. For:
+
+```roc
+app [Model, main] { pf: platform "./platform/main.roc" }
+
+import pf.Simple
+
+Model : { value: I64 }
+
+main = {
+    init: |{}| { value: 0 },
+    update: |m, delta| { value: m.value + delta },
+    render: |_m| Simple.leaf("hello"),
+}
+```
+
+the lowering-visible type of the top-level binding pattern `main` is the
+finalized definition type, `module.defType(main_def)`. The raw pattern-node type,
+`module.patternType(main_pattern)`, is not the artifact authority for the
+top-level value. It may contain checker-internal placeholders while the
+platform/app relation is being finalized. The artifact must publish the pattern
+entry for binding identity and source regions, but the pattern entry's checked
+type must point at the published definition type. Local patterns inside checked
+bodies still use their own checked pattern type because those binders are owned
+by the body that introduces them.
+
+This rule applies before app/platform co-finalization as well as after it. If a
+top-level value participates in platform requirement finalization, the relation
+artifact and `PlatformRequiredBindingTable` publish the platform-specific
+requirements. They must not make later stages recover the app binding's type by
+canonicalizing the raw top-level pattern node.
+
 Checking finalization order:
 
 1. Finish type solving and collect all user-facing diagnostics.
@@ -19427,6 +20068,39 @@ fn reifyTagUnion(plan: TagUnionPlan, layout: Layout, value: Value) Reified {
 
 This is the same rule used by LIR bridge lowering: physical ZST elision removes
 storage, not logical source identity.
+
+The same distinction applies to ZST aggregates that contain function-typed
+fields. A function value may have no runtime bytes, but an inhabited function
+slot is still a semantic value. If const-graph planning has an explicit
+executable endpoint for that slot and the endpoint payload is `callable_set`,
+the plan must publish a `callable_leaf` from that executable payload even when
+the interpreted runtime value is `Value.zst`. It must not downgrade the slot to
+`callable_schema` merely because there is no runtime field storage.
+
+For example, the required platform record:
+
+```roc
+main = {
+    init: |{}| { value: 0 },
+    update: |model, delta| { value: model.value + delta },
+    render: |_model| Simple.leaf("hello"),
+}
+```
+
+can physically lower to a ZST record because all three fields are closed
+function values. The concrete constant instance still needs three callable
+leaves. The `render` field's plan is built from the explicit executable
+`callable_set` payload for that record field; reification then stores a
+`ComptimeValue.callable` leaf even though it reads no runtime bytes for the
+field. Later platform code such as `main.render(model)` consumes that callable
+leaf through ordinary const-instance materialization.
+
+`callable_schema` is reserved for type-only, uninhabited, or schema-only
+positions where no concrete callable value exists, such as the element schema of
+an empty `List(I64 -> I64)`. It is a compiler bug for a concrete constant
+instance value graph to contain `callable_schema` at a field, tuple element, tag
+payload, box payload, nominal backing, or alias backing that is known from an
+executable endpoint to be an inhabited `callable_set`.
 
 Const-graph reification must likewise respect physical erasure of one-field
 records, one-element tuples, and newtype-like wrappers. If a logical record or
@@ -23212,6 +23886,135 @@ platform-owned requested payload, wrong value kind, or app-artifact payload
 lookup is a compiler bug: debug assertion in debug builds and `unreachable` in
 release builds.
 
+Platform for-clause aliases are part of this relation. They must be substituted
+during executable platform artifact publication, before any root request,
+procedure template, resolved value reference, hosted table, compile-time root, or
+MIR-family lowering request is published.
+
+For example:
+
+```roc
+platform ""
+    requires {
+        [Model : model] for main : {
+            init : {} -> model,
+            update : model, I64 -> model,
+            render : model -> Simple(model)
+        }
+    }
+    exposes [Simple]
+    packages {}
+    provides { render_for_host: "render" }
+
+import Simple exposing [Simple]
+
+render_for_host : Box(Model) -> Simple(Model)
+render_for_host = |boxed_model| {
+    model = Box.unbox(boxed_model)
+    main.render(model)
+}
+```
+
+```roc
+app [Model, main] { pf: platform "./platform/main.roc" }
+
+import pf.Simple
+
+Model : { value: I64 }
+
+main = {
+    init: |{}| { value: 0 },
+    update: |model, delta| { value: model.value + delta },
+    render: |_model| Simple.leaf("hello"),
+}
+```
+
+The platform declaration artifact may contain the rigid `model` in the raw
+requirement annotation. That artifact is not executable. The executable platform
+artifact, published after the app artifact and `PlatformAppRelation` are known,
+must replace every occurrence of the platform-owned for-clause rigid `model`
+with the app artifact's checked type for `Model`, projected into the executable
+platform artifact's own `CheckedTypeStore`.
+
+This substitution is not a mono-MIR repair step. It is checked-artifact
+publication. The executable platform artifact must publish a
+`PlatformForClauseSubstitutionTable` or equivalent explicit publication-time
+structure:
+
+```zig
+const PlatformForClauseSubstitution = struct {
+    requirement: PlatformRequiredDeclarationId,
+
+    // The platform alias spelling from `[Model : model]`.
+    platform_alias_name: TypeNameId,
+
+    // The platform rigid variable root that appears in the platform requirement
+    // annotation and in platform code such as `Box(Model)`.
+    platform_rigid_root: CheckedTypeId,
+
+    // The app type declaration named by `platform_alias_name`, projected into
+    // the executable platform artifact's checked type store.
+    projected_app_type_root: CheckedTypeId,
+};
+```
+
+When executable platform publication begins, the publisher builds all
+for-clause substitutions from explicit source data:
+
+1. Read each `RequiredType.type_aliases` row from the platform `ModuleEnv`.
+2. For each `[Alias : rigid]`, find the platform alias statement and its checked
+   root in the platform checked type store. That root is the formal
+   substitution root. It must not be recovered by string-searching type payloads.
+3. Find the app type declaration named `Alias` in the app artifact's retained
+   `ModuleEnv`. It must be an alias declaration, because platform for-clauses
+   require aliases, not nominal types. If this does not exist or is not an alias,
+   checking reports the user-facing platform-alias diagnostic before artifact
+   publication.
+4. Project the app alias root and all of its payload children into the executable
+   platform artifact's checked type store, remapping canonical names through the
+   platform artifact's `CanonicalNameStore`.
+5. Clone every lowering-visible platform checked type root through the formal to
+   actual substitution map before publishing any table that stores a
+   `CheckedTypeId`.
+
+After this step, `render_for_host : Box(Model) -> Simple(Model)` above has the
+executable checked type `Box(app.Model) -> Simple(app.Model)` in the platform
+artifact's own checked store. The app artifact's checked payload remains only the
+source of the projected actual type. Mono MIR must never see or lower the
+unsubstituted rigid `model` for an executable platform root.
+
+The substitution applies to all checked type roots that can be consumed after
+publication:
+
+- platform-required relation payloads
+- platform-required binding payloads
+- root request `checked_type` fields
+- checked procedure template `checked_fn_root` fields
+- checked body expression and pattern `checked_type` fields
+- resolved value reference payloads
+- hosted/platform interface capability payloads
+- compile-time root and entry-wrapper payloads
+
+It is a compiler bug for the executable platform artifact to publish any
+lowering-visible checked type root that still contains a for-clause rigid. Debug
+verification must scan the executable platform artifact's published checked type
+roots and panic if such a rigid is reachable. Release builds must not pay for
+that verification; they use `unreachable` if an invariant path is reached.
+
+Do not implement this by:
+
+- letting mono MIR default, close, or erase the rigid
+- asking the app artifact for a root with the platform requirement's canonical
+  key
+- copying app artifact `CheckedTypeId` values directly into the platform
+  artifact
+- resolving the app alias by repeatedly trying display-name variants after
+  publication
+- treating every app type declaration as visible just because a platform/app
+  relation exists
+- substituting only platform-required lookup nodes while leaving hosted wrapper
+  annotations such as `Box(Model) -> Simple(Model)` unsubstituted
+
 Required values are not always procedures. For example, this is valid Roc:
 
 ```roc
@@ -23261,6 +24064,86 @@ This is the only payload later stages use for the requirement. The app artifact
 provides only the app value identity (`TopLevelValueRef`,
 `TopLevelProcedureBindingRef`, `ConstRef`, or concrete callable-binding
 instance), not the platform requested type payload.
+
+Required constants must also be concretized before runtime dependency summary
+lowering of the executable platform artifact. This is mandatory when a required
+constant contains callable fields:
+
+```roc
+platform ""
+    requires {
+        [Model : model] for main : {
+            init : {} -> model,
+            update : model, I64 -> model,
+            render : model -> Simple(model)
+        }
+    }
+    exposes [Simple]
+    packages {}
+    provides { render_for_host: "render" }
+
+import Simple exposing [Simple]
+
+render_for_host : Box(Model) -> Simple(Model)
+render_for_host = |boxed_model| {
+    model = Box.unbox(boxed_model)
+    main.render(model)
+}
+```
+
+```roc
+app [Model, main] { pf: platform "./platform/main.roc" }
+
+import pf.Simple
+
+Model : { value: I64 }
+
+main = {
+    init: |{}| { value: 0 },
+    update: |model, delta| { value: model.value + delta },
+    render: |_model| Simple.leaf("hello"),
+}
+```
+
+The platform runtime root contains a call through a field projection,
+`main.render(model)`. Lambda-solved cannot solve that call from the field name,
+the source expression shape, or the platform requirement annotation. It must see
+the already-instantiated app constant value graph, whose `render` field is a
+concrete callable leaf. Therefore, before the executable platform artifact runs
+runtime dependency summaries for its root requests, checking finalization must:
+
+1. Iterate the explicit `PlatformRequiredBindingTable`.
+2. For every `PlatformRequiredValueUse.const_value`, build the exact
+   `ConstInstantiationKey` that mono MIR will use for the same
+   `ConstUseTemplate`.
+3. Reserve and fill that concrete `ConstInstanceRef` in the executable platform
+   artifact's `ConstInstantiationStore`.
+4. Ensure all concrete dependencies of that const instance before proceeding to
+   runtime-root lowering.
+
+This is not an extra discovery pass and not a graph walk over platform code. The
+source of work is the already-published platform/app relation table. The runtime
+dependency summary may still record the const instance as a dependency, but it
+must not be the first stage to discover that the instance is needed when runtime
+code immediately projects and calls one of its callable fields.
+
+The const-instantiation key must exactly match mono MIR's key-selection rule. If
+the app `ConstRef.source_scheme` is a concrete constant producer scheme, the key
+uses the producer scheme root's canonical key projected into the executable
+platform artifact as needed. If the app const template is genuinely generic, the
+key uses `PlatformRequiredConstUse.const_use.requested_source_ty_template` and
+`requested_source_ty_payload`, which are owned by the executable platform
+artifact. This prevents the platform artifact from creating one instance under
+the relation-requested key while mono MIR searches for another instance under the
+producer key.
+
+For the example above, the `main` constant is concrete, but it still contains
+callable leaves. Pre-concretization instantiates `main` in the platform artifact
+before `render_for_host` is lowered for dependency summaries. When mono MIR
+lowers `main.render`, it materializes `main` from that sealed `ConstInstanceRef`;
+lambda-solved sees the `render` field as a finite callable leaf and solves the
+call normally. It must not synthesize the `render` procedure from the record
+field label, rescan app source, or repair the projection in lambda-solved.
 
 Executable platform artifacts must also publish relation artifact views into
 checking finalization and every MIR-family lowering request. These relation

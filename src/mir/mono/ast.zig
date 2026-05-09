@@ -344,6 +344,9 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        for (self.exprs.items) |*expr| {
+            deinitExprData(self.allocator, &expr.data);
+        }
         self.exprs.deinit(self.allocator);
         self.pats.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -360,8 +363,10 @@ pub const Store = struct {
     }
 
     pub fn addExpr(self: *Store, ty: TypeId, data: Expr.Data) std.mem.Allocator.Error!ExprId {
+        var owned_data = data;
+        errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .data = data });
+        try self.exprs.append(self.allocator, .{ .ty = ty, .data = owned_data });
         return @enumFromInt(idx);
     }
 
@@ -371,8 +376,10 @@ pub const Store = struct {
         source_ty: canonical.CanonicalTypeKey,
         data: Expr.Data,
     ) std.mem.Allocator.Error!ExprId {
+        var owned_data = data;
+        errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .data = data });
+        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .data = owned_data });
         return @enumFromInt(idx);
     }
 
@@ -536,6 +543,18 @@ pub const Store = struct {
         return self.defs.items;
     }
 };
+
+fn deinitExprData(allocator: std.mem.Allocator, data: *Expr.Data) void {
+    switch (data.*) {
+        .proc_value => |*proc_value| {
+            if (proc_value.forced_target) |*target| {
+                mir_ids.deinitProcValueExecutableTarget(allocator, target);
+            }
+            proc_value.forced_target = null;
+        },
+        else => {},
+    }
+}
 
 test "mono ast tests" {
     std.testing.refAllDecls(@This());

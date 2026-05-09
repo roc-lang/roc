@@ -297,9 +297,11 @@ pub const ExecutablePrimitive = checked_artifact.ExecutablePrimitive;
 pub const CanonicalCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: canonical.ProcedureCallableRef,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
     source_proc: canonical.MirProcedureRef,
     published_proc_value: ?canonical.ProcedureCallableRef = null,
     published_source_proc: ?canonical.MirProcedureRef = null,
+    lifted_owner_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     target_instance: ProcRepresentationInstanceId,
     capture_slots: []const CallableSetCaptureSlot,
     capture_shape_key: CaptureShapeKey,
@@ -869,6 +871,7 @@ pub const CallableValueSource = union(enum) {
         target_instance: ProcRepresentationInstanceId,
         captures: []const ValueInfoId,
         fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
     },
     finite_set: CanonicalCallableSetKey,
     already_erased: AlreadyErasedCallablePlan,
@@ -1548,6 +1551,13 @@ pub const SourceMatchBranchReachability = struct {
     reachable: bool = true,
 };
 
+/// Public `ConstBackedValueInfo` declaration.
+pub const ConstBackedValueInfo = struct {
+    const_instance: checked_artifact.ConstInstanceRef,
+    schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValueId,
+};
+
 /// Public `ValueInfo` declaration.
 pub const ValueInfo = struct {
     logical_ty: TypeVarId,
@@ -1564,6 +1574,7 @@ pub const ValueInfo = struct {
     callable: ?CallableValueInfo = null,
     boxed: ?BoxedValueInfo = null,
     aggregate: ?AggregateValueInfo = null,
+    const_backing: ?ConstBackedValueInfo = null,
     nominal_backing_consumer_use: ?ConsumerUsePlanId = null,
     source_match_branch: ?SourceMatchBranchRef = null,
     pending_local_root_origin: bool = false,
@@ -2721,6 +2732,7 @@ pub const RepresentationStore = struct {
         published_proc: ?canonical.MirProcedureRef,
         target_instance: ProcRepresentationInstanceId,
         capture_values: []const ValueInfoId,
+        source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
     ) std.mem.Allocator.Error!CallableValueInfo {
         const source_fn_ty = proc.callable.source_fn_ty;
         const construction_plan = try self.appendCallableConstructionPlan(.{
@@ -2748,6 +2760,7 @@ pub const RepresentationStore = struct {
                 .target_instance = target_instance,
                 .captures = construction.capture_values,
                 .fn_ty = source_fn_ty,
+                .source_fn_ty_payload = source_fn_ty_payload,
             } },
             .emission_plan = emission_plan,
             .construction_plan = construction_plan,
@@ -3004,9 +3017,11 @@ pub const RepresentationStore = struct {
         for (owned_members) |*member| member.* = .{
             .member = @enumFromInt(0),
             .proc_value = members[0].proc_value,
+            .source_fn_ty_payload = members[0].source_fn_ty_payload,
             .source_proc = members[0].source_proc,
             .published_proc_value = members[0].published_proc_value,
             .published_source_proc = members[0].published_source_proc,
+            .lifted_owner_source_fn_ty_payload = members[0].lifted_owner_source_fn_ty_payload,
             .target_instance = members[0].target_instance,
             .capture_slots = &.{},
             .capture_shape_key = .{},
@@ -3021,9 +3036,11 @@ pub const RepresentationStore = struct {
             owned_members[i] = .{
                 .member = @enumFromInt(@as(u32, @intCast(i))),
                 .proc_value = member.proc_value,
+                .source_fn_ty_payload = member.source_fn_ty_payload,
                 .source_proc = member.source_proc,
                 .published_proc_value = member.published_proc_value,
                 .published_source_proc = member.published_source_proc,
+                .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
                 .target_instance = member.target_instance,
                 .capture_slots = if (member.capture_slots.len == 0)
                     &.{}

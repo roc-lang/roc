@@ -1133,7 +1133,7 @@ fn reserveErasedPromotedWrapperCodeDependency(
             }
             for (descriptor.members, erased.finite_adapter_member_targets) |member, target| {
                 validatePersistedFiniteAdapterMemberTarget(member, target);
-                try reserveCallableProcedureDependency(input, program, queue, member.proc_value, reason);
+                _ = try reserveCallableSetMemberProcedureDependency(input, program, queue, member, reason);
             }
         },
     }
@@ -1145,9 +1145,6 @@ fn validatePersistedFiniteAdapterMemberTarget(
 ) void {
     if (member.source_proc.proc.proc_base != target.base) {
         invariantViolation("mono persisted finite-set adapter member target base differs from descriptor member");
-    }
-    if (!std.mem.eql(u8, &member.source_proc.callable.source_fn_ty.bytes, &target.requested_fn_ty.bytes)) {
-        invariantViolation("mono persisted finite-set adapter member target source type differs from source procedure");
     }
     if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &target.requested_fn_ty.bytes)) {
         invariantViolation("mono persisted finite-set adapter member target source type differs from procedure value");
@@ -1168,7 +1165,7 @@ fn reserveErasedCodeRefDependency(
                 invariantViolation("mono dependency reservation reached finite-set adapter with no callable-set descriptor");
             };
             for (descriptor.members) |member| {
-                try reserveCallableProcedureDependency(input, program, queue, member.proc_value, reason);
+                _ = try reserveCallableSetMemberProcedureDependency(input, program, queue, member, reason);
             }
         },
     }
@@ -1181,12 +1178,41 @@ fn reserveCallableProcedureDependency(
     callable: canonical.ProcedureCallableRef,
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
-    switch (callable.template) {
+    const lowering_callable = try remapDependencyCallable(input, program, callable);
+    switch (lowering_callable.template) {
         .checked,
         .synthetic,
-        => _ = try reserveProcedureCallableDependency(input, program, queue, callable, reason),
+        => _ = try reserveLoweringProcedureCallableDependency(input, program, queue, lowering_callable, reason),
         .lifted => |lifted| try reserveLiftedCallableOwnerDependency(input, program, queue, lifted, reason),
     }
+}
+
+fn remapDependencyCallable(
+    input: Input,
+    program: *Program,
+    callable: canonical.ProcedureCallableRef,
+) Allocator.Error!canonical.ProcedureCallableRef {
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
+    return try name_resolver.procedureCallableRef(callable);
+}
+
+fn remapDependencyMirProcedure(
+    input: Input,
+    program: *Program,
+    proc: canonical.MirProcedureRef,
+) Allocator.Error!canonical.MirProcedureRef {
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
+    return try name_resolver.mirProcedureRef(proc);
 }
 
 fn reserveLiftedCallableOwnerDependency(
@@ -1205,14 +1231,12 @@ fn reserveLiftedCallableOwnerDependency(
         debug.invariant(false, "mono dependency reservation invariant violated: lifted callable owner checked types were not available");
         unreachable;
     };
-    const owner_checked_ty = checkedTypeRootForKey(owner_checked_types, owner_key.requested_mono_fn_ty) orelse {
-        debug.invariant(false, "mono dependency reservation invariant violated: lifted callable owner source function type was not published");
-        unreachable;
-    };
-    const owner_requested_fn_ty = try program.concrete_source_types.registerArtifactRoot(
+    const owner_requested_fn_ty = try liftedOwnerRequestedSourceType(
+        program,
         owner_artifact,
         owner_checked_types,
-        owner_checked_ty,
+        owner_key.requested_mono_fn_ty,
+        "mono dependency reservation invariant violated: lifted callable owner source function type was not published",
     );
     const owner_requested_key = program.concrete_source_types.key(owner_requested_fn_ty);
     if (!std.mem.eql(u8, &owner_requested_key.bytes, &owner_key.requested_mono_fn_ty.bytes)) {
@@ -1223,6 +1247,26 @@ fn reserveLiftedCallableOwnerDependency(
         .requested_fn_ty = owner_requested_fn_ty,
         .reason = reason,
     });
+}
+
+fn liftedOwnerRequestedSourceType(
+    program: *Program,
+    owner_artifact: checked_artifact.CheckedModuleArtifactKey,
+    owner_checked_types: checked_artifact.CheckedTypeStoreView,
+    requested_key: canonical.CanonicalTypeKey,
+    comptime missing_message: []const u8,
+) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+    if (program.concrete_source_types.refForKey(requested_key)) |existing| return existing;
+
+    const owner_checked_ty = checkedTypeRootForKey(owner_checked_types, requested_key) orelse {
+        debug.invariant(false, missing_message);
+        unreachable;
+    };
+    return try program.concrete_source_types.registerArtifactRoot(
+        owner_artifact,
+        owner_checked_types,
+        owner_checked_ty,
+    );
 }
 
 fn callableSetDescriptorForKey(
@@ -1287,7 +1331,7 @@ fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
             };
             for (descriptor.members) |member| {
                 if (member.member == finite.selected_member) {
-                    try reserveCallableProcedureDependency(input, program, queue, member.proc_value, .{ .erased_finite_capture_member = node_id });
+                    _ = try reserveCallableSetMemberProcedureDependency(input, program, queue, member, .{ .erased_finite_capture_member = node_id });
                     break;
                 }
             } else {
@@ -1371,6 +1415,31 @@ fn reserveCallableLeafDependency(
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
     try reserveCallableProcedureDependency(input, program, queue, leaf.proc_value, reason);
+}
+
+fn reserveCallableSetMemberProcedureDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    member: canonical.CanonicalCallableSetMember,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
+    const lowering_member_proc = try remapDependencyMirProcedure(input, program, member.source_proc);
+    switch (lowering_member_proc.callable.template) {
+        .lifted => |lifted| {
+            try reserveLiftedCallableOwnerDependency(input, program, queue, lifted, reason);
+            return lowering_member_proc;
+        },
+        .checked,
+        .synthetic,
+        => {
+            const reserved = try reserveLoweringProcedureCallableDependency(input, program, queue, lowering_member_proc.callable, reason);
+            if (!canonical.mirProcedureRefEql(reserved, lowering_member_proc)) {
+                invariantViolation("mono callable-set member dependency reservation produced a different procedure identity");
+            }
+            return reserved;
+        },
+    }
 }
 
 fn reserveConstInstanceRefDependencies(
@@ -1494,8 +1563,76 @@ fn reserveComptimeDependencySummaryDependencies(
             .procedure_callable => |callable| {
                 try reserveCallableProcedureDependency(input, program, queue, callable, reason);
             },
+            .procedure_callable_with_payloads => |dependency| {
+                try reserveCallableProcedureDependencyWithPayloads(input, program, queue, owner, dependency, reason);
+            },
         }
     }
+}
+
+fn reserveCallableProcedureDependencyWithPayloads(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    dependency_owner: checked_artifact.CheckedModuleArtifactKey,
+    dependency: checked_artifact.ProcedureCallableDependency,
+    reason: MonoSpecializationReason,
+) Allocator.Error!void {
+    const lowering_callable = try remapDependencyCallable(input, program, dependency.proc_value);
+    const source_ref = try registerDependencyPayload(
+        input,
+        program,
+        dependency_owner,
+        dependency.source_fn_ty_payload,
+        lowering_callable.source_fn_ty,
+        "mono dependency reservation callable source type payload disagreed with callable source type",
+    );
+    var concrete_callable = lowering_callable;
+    concrete_callable.source_fn_ty = program.concrete_source_types.key(source_ref);
+    switch (concrete_callable.template) {
+        .checked,
+        .synthetic,
+        => _ = try reserveLoweringProcedureCallableDependencyWithConcreteRef(input, program, queue, concrete_callable, source_ref, reason),
+        .lifted => |lifted| {
+            const owner_payload = dependency.lifted_owner_source_fn_ty_payload orelse {
+                debug.invariant(false, "mono dependency reservation lifted callable dependency had no owner source type payload");
+                unreachable;
+            };
+            const owner_ref = try registerDependencyPayload(
+                input,
+                program,
+                dependency_owner,
+                owner_payload,
+                lifted.owner_mono_specialization.requested_mono_fn_ty,
+                "mono dependency reservation lifted callable owner source type payload disagreed with owner specialization",
+            );
+            _ = try queue.reserve(&program.concrete_source_types, .{
+                .template = lifted.owner_mono_specialization.template,
+                .requested_fn_ty = owner_ref,
+                .reason = reason,
+            });
+        },
+    }
+}
+
+fn registerDependencyPayload(
+    input: Input,
+    program: *Program,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    checked_ty: checked_artifact.CheckedTypeId,
+    expected_key: canonical.CanonicalTypeKey,
+    comptime mismatch_message: []const u8,
+) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+    const checked_types = checkedTypesForKey(input, owner) orelse {
+        debug.invariant(false, "mono dependency reservation explicit payload owner artifact was not available");
+        unreachable;
+    };
+    const ref = try program.concrete_source_types.registerArtifactRoot(owner, checked_types, checked_ty);
+    const key = program.concrete_source_types.key(ref);
+    if (!std.mem.eql(u8, &key.bytes, &expected_key.bytes)) {
+        invariantViolation(mismatch_message);
+    }
+    return ref;
 }
 
 fn reserveSemanticInstantiationProcedureDependency(
@@ -1552,10 +1689,61 @@ fn reserveProcedureCallableDependency(
     callable: canonical.ProcedureCallableRef,
     reason: MonoSpecializationReason,
 ) Allocator.Error!canonical.MirProcedureRef {
-    return reserveCallableProcedureDependencyWithClosure(input, program, queue, callable, null, reason);
+    const lowering_callable = try remapDependencyCallable(input, program, callable);
+    return reserveLoweringProcedureCallableDependency(input, program, queue, lowering_callable, reason);
+}
+
+fn reserveLoweringProcedureCallableDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    callable: canonical.ProcedureCallableRef,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
+    return reserveLoweringProcedureCallableDependencyWithClosure(input, program, queue, callable, null, reason);
+}
+
+fn reserveLoweringProcedureCallableDependencyWithConcreteRef(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    callable: canonical.ProcedureCallableRef,
+    requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
+    _ = input;
+    const requested_key = program.concrete_source_types.key(requested_fn_ty);
+    if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
+        invariantViolation("mono dependency reservation explicit callable source type disagreed with callable occurrence");
+    }
+    var concrete_callable = callable;
+    concrete_callable.source_fn_ty = requested_key;
+    const template = checkedTemplateFromCallableTemplate(callable.template);
+    const reserved = try queue.reserve(&program.concrete_source_types, .{
+        .template = template,
+        .callable_template = concrete_callable.template,
+        .requested_fn_ty = requested_fn_ty,
+        .reason = reason,
+    });
+    return .{
+        .proc = reserved.proc.proc,
+        .callable = concrete_callable,
+    };
 }
 
 fn reserveCallableProcedureDependencyWithClosure(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    callable: canonical.ProcedureCallableRef,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView,
+    reason: MonoSpecializationReason,
+) Allocator.Error!canonical.MirProcedureRef {
+    const lowering_callable = try remapDependencyCallable(input, program, callable);
+    return reserveLoweringProcedureCallableDependencyWithClosure(input, program, queue, lowering_callable, imported_closure, reason);
+}
+
+fn reserveLoweringProcedureCallableDependencyWithClosure(
     input: Input,
     program: *Program,
     queue: *Queue,
@@ -1581,16 +1769,18 @@ fn reserveCallableProcedureDependencyWithClosure(
     if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
         invariantViolation("mono dependency reservation source function type disagrees with callable occurrence");
     }
+    var concrete_callable = callable;
+    concrete_callable.source_fn_ty = requested_key;
     const reserved = try queue.reserve(&program.concrete_source_types, .{
         .template = template,
-        .callable_template = callable.template,
+        .callable_template = concrete_callable.template,
         .requested_fn_ty = requested_fn_ty,
         .reason = reason,
         .imported_closure = imported_closure,
     });
     return .{
         .proc = reserved.proc.proc,
-        .callable = callable,
+        .callable = concrete_callable,
     };
 }
 
@@ -4911,9 +5101,6 @@ const BodyLowerer = struct {
         if (!std.mem.eql(u8, &reserved.proc.specialization.requested_mono_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
             invariantViolation("promoted callable wrapper source function type disagrees with mono specialization request");
         }
-        if (!std.mem.eql(u8, &finite.member_proc.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
-            invariantViolation("promoted callable wrapper member source function type disagrees with wrapper source function type");
-        }
         if (finite.member_capture_slots.len != finite.captures.len) {
             invariantViolation("promoted callable wrapper capture refs disagree with member capture slots");
         }
@@ -4932,15 +5119,12 @@ const BodyLowerer = struct {
             };
         }
 
-        const member_proc = try self.reserveCallableProcedure(
-            finite.member_proc,
+        const member_proc = try self.reserveFinitePromotedWrapperMemberProcedure(
+            finite,
             reserved.requested_fn_ty,
             .{ .promoted_callable_wrapper = wrapper_id },
         );
-        const member_target_artifact = checked_artifact.CheckedModuleArtifactKey{
-            .bytes = callableTemplateArtifact(finite.member_proc.template).bytes,
-        };
-        var member_target = try self.remapExecutableSpecializationKeyForArtifact(finite.member_target, member_target_artifact);
+        var member_target = try self.lowerPromotedMemberTarget(finite.member_target, finite.member_proc, member_proc);
         var member_target_owned = true;
         errdefer if (member_target_owned) deinitExecutableSpecializationKeyForMono(self.allocator, &member_target);
         const proc_value = try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .proc_value = .{
@@ -4979,6 +5163,130 @@ const BodyLowerer = struct {
             .requested_fn_ty = fn_ty,
             .requested_source_fn_ty = finite.source_fn_ty,
         } });
+    }
+
+    fn reserveFinitePromotedWrapperMemberProcedure(
+        self: *BodyLowerer,
+        finite: checked_artifact.FinitePromotedWrapperBodyPlan,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+        reason: MonoSpecializationReason,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+        if (!std.mem.eql(u8, &requested_key.bytes, &finite.member_proc.source_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper member source function type disagrees with requested mono type");
+        }
+
+        const payload_key = checkedTypeKey(self.template_lookup.checked_types, finite.member_proc_source_fn_ty_payload);
+        if (!std.mem.eql(u8, &payload_key.bytes, &finite.member_proc.source_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper member source type payload disagrees with member procedure");
+        }
+
+        const remapped_callable = try self.name_resolver.procedureCallableRef(finite.member_proc);
+        var concrete_callable = remapped_callable;
+        concrete_callable.source_fn_ty = requested_key;
+        return switch (concrete_callable.template) {
+            .checked,
+            .synthetic,
+            => blk: {
+                const template = checkedTemplateFromCallableTemplate(concrete_callable.template);
+                const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+                    .template = template,
+                    .callable_template = concrete_callable.template,
+                    .requested_fn_ty = requested_fn_ty,
+                    .reason = reason,
+                    .imported_closure = self.importedClosureForTemplate(template),
+                });
+                break :blk .{
+                    .proc = reserved.proc.proc,
+                    .callable = concrete_callable,
+                };
+            },
+            .lifted => |lifted| try self.reserveFinitePromotedWrapperLiftedMemberProcedure(
+                concrete_callable,
+                lifted,
+                finite.member_lifted_owner_source_fn_ty_payload orelse {
+                    invariantViolation("promoted callable wrapper lifted member has no owner source type payload");
+                },
+                reason,
+            ),
+        };
+    }
+
+    fn reserveFinitePromotedWrapperLiftedMemberProcedure(
+        self: *BodyLowerer,
+        callable: canonical.ProcedureCallableRef,
+        lifted: canonical.LiftedProcedureTemplateRef,
+        owner_source_fn_ty_payload: checked_artifact.CheckedTypeId,
+        reason: MonoSpecializationReason,
+    ) Allocator.Error!canonical.MirProcedureRef {
+        const owner_key = lifted.owner_mono_specialization;
+        const owner_requested_key = checkedTypeKey(self.template_lookup.checked_types, owner_source_fn_ty_payload);
+        if (!std.mem.eql(u8, &owner_requested_key.bytes, &owner_key.requested_mono_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper lifted owner source type payload disagrees with owner specialization");
+        }
+        const owner_requested_fn_ty = try self.program.concrete_source_types.registerArtifactRoot(
+            self.template_lookup.artifact,
+            self.template_lookup.checked_types,
+            owner_source_fn_ty_payload,
+        );
+        const owner_reserved_key = self.program.concrete_source_types.key(owner_requested_fn_ty);
+        if (!std.mem.eql(u8, &owner_reserved_key.bytes, &owner_key.requested_mono_fn_ty.bytes)) {
+            invariantViolation("promoted callable wrapper lifted owner source function type disagrees with registered payload");
+        }
+
+        _ = try self.queue.reserve(&self.program.concrete_source_types, .{
+            .template = owner_key.template,
+            .requested_fn_ty = owner_requested_fn_ty,
+            .reason = reason,
+            .imported_closure = self.importedClosureForTemplate(owner_key.template),
+        });
+
+        const owner_base = self.program.canonical_names.procBase(owner_key.template.proc_base);
+        const proc_base = try self.program.canonical_names.internProcBase(.{
+            .module_name = owner_base.module_name,
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = @intFromEnum(lifted.site),
+            .nested_proc_site = .{
+                .owner_template = owner_key.template,
+                .site = lifted.site,
+            },
+            .owner_mono_specialization = owner_key,
+        });
+        return .{
+            .proc = .{
+                .artifact = owner_key.template.artifact,
+                .proc_base = proc_base,
+            },
+            .callable = callable,
+        };
+    }
+
+    fn lowerPromotedMemberTarget(
+        self: *BodyLowerer,
+        target: checked_artifact.CallableResultMemberTargetPlan,
+        member_proc_value: canonical.ProcedureCallableRef,
+        reserved_member_proc: canonical.MirProcedureRef,
+    ) Allocator.Error!canonical.ExecutableSpecializationKey {
+        return switch (target) {
+            .artifact_owned => |key| blk: {
+                const member_target_artifact = checked_artifact.CheckedModuleArtifactKey{
+                    .bytes = callableTemplateArtifact(member_proc_value.template).bytes,
+                };
+                break :blk try self.remapExecutableSpecializationKeyForArtifact(key, member_target_artifact);
+            },
+            .member_proc_relative => |endpoint| .{
+                .base = reserved_member_proc.proc.proc_base,
+                .requested_fn_ty = endpoint.requested_fn_ty,
+                .exec_arg_tys = if (endpoint.exec_arg_tys.len == 0)
+                    &.{}
+                else
+                    try self.allocator.dupe(canonical.CanonicalExecValueTypeKey, endpoint.exec_arg_tys),
+                .exec_ret_ty = endpoint.exec_ret_ty,
+                .callable_repr_mode = endpoint.callable_repr_mode,
+                .capture_shape_key = endpoint.capture_shape_key,
+            },
+        };
     }
 
     fn remapExecutableSpecializationKeyForArtifact(
@@ -5339,24 +5647,26 @@ const BodyLowerer = struct {
             invariantViolation("callable procedure reservation source function type disagrees with requested mono type");
         }
         const remapped_callable = try self.name_resolver.procedureCallableRef(callable);
-        return switch (remapped_callable.template) {
+        var concrete_callable = remapped_callable;
+        concrete_callable.source_fn_ty = requested_key;
+        return switch (concrete_callable.template) {
             .checked,
             .synthetic,
             => blk: {
-                const template = checkedTemplateFromCallableTemplate(remapped_callable.template);
+                const template = checkedTemplateFromCallableTemplate(concrete_callable.template);
                 const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
                     .template = template,
-                    .callable_template = remapped_callable.template,
+                    .callable_template = concrete_callable.template,
                     .requested_fn_ty = requested_fn_ty,
                     .reason = reason,
                     .imported_closure = self.importedClosureForTemplate(template),
                 });
                 break :blk .{
                     .proc = reserved.proc.proc,
-                    .callable = remapped_callable,
+                    .callable = concrete_callable,
                 };
             },
-            .lifted => |lifted| try self.reserveLiftedCallableProcedure(remapped_callable, lifted, reason),
+            .lifted => |lifted| try self.reserveLiftedCallableProcedure(concrete_callable, lifted, reason),
         };
     }
 
@@ -5375,14 +5685,12 @@ const BodyLowerer = struct {
             debug.invariant(false, "mono body lowering invariant violated: lifted callable owner checked types were not available");
             unreachable;
         };
-        const owner_checked_ty = checkedTypeRootForKey(owner_checked_types, owner_key.requested_mono_fn_ty) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: lifted callable owner source function type was not published");
-            unreachable;
-        };
-        const owner_requested_fn_ty = try self.program.concrete_source_types.registerArtifactRoot(
+        const owner_requested_fn_ty = try liftedOwnerRequestedSourceType(
+            self.program,
             owner_artifact,
             owner_checked_types,
-            owner_checked_ty,
+            owner_key.requested_mono_fn_ty,
+            "mono body lowering invariant violated: lifted callable owner source function type was not published",
         );
         _ = try self.queue.reserve(&self.program.concrete_source_types, .{
             .template = owner_key.template,
@@ -8734,15 +9042,20 @@ const BodyLowerer = struct {
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
-        const template = try self.name_resolver.procedureTemplateRef(try self.procedureTemplateForUse(use, requested_fn_ty));
+        const callable = try self.name_resolver.procedureCallableRef(try self.procedureCallableForUse(use, requested_fn_ty));
+        const template = checkedTemplateFromCallableTemplate(callable.template);
         const imported_closure = self.importedClosureForProcedureUse(use, template);
         const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
             .template = template,
+            .callable_template = callable.template,
             .requested_fn_ty = requested_fn_ty,
             .reason = reason,
             .imported_closure = imported_closure,
         });
-        return mirProcedureRefFromReserved(reserved);
+        return .{
+            .proc = reserved.proc.proc,
+            .callable = callable,
+        };
     }
 
     fn importedClosureForProcedureUse(
@@ -8814,39 +9127,6 @@ const BodyLowerer = struct {
         return null;
     }
 
-    fn procedureTemplateForUse(
-        self: *BodyLowerer,
-        use: checked_artifact.ProcedureUseTemplate,
-        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
-    ) Allocator.Error!canonical.ProcedureTemplateRef {
-        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
-        return switch (use.binding) {
-            .top_level => |binding_ref| try self.templateFromTopLevelBinding(
-                self.template_lookup.artifact,
-                topLevelProcedureBindingsForKey(self.input, self.template_lookup.artifact) orelse {
-                    debug.invariant(false, "mono body lowering invariant violated: template artifact has no top-level procedure binding table");
-                    unreachable;
-                },
-                binding_ref,
-                .{ .top_level = binding_ref },
-                requested_key,
-            ),
-            .imported => |imported| try self.templateFromImportedProcedureBinding(imported, requested_key),
-            .hosted => |hosted| hosted.template,
-            .platform_required => |required| try self.templateFromTopLevelBinding(
-                required.artifact,
-                topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
-                    debug.invariant(false, "mono body lowering invariant violated: platform-required artifact has no procedure binding table");
-                    unreachable;
-                },
-                required.procedure_binding,
-                .{ .platform_required = required },
-                requested_key,
-            ),
-            .promoted => |promoted| self.templateFromPromotedProcedure(promoted),
-        };
-    }
-
     fn procedureCallableForUse(
         self: *BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
@@ -8889,13 +9169,6 @@ const BodyLowerer = struct {
         };
     }
 
-    fn templateFromPromotedProcedure(
-        self: *const BodyLowerer,
-        promoted: checked_artifact.PromotedProcedureRef,
-    ) canonical.ProcedureTemplateRef {
-        return self.promotedProcedureForRef(promoted).template;
-    }
-
     fn promotedProcedureForRef(
         self: *const BodyLowerer,
         promoted: checked_artifact.PromotedProcedureRef,
@@ -8914,21 +9187,6 @@ const BodyLowerer = struct {
         invariantViolation("mono body lowering could not find promoted procedure in published artifact views");
     }
 
-    fn templateFromTopLevelBinding(
-        self: *BodyLowerer,
-        owner: checked_artifact.CheckedModuleArtifactKey,
-        bindings: *const checked_artifact.TopLevelProcedureBindingTable,
-        binding_ref: checked_artifact.TopLevelProcedureBindingRef,
-        binding_key: checked_artifact.ProcedureBindingRef,
-        requested_key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!canonical.ProcedureTemplateRef {
-        const binding = bindings.get(binding_ref);
-        return switch (binding.body) {
-            .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
-            .callable_eval_template => try self.templateFromCallableBindingInstance(owner, binding_key, requested_key),
-        };
-    }
-
     fn callableFromTopLevelBinding(
         self: *BodyLowerer,
         owner: checked_artifact.CheckedModuleArtifactKey,
@@ -8945,50 +9203,6 @@ const BodyLowerer = struct {
             },
             .callable_eval_template => try self.callableFromCallableBindingInstance(owner, binding_key, requested_key),
         };
-    }
-
-    fn templateFromImportedProcedureBinding(
-        self: *BodyLowerer,
-        imported: checked_artifact.ImportedProcedureBindingRef,
-        requested_key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!canonical.ProcedureTemplateRef {
-        for (self.input.imports) |view| {
-            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
-            for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
-                    binding.binding.pattern == imported.pattern)
-                {
-                    return switch (binding.body) {
-                        .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
-                        .callable_eval_template => try self.templateFromCallableBindingInstance(
-                            self.input.root.artifact.key,
-                            .{ .imported = imported },
-                            requested_key,
-                        ),
-                    };
-                }
-            }
-        }
-        for (self.input.root.relation_artifacts) |view| {
-            if (!std.mem.eql(u8, &view.key.bytes, &imported.artifact.bytes)) continue;
-            for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.module_idx == imported.module_idx and
-                    binding.binding.def == imported.def and
-                    binding.binding.pattern == imported.pattern)
-                {
-                    return switch (binding.body) {
-                        .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
-                        .callable_eval_template => try self.templateFromCallableBindingInstance(
-                            self.input.root.artifact.key,
-                            .{ .imported = imported },
-                            requested_key,
-                        ),
-                    };
-                }
-            }
-        }
-        invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
     }
 
     fn callableFromImportedProcedureBinding(
@@ -9039,32 +9253,6 @@ const BodyLowerer = struct {
             }
         }
         invariantViolation("mono body lowering could not find imported procedure binding in published artifact views");
-    }
-
-    fn templateFromCallableBindingInstance(
-        self: *BodyLowerer,
-        owner: checked_artifact.CheckedModuleArtifactKey,
-        binding: checked_artifact.ProcedureBindingRef,
-        requested_key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!canonical.ProcedureTemplateRef {
-        const key = checked_artifact.CallableBindingInstantiationKey{
-            .binding = binding,
-            .requested_source_fn_ty = requested_key,
-        };
-        const ref = callableBindingInstanceForKey(self.input, owner, key) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: callable-eval procedure binding had no sealed concrete instance for requested function type");
-            unreachable;
-        };
-        var dependency_state = ConcreteDependencyReservationState.init(self.allocator);
-        defer dependency_state.deinit();
-        try reserveCallableBindingInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, ref);
-
-        const instance = callableBindingInstanceForRef(self.input, ref);
-        if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &requested_key.bytes)) {
-            debug.invariant(false, "mono body lowering invariant violated: callable-eval instance source function type disagrees with requested type");
-            unreachable;
-        }
-        return checkedTemplateFromCallableTemplate(instance.proc_value.template);
     }
 
     fn callableFromCallableBindingInstance(

@@ -588,7 +588,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // 4. Stdout contains success message
     try testing.expect(result.stdout.len > 5);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build creates executable from test/int/app.roc (dev)" {
@@ -1149,7 +1149,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     try testing.expect(stat.size > 0);
 
     // 4. Success message was printed
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build returns exit code 2 for warnings (dev)" {

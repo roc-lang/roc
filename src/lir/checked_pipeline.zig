@@ -18,6 +18,7 @@ const LIR = @import("LIR.zig");
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
+const ConcreteSourceType = mir.ConcreteSourceType;
 const repr = mir.LambdaSolved.Representation;
 
 /// Public `LowerResourceError` declaration.
@@ -502,6 +503,7 @@ pub fn lowerArtifactsToLir(
         allocator,
         artifacts.root.artifact,
         artifacts.imports,
+        artifacts.root.relation_artifacts,
         &solved,
         selected_entrypoints,
         roots,
@@ -639,6 +641,7 @@ pub fn summarizeCompileTimeDependencies(
         allocator,
         artifacts.root.artifact,
         artifacts.imports,
+        artifacts.root.relation_artifacts,
         &solved,
         selected_entrypoints,
         roots,
@@ -915,9 +918,11 @@ fn cloneRuntimeCallableSetDescriptors(
             members[member_i] = .{
                 .member = member.member,
                 .proc_value = member.proc_value,
+                .source_fn_ty_payload = member.source_fn_ty_payload,
                 .source_proc = member.source_proc,
                 .published_proc_value = member.published_proc_value,
                 .published_source_proc = member.published_source_proc,
+                .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
                 .target_instance = member.target_instance,
                 .capture_slots = if (member.capture_slots.len == 0)
                     &.{}
@@ -1023,6 +1028,7 @@ fn publishCompileTimePayloads(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     solved: *const mir.LambdaSolved.Solve.Program,
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     roots: RootRequestSet,
@@ -1046,6 +1052,7 @@ fn publishCompileTimePayloads(
         .artifact = artifact,
         .artifact_sink = artifact_sink,
         .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
+        .relation_artifacts = relation_artifacts,
         .plans = plan_sink,
         .values = &artifact_sink.comptime_values,
         .active = std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId).init(allocator),
@@ -1069,6 +1076,7 @@ fn publishCompileTimePayloads(
                         allocator,
                         artifact_sink,
                         imports,
+                        relation_artifacts,
                         plan_sink,
                         solved,
                         root_instance,
@@ -1086,6 +1094,7 @@ fn publishCompileTimePayloads(
                 allocator,
                 artifact_sink,
                 imports,
+                relation_artifacts,
                 plan_sink,
                 solved,
                 root_instance,
@@ -1280,23 +1289,24 @@ fn publishCompileTimeDependencySummariesFromSolved(
     selected_entrypoints: []const checked_artifact.LoweringEntrypointRequest,
     payloads: ?[]const checked_artifact.CompileTimeEvaluationPayload,
 ) Allocator.Error![]const ?checked_artifact.ComptimeDependencySummaryId {
-    if (selected_entrypoints.len != solved.root_instances.items.len) {
-        checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
-    }
     if (payloads) |payload_slice| {
         if (selected_entrypoints.len != payload_slice.len) {
             checkedPipelineInvariant("compile-time dependency summary payload count changed before publication");
+        }
+        if (selected_entrypoints.len != solved.root_instances.items.len) {
+            checkedPipelineInvariant("compile-time dependency summary root count changed before publication");
         }
     }
 
     var collector = CompileTimeDependencySummaryBuilder.init(allocator, artifact, artifact_sink, solved, callable_set_descriptors);
     defer collector.deinit();
 
-    const summary_ids = try allocator.alloc(?checked_artifact.ComptimeDependencySummaryId, selected_entrypoints.len);
+    const summary_count = if (payloads != null) selected_entrypoints.len else solved.root_instances.items.len;
+    const summary_ids = try allocator.alloc(?checked_artifact.ComptimeDependencySummaryId, summary_count);
     errdefer allocator.free(summary_ids);
     @memset(summary_ids, null);
 
-    for (selected_entrypoints, solved.root_instances.items, 0..) |entrypoint, root_instance, i| {
+    for (solved.root_instances.items, 0..) |root_instance, i| {
         const payload = if (payloads) |payload_slice| payload_slice[i] else null;
         var summary = try collector.entrypointSummary(root_instance, payload);
         defer summary.deinit(allocator);
@@ -1306,6 +1316,7 @@ fn publishCompileTimeDependencySummariesFromSolved(
         });
         summary_ids[i] = summary_id;
         if (payloads != null) {
+            const entrypoint = selected_entrypoints[i];
             switch (entrypoint) {
                 .root => |root_request| {
                     const root = compileTimeRootForRequest(artifact, root_request);
@@ -1847,6 +1858,11 @@ const CompileTimeDependencySummaryBuilder = struct {
         switch (self.artifact_sink.comptime_plans.callableResult(plan_id)) {
             .finite => |finite| {
                 for (finite.members) |member| {
+                    try concrete.append(self.allocator, .{ .procedure_callable_with_payloads = .{
+                        .proc_value = member.member_proc,
+                        .source_fn_ty_payload = member.member_proc_source_fn_ty_payload,
+                        .lifted_owner_source_fn_ty_payload = member.member_lifted_owner_source_fn_ty_payload,
+                    } });
                     for (member.capture_slots) |capture| try self.collectCaptureSlotPlan(capture, availability, concrete);
                 }
             },
@@ -2046,11 +2062,40 @@ fn deinitCallableResultMembersForPipeline(
     members: []checked_artifact.CallableResultMemberPlan,
 ) void {
     for (members) |member| {
-        var target_key = member.target_key;
-        repr.deinitExecutableSpecializationKey(allocator, &target_key);
+        deinitCallableResultMemberTargetPlanForPipeline(allocator, member.target);
         allocator.free(member.capture_slots);
     }
     allocator.free(members);
+}
+
+fn deinitCallableResultMemberTargetPlanForPipeline(
+    allocator: Allocator,
+    target: checked_artifact.CallableResultMemberTargetPlan,
+) void {
+    switch (target) {
+        .artifact_owned => |key| {
+            var owned = key;
+            repr.deinitExecutableSpecializationKey(allocator, &owned);
+        },
+        .member_proc_relative => |endpoint| allocator.free(endpoint.exec_arg_tys),
+    }
+}
+
+fn executableEndpointFromKey(
+    allocator: Allocator,
+    key: canonical.ExecutableSpecializationKey,
+    source_fn_ty: canonical.CanonicalTypeKey,
+) Allocator.Error!checked_artifact.ExecutableSpecializationEndpoint {
+    return .{
+        .requested_fn_ty = source_fn_ty,
+        .exec_arg_tys = if (key.exec_arg_tys.len == 0)
+            &.{}
+        else
+            try allocator.dupe(canonical.CanonicalExecValueTypeKey, key.exec_arg_tys),
+        .exec_ret_ty = key.exec_ret_ty,
+        .callable_repr_mode = key.callable_repr_mode,
+        .capture_shape_key = key.capture_shape_key,
+    };
 }
 
 fn cloneExecutableSpecializationKeySlice(
@@ -2664,6 +2709,7 @@ fn callableResultPlanForRoot(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     solved: *const mir.LambdaSolved.Solve.Program,
     root_instance: repr.ProcRepresentationInstanceId,
@@ -2686,10 +2732,10 @@ fn callableResultPlanForRoot(
     const emission = representation_store.callableEmissionPlan(callable.emission_plan);
     return switch (emission) {
         .pending_proc_value => checkedPipelineInvariant("callable result plan reached pending callable emission"),
-        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, imports, plans, value_context, instance.public_roots.ret, callable, key),
-        .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, imports, plans, value_context, erased),
-        .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, imports, plans, value_context, callable, erase),
-        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, imports, plans, value_context, instance.public_roots.ret, callable, erase),
+        .finite => |key| try finiteCallableResultPlan(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, instance.public_roots.ret, callable, key),
+        .already_erased => |erased| try alreadyErasedResultPlan(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, erased),
+        .erase_proc_value => |erase| try erasedProcValueResultPlan(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, callable, erase),
+        .erase_finite_set => |erase| try erasedFiniteSetResultPlan(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, instance.public_roots.ret, callable, erase),
     };
 }
 
@@ -2697,6 +2743,7 @@ fn finiteCallableResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable_value: repr.ValueInfoId,
@@ -2707,6 +2754,7 @@ fn finiteCallableResultPlan(
         .allocator = allocator,
         .artifact = artifact_sink,
         .imports = imports,
+        .relation_artifacts = relation_artifacts,
         .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
         .plans = plans,
         .value_context = value_context,
@@ -2966,6 +3014,7 @@ fn erasedProcValueResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable: repr.CallableValueInfo,
@@ -2993,7 +3042,7 @@ fn erasedProcValueResultPlan(
             .proc_value = erase.proc_value,
             .capture_shape_key = erase.capture_shape_key,
         } } },
-        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, imports, plans, value_context, erase),
+        .capture = try erasedCapturePlanForProcValue(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, erase),
         .result_ty = erase.executable_specialization_key.exec_ret_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForProcValue(
             allocator,
@@ -3008,6 +3057,7 @@ fn erasedFiniteSetResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     callable_value: repr.ValueInfoId,
@@ -3027,6 +3077,7 @@ fn erasedFiniteSetResultPlan(
                 allocator,
                 artifact_sink,
                 imports,
+                relation_artifacts,
                 plans,
                 value_context,
                 callable_value,
@@ -3046,6 +3097,7 @@ fn alreadyErasedResultPlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erased: repr.AlreadyErasedCallablePlan,
@@ -3055,7 +3107,7 @@ fn alreadyErasedResultPlan(
         .sig_key = erased.sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erased.provenance),
         .code_plan = .read_from_interpreted_erased_value,
-        .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, imports, plans, value_context, erased),
+        .capture = try alreadyErasedCapturePlan(allocator, artifact_sink, imports, relation_artifacts, plans, value_context, erased),
         .result_ty = erased.result_ty,
         .executable_signature_payloads = try erasedPromotedSignaturePayloadsForAlreadyErased(
             allocator,
@@ -3070,6 +3122,7 @@ fn alreadyErasedCapturePlan(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erased: repr.AlreadyErasedCallablePlan,
@@ -3096,6 +3149,7 @@ fn alreadyErasedCapturePlan(
                 .allocator = allocator,
                 .artifact = artifact_sink,
                 .imports = imports,
+                .relation_artifacts = relation_artifacts,
                 .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
                 .plans = plans,
                 .value_context = value_context,
@@ -3114,6 +3168,7 @@ fn erasedCapturePlanForProcValue(
     allocator: Allocator,
     artifact_sink: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
     erase: repr.ProcValueErasePlan,
@@ -3145,6 +3200,7 @@ fn erasedCapturePlanForProcValue(
         .allocator = allocator,
         .artifact = artifact_sink,
         .imports = imports,
+        .relation_artifacts = relation_artifacts,
         .type_projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports),
         .plans = plans,
         .value_context = target_context,
@@ -3379,6 +3435,7 @@ const CaptureSlotPlanBuilder = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
     type_projector: checked_artifact.CheckedTypeProjector,
     plans: *checked_artifact.CompileTimePlanStore,
     value_context: ConstValueContext,
@@ -3466,7 +3523,7 @@ const CaptureSlotPlanBuilder = struct {
             .function => if (value_info_id) |info_id|
                 .{ .callable_leaf = try self.callableLeafPlan(info_id) }
             else if (exec_ty) |key|
-                try self.callablePlanForExecutableKey(source_ty, key)
+                try self.callablePlanForExecutableKey(source_ty, checked_ty, key)
             else
                 .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .empty_record => .{ .record = &.{} },
@@ -3525,12 +3582,10 @@ const CaptureSlotPlanBuilder = struct {
             if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
                 checkedPipelineInvariant("finite compile-time callable result descriptor mixes source function types");
             }
-            const target_key = try self.cloneAndPublishMemberTargetKey(member);
-            var target_key_owned = true;
-            errdefer if (target_key_owned) {
-                var owned_target_key = target_key;
-                repr.deinitExecutableSpecializationKey(self.allocator, &owned_target_key);
-            };
+            const member_proc = try self.callableResultMemberProcForBoundary(member, source_fn_ty, null);
+            const target = try self.cloneMemberTargetPlan(member, source_fn_ty);
+            var target_owned = true;
+            errdefer if (target_owned) deinitCallableResultMemberTargetPlanForPipeline(self.allocator, target);
             if (member.capture_slots.len != 0) {
                 const slot_plans = try self.allocator.alloc(checked_artifact.CaptureSlotReificationPlanId, member.capture_slots.len);
                 errdefer self.allocator.free(slot_plans);
@@ -3547,10 +3602,13 @@ const CaptureSlotPlanBuilder = struct {
                         try self.fillMemberCapturePlansFromConstruction(member, construction_id.?, constructed, slot_plans);
                         members[i] = .{
                             .member = member.member,
-                            .target_key = target_key,
+                            .member_proc = member_proc.proc,
+                            .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
+                            .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                            .target = target,
                             .capture_slots = slot_plans,
                         };
-                        target_key_owned = false;
+                        target_owned = false;
                         initialized_members += 1;
                         continue;
                     }
@@ -3558,19 +3616,25 @@ const CaptureSlotPlanBuilder = struct {
                 try self.fillMemberCapturePlansFromTargetProc(member, slot_plans);
                 members[i] = .{
                     .member = member.member,
-                    .target_key = target_key,
+                    .member_proc = member_proc.proc,
+                    .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
+                    .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                    .target = target,
                     .capture_slots = slot_plans,
                 };
-                target_key_owned = false;
+                target_owned = false;
                 initialized_members += 1;
                 continue;
             }
             members[i] = .{
                 .member = member.member,
-                .target_key = target_key,
+                .member_proc = member_proc.proc,
+                .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
+                .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                .target = target,
                 .capture_slots = &.{},
             };
-            target_key_owned = false;
+            target_owned = false;
             initialized_members += 1;
         }
 
@@ -3683,14 +3747,15 @@ const CaptureSlotPlanBuilder = struct {
     fn callablePlanForExecutableKey(
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: checked_artifact.CheckedTypeId,
         exec_ty: canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         const payload = self.executablePayloadForKey(exec_ty);
         return switch (payload) {
-            .callable_set => |callable_set| .{ .callable_leaf = try self.finiteCallableResultPlanForExecutableKey(source_ty, callable_set.key) },
+            .callable_set => |callable_set| .{ .callable_leaf = try self.finiteCallableResultPlanForExecutableKey(source_ty, source_ty_payload, callable_set.key) },
             .vacant_callable_slot => .{ .callable_schema = source_ty },
             .erased_fn => checkedPipelineInvariant("capture slot executable schema reached erased function without explicit value metadata"),
-            .recursive_ref => |ref| try self.callablePlanForExecutablePayloadRef(source_ty, ref),
+            .recursive_ref => |ref| try self.callablePlanForExecutablePayloadRef(source_ty, source_ty_payload, ref),
             else => checkedPipelineInvariant("function capture slot executable key did not reference callable payload"),
         };
     }
@@ -3698,15 +3763,17 @@ const CaptureSlotPlanBuilder = struct {
     fn callablePlanForExecutablePayloadRef(
         self: *CaptureSlotPlanBuilder,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: checked_artifact.CheckedTypeId,
         ref: repr.SessionExecutableTypePayloadId,
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         const key = self.value_context.representation_store.session_executable_type_payloads.keyFor(ref);
-        return try self.callablePlanForExecutableKey(source_ty, key);
+        return try self.callablePlanForExecutableKey(source_ty, source_ty_payload, key);
     }
 
     fn finiteCallableResultPlanForExecutableKey(
         self: *CaptureSlotPlanBuilder,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: checked_artifact.CheckedTypeId,
         key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!checked_artifact.CallableResultPlanId {
         const descriptor = self.value_context.representation_store.callableSetDescriptor(key) orelse {
@@ -3721,15 +3788,10 @@ const CaptureSlotPlanBuilder = struct {
         errdefer deinitCallableResultMembersForPipeline(self.allocator, members[0..initialized_members]);
 
         for (descriptor.members, 0..) |member, i| {
-            if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &source_fn_ty.bytes)) {
-                checkedPipelineInvariant("finite executable callable result descriptor source function type disagrees with payload");
-            }
-            const target_key = try self.cloneAndPublishMemberTargetKey(member);
-            var target_key_owned = true;
-            errdefer if (target_key_owned) {
-                var owned_target_key = target_key;
-                repr.deinitExecutableSpecializationKey(self.allocator, &owned_target_key);
-            };
+            const member_proc = try self.callableResultMemberProcForBoundary(member, source_fn_ty, source_fn_ty_payload);
+            const target = try self.cloneMemberTargetPlan(member, source_fn_ty);
+            var target_owned = true;
+            errdefer if (target_owned) deinitCallableResultMemberTargetPlanForPipeline(self.allocator, target);
             const slot_plans: []const checked_artifact.CaptureSlotReificationPlanId = if (member.capture_slots.len == 0)
                 &.{}
             else blk: {
@@ -3740,10 +3802,13 @@ const CaptureSlotPlanBuilder = struct {
             };
             members[i] = .{
                 .member = member.member,
-                .target_key = target_key,
+                .member_proc = member_proc.proc,
+                .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
+                .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                .target = target,
                 .capture_slots = slot_plans,
             };
-            target_key_owned = false;
+            target_owned = false;
             initialized_members += 1;
         }
 
@@ -3756,10 +3821,116 @@ const CaptureSlotPlanBuilder = struct {
         return result;
     }
 
-    fn cloneAndPublishMemberTargetKey(
+    const CallableResultMemberProcPlan = struct {
+        proc: canonical.ProcedureCallableRef,
+        source_fn_ty_payload: checked_artifact.CheckedTypeId,
+        lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId,
+    };
+
+    fn callableResultMemberProcForBoundary(
         self: *CaptureSlotPlanBuilder,
         member: repr.CanonicalCallableSetMember,
-    ) Allocator.Error!canonical.ExecutableSpecializationKey {
+        source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: ?checked_artifact.CheckedTypeId,
+    ) Allocator.Error!CallableResultMemberProcPlan {
+        var out = member.published_proc_value orelse member.proc_value;
+        out.source_fn_ty = source_fn_ty;
+        return .{
+            .proc = out,
+            .source_fn_ty_payload = if (source_fn_ty_payload) |payload|
+                self.checkedPayloadForBoundaryRoot(payload, source_fn_ty)
+            else
+                try self.checkedPayloadForConcreteSourcePayload(member.source_fn_ty_payload, source_fn_ty),
+            .lifted_owner_source_fn_ty_payload = switch (out.template) {
+                .lifted => |lifted| blk: {
+                    const payload = member.lifted_owner_source_fn_ty_payload orelse {
+                        checkedPipelineInvariant("lifted callable result member did not publish owner source function type payload");
+                    };
+                    break :blk try self.checkedPayloadForConcreteSourcePayload(payload, lifted.owner_mono_specialization.requested_mono_fn_ty);
+                },
+                .checked, .synthetic => blk: {
+                    if (member.lifted_owner_source_fn_ty_payload != null) {
+                        checkedPipelineInvariant("non-lifted callable result member published lifted owner source function type payload");
+                    }
+                    break :blk null;
+                },
+            },
+        };
+    }
+
+    fn checkedPayloadForConcreteSourcePayload(
+        self: *CaptureSlotPlanBuilder,
+        payload_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        expected_key: canonical.CanonicalTypeKey,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const root = self.value_context.solved.concrete_source_types.root(payload_ref);
+        if (!std.mem.eql(u8, &root.key.bytes, &expected_key.bytes)) {
+            checkedPipelineInvariant("callable result member source function type payload key disagrees with published callable type");
+        }
+        return switch (root.source) {
+            .local => |local| try self.type_projector.projectCheckedTypeViewRootWithNames(
+                self.value_context.solved.concrete_source_types.localView(),
+                &self.value_context.solved.canonical_names,
+                local,
+            ),
+            .artifact => |artifact| try self.checkedPayloadForArtifactSource(artifact),
+        };
+    }
+
+    fn checkedPayloadForBoundaryRoot(
+        self: *CaptureSlotPlanBuilder,
+        payload: checked_artifact.CheckedTypeId,
+        expected_key: canonical.CanonicalTypeKey,
+    ) checked_artifact.CheckedTypeId {
+        const index = @intFromEnum(payload);
+        if (index >= self.artifact.checked_types.roots.len) {
+            checkedPipelineInvariant("callable result boundary source type payload referenced a missing checked root");
+        }
+        const key = self.artifact.checked_types.roots[index].key;
+        if (!std.mem.eql(u8, &key.bytes, &expected_key.bytes)) {
+            checkedPipelineInvariant("callable result boundary source type payload key disagrees with published callable type");
+        }
+        return payload;
+    }
+
+    fn checkedPayloadForArtifactSource(
+        self: *CaptureSlotPlanBuilder,
+        source: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        if (std.mem.eql(u8, &source.artifact.bytes, &self.artifact.key.bytes)) {
+            return try self.type_projector.projectCheckedTypeViewRootWithNames(
+                self.artifact.checked_types.view(),
+                &self.artifact.canonical_names,
+                source.ty,
+            );
+        }
+
+        for (self.imports) |imported| {
+            if (!std.mem.eql(u8, &imported.key.bytes, &source.artifact.bytes)) continue;
+            return try self.type_projector.projectCheckedTypeViewRootWithNames(
+                imported.checked_types,
+                imported.canonical_names,
+                source.ty,
+            );
+        }
+
+        for (self.relation_artifacts) |related| {
+            if (!std.mem.eql(u8, &related.key.bytes, &source.artifact.bytes)) continue;
+            return try self.type_projector.projectCheckedTypeViewRootWithNames(
+                related.checked_types,
+                related.canonical_names,
+                source.ty,
+            );
+        }
+
+        checkedPipelineInvariant("callable result member source function type payload artifact was not available");
+    }
+
+    fn cloneMemberTargetPlan(
+        self: *CaptureSlotPlanBuilder,
+        member: repr.CanonicalCallableSetMember,
+        source_fn_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!checked_artifact.CallableResultMemberTargetPlan {
         const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(member.target_instance)];
         if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
             checkedPipelineInvariant("finite callable result target instance disagrees with descriptor source procedure");
@@ -3773,16 +3944,19 @@ const CaptureSlotPlanBuilder = struct {
         for (member.capture_slots) |slot| {
             _ = try payload_builder.payloadForSessionKey(target_instance.solve_session, slot.exec_value_ty);
         }
-        var target_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
-        const published_source_proc = try self.artifactOwnedSourceProcForMember(member);
-        target_key.base = published_source_proc.proc.proc_base;
-        return target_key;
+        if (try self.artifactOwnedSourceProcForMember(member)) |published_source_proc| {
+            var target_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_instance.executable_specialization_key);
+            target_key.base = published_source_proc.proc.proc_base;
+            target_key.requested_fn_ty = source_fn_ty;
+            return .{ .artifact_owned = target_key };
+        }
+        return .{ .member_proc_relative = try executableEndpointFromKey(self.allocator, target_instance.executable_specialization_key, source_fn_ty) };
     }
 
     fn artifactOwnedSourceProcForMember(
         self: *CaptureSlotPlanBuilder,
         member: repr.CanonicalCallableSetMember,
-    ) Allocator.Error!canonical.MirProcedureRef {
+    ) Allocator.Error!?canonical.MirProcedureRef {
         if (member.published_source_proc) |published| return published;
 
         return switch (member.proc_value.template) {
@@ -3797,7 +3971,10 @@ const CaptureSlotPlanBuilder = struct {
         self: *CaptureSlotPlanBuilder,
         lifted: canonical.LiftedProcedureTemplateRef,
         source_fn_ty: canonical.CanonicalTypeKey,
-    ) Allocator.Error!canonical.MirProcedureRef {
+    ) Allocator.Error!?canonical.MirProcedureRef {
+        if (!std.mem.eql(u8, &lifted.owner_mono_specialization.template.artifact.bytes, &self.artifact.key.bytes)) {
+            return null;
+        }
         const owner_template = self.artifactOwnedOwnerTemplate(lifted.owner_mono_specialization.template);
         const owner_key = canonical.MonoSpecializationKey{
             .template = owner_template,
@@ -3867,6 +4044,7 @@ const CaptureSlotPlanBuilder = struct {
                 self.allocator,
                 self.artifact,
                 self.imports,
+                self.relation_artifacts,
                 self.plans,
                 self.value_context,
                 erased,
@@ -3875,6 +4053,7 @@ const CaptureSlotPlanBuilder = struct {
                 self.allocator,
                 self.artifact,
                 self.imports,
+                self.relation_artifacts,
                 self.plans,
                 self.value_context,
                 callable,
@@ -3884,6 +4063,7 @@ const CaptureSlotPlanBuilder = struct {
                 self.allocator,
                 self.artifact,
                 self.imports,
+                self.relation_artifacts,
                 self.plans,
                 self.value_context,
                 value_info_id,
@@ -3904,6 +4084,7 @@ const CaptureSlotPlanBuilder = struct {
             .artifact = self.artifact,
             .artifact_sink = self.artifact,
             .type_projector = checked_artifact.CheckedTypeProjector.init(self.allocator, self.artifact, self.imports),
+            .relation_artifacts = self.relation_artifacts,
             .plans = self.plans,
             .values = &self.artifact.comptime_values,
             .active = std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId).init(self.allocator),
@@ -4518,6 +4699,7 @@ const ConstGraphPlanBuilder = struct {
     artifact: *const checked_artifact.CheckedModuleArtifact,
     artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
     type_projector: checked_artifact.CheckedTypeProjector,
+    relation_artifacts: []const checked_artifact.ImportedModuleView = &.{},
     plans: *checked_artifact.CompileTimePlanStore,
     values: ?*checked_artifact.CompileTimeValueStore = null,
     active: std.AutoHashMap(ConstPlanKey, checked_artifact.ConstGraphReificationPlanId),
@@ -4726,13 +4908,63 @@ const ConstGraphPlanBuilder = struct {
                 .backing = try self.planForExpected(alias.backing, value_context, value_info, expected_exec_key),
             } },
             .nominal => |nominal| try self.nominalPlan(checked_ty, nominal, value_context, value_info, expected_exec_key),
-            .function => if (value_info == null)
-                .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key }
+            .function => if (value_info) |info|
+                .{ .callable_leaf = try self.callableLeafPlan(value_context, info) }
+            else if (expected_exec_key) |key|
+                try self.callablePlanForExecutableKey(
+                    self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key,
+                    checked_ty,
+                    value_context,
+                    key,
+                )
             else
-                .{ .callable_leaf = try self.callableLeafPlan(value_context, value_info) },
+                .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .flex, .rigid => checkedPipelineInvariant("compile-time constant planning reached unresolved type variable"),
             .pending => checkedPipelineInvariant("compile-time constant planning reached pending checked type"),
         };
+    }
+
+    fn callablePlanForExecutableKey(
+        self: *ConstGraphPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: checked_artifact.CheckedTypeId,
+        value_context: ?ConstValueContext,
+        exec_ty: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
+        const context = value_context orelse checkedPipelineInvariant("callable const graph executable endpoint requires value context");
+        const payload = self.executablePayloadForKey(context, exec_ty);
+        return switch (payload) {
+            .callable_set => |callable_set| blk: {
+                var capture_builder = CaptureSlotPlanBuilder{
+                    .allocator = self.allocator,
+                    .artifact = self.artifactSink(),
+                    .imports = self.type_projector.imports,
+                    .relation_artifacts = self.relation_artifacts,
+                    .type_projector = checked_artifact.CheckedTypeProjector.init(self.allocator, self.artifactSink(), self.type_projector.imports),
+                    .plans = self.plans,
+                    .value_context = context,
+                    .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(self.allocator),
+                };
+                defer capture_builder.deinit();
+                break :blk .{ .callable_leaf = .{ .finite = try capture_builder.finiteCallableResultPlanForExecutableKey(source_ty, source_ty_payload, callable_set.key) } };
+            },
+            .vacant_callable_slot => .{ .callable_schema = source_ty },
+            .erased_fn => checkedPipelineInvariant("const graph executable schema reached erased function without explicit value metadata"),
+            .recursive_ref => |ref| try self.callablePlanForExecutablePayloadRef(source_ty, source_ty_payload, value_context, ref),
+            else => checkedPipelineInvariant("function const graph executable key did not reference callable payload"),
+        };
+    }
+
+    fn callablePlanForExecutablePayloadRef(
+        self: *ConstGraphPlanBuilder,
+        source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: checked_artifact.CheckedTypeId,
+        value_context: ?ConstValueContext,
+        ref: repr.SessionExecutableTypePayloadId,
+    ) Allocator.Error!checked_artifact.ConstGraphReificationPlan {
+        const context = value_context orelse checkedPipelineInvariant("callable const graph executable payload requires value context");
+        const key = context.representation_store.session_executable_type_payloads.keyFor(ref);
+        return try self.callablePlanForExecutableKey(source_ty, source_ty_payload, value_context, key);
     }
 
     fn nominalPlan(
@@ -5190,6 +5422,7 @@ const ConstGraphPlanBuilder = struct {
                 self.allocator,
                 self.artifactSink(),
                 self.type_projector.imports,
+                self.relation_artifacts,
                 self.plans,
                 context,
                 info_id,
@@ -5200,6 +5433,7 @@ const ConstGraphPlanBuilder = struct {
                 self.allocator,
                 self.artifactSink(),
                 self.type_projector.imports,
+                self.relation_artifacts,
                 self.plans,
                 context,
                 erased,
@@ -5208,6 +5442,7 @@ const ConstGraphPlanBuilder = struct {
                 self.allocator,
                 self.artifactSink(),
                 self.type_projector.imports,
+                self.relation_artifacts,
                 self.plans,
                 context,
                 callable,
@@ -5217,6 +5452,7 @@ const ConstGraphPlanBuilder = struct {
                 self.allocator,
                 self.artifactSink(),
                 self.type_projector.imports,
+                self.relation_artifacts,
                 self.plans,
                 context,
                 info_id,

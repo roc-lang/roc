@@ -160,6 +160,15 @@ fn finalizeRuntimeDependencySummaries(
 ) anyerror!void {
     if (artifactHasUnboundPlatformRequirements(artifact)) return;
 
+    try ensurePlatformRequiredConstInstances(
+        allocator,
+        artifact,
+        dependency_views,
+        lowering_imports,
+        relation_artifacts,
+        runtime_env,
+    );
+
     var runtime_dependency_summaries = try lir.CheckedPipeline.summarizeCompileTimeDependencies(
         allocator,
         .{
@@ -192,6 +201,103 @@ fn finalizeRuntimeDependencySummaries(
 fn artifactHasUnboundPlatformRequirements(artifact: *const checked_artifact.CheckedModuleArtifact) bool {
     return artifact.platform_required_declarations.declarations.len != 0 and
         artifact.platform_required_bindings.bindings.len == 0;
+}
+
+fn ensurePlatformRequiredConstInstances(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    lowering_imports: []const checked_artifact.ImportedModuleView,
+    relation_artifacts: []const checked_artifact.ImportedModuleView,
+    runtime_env: *RuntimeHostEnv,
+) anyerror!void {
+    for (artifact.platform_required_bindings.bindings) |binding| {
+        const const_use = switch (binding.value_use) {
+            .const_value => |platform_const| platform_const.const_use,
+            .procedure_value => continue,
+        };
+        const request = try constInstantiationRequestForUse(
+            allocator,
+            artifact,
+            dependency_views,
+            const_use,
+        );
+        _ = try ensureConstInstanceRequest(
+            allocator,
+            artifact,
+            dependency_views,
+            lowering_imports,
+            relation_artifacts,
+            runtime_env,
+            request,
+        );
+    }
+}
+
+fn constInstantiationRequestForUse(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    const_use: checked_artifact.ConstUseTemplate,
+) Allocator.Error!checked_artifact.ConstInstantiationRequest {
+    const key = if (try concreteConstProducerKeyForRef(
+        allocator,
+        artifact,
+        dependency_views,
+        const_use.const_ref,
+    )) |producer_key|
+        producer_key
+    else
+        const_use.requested_source_ty_template;
+
+    const instance_key = checked_artifact.ConstInstantiationKey{
+        .const_ref = const_use.const_ref,
+        .requested_source_ty = key,
+    };
+    return .{
+        .key = instance_key,
+        .requested_source_ty_payload = try constInstantiationPayloadForKey(
+            allocator,
+            artifact,
+            dependency_views,
+            const_use,
+            instance_key,
+        ),
+    };
+}
+
+fn concreteConstProducerKeyForRef(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    ref: checked_artifact.ConstRef,
+) Allocator.Error!?canonical.CanonicalTypeKey {
+    const source = constTemplateSourceForRef(artifact, dependency_views, ref);
+    const scheme = source.checked_types.schemeForKey(ref.source_scheme) orelse {
+        compileTimeFinalizationInvariant("constant use referenced a missing producer source scheme");
+    };
+    if (!try source.checked_types.isConcreteConstProducerScheme(allocator, scheme.root)) return null;
+    return source.checked_types.rootKey(scheme.root);
+}
+
+fn constInstantiationPayloadForKey(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    const_use: checked_artifact.ConstUseTemplate,
+    key: checked_artifact.ConstInstantiationKey,
+) Allocator.Error!checked_artifact.CheckedTypeId {
+    if (std.mem.eql(u8, &key.requested_source_ty.bytes, &const_use.requested_source_ty_template.bytes)) {
+        return const_use.requested_source_ty_payload orelse {
+            compileTimeFinalizationInvariant("constant use had no requested source type payload");
+        };
+    }
+    return try checkedTypePayloadForConstInstanceDependency(
+        allocator,
+        artifact,
+        dependency_views,
+        key,
+    );
 }
 
 fn publishAlreadyEvaluatedConstantRoot(
@@ -483,6 +589,9 @@ fn evaluateConstantRoot(
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
+    var dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+    defer dependencies.deinit();
+
     var reifier = ComptimeReifier{
         .allocator = allocator,
         .artifact = artifact,
@@ -500,15 +609,11 @@ fn evaluateConstantRoot(
                 .instance = const_instance_key,
             } },
         },
+        .dependencies = &dependencies,
     };
     defer reifier.deinit();
     const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
-    const dependency_summary = try appendConcreteDependencySummaryForConstRoot(
-        allocator,
-        artifact,
-        root,
-        reification_plan,
-    );
+    const dependency_summary = try appendConcreteDependencySummary(allocator, artifact, root, dependencies.concrete.items);
 
     try artifact.comptime_values.bind(pattern, reified.schema, reified.value);
 
@@ -654,6 +759,7 @@ const SelectedFiniteCallableResult = struct {
 
 const PublishedCallableResult = struct {
     proc_value: check.CanonicalNames.ProcedureCallableRef,
+    source_fn_ty_payload: checked_artifact.CheckedTypeId,
     output: checked_artifact.CallablePromotionOutput,
     promotion_plan: ?checked_artifact.CallablePromotionPlanId,
     generated_procedure: ?checked_artifact.SemanticInstantiationProcedureId = null,
@@ -911,6 +1017,9 @@ fn ensureConstInstanceRequest(
             const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
             defer interpreter.dropValue(result.value, ret_layout);
 
+            var concrete_dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+            defer concrete_dependencies.deinit();
+
             var reifier = ComptimeReifier{
                 .allocator = allocator,
                 .artifact = artifact,
@@ -925,13 +1034,20 @@ fn ensureConstInstanceRequest(
                     .source_binding = sourceBindingForConstInstanceRequest(artifact, request.key.const_ref),
                     .base = .{ .const_instance = request.key },
                 },
+                .dependencies = &concrete_dependencies,
             };
             defer reifier.deinit();
             const reified = try reifier.reifyPlan(reification_plan, ret_layout, result.value);
+            const concrete_dependency_summary = try appendConcreteDependencySummaryFromBase(
+                allocator,
+                artifact,
+                dependency_summary,
+                concrete_dependencies.concrete.items,
+            );
             artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
                 .value = reified.value,
-                .dependency_summary = dependency_summary,
+                .dependency_summary = concrete_dependency_summary,
                 .reification_plan = reification_plan,
                 .generated_procedures = try generatedProceduresForConstInstance(
                     allocator,
@@ -1066,7 +1182,9 @@ fn ensureConcreteDependencyValue(
                 },
             );
         },
-        .procedure_callable => {},
+        .procedure_callable,
+        .procedure_callable_with_payloads,
+        => {},
     }
 }
 
@@ -1522,18 +1640,6 @@ fn constGraphContainsCallableSlotsInner(
     };
 }
 
-fn appendConcreteDependencySummaryForConstRoot(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    root: checked_artifact.CompileTimeRoot,
-    reification_plan: checked_artifact.ConstGraphReificationPlanId,
-) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
-    var collector = ConcreteDependencyCollector.init(allocator, artifact);
-    defer collector.deinit();
-    try collector.collectConstGraph(reification_plan);
-    return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
-}
-
 fn appendConcreteDependencySummaryForCallableRoot(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
@@ -1557,6 +1663,19 @@ fn appendConcreteDependencySummary(
     const root_summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
     return try artifact.comptime_dependencies.appendSummary(allocator, .{
         .availability_values = root_summary.availability_values,
+        .concrete_values = concrete_values,
+    });
+}
+
+fn appendConcreteDependencySummaryFromBase(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    base_summary_id: checked_artifact.ComptimeDependencySummaryId,
+    concrete_values: []const checked_artifact.ComptimeConcreteValueUse,
+) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
+    const base_summary = artifact.comptime_dependencies.getSummary(base_summary_id);
+    return try artifact.comptime_dependencies.appendSummary(allocator, .{
+        .availability_values = base_summary.availability_values,
         .concrete_values = concrete_values,
     });
 }
@@ -1679,7 +1798,14 @@ const ConcreteDependencyCollector = struct {
                     const member = persistedCallableSetMember(descriptor, member_plan.member) orelse {
                         compileTimeFinalizationInvariant("concrete dependency collection reached missing callable-set member");
                     };
-                    try self.appendProcedureCallable(member.proc_value);
+                    if (!canonical.procedureCallableRefEql(member.proc_value, member_plan.member_proc)) {
+                        compileTimeFinalizationInvariant("concrete dependency collection finite member plan disagreed with descriptor member");
+                    }
+                    try self.concrete.append(self.allocator, .{ .procedure_callable_with_payloads = .{
+                        .proc_value = member_plan.member_proc,
+                        .source_fn_ty_payload = member_plan.member_proc_source_fn_ty_payload,
+                        .lifted_owner_source_fn_ty_payload = member_plan.member_lifted_owner_source_fn_ty_payload,
+                    } });
                     for (member_plan.capture_slots) |capture| try self.collectCaptureSlot(capture);
                 }
             },
@@ -2208,9 +2334,6 @@ fn selectFiniteCallableResult(
     const member = runtimeCallableSetMember(descriptor, planned_member.member) orelse {
         compileTimeFinalizationInvariant("compile-time callable result selected missing descriptor member");
     };
-    if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
-        compileTimeFinalizationInvariant("compile-time callable descriptor member source type differs from result plan");
-    }
     if (member.capture_slots.len != planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("compile-time callable result member capture arity differs from descriptor");
     }
@@ -2242,6 +2365,7 @@ fn publishCallableResult(
     const proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected);
     return .{
         .proc_value = proc_value,
+        .source_fn_ty_payload = selected.planned_member.member_proc_source_fn_ty_payload,
         .output = .{ .existing_procedure = proc_value },
         .promotion_plan = null,
         .generated_procedure = null,
@@ -2254,6 +2378,7 @@ fn selectedFiniteCallableRequiresPromotion(
     if (selected.planned_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.published_proc_value == null) return true;
+    if (!std.mem.eql(u8, &selected.descriptor_member.published_proc_value.?.source_fn_ty.bytes, &selected.result_plan.source_fn_ty.bytes)) return true;
     if (selected.descriptor_member.published_source_proc == null) {
         compileTimeFinalizationInvariant("finite callable descriptor published procedure identity was not paired with published source procedure");
     }
@@ -2294,12 +2419,9 @@ fn promoteFiniteCallableResult(
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
     const call_args = try promotedWrapperCallArgs(allocator, params.len);
     const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
-    const member_target = try repr.cloneExecutableSpecializationKey(allocator, selected.planned_member.target_key);
+    const member_target = try cloneCallableResultMemberTargetPlan(allocator, selected.planned_member.target);
     var member_target_owned = true;
-    errdefer if (member_target_owned) {
-        var owned_member_target = member_target;
-        repr.deinitExecutableSpecializationKey(allocator, &owned_member_target);
-    };
+    errdefer if (member_target_owned) deinitCallableResultMemberTargetPlan(allocator, member_target);
 
     var capture_builder = PrivateCaptureBuilder{
         .allocator = allocator,
@@ -2344,6 +2466,8 @@ fn promoteFiniteCallableResult(
         .callable_set_key = selected.result_plan.callable_set_key,
         .member = selected.planned_member.member,
         .member_proc = member_proc,
+        .member_proc_source_fn_ty_payload = selected.planned_member.member_proc_source_fn_ty_payload,
+        .member_lifted_owner_source_fn_ty_payload = selected.planned_member.member_lifted_owner_source_fn_ty_payload,
         .member_target = member_target,
         .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
         .member_capture_shape = selected.descriptor_member.capture_shape_key,
@@ -2373,6 +2497,7 @@ fn promoteFiniteCallableResult(
     };
     return .{
         .proc_value = proc_value,
+        .source_fn_ty_payload = checked_fn_root,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
         .generated_procedure = generated_procedure,
@@ -2383,19 +2508,24 @@ fn artifactOwnedCallableForSelectedMember(
     artifact: *checked_artifact.CheckedModuleArtifact,
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!canonical.ProcedureCallableRef {
-    if (selected.descriptor_member.published_proc_value) |published| return published;
+    if (selected.descriptor_member.published_proc_value) |published| {
+        if (std.mem.eql(u8, &published.source_fn_ty.bytes, &selected.result_plan.source_fn_ty.bytes)) return published;
+    }
 
-    return switch (selected.descriptor_member.proc_value.template) {
-        .lifted => |lifted| .{
-            .template = .{ .lifted = .{
-                .owner_mono_specialization = .{
-                    .template = artifactOwnedOwnerTemplateForLiftedMember(artifact, lifted.owner_mono_specialization.template),
-                    .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
-                },
-                .site = lifted.site,
-            } },
-            .source_fn_ty = selected.descriptor_member.proc_value.source_fn_ty,
-        },
+    return switch (selected.planned_member.member_proc.template) {
+        .lifted => |lifted| if (!std.mem.eql(u8, &lifted.owner_mono_specialization.template.artifact.bytes, &artifact.key.bytes))
+            selected.planned_member.member_proc
+        else
+            .{
+                .template = .{ .lifted = .{
+                    .owner_mono_specialization = .{
+                        .template = artifactOwnedOwnerTemplateForLiftedMember(artifact, lifted.owner_mono_specialization.template),
+                        .requested_mono_fn_ty = lifted.owner_mono_specialization.requested_mono_fn_ty,
+                    },
+                    .site = lifted.site,
+                } },
+                .source_fn_ty = selected.result_plan.source_fn_ty,
+            },
         .checked,
         .synthetic,
         => compileTimeFinalizationInvariant("promoted finite callable selected non-lifted member had no artifact-owned procedure"),
@@ -2548,6 +2678,7 @@ fn publishErasedCallableResult(
     };
     return .{
         .proc_value = proc_value,
+        .source_fn_ty_payload = checked_fn_root,
         .output = .{ .promoted_procedure = reserved.promoted_ref },
         .promotion_plan = promotion_plan,
         .generated_procedure = generated_procedure,
@@ -2724,6 +2855,8 @@ fn persistConcreteFiniteAdapterAsSingleton(
         },
         singleton_adapter,
         erased,
+        published_member.source_fn_ty_payload,
+        null,
         target_key,
     );
     errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
@@ -2765,6 +2898,8 @@ fn persistedSingletonAdapterBranches(
     owner_proc: canonical.MirProcedureRef,
     adapter: canonical.ErasedAdapterKey,
     erased: checked_artifact.ErasedCallableResultPlan,
+    member_proc_source_fn_ty_payload: checked_artifact.CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId,
     target_key: canonical.ExecutableSpecializationKey,
 ) Allocator.Error![]const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan {
     if (target_key.exec_arg_tys.len != erased.executable_signature_payloads.erased_call_arg_keys.len) {
@@ -2780,6 +2915,8 @@ fn persistedSingletonAdapterBranches(
             .callable_set_key = adapter.callable_set_key,
             .member_index = @enumFromInt(0),
         },
+        .member_proc_source_fn_ty_payload = @enumFromInt(0),
+        .member_lifted_owner_source_fn_ty_payload = null,
         .target_key = .{
             .base = @enumFromInt(0),
             .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
@@ -2825,6 +2962,8 @@ fn persistedSingletonAdapterBranches(
             .callable_set_key = adapter.callable_set_key,
             .member_index = @enumFromInt(0),
         },
+        .member_proc_source_fn_ty_payload = member_proc_source_fn_ty_payload,
+        .member_lifted_owner_source_fn_ty_payload = member_lifted_owner_source_fn_ty_payload,
         .target_key = try repr.cloneExecutableSpecializationKey(allocator, target_key),
         .arg_transforms = arg_transforms,
         .capture_transforms = &.{},
@@ -3227,6 +3366,38 @@ fn cloneExecutableSpecializationKeySlice(
         initialized += 1;
     }
     return out;
+}
+
+fn cloneCallableResultMemberTargetPlan(
+    allocator: Allocator,
+    target: checked_artifact.CallableResultMemberTargetPlan,
+) Allocator.Error!checked_artifact.CallableResultMemberTargetPlan {
+    return switch (target) {
+        .artifact_owned => |key| .{ .artifact_owned = try repr.cloneExecutableSpecializationKey(allocator, key) },
+        .member_proc_relative => |endpoint| .{ .member_proc_relative = .{
+            .requested_fn_ty = endpoint.requested_fn_ty,
+            .exec_arg_tys = if (endpoint.exec_arg_tys.len == 0)
+                &.{}
+            else
+                try allocator.dupe(canonical.CanonicalExecValueTypeKey, endpoint.exec_arg_tys),
+            .exec_ret_ty = endpoint.exec_ret_ty,
+            .callable_repr_mode = endpoint.callable_repr_mode,
+            .capture_shape_key = endpoint.capture_shape_key,
+        } },
+    };
+}
+
+fn deinitCallableResultMemberTargetPlan(
+    allocator: Allocator,
+    target: checked_artifact.CallableResultMemberTargetPlan,
+) void {
+    switch (target) {
+        .artifact_owned => |key| {
+            var owned = key;
+            repr.deinitExecutableSpecializationKey(allocator, &owned);
+        },
+        .member_proc_relative => |endpoint| if (endpoint.exec_arg_tys.len > 0) allocator.free(endpoint.exec_arg_tys),
+    }
 }
 
 fn cloneExecValueTypeKeySlice(

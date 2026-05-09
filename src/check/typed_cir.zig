@@ -308,9 +308,8 @@ pub const Module = struct {
         };
     }
 
-    pub fn defType(self: @This(), idx: CIR.Def.Idx) Var {
-        const def_data = self.env().store.getDef(idx);
-        return self.patternType(def_data.pattern);
+    pub fn defType(_: @This(), idx: CIR.Def.Idx) Var {
+        return ModuleEnv.varFrom(idx);
     }
 
     pub fn topLevelDefByIdent(self: @This(), ident: Ident.Idx) ?CIR.Def.Idx {

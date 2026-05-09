@@ -3113,7 +3113,8 @@ fn platformEntrypointNamesFromLowered(
     for (root_metadata) |metadata| {
         if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
         const root = rootRequestByOrder(root_artifact, metadata.order);
-        try names.append(try platformEntrypointNameForRoot(ctx, root_artifact, root));
+        const artifact_name = try platformEntrypointNameForRoot(ctx, root_artifact, root);
+        try names.append(try ctx.arena.dupe(u8, artifact_name));
     }
     return names.items;
 }

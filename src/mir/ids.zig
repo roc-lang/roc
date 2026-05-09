@@ -77,6 +77,46 @@ pub const ProcValueExecutableTarget = struct {
     promoted_wrapper: ?canonical.MirProcedureRef = null,
 };
 
+/// Clone an explicit executable target carried by a procedure-value expression.
+pub fn cloneProcValueExecutableTarget(
+    allocator: std.mem.Allocator,
+    target: ProcValueExecutableTarget,
+) std.mem.Allocator.Error!ProcValueExecutableTarget {
+    return .{
+        .key = .{
+            .base = target.key.base,
+            .requested_fn_ty = target.key.requested_fn_ty,
+            .exec_arg_tys = if (target.key.exec_arg_tys.len == 0)
+                &.{}
+            else
+                try allocator.dupe(canonical.CanonicalExecValueTypeKey, target.key.exec_arg_tys),
+            .exec_ret_ty = target.key.exec_ret_ty,
+            .callable_repr_mode = target.key.callable_repr_mode,
+            .capture_shape_key = target.key.capture_shape_key,
+        },
+        .artifact = target.artifact,
+        .payloads = target.payloads,
+        .promoted_wrapper = target.promoted_wrapper,
+    };
+}
+
+/// Clone an optional explicit executable target carried by a procedure-value expression.
+pub fn cloneProcValueExecutableTargetOptional(
+    allocator: std.mem.Allocator,
+    target: ?ProcValueExecutableTarget,
+) std.mem.Allocator.Error!?ProcValueExecutableTarget {
+    return if (target) |owned| try cloneProcValueExecutableTarget(allocator, owned) else null;
+}
+
+/// Release owned storage inside an explicit procedure-value executable target.
+pub fn deinitProcValueExecutableTarget(
+    allocator: std.mem.Allocator,
+    target: *ProcValueExecutableTarget,
+) void {
+    if (target.key.exec_arg_tys.len > 0) allocator.free(target.key.exec_arg_tys);
+    target.key.exec_arg_tys = &.{};
+}
+
 /// Public `RecordShapeId` declaration.
 pub const RecordShapeId = enum(u32) { _ };
 /// Public `RecordFieldId` declaration.

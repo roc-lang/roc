@@ -382,7 +382,7 @@ const BodyLifter = struct {
                 .published_proc = proc_value.published_proc,
                 .captures = try self.lowerCaptureArgSpan(proc_value.captures),
                 .fn_ty = proc_value.fn_ty,
-                .forced_target = proc_value.forced_target,
+                .forced_target = try ids.cloneProcValueExecutableTargetOptional(self.allocator, proc_value.forced_target),
             } },
             .low_level => |low_level| .{ .low_level = .{
                 .op = low_level.op,

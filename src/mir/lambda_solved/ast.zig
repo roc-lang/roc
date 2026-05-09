@@ -387,6 +387,9 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        for (self.exprs.items) |*expr| {
+            deinitExprData(self.allocator, &expr.data);
+        }
         self.tag_payload_assemblies.deinit(self.allocator);
         self.tag_payload_evals.deinit(self.allocator);
         self.record_field_assemblies.deinit(self.allocator);
@@ -413,8 +416,10 @@ pub const Store = struct {
         value_info: repr.ValueInfoId,
         data: Expr.Data,
     ) std.mem.Allocator.Error!ExprId {
+        var owned_data = data;
+        errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .value_info = value_info, .data = data });
+        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .value_info = value_info, .data = owned_data });
         return @enumFromInt(idx);
     }
 
@@ -566,6 +571,18 @@ pub const Store = struct {
         return self.tag_payload_evals.items[span.start..][0..span.len];
     }
 };
+
+fn deinitExprData(allocator: std.mem.Allocator, data: *Expr.Data) void {
+    switch (data.*) {
+        .proc_value => |*proc_value| {
+            if (proc_value.forced_target) |*target| {
+                mir_ids.deinitProcValueExecutableTarget(allocator, target);
+            }
+            proc_value.forced_target = null;
+        },
+        else => {},
+    }
+}
 
 test "lambda_solved ast tests" {
     std.testing.refAllDecls(@This());

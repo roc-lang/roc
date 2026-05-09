@@ -191,6 +191,7 @@ const RecursiveGroupMemberReservation = struct {
 };
 
 const MirProcedureRefIndexMap = std.HashMap(canonical.MirProcedureRef, u32, MirProcedureRefContext, std.hash_map.default_max_load_percentage);
+const ProcedureCallableRefIndexMap = std.HashMap(canonical.ProcedureCallableRef, canonical.MirProcedureRef, ProcedureCallableRefContext, std.hash_map.default_max_load_percentage);
 
 const MirProcedureRefContext = struct {
     pub fn hash(_: MirProcedureRefContext, key: canonical.MirProcedureRef) u64 {
@@ -201,6 +202,18 @@ const MirProcedureRefContext = struct {
 
     pub fn eql(_: MirProcedureRefContext, a: canonical.MirProcedureRef, b: canonical.MirProcedureRef) bool {
         return canonical.mirProcedureRefEql(a, b);
+    }
+};
+
+const ProcedureCallableRefContext = struct {
+    pub fn hash(_: ProcedureCallableRefContext, key: canonical.ProcedureCallableRef) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hashProcedureCallableRef(&hasher, key);
+        return hasher.final();
+    }
+
+    pub fn eql(_: ProcedureCallableRefContext, a: canonical.ProcedureCallableRef, b: canonical.ProcedureCallableRef) bool {
+        return canonical.procedureCallableRefEql(a, b);
     }
 };
 
@@ -219,6 +232,37 @@ fn buildProcIndexMap(
         entry.value_ptr.* = @intCast(raw_index);
     }
     return map;
+}
+
+fn buildProcCallableIndexMap(
+    allocator: Allocator,
+    input: *const Lifted.Lift.Program,
+) Allocator.Error!ProcedureCallableRefIndexMap {
+    var map = ProcedureCallableRefIndexMap.init(allocator);
+    errdefer map.deinit();
+    try map.ensureTotalCapacity(@intCast(input.procs.items.len + input.executable_synthetic_procs.items.len));
+    for (input.procs.items) |proc| {
+        try putProcCallableIndex(&map, proc.proc.callable, proc.proc);
+    }
+    for (input.executable_synthetic_procs.items) |proc| {
+        try putProcCallableIndex(&map, proc.source_proc.callable, proc.source_proc);
+    }
+    return map;
+}
+
+fn putProcCallableIndex(
+    map: *ProcedureCallableRefIndexMap,
+    callable: canonical.ProcedureCallableRef,
+    proc: canonical.MirProcedureRef,
+) Allocator.Error!void {
+    const entry = try map.getOrPut(callable);
+    if (entry.found_existing) {
+        if (!canonical.mirProcedureRefEql(entry.value_ptr.*, proc)) {
+            lambdaInvariant("lambda-solved callable procedure index saw one callable identity with multiple procedure identities");
+        }
+        return;
+    }
+    entry.value_ptr.* = proc;
 }
 
 fn buildExecutableSyntheticProcIndexMap(
@@ -419,6 +463,7 @@ const ProcedureInstanceRegistry = struct {
     type_importer: *TypeImporter,
     records: *std.ArrayList(ProcBuildRecord),
     proc_indices: MirProcedureRefIndexMap,
+    proc_callable_indices: ProcedureCallableRefIndexMap,
     executable_synthetic_indices: MirProcedureRefIndexMap,
     proc_sccs: []ProcSccInfo,
     reservations: std.ArrayList(ProcedureInstanceReservation),
@@ -437,6 +482,8 @@ const ProcedureInstanceRegistry = struct {
     ) Allocator.Error!ProcedureInstanceRegistry {
         var proc_indices = try buildProcIndexMap(allocator, input);
         errdefer proc_indices.deinit();
+        var proc_callable_indices = try buildProcCallableIndexMap(allocator, input);
+        errdefer proc_callable_indices.deinit();
         var executable_synthetic_indices = try buildExecutableSyntheticProcIndexMap(allocator, input);
         errdefer executable_synthetic_indices.deinit();
         const proc_sccs = try buildDirectCallSccInfo(allocator, input, &proc_indices, &executable_synthetic_indices);
@@ -448,6 +495,7 @@ const ProcedureInstanceRegistry = struct {
             .type_importer = type_importer,
             .records = records,
             .proc_indices = proc_indices,
+            .proc_callable_indices = proc_callable_indices,
             .executable_synthetic_indices = executable_synthetic_indices,
             .proc_sccs = proc_sccs,
             .reservations = .empty,
@@ -469,6 +517,7 @@ const ProcedureInstanceRegistry = struct {
         self.reservations.deinit(self.allocator);
         self.allocator.free(self.proc_sccs);
         self.executable_synthetic_indices.deinit();
+        self.proc_callable_indices.deinit();
         self.proc_indices.deinit();
     }
 
@@ -546,11 +595,12 @@ const ProcedureInstanceRegistry = struct {
 
     fn reserve(
         self: *ProcedureInstanceRegistry,
-        proc: canonical.MirProcedureRef,
+        requested_proc: canonical.MirProcedureRef,
         session_id: repr.RepresentationSolveSessionId,
         owner: ProcedureInstanceOwner,
         recursive_group_anchor: ?repr.ProcRepresentationInstanceId,
     ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        const proc = self.canonicalProcedureForReservation(requested_proc);
         for (self.reservations.items) |reservation| {
             if (reservation.solve_session == session_id and
                 canonical.mirProcedureRefEql(reservation.proc, proc) and
@@ -565,7 +615,31 @@ const ProcedureInstanceRegistry = struct {
         else if (self.executable_synthetic_indices.get(proc)) |synthetic_index|
             .{ .executable_synthetic = synthetic_index }
         else {
-            lambdaInvariant("lambda-solved procedure instance registry referenced missing procedure");
+            var same_template_count: usize = 0;
+            var same_callable_count: usize = 0;
+            var same_template_proc_base: u32 = 0;
+            const same_template_requested_proc_base: u32 = @intFromEnum(proc.proc.proc_base);
+            for (self.input.procs.items) |input_proc| {
+                if (canonical.callableProcedureTemplateRefEql(input_proc.proc.callable.template, proc.callable.template)) {
+                    same_template_count += 1;
+                    same_template_proc_base = @intFromEnum(input_proc.proc.proc.proc_base);
+                    if (canonical.procedureCallableRefEql(input_proc.proc.callable, proc.callable)) {
+                        same_callable_count += 1;
+                    }
+                }
+            }
+            lambdaInvariantFmt(
+                "lambda-solved procedure instance registry referenced missing procedure (callable_template={s}, input_procs={d}, synthetic_procs={d}, same_template_procs={d}, same_callable_procs={d}, requested_proc_base={d}, matching_proc_base={d})",
+                .{
+                    @tagName(std.meta.activeTag(proc.callable.template)),
+                    self.input.procs.items.len,
+                    self.input.executable_synthetic_procs.items.len,
+                    same_template_count,
+                    same_callable_count,
+                    same_template_requested_proc_base,
+                    same_template_proc_base,
+                },
+            );
         };
         const instance: repr.ProcRepresentationInstanceId = @enumFromInt(@as(u32, @intCast(self.records.items.len)));
         const value_store_id: repr.ValueInfoStoreId = @enumFromInt(@as(u32, @intCast(self.program.value_stores.items.len)));
@@ -604,6 +678,25 @@ const ProcedureInstanceRegistry = struct {
             .executable_synthetic => try self.buildExecutableSyntheticInstance(instance),
         }
         return instance;
+    }
+
+    fn canonicalProcedureForReservation(
+        self: *ProcedureInstanceRegistry,
+        requested_proc: canonical.MirProcedureRef,
+    ) canonical.MirProcedureRef {
+        if (self.proc_indices.get(requested_proc) != null) return requested_proc;
+        if (self.executable_synthetic_indices.get(requested_proc) != null) return requested_proc;
+
+        var found: ?canonical.MirProcedureRef = null;
+        for (self.input.procs.items) |input_proc| {
+            if (!canonical.procedureValueRefEql(input_proc.proc.proc, requested_proc.proc)) continue;
+            if (!canonical.callableProcedureTemplateRefEql(input_proc.proc.callable.template, requested_proc.callable.template)) continue;
+            if (found != null) {
+                lambdaInvariant("lambda-solved procedure body identity matched multiple lifted procedures");
+            }
+            found = input_proc.proc;
+        }
+        return found orelse requested_proc;
     }
 
     fn buildPending(self: *ProcedureInstanceRegistry) Allocator.Error!void {
@@ -896,7 +989,8 @@ const ProcedureInstanceRegistry = struct {
                     }
                     for (descriptor.members, erased.finite_adapter_member_targets, 0..) |member, target_key, member_index| {
                         validatePersistedFiniteAdapterMemberTarget(member, target_key);
-                        _ = try self.reserve(member.source_proc, session_id, .{ .executable_erased_adapter_member = .{
+                        const source_proc = try self.type_importer.name_resolver.mirProcedureRef(member.source_proc);
+                        _ = try self.reserve(source_proc, session_id, .{ .executable_erased_adapter_member = .{
                             .synthetic_index = synthetic_index,
                             .member_index = @intCast(member_index),
                         } }, null);
@@ -1007,6 +1101,13 @@ const ProcedureInstanceRegistry = struct {
     ) Lifted.Lift.Proc {
         return self.input.procs.items[self.inputProcIndex(proc)];
     }
+
+    fn procForCallable(
+        self: *const ProcedureInstanceRegistry,
+        callable: canonical.ProcedureCallableRef,
+    ) ?canonical.MirProcedureRef {
+        return self.proc_callable_indices.get(callable);
+    }
 };
 
 fn procedureInstanceOwnerEql(a: ProcedureInstanceOwner, b: ProcedureInstanceOwner) bool {
@@ -1064,15 +1165,20 @@ fn procValueExecutableTargetEql(
     return true;
 }
 
+fn constBackedValueInfoEql(a: repr.ConstBackedValueInfo, b: repr.ConstBackedValueInfo) bool {
+    return artifactKeyEql(a.const_instance.owner, b.const_instance.owner) and
+        checked_artifact.constInstantiationKeyEql(a.const_instance.key, b.const_instance.key) and
+        a.const_instance.instance == b.const_instance.instance and
+        a.schema == b.schema and
+        a.value == b.value;
+}
+
 fn validatePersistedFiniteAdapterMemberTarget(
     member: anytype,
     target: canonical.ExecutableSpecializationKey,
 ) void {
     if (member.source_proc.proc.proc_base != target.base) {
         lambdaInvariant("lambda-solved persisted finite-set adapter member target base differs from descriptor member");
-    }
-    if (!repr.canonicalTypeKeyEql(member.source_proc.callable.source_fn_ty, target.requested_fn_ty)) {
-        lambdaInvariant("lambda-solved persisted finite-set adapter member target source type differs from source procedure");
     }
     if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, target.requested_fn_ty)) {
         lambdaInvariant("lambda-solved persisted finite-set adapter member target source type differs from procedure value");
@@ -4228,6 +4334,7 @@ const ProcValueCallableSource = struct {
     target_instance: repr.ProcRepresentationInstanceId,
     captures: []const repr.ValueInfoId,
     fn_ty: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
 };
 
 const CallableClassPublishState = enum {
@@ -4337,6 +4444,7 @@ const CallableEmissionAssigner = struct {
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
+                                    .source_fn_ty_payload = source.source_fn_ty_payload,
                                 };
                                 if (!try self.ensureFunctionCaptureClassesPublished(proc_source)) continue;
                                 const member = try self.memberForProcValueSource(proc_source);
@@ -4363,6 +4471,7 @@ const CallableEmissionAssigner = struct {
                                 .target_instance = source.target_instance,
                                 .captures = source.captures,
                                 .fn_ty = source.fn_ty,
+                                .source_fn_ty_payload = source.source_fn_ty_payload,
                             },
                         });
                     },
@@ -4377,6 +4486,7 @@ const CallableEmissionAssigner = struct {
                             .target_instance = source.target_instance,
                             .captures = source.captures,
                             .fn_ty = source.fn_ty,
+                            .source_fn_ty_payload = source.source_fn_ty_payload,
                         });
                         defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
                         try self.addClassCallableMember(class, member);
@@ -4390,6 +4500,7 @@ const CallableEmissionAssigner = struct {
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
+                                    .source_fn_ty_payload = source.source_fn_ty_payload,
                                 };
                                 if (!try self.ensureFunctionCaptureClassesPublished(proc_source)) continue;
                                 const member = try self.memberForProcValueSource(proc_source);
@@ -4439,6 +4550,8 @@ const CallableEmissionAssigner = struct {
                 existing.capture_shape_key = member.capture_shape_key;
                 existing.published_proc_value = member.published_proc_value;
                 existing.published_source_proc = member.published_source_proc;
+                existing.source_fn_ty_payload = member.source_fn_ty_payload;
+                existing.lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload;
                 return;
             }
         }
@@ -4450,9 +4563,11 @@ const CallableEmissionAssigner = struct {
         try set.members.append(self.allocator, .{
             .member = member.member,
             .proc_value = member.proc_value,
+            .source_fn_ty_payload = member.source_fn_ty_payload,
             .source_proc = member.source_proc,
             .published_proc_value = member.published_proc_value,
             .published_source_proc = member.published_source_proc,
+            .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
             .target_instance = member.target_instance,
             .capture_slots = capture_slots,
             .capture_shape_key = member.capture_shape_key,
@@ -4707,6 +4822,31 @@ const CallableEmissionAssigner = struct {
                     if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
                     if (value_info.pending_local_root_origin) continue;
                     if (self.mode == .allow_pending_call_values and value_info.callable == null) continue;
+                    if (value_info.projection_info) |projection_id| {
+                        const projection = value_store.projections.items[@intFromEnum(projection_id)];
+                        const source_info = value_store.values.items[@intFromEnum(projection.source)];
+                        lambdaInvariantFmt(
+                            "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to class {d} with no finite callable members (callable={}, projection={}, alias={}); projection source={d} kind={s} source_callable={} source_aggregate={} source_alias={} source_root={s}",
+                            .{
+                                raw_value,
+                                @intFromEnum(instance),
+                                @tagName(record.owner),
+                                record.materialized,
+                                @tagName(self.representationStore().rootKind(value_info.root)),
+                                value_info.source_match_branch != null,
+                                @intFromEnum(class),
+                                value_info.callable != null,
+                                value_info.projection_info != null,
+                                value_info.value_alias_source != null,
+                                @intFromEnum(projection.source),
+                                @tagName(std.meta.activeTag(projection.kind)),
+                                source_info.callable != null,
+                                source_info.aggregate != null,
+                                source_info.value_alias_source != null,
+                                @tagName(self.representationStore().rootKind(source_info.root)),
+                            },
+                        );
+                    }
                     lambdaInvariantFmt(
                         "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to class {d} with no finite callable members (callable={}, projection={}, alias={})",
                         .{
@@ -4919,7 +5059,7 @@ const CallableEmissionAssigner = struct {
                 }
                 for (class_set.members.items) |member| {
                     if (member.target_instance != source.target_instance) continue;
-                    if (!canonical.mirProcedureRefEql(member.source_proc, source.proc)) continue;
+                    if (!mirProcedureBodyIdentityEql(member.source_proc, source.proc)) continue;
                     if (!canonical.procedureCallableRefEql(member.proc_value, source.proc.callable)) continue;
                     return member;
                 }
@@ -4980,8 +5120,8 @@ const CallableEmissionAssigner = struct {
     ) Allocator.Error!repr.CanonicalCallableSetMember {
         const target_id = source.target_instance;
         const target_record = self.recordForInstance(target_id);
-        if (!canonical.mirProcedureRefEql(target_record.proc, source.proc)) {
-            lambdaInvariant("lambda-solved proc-value callable target instance differs from proc-value source");
+        if (!mirProcedureBodyIdentityEql(target_record.proc, source.proc)) {
+            lambdaInvariant("lambda-solved proc-value callable target instance has a different procedure body identity");
         }
         if (!repr.canonicalTypeKeyEql(source.fn_ty, source.proc.callable.source_fn_ty)) {
             lambdaInvariant("lambda-solved proc-value callable source function type differs from procedure callable type");
@@ -5007,13 +5147,32 @@ const CallableEmissionAssigner = struct {
         return .{
             .member = @enumFromInt(0),
             .proc_value = source.proc.callable,
-            .source_proc = source.proc,
+            .source_fn_ty_payload = source.source_fn_ty_payload,
+            .source_proc = target_record.proc,
             .published_proc_value = if (source.published_proc) |published| published.callable else null,
             .published_source_proc = source.published_proc,
+            .lifted_owner_source_fn_ty_payload = switch (source.proc.callable.template) {
+                .lifted => |lifted| self.concreteSourcePayloadForKey(
+                    lifted.owner_mono_specialization.requested_mono_fn_ty,
+                    "lambda-solved lifted callable owner source function type has no concrete payload",
+                ),
+                .checked,
+                .synthetic,
+                => null,
+            },
             .target_instance = target_id,
             .capture_slots = capture_slots,
             .capture_shape_key = capture_shape_key,
         };
+    }
+
+    fn concreteSourcePayloadForKey(
+        self: *CallableEmissionAssigner,
+        key: canonical.CanonicalTypeKey,
+        comptime missing_message: []const u8,
+    ) ConcreteSourceType.ConcreteSourceTypeRef {
+        if (self.program.concrete_source_types.refForKey(key)) |payload| return payload;
+        lambdaInvariant(missing_message);
     }
 
     fn appendFiniteSetErasePlan(
@@ -5765,6 +5924,14 @@ fn boxErasureProvenanceSetEql(
         if (!boxErasureProvenanceSliceContains(b, item)) return false;
     }
     return true;
+}
+
+fn mirProcedureBodyIdentityEql(
+    a: canonical.MirProcedureRef,
+    b: canonical.MirProcedureRef,
+) bool {
+    return canonical.procedureValueRefEql(a.proc, b.proc) and
+        canonical.callableProcedureTemplateRefEql(a.callable.template, b.callable.template);
 }
 
 fn callableSetMemberEquivalent(
@@ -9830,6 +9997,28 @@ fn callableSetDescriptorsForArtifactViews(
     return null;
 }
 
+const ConstMaterializationView = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    names: *const canonical.CanonicalNameStore,
+    values: *const checked_artifact.CompileTimeValueStore,
+};
+
+const ResolvedConstBackedValue = struct {
+    materialization: ConstMaterializationView,
+    schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValueId,
+};
+
+const ResolvedConstInstance = struct {
+    materialization: ConstMaterializationView,
+    instance: checked_artifact.ConstInstance,
+};
+
+const ConstBackedProjectionResult = struct {
+    value: repr.ValueInfoId,
+    projection: repr.ProjectionInfoId,
+};
+
 const BodySolver = struct {
     allocator: Allocator,
     input: *const Lifted.Ast.Store,
@@ -10747,7 +10936,7 @@ const BodySolver = struct {
             .access => |access| {
                 const record = try self.lowerExpr(access.record);
                 const source = self.exprValue(record);
-                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                if (self.aggregateForProjection(source)) |aggregate| {
                     const result = switch (aggregate) {
                         .record => |record_info| self.recordAggregateFieldValue(record_info, access.field),
                         else => lambdaInvariant("lambda-solved record access source had non-record aggregate metadata"),
@@ -10768,11 +10957,22 @@ const BodySolver = struct {
                     }
                     return lowered;
                 }
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .record_field = access.field })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .access = .{
+                        .record = record,
+                        .field = access.field,
+                        .projection_info = projected.projection,
+                    } });
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
+                    return lowered;
+                }
             },
             .tuple_access => |access| {
                 const tuple = try self.lowerExpr(access.tuple);
                 const source = self.exprValue(tuple);
-                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                if (self.aggregateForProjection(source)) |aggregate| {
                     const result = switch (aggregate) {
                         .tuple => |tuple_info| self.tupleAggregateElemValue(tuple_info, access.elem_index),
                         else => lambdaInvariant("lambda-solved tuple access source had non-tuple aggregate metadata"),
@@ -10793,11 +10993,22 @@ const BodySolver = struct {
                     }
                     return lowered;
                 }
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .tuple_elem = access.elem_index })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .tuple_access = .{
+                        .tuple = tuple,
+                        .elem_index = access.elem_index,
+                        .projection_info = projected.projection,
+                    } });
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
+                    return lowered;
+                }
             },
             .tag_payload => |payload| {
                 const tag_union = try self.lowerExpr(payload.tag_union);
                 const source = self.exprValue(tag_union);
-                if (self.value_store.values.items[@intFromEnum(source)].aggregate) |aggregate| {
+                if (self.aggregateForProjection(source)) |aggregate| {
                     const result = switch (aggregate) {
                         .tag => |tag_info| self.tagAggregatePayloadValue(tag_info, payload.payload),
                         else => lambdaInvariant("lambda-solved tag payload source had non-tag aggregate metadata"),
@@ -10812,6 +11023,17 @@ const BodySolver = struct {
                         .tag_union = tag_union,
                         .payload = payload.payload,
                         .projection_info = projection,
+                    } });
+                    if (can_use_expr_map) {
+                        try self.expr_map.put(expr_id, lowered);
+                    }
+                    return lowered;
+                }
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .tag_payload = payload.payload })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .tag_payload = .{
+                        .tag_union = tag_union,
+                        .payload = payload.payload,
+                        .projection_info = projected.projection,
                     } });
                     if (can_use_expr_map) {
                         try self.expr_map.put(expr_id, lowered);
@@ -10833,7 +11055,10 @@ const BodySolver = struct {
             .dec_lit => |literal| .{ .dec_lit = literal },
             .bool_lit => |literal| .{ .bool_lit = literal },
             .str_lit => |literal| .{ .str_lit = literal },
-            .const_instance => |const_instance| .{ .const_instance = const_instance },
+            .const_instance => |const_instance| blk: {
+                try self.publishConstBackedValueMetadata(value, self.constBackedRoot(const_instance));
+                break :blk .{ .const_instance = const_instance };
+            },
             .const_ref => |key| .{ .const_ref = key },
             .pending_local_root => |root| blk: {
                 self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
@@ -10967,6 +11192,9 @@ const BodySolver = struct {
                     proc_value.published_proc,
                     target_instance,
                     self.value_store.sliceValueSpan(captures.values),
+                    self.sourcePayloadForKey(proc_value.proc.callable.source_fn_ty) orelse {
+                        lambdaInvariant("lambda-solved proc-value source function type has no concrete payload");
+                    },
                 );
                 self.value_store.values.items[@intFromEnum(value)].callable = callable;
                 break :blk .{ .proc_value = .{
@@ -10974,7 +11202,7 @@ const BodySolver = struct {
                     .published_proc = proc_value.published_proc,
                     .captures = captures.args,
                     .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
-                    .forced_target = proc_value.forced_target,
+                    .forced_target = try ids.cloneProcValueExecutableTargetOptional(self.allocator, proc_value.forced_target),
                 } };
             },
             .low_level => unreachable,
@@ -12153,6 +12381,559 @@ const BodySolver = struct {
         lambdaInvariant("lambda-solved tag aggregate projection referenced a missing payload");
     }
 
+    fn aggregateForProjection(
+        self: *const BodySolver,
+        value: repr.ValueInfoId,
+    ) ?repr.AggregateValueInfo {
+        var current = value;
+        var remaining = self.value_store.values.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            const info = self.value_store.values.items[@intFromEnum(current)];
+            if (info.aggregate) |aggregate| return aggregate;
+            current = info.value_alias_source orelse return null;
+        }
+        lambdaInvariant("lambda-solved aggregate projection alias chain is cyclic");
+    }
+
+    fn constBackedForProjection(
+        self: *const BodySolver,
+        value: repr.ValueInfoId,
+    ) ?repr.ConstBackedValueInfo {
+        var current = value;
+        var remaining = self.value_store.values.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            const info = self.value_store.values.items[@intFromEnum(current)];
+            if (info.const_backing) |backing| return backing;
+            current = info.value_alias_source orelse return null;
+        }
+        lambdaInvariant("lambda-solved const-backed projection alias chain is cyclic");
+    }
+
+    fn publishConstBackedProjectionValue(
+        self: *BodySolver,
+        source: repr.ValueInfoId,
+        ty: Type.TypeVarId,
+        source_ty: canonical.CanonicalTypeKey,
+        kind: repr.ProjectionKind,
+    ) Allocator.Error!?ConstBackedProjectionResult {
+        const source_backing = self.constBackedForProjection(source) orelse return null;
+        const child_backing = try self.constBackedProjectionChild(source_backing, kind);
+        const result = try self.newValue(ty, source_ty);
+        const projection = try self.publishProjectionInfo(source, result, kind);
+        try self.publishConstBackedValueMetadata(result, child_backing);
+        return .{
+            .value = result,
+            .projection = projection,
+        };
+    }
+
+    fn publishConstBackedValueMetadata(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        backing: repr.ConstBackedValueInfo,
+    ) Allocator.Error!void {
+        const info = &self.value_store.values.items[@intFromEnum(value)];
+        if (info.const_backing) |existing| {
+            if (!constBackedValueInfoEql(existing, backing)) {
+                lambdaInvariant("lambda-solved value received conflicting const-backed metadata");
+            }
+        } else {
+            info.const_backing = backing;
+        }
+
+        const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
+        const schema = self.constSchema(resolved.materialization, resolved.schema);
+        const value_data = self.constValue(resolved.materialization, resolved.value);
+        switch (schema) {
+            .callable => {
+                const leaf = switch (value_data) {
+                    .callable => |leaf| leaf,
+                    else => lambdaInvariant("lambda-solved const-backed callable schema had non-callable value"),
+                };
+                try self.publishConstBackedCallableLeaf(value, leaf);
+            },
+            .record => try self.publishConstBackedRecordAggregate(value, backing, resolved),
+            .tuple => try self.publishConstBackedTupleAggregate(value, backing, resolved),
+            .list => try self.publishConstBackedListAggregate(value, backing, resolved),
+            .pending => lambdaInvariant("lambda-solved const-backed value reached pending schema"),
+            .zst,
+            .int,
+            .frac,
+            .str,
+            .box,
+            .tag_union,
+            .alias,
+            .nominal,
+            => {},
+        }
+    }
+
+    fn publishConstBackedCallableLeaf(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        leaf: checked_artifact.CallableLeafInstance,
+    ) Allocator.Error!void {
+        if (self.value_store.values.items[@intFromEnum(value)].callable != null) return;
+        switch (leaf) {
+            .finite => |finite| try self.publishConstBackedFiniteCallableLeaf(value, finite),
+            .erased_boxed => lambdaInvariant("lambda-solved const-backed erased callable leaf requires already-erased metadata publication"),
+        }
+    }
+
+    fn publishConstBackedFiniteCallableLeaf(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        finite: checked_artifact.FiniteCallableLeafInstance,
+    ) Allocator.Error!void {
+        const callable = try self.type_importer.name_resolver.procedureCallableRef(finite.proc_value);
+        const proc = self.registry.procForCallable(callable) orelse {
+            var same_template_count: usize = 0;
+            for (self.registry.input.procs.items) |input_proc| {
+                if (canonical.callableProcedureTemplateRefEql(input_proc.proc.callable.template, callable.template)) {
+                    same_template_count += 1;
+                }
+            }
+            lambdaInvariantFmt(
+                "lambda-solved const-backed finite callable leaf referenced a procedure that was not published to lifted MIR (template={s}, input_procs={d}, synthetic_procs={d}, same_template_procs={d})",
+                .{
+                    @tagName(std.meta.activeTag(callable.template)),
+                    self.registry.input.procs.items.len,
+                    self.registry.input.executable_synthetic_procs.items.len,
+                    same_template_count,
+                },
+            );
+        };
+        const whole_function_root = self.representation_store.reserveRoot();
+        const target_instance = try self.registry.reserveProcValue(self.instance, value, proc, null);
+        self.refreshValueStore();
+        try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = .{
+            .instance = self.instance,
+            .value = value,
+        } });
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = self.valueRoot(value) },
+            .to = .{ .local = whole_function_root },
+            .kind = .value_alias,
+        });
+        const callable_info = try self.representation_store.addSingletonProcValueCallable(
+            value,
+            whole_function_root,
+            proc,
+            null,
+            target_instance,
+            &.{},
+            self.sourcePayloadForKey(proc.callable.source_fn_ty) orelse {
+                lambdaInvariant("lambda-solved const-backed callable source function type has no concrete payload");
+            },
+        );
+        self.value_store.values.items[@intFromEnum(value)].callable = callable_info;
+    }
+
+    fn publishConstBackedRecordAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        backing: repr.ConstBackedValueInfo,
+        resolved: ResolvedConstBackedValue,
+    ) Allocator.Error!void {
+        if (self.value_store.values.items[@intFromEnum(value)].aggregate != null) return;
+        const value_info = self.value_store.values.items[@intFromEnum(value)];
+        const logical_fields = try self.logicalRecordFields(value_info.logical_ty);
+        const shape = try self.recordShapeForTypeFields(logical_fields);
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != logical_fields.len) {
+            lambdaInvariant("lambda-solved const-backed record aggregate shape arity mismatch");
+        }
+        const fields = try self.allocator.alloc(repr.FieldValueInfo, shape_fields.len);
+        errdefer if (fields.len > 0) self.allocator.free(fields);
+
+        const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
+        for (shape_fields, 0..) |field_id, i| {
+            const field_ty = self.logicalRecordFieldType(logical_fields, field_id);
+            const child_backing = try self.constBackedRecordField(resolved, field_id, backing.const_instance);
+            const child_source_root = try self.sourceChildRoot(source_root, .{ .record_field = field_id });
+            const child_value = try self.newValue(field_ty, if (child_source_root) |source| source.key else .{});
+            try self.publishConstBackedValueMetadata(child_value, child_backing);
+            fields[i] = .{
+                .field = field_id,
+                .value = child_value,
+            };
+        }
+        try self.publishAggregate(value, .{ .record = .{
+            .shape = shape,
+            .fields = fields,
+        } });
+    }
+
+    fn publishConstBackedTupleAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        backing: repr.ConstBackedValueInfo,
+        resolved: ResolvedConstBackedValue,
+    ) Allocator.Error!void {
+        if (self.value_store.values.items[@intFromEnum(value)].aggregate != null) return;
+        const value_info = self.value_store.values.items[@intFromEnum(value)];
+        const logical_items = try self.logicalTupleItems(value_info.logical_ty);
+        const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .tuple => |items| items,
+            else => lambdaInvariant("lambda-solved const-backed tuple aggregate reached non-tuple schema"),
+        };
+        const values = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .tuple => |items| items,
+            else => lambdaInvariant("lambda-solved const-backed tuple aggregate reached non-tuple value"),
+        };
+        if (logical_items.len != schema.len or schema.len != values.len) {
+            lambdaInvariant("lambda-solved const-backed tuple aggregate arity mismatch");
+        }
+        const child_values = try self.allocator.alloc(repr.ValueInfoId, logical_items.len);
+        defer if (child_values.len > 0) self.allocator.free(child_values);
+        const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
+        for (logical_items, 0..) |item_ty, i| {
+            const child_source_root = try self.sourceChildRoot(source_root, .{ .tuple_elem = @intCast(i) });
+            const child_value = try self.newValue(item_ty, if (child_source_root) |source| source.key else .{});
+            try self.publishConstBackedValueMetadata(child_value, .{
+                .const_instance = backing.const_instance,
+                .schema = schema[i],
+                .value = values[i],
+            });
+            child_values[i] = child_value;
+        }
+        const span = try self.value_store.addValueSpan(child_values);
+        try self.publishTupleAggregate(value, span);
+    }
+
+    fn publishConstBackedListAggregate(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        backing: repr.ConstBackedValueInfo,
+        resolved: ResolvedConstBackedValue,
+    ) Allocator.Error!void {
+        if (self.value_store.values.items[@intFromEnum(value)].aggregate != null) return;
+        const value_info = self.value_store.values.items[@intFromEnum(value)];
+        const elem_ty = try self.logicalListElemType(value_info.logical_ty);
+        const elem_schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .list => |elem| elem,
+            else => lambdaInvariant("lambda-solved const-backed list aggregate reached non-list schema"),
+        };
+        const values = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .list => |items| items,
+            else => lambdaInvariant("lambda-solved const-backed list aggregate reached non-list value"),
+        };
+        const child_values = try self.allocator.alloc(repr.ValueInfoId, values.len);
+        defer if (child_values.len > 0) self.allocator.free(child_values);
+        const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
+        const elem_source_root = try self.sourceChildRoot(source_root, .list_elem);
+        for (values, 0..) |item, i| {
+            const child_value = try self.newValue(elem_ty, if (elem_source_root) |source| source.key else .{});
+            try self.publishConstBackedValueMetadata(child_value, .{
+                .const_instance = backing.const_instance,
+                .schema = elem_schema,
+                .value = item,
+            });
+            child_values[i] = child_value;
+        }
+        const span = try self.value_store.addValueSpan(child_values);
+        try self.publishListAggregate(value, span);
+    }
+
+    fn constBackedProjectionChild(
+        self: *BodySolver,
+        backing: repr.ConstBackedValueInfo,
+        kind: repr.ProjectionKind,
+    ) Allocator.Error!repr.ConstBackedValueInfo {
+        const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
+        return switch (kind) {
+            .record_field => |field| try self.constBackedRecordField(resolved, field, backing.const_instance),
+            .tuple_elem => |index| self.constBackedTupleElem(resolved, index, backing.const_instance),
+            .tag_payload => |payload| self.constBackedTagPayload(resolved, payload, backing.const_instance),
+        };
+    }
+
+    fn constBackedRecordField(
+        self: *BodySolver,
+        resolved: ResolvedConstBackedValue,
+        field: MonoRow.RecordFieldId,
+        const_instance: checked_artifact.ConstInstanceRef,
+    ) Allocator.Error!repr.ConstBackedValueInfo {
+        const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .record => |fields| fields,
+            else => lambdaInvariant("lambda-solved const-backed record projection reached non-record schema"),
+        };
+        const values = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .record => |values| values,
+            else => lambdaInvariant("lambda-solved const-backed record projection reached non-record value"),
+        };
+        if (schema.len != values.len) {
+            lambdaInvariant("lambda-solved const-backed record projection reached schema/value arity mismatch");
+        }
+        const logical_label = self.row_shapes.recordField(field).label;
+        for (schema, values) |field_schema, field_value| {
+            if (!self.constRecordFieldMatches(resolved.materialization, field_schema.name, logical_label)) continue;
+            return .{
+                .const_instance = const_instance,
+                .schema = field_schema.schema,
+                .value = field_value,
+            };
+        }
+        lambdaInvariant("lambda-solved const-backed record projection could not find requested field");
+    }
+
+    fn logicalRecordFieldType(
+        self: *BodySolver,
+        fields: []const Type.Field,
+        field: MonoRow.RecordFieldId,
+    ) Type.TypeVarId {
+        const label = self.row_shapes.recordField(field).label;
+        for (fields) |logical_field| {
+            if (logical_field.name == label) return logical_field.ty;
+        }
+        lambdaInvariant("lambda-solved const-backed record aggregate field missing from logical type");
+    }
+
+    fn constBackedTupleElem(
+        self: *BodySolver,
+        resolved: ResolvedConstBackedValue,
+        index: u32,
+        const_instance: checked_artifact.ConstInstanceRef,
+    ) repr.ConstBackedValueInfo {
+        const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .tuple => |items| items,
+            else => lambdaInvariant("lambda-solved const-backed tuple projection reached non-tuple schema"),
+        };
+        const values = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .tuple => |values| values,
+            else => lambdaInvariant("lambda-solved const-backed tuple projection reached non-tuple value"),
+        };
+        if (schema.len != values.len) {
+            lambdaInvariant("lambda-solved const-backed tuple projection reached schema/value arity mismatch");
+        }
+        const raw_index: usize = @intCast(index);
+        if (raw_index >= schema.len) {
+            lambdaInvariant("lambda-solved const-backed tuple projection index out of range");
+        }
+        return .{
+            .const_instance = const_instance,
+            .schema = schema[raw_index],
+            .value = values[raw_index],
+        };
+    }
+
+    fn constBackedTagPayload(
+        self: *BodySolver,
+        resolved: ResolvedConstBackedValue,
+        payload: MonoRow.TagPayloadId,
+        const_instance: checked_artifact.ConstInstanceRef,
+    ) repr.ConstBackedValueInfo {
+        const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .tag_union => |variants| variants,
+            else => lambdaInvariant("lambda-solved const-backed tag payload projection reached non-tag schema"),
+        };
+        const tag_value = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .tag_union => |tag| tag,
+            else => lambdaInvariant("lambda-solved const-backed tag payload projection reached non-tag value"),
+        };
+        const variant_index: usize = @intCast(tag_value.variant_index);
+        if (variant_index >= schema.len) {
+            lambdaInvariant("lambda-solved const-backed tag payload projection variant index out of range");
+        }
+        const variant = schema[variant_index];
+        const payload_info = self.row_shapes.tagPayload(payload);
+        const tag_info = self.row_shapes.tag(payload_info.tag);
+        if (!self.constTagMatches(resolved.materialization, variant.name, tag_info.label)) {
+            lambdaInvariant("lambda-solved const-backed tag payload projection selected the wrong tag");
+        }
+        if (variant.payloads.len != tag_value.payloads.len) {
+            lambdaInvariant("lambda-solved const-backed tag payload projection schema/value arity mismatch");
+        }
+        const payload_index: usize = @intCast(payload_info.logical_index);
+        if (payload_index >= variant.payloads.len) {
+            lambdaInvariant("lambda-solved const-backed tag payload projection payload index out of range");
+        }
+        return .{
+            .const_instance = const_instance,
+            .schema = variant.payloads[payload_index],
+            .value = tag_value.payloads[payload_index],
+        };
+    }
+
+    fn constBackedRoot(
+        self: *const BodySolver,
+        ref: checked_artifact.ConstInstanceRef,
+    ) repr.ConstBackedValueInfo {
+        const resolved = self.resolveConstInstance(ref);
+        return .{
+            .const_instance = ref,
+            .schema = resolved.instance.schema,
+            .value = resolved.instance.value,
+        };
+    }
+
+    fn resolveConstBackedValue(
+        self: *const BodySolver,
+        backing: repr.ConstBackedValueInfo,
+    ) ResolvedConstBackedValue {
+        return .{
+            .materialization = self.constMaterializationForArtifact(backing.const_instance.owner),
+            .schema = backing.schema,
+            .value = backing.value,
+        };
+    }
+
+    fn resolveConstInstance(
+        self: *const BodySolver,
+        ref: checked_artifact.ConstInstanceRef,
+    ) ResolvedConstInstance {
+        const materialization = self.constMaterializationForArtifact(ref.owner);
+        const instances = self.constInstancesForArtifact(ref.owner);
+        if (!artifactKeyEql(instances.owner, ref.owner)) {
+            lambdaInvariant("lambda-solved constant instance view has wrong owning artifact");
+        }
+        const index: usize = @intFromEnum(ref.instance);
+        if (index >= instances.instances.len) {
+            lambdaInvariant("lambda-solved const-backed value referenced an out-of-range constant instance");
+        }
+        const record = instances.instances[index];
+        if (!checked_artifact.constInstantiationKeyEql(record.key, ref.key)) {
+            lambdaInvariant("lambda-solved const-backed value instance key does not match published row");
+        }
+        const instance = switch (record.state) {
+            .evaluated => |instance| instance,
+            .reserved,
+            .evaluating,
+            => lambdaInvariant("lambda-solved const-backed value consumed an unsealed constant instance"),
+        };
+        return .{
+            .materialization = materialization,
+            .instance = instance,
+        };
+    }
+
+    fn constMaterializationForArtifact(
+        self: *const BodySolver,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+    ) ConstMaterializationView {
+        if (artifactKeyEql(self.artifact_views.root.artifact.key, owner)) {
+            return .{
+                .owner = self.artifact_views.root.artifact.key,
+                .names = &self.artifact_views.root.artifact.canonical_names,
+                .values = &self.artifact_views.root.artifact.comptime_values,
+            };
+        }
+        for (self.artifact_views.imports) |imported| {
+            if (!artifactKeyEql(imported.key, owner)) continue;
+            return .{
+                .owner = imported.key,
+                .names = imported.canonical_names,
+                .values = imported.comptime_values,
+            };
+        }
+        for (self.artifact_views.root.relation_artifacts) |related| {
+            if (!artifactKeyEql(related.key, owner)) continue;
+            return .{
+                .owner = related.key,
+                .names = related.canonical_names,
+                .values = related.comptime_values,
+            };
+        }
+        lambdaInvariant("lambda-solved const-backed value referenced an unpublished artifact");
+    }
+
+    fn constInstancesForArtifact(
+        self: *const BodySolver,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+    ) checked_artifact.ConstInstantiationStoreView {
+        if (artifactKeyEql(self.artifact_views.root.artifact.key, owner)) {
+            return self.artifact_views.root.artifact.const_instances.view();
+        }
+        for (self.artifact_views.imports) |imported| {
+            if (artifactKeyEql(imported.key, owner)) return imported.const_instances;
+        }
+        for (self.artifact_views.root.relation_artifacts) |related| {
+            if (artifactKeyEql(related.key, owner)) return related.const_instances;
+        }
+        lambdaInvariant("lambda-solved const-backed value referenced unpublished constant instances");
+    }
+
+    fn unwrapConstBackedValue(
+        self: *const BodySolver,
+        resolved: ResolvedConstBackedValue,
+    ) ResolvedConstBackedValue {
+        var current = resolved;
+        var remaining = current.materialization.values.schemas.items.len + current.materialization.values.values.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            const schema = self.constSchema(current.materialization, current.schema);
+            switch (schema) {
+                .alias => |alias| {
+                    current.schema = alias.backing;
+                    current.value = switch (self.constValue(current.materialization, current.value)) {
+                        .alias => |backing| backing,
+                        else => lambdaInvariant("lambda-solved const-backed alias schema had non-alias value"),
+                    };
+                },
+                .nominal => |nominal| {
+                    current.schema = nominal.backing;
+                    current.value = switch (self.constValue(current.materialization, current.value)) {
+                        .nominal => |backing| backing,
+                        else => lambdaInvariant("lambda-solved const-backed nominal schema had non-nominal value"),
+                    };
+                },
+                else => return current,
+            }
+        }
+        lambdaInvariant("lambda-solved const-backed schema/value wrapper chain is cyclic");
+    }
+
+    fn constSchema(
+        self: *const BodySolver,
+        materialization: ConstMaterializationView,
+        id: checked_artifact.ComptimeSchemaId,
+    ) checked_artifact.ComptimeSchema {
+        _ = self;
+        const index: usize = @intFromEnum(id);
+        if (index >= materialization.values.schemas.items.len) {
+            lambdaInvariant("lambda-solved const-backed schema id out of range");
+        }
+        return materialization.values.schemas.items[index];
+    }
+
+    fn constValue(
+        self: *const BodySolver,
+        materialization: ConstMaterializationView,
+        id: checked_artifact.ComptimeValueId,
+    ) checked_artifact.ComptimeValue {
+        _ = self;
+        const index: usize = @intFromEnum(id);
+        if (index >= materialization.values.values.items.len) {
+            lambdaInvariant("lambda-solved const-backed value id out of range");
+        }
+        return materialization.values.values.items[index];
+    }
+
+    fn constRecordFieldMatches(
+        self: *const BodySolver,
+        materialization: ConstMaterializationView,
+        source_field: canonical.RecordFieldLabelId,
+        logical_field: canonical.RecordFieldLabelId,
+    ) bool {
+        return std.mem.eql(
+            u8,
+            materialization.names.recordFieldLabelText(source_field),
+            self.canonical_names.recordFieldLabelText(logical_field),
+        );
+    }
+
+    fn constTagMatches(
+        self: *const BodySolver,
+        materialization: ConstMaterializationView,
+        source_tag: canonical.TagLabelId,
+        logical_tag: canonical.TagLabelId,
+    ) bool {
+        return std.mem.eql(
+            u8,
+            materialization.names.tagLabelText(source_tag),
+            self.canonical_names.tagLabelText(logical_tag),
+        );
+    }
+
     fn recordAssemblyEval(
         evals: []const Ast.RecordFieldEval,
         assembly: Ast.RecordFieldAssembly,
@@ -12907,6 +13688,18 @@ const BodySolver = struct {
                 else => lambdaInvariant("lambda-solved list structural root attached to non-list type"),
             },
             else => lambdaInvariant("lambda-solved list structural root attached to unresolved type"),
+        };
+    }
+
+    fn logicalTupleItems(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error![]const Type.TypeVarId {
+        const root = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .nominal => |nominal| try self.logicalTupleItems(nominal.backing),
+            .content => |content| switch (content) {
+                .tuple => |items| self.type_importer.output.sliceTypeVarSpan(items),
+                else => lambdaInvariant("lambda-solved tuple structural root attached to non-tuple type"),
+            },
+            else => lambdaInvariant("lambda-solved tuple structural root attached to unresolved type"),
         };
     }
 

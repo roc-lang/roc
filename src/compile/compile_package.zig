@@ -1170,13 +1170,21 @@ pub const PackageEnv = struct {
         return checker;
     }
 
-    fn statementIdxForImportedModule(
-        module_env: *const ModuleEnv,
-        module_name: []const u8,
-    ) ?can.CIR.Statement.Idx {
-        const type_ident_in_module = module_env.common.findIdent(module_name) orelse return null;
-        const type_node_idx = module_env.getExposedNodeIndexById(type_ident_in_module) orelse return null;
-        return @enumFromInt(type_node_idx);
+    const ImportedTypeModuleInfo = struct {
+        type_ident_text: []const u8,
+        statement_idx: can.CIR.Statement.Idx,
+    };
+
+    fn typeModuleInfoForImportedModule(module_env: *const ModuleEnv) ?ImportedTypeModuleInfo {
+        const type_ident = switch (module_env.module_kind) {
+            .type_module => |ident| ident,
+            else => return null,
+        };
+        const type_node_idx = module_env.getExposedNodeIndexById(type_ident) orelse return null;
+        return .{
+            .type_ident_text = module_env.getIdent(type_ident),
+            .statement_idx = @enumFromInt(type_node_idx),
+        };
     }
 
     fn populateCanonicalizeImports(
@@ -1187,27 +1195,30 @@ pub const PackageEnv = struct {
         for (imported_modules) |imported| {
             const import_name = imported.import_name;
             const module_env = imported.module_env;
+            const type_module_info = typeModuleInfoForImportedModule(module_env);
+            const qualified_type_ident_text = if (type_module_info) |info| info.type_ident_text else import_name;
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(qualified_type_ident_text));
+            const statement_idx = if (type_module_info) |info| info.statement_idx else null;
 
             if (std.mem.indexOfScalar(u8, import_name, '.')) |_| {
-                const qualified_ident = try env.insertIdent(base.Ident.for_text(import_name));
+                const import_ident = try env.insertIdent(base.Ident.for_text(import_name));
                 const entry: Can.AutoImportedType = .{
                     .env = module_env,
-                    .statement_idx = null,
+                    .statement_idx = statement_idx,
                     .qualified_type_ident = qualified_ident,
                     .is_package_qualified = true,
                 };
-                if (!module_envs_map.contains(qualified_ident)) {
-                    try module_envs_map.put(qualified_ident, entry);
+                if (!module_envs_map.contains(import_ident)) {
+                    try module_envs_map.put(import_ident, entry);
                 }
                 continue;
             }
 
             const module_ident = try env.insertIdent(base.Ident.for_text(import_name));
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(import_name));
             if (!module_envs_map.contains(module_ident)) {
                 try module_envs_map.put(module_ident, .{
                     .env = module_env,
-                    .statement_idx = statementIdxForImportedModule(module_env, import_name),
+                    .statement_idx = statement_idx,
                     .qualified_type_ident = qualified_ident,
                 });
             }

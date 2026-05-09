@@ -1486,6 +1486,8 @@ fn clonePublishedFiniteSetEraseAdapterBranches(
             .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
             .member_index = @enumFromInt(0),
         },
+        .member_proc_source_fn_ty_payload = @enumFromInt(0),
+        .member_lifted_owner_source_fn_ty_payload = null,
         .target_key = .{
             .base = @enumFromInt(0),
             .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
@@ -1505,6 +1507,8 @@ fn clonePublishedFiniteSetEraseAdapterBranches(
     for (branches, 0..) |branch, i| {
         out[i] = .{
             .member = branch.member,
+            .member_proc_source_fn_ty_payload = branch.member_proc_source_fn_ty_payload,
+            .member_lifted_owner_source_fn_ty_payload = branch.member_lifted_owner_source_fn_ty_payload,
             .target_key = try repr.cloneExecutableSpecializationKey(allocator, branch.target_key),
             .arg_transforms = if (branch.arg_transforms.len == 0)
                 &.{}
@@ -1574,7 +1578,7 @@ const AdapterDescriptorView = struct {
 
 fn callableSetDescriptorForErasedAdapterReservation(
     allocator: Allocator,
-    program: *const Program,
+    program: *Program,
     input: *const LambdaSolved.Solve.Program,
     reservation: ErasedAdapterProcReservation,
 ) Allocator.Error!AdapterDescriptorView {
@@ -1588,20 +1592,33 @@ fn callableSetDescriptorForErasedAdapterReservation(
         const source_descriptor = descriptors.descriptorFor(reservation.key.callable_set_key) orelse {
             executableInvariant("persisted erased finite-set adapter referenced missing artifact callable-set descriptor");
         };
-        return try remapAdapterDescriptorMembers(allocator, input, source_descriptor.key, source_descriptor.members, reservation.member_targets);
+        const checked_types = checkedTypesForArtifactInViews(program.artifact_views, owner) orelse {
+            executableInvariant("persisted erased finite-set adapter referenced unavailable artifact checked types");
+        };
+        return try remapPublishedAdapterDescriptorMembers(
+            allocator,
+            program,
+            input,
+            owner,
+            checked_types,
+            source_descriptor.key,
+            source_descriptor.members,
+            reservation.member_targets,
+            reservation.published_branches,
+        );
     }
 
     const source_descriptor = programCallableSetDescriptor(program, reservation.key.callable_set_key) orelse {
         executableInvariant("session erased finite-set adapter referenced missing callable-set descriptor");
     };
-    return try remapAdapterDescriptorMembers(allocator, input, source_descriptor.key, source_descriptor.members, reservation.member_targets);
+    return try remapSessionAdapterDescriptorMembers(allocator, input, source_descriptor.key, source_descriptor.members, reservation.member_targets);
 }
 
-fn remapAdapterDescriptorMembers(
+fn remapSessionAdapterDescriptorMembers(
     allocator: Allocator,
     input: *const LambdaSolved.Solve.Program,
     key: repr.CanonicalCallableSetKey,
-    source_members: anytype,
+    source_members: []const repr.CanonicalCallableSetMember,
     member_targets: []const repr.ExecutableSpecializationKey,
 ) Allocator.Error!AdapterDescriptorView {
     if (source_members.len != member_targets.len) {
@@ -1617,7 +1634,87 @@ fn remapAdapterDescriptorMembers(
         members[i] = .{
             .member = source_member.member,
             .proc_value = source_member.proc_value,
+            .source_fn_ty_payload = source_member.source_fn_ty_payload,
             .source_proc = source_member.source_proc,
+            .lifted_owner_source_fn_ty_payload = source_member.lifted_owner_source_fn_ty_payload,
+            .target_instance = target_instance,
+            .capture_slots = source_member.capture_slots,
+            .capture_shape_key = source_member.capture_shape_key,
+        };
+    }
+    return .{
+        .descriptor = .{
+            .key = key,
+            .members = members,
+        },
+        .owned_members = members,
+    };
+}
+
+fn remapPublishedAdapterDescriptorMembers(
+    allocator: Allocator,
+    program: *Program,
+    input: *const LambdaSolved.Solve.Program,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    checked_types: checked_artifact.CheckedTypeStoreView,
+    key: repr.CanonicalCallableSetKey,
+    source_members: []const canonical.CanonicalCallableSetMember,
+    member_targets: []const repr.ExecutableSpecializationKey,
+    published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+) Allocator.Error!AdapterDescriptorView {
+    if (source_members.len != member_targets.len or source_members.len != published_branches.len) {
+        executableInvariant("published erased finite-set adapter member metadata count differs from descriptor");
+    }
+
+    const members = try allocator.alloc(repr.CanonicalCallableSetMember, source_members.len);
+    errdefer allocator.free(members);
+    for (source_members, member_targets, published_branches, 0..) |source_member, target_key, published_branch, i| {
+        const target_instance = procInstanceForExecutableSpecializationKey(input, target_key) orelse {
+            executableInvariant("published erased finite-set adapter member target was not reserved in current solve session");
+        };
+        const expected_member_ref = repr.CallableSetMemberRef{
+            .callable_set_key = key,
+            .member_index = source_member.member,
+        };
+        if (!repr.callableSetKeyEql(published_branch.member.callable_set_key, expected_member_ref.callable_set_key) or
+            published_branch.member.member_index != expected_member_ref.member_index)
+        {
+            executableInvariant("published erased finite-set adapter branch member differs from descriptor");
+        }
+        const source_fn_ty_payload = try program.concrete_source_types.registerArtifactRoot(
+            owner,
+            checked_types,
+            published_branch.member_proc_source_fn_ty_payload,
+        );
+        if (!repr.canonicalTypeKeyEql(program.concrete_source_types.key(source_fn_ty_payload), source_member.proc_value.source_fn_ty)) {
+            executableInvariant("published erased finite-set adapter member source payload differs from descriptor");
+        }
+        const lifted_owner_source_fn_ty_payload = switch (source_member.proc_value.template) {
+            .lifted => |lifted| blk: {
+                const owner_payload = published_branch.member_lifted_owner_source_fn_ty_payload orelse {
+                    executableInvariant("published erased finite-set adapter lifted member has no owner source payload");
+                };
+                const registered = try program.concrete_source_types.registerArtifactRoot(owner, checked_types, owner_payload);
+                if (!repr.canonicalTypeKeyEql(program.concrete_source_types.key(registered), lifted.owner_mono_specialization.requested_mono_fn_ty)) {
+                    executableInvariant("published erased finite-set adapter lifted owner source payload differs from descriptor");
+                }
+                break :blk registered;
+            },
+            .checked,
+            .synthetic,
+            => blk: {
+                if (published_branch.member_lifted_owner_source_fn_ty_payload != null) {
+                    executableInvariant("published erased finite-set adapter non-lifted member carried lifted owner payload");
+                }
+                break :blk null;
+            },
+        };
+        members[i] = .{
+            .member = source_member.member,
+            .proc_value = source_member.proc_value,
+            .source_fn_ty_payload = source_fn_ty_payload,
+            .source_proc = source_member.source_proc,
+            .lifted_owner_source_fn_ty_payload = lifted_owner_source_fn_ty_payload,
             .target_instance = target_instance,
             .capture_slots = source_member.capture_slots,
             .capture_shape_key = source_member.capture_shape_key,
@@ -4074,6 +4171,22 @@ fn callableSetDescriptorsForArtifactInViews(
     }
     for (artifact_views.imports) |imported| {
         if (artifactKeyEql(imported.key, artifact)) return imported.callable_set_descriptors;
+    }
+    return null;
+}
+
+fn checkedTypesForArtifactInViews(
+    artifact_views: ArtifactViews,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+) ?checked_artifact.CheckedTypeStoreView {
+    if (artifact_views.root) |root| {
+        if (artifactKeyEql(root.artifact.key, artifact)) return root.artifact.checked_types.view();
+        for (root.relation_artifacts) |related| {
+            if (artifactKeyEql(related.key, artifact)) return related.checked_types;
+        }
+    }
+    for (artifact_views.imports) |imported| {
+        if (artifactKeyEql(imported.key, artifact)) return imported.checked_types;
     }
     return null;
 }
