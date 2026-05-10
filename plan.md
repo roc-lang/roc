@@ -22091,6 +22091,39 @@ Issue 9401 is complete only when:
 - boxed erased callable host-boundary tests are unskipped and pass for every
   supported runner
 
+The required coverage is not satisfied by object snapshots alone. There must be
+at least one native host integration test that links against exported readonly
+data symbols exactly as a C/Zig host would. That test must compile a platform
+whose `provides` table includes both a procedure entrypoint and non-function
+data exports, then the host must declare and dereference symbols such as:
+
+```zig
+extern const roc__answer: i64;
+extern const roc__table: Table;
+extern const roc__names: RocList;
+extern const roc__tree: Tree;
+```
+
+The host test must prove all of the following by reading the linked symbols,
+not by inspecting compiler-internal snapshots:
+
+- primitive provided constants have ordinary host-linkable data symbols
+- nested records preserve target field order and contain ordinary Roc values
+- heap-backed `Str` values point at readonly static allocations with
+  `REFCOUNT_STATIC_DATA`
+- `List(Str)` and `List(List(Str))` values point at readonly static allocations,
+  including the allocation-element-count word for refcounted-element lists
+- `Box(T)` values point at readonly static allocations for their payloads
+- recursive tag unions with boxed children use ordinary tag-union layout plus
+  readonly boxed payloads
+- calling runtime `incref`/`decref` helpers on those static pointers does not
+  mutate the refcount, write list bookkeeping fields, recursively final-drop
+  children, or call host deallocation
+
+This host-linking test is the regression guard for issue 9401. The branch may
+close that issue only when the direct host-linking test, object snapshot tests,
+and boxed erased callable host-boundary tests all pass.
+
 ### Checked Module Artifact Cache
 
 The checked module cache stores one complete, target-independent checked module

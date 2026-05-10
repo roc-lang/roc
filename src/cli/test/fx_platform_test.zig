@@ -96,6 +96,76 @@ fn runDevBackendHostSelfTest(
     });
 }
 
+fn buildAndRunDevBackendApp(
+    allocator: std.mem.Allocator,
+    roc_file: []const u8,
+    output_basename: []const u8,
+) !std.process.Child.RunResult {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, output_basename });
+    defer allocator.free(output_path);
+
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.makePath("roc-cache");
+
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.makePath("zig-local-cache");
+
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
+
+    const build_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            util.roc_binary_path,
+            "build",
+            "--opt=dev",
+            "--no-cache",
+            output_arg,
+            roc_file,
+        },
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    switch (build_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+                return error.DevBackendBuildFailed;
+            }
+        },
+        else => {
+            std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
+            std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+            return error.DevBackendBuildFailed;
+        },
+    }
+
+    return try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{output_path},
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+}
+
 fn expectInterpreterRuntimeStackOverflow() !void {
     const allocator = testing.allocator;
 
@@ -281,6 +351,38 @@ test "fx platform boxed erased callable host boundary (interpreter)" {
 
 test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "provided static data exports are host-linkable readonly constants" {
+    const allocator = testing.allocator;
+
+    const run_result = try buildAndRunDevBackendApp(
+        allocator,
+        "test/static-data-host/app.roc",
+        "static_data_host_test",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("static data host test exited with code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.StaticDataHostTestFailed;
+            }
+        },
+        else => {
+            std.debug.print("static data host test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.StaticDataHostTestFailed;
+        },
+    }
+
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.

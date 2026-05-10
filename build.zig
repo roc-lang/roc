@@ -3582,6 +3582,34 @@ pub fn build(b: *std.Build) void {
 
         b.getInstallStep().dependOn(final_fx_host_step);
 
+        const static_data_host_target_dir = fx_host_target_dir orelse native_fx_target_dir;
+        const final_static_data_host_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "static-data-host",
+            fx_host_target,
+            static_data_host_target_dir,
+            optimize,
+            roc_modules,
+            strip,
+            omit_frame_pointer,
+        );
+        b.getInstallStep().dependOn(final_static_data_host_step);
+
+        const final_static_data_platform_step: *Step = if (std.mem.endsWith(u8, static_data_host_target_dir, "musl")) blk: {
+            const copy_musl_runtime = b.addUpdateSourceFiles();
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "crt1.o" })),
+                b.pathJoin(&.{ "test/static-data-host/platform/targets", static_data_host_target_dir, "crt1.o" }),
+            );
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "libc.a" })),
+                b.pathJoin(&.{ "test/static-data-host/platform/targets", static_data_host_target_dir, "libc.a" }),
+            );
+            copy_musl_runtime.step.dependOn(final_static_data_host_step);
+            break :blk &copy_musl_runtime.step;
+        } else final_static_data_host_step;
+        b.getInstallStep().dependOn(final_static_data_platform_step);
+
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
             .root_module = b.createModule(.{
@@ -3598,6 +3626,7 @@ pub fn build(b: *std.Build) void {
         }
         // Ensure host library is copied AND fixed before running the test
         run_fx_platform_test.step.dependOn(final_fx_host_step);
+        run_fx_platform_test.step.dependOn(final_static_data_platform_step);
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
