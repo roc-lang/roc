@@ -202,12 +202,12 @@ _Static_assert(_Alignof(HostBoxed_nested_recordArgs) >= 1, "HostBoxed_nested_rec
 
 /**
  * Arguments for Host.boxed_recursive_tree!
- * Roc signature: Tree => Box(I64 -> I64)
+ * Roc signature: Host.Tree => Box(I64 -> I64)
  * C function name: host_boxed_recursive_tree
  * Return type: RocErasedCallable
  */
 typedef struct {
-    void* arg0;  // Tree
+    void* arg0;  // Host.Tree
 } HostBoxed_recursive_treeArgs;
 
 _Static_assert(sizeof(HostBoxed_recursive_treeArgs) > 0, "HostBoxed_recursive_treeArgs must have non-zero size");
@@ -216,7 +216,7 @@ _Static_assert(_Alignof(HostBoxed_recursive_treeArgs) >= 1, "HostBoxed_recursive
 /*
  * Example implementation:
  * void hosted_host_boxed_recursive_tree(struct RocOps* ops, HostBoxed_recursive_treeArgs* args, void* ret) {
- *     // args->arg0 is void* (Tree)
+ *     // args->arg0 is void* (Host.Tree)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
  */
