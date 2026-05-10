@@ -528,9 +528,6 @@ fn orderCompileTimeRootRequests(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     roots: []const checked_artifact.RootRequest,
 ) Allocator.Error![]checked_artifact.RootRequest {
-    var graph = try buildCompileTimeRootDependencyGraph(allocator, artifact, roots);
-    defer graph.deinit(allocator);
-
     var root_to_request = std.AutoHashMap(checked_artifact.ComptimeRootId, usize).init(allocator);
     defer root_to_request.deinit();
 
@@ -538,6 +535,9 @@ fn orderCompileTimeRootRequests(
         const root = compileTimeRootForRequest(artifact, request);
         try root_to_request.put(root.id, i);
     }
+
+    var graph = try buildCompileTimeRootDependencyGraph(allocator, artifact, roots, &root_to_request);
+    defer graph.deinit(allocator);
 
     const emitted = try allocator.alloc(bool, roots.len);
     defer allocator.free(emitted);
@@ -571,6 +571,7 @@ fn buildCompileTimeRootDependencyGraph(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
     roots: []const checked_artifact.RootRequest,
+    selected_roots: *const std.AutoHashMap(checked_artifact.ComptimeRootId, usize),
 ) Allocator.Error!CompileTimeRootDependencyGraph {
     const nodes = try allocator.alloc(CompileTimeRootNode, roots.len);
     errdefer allocator.free(nodes);
@@ -588,7 +589,13 @@ fn buildCompileTimeRootDependencyGraph(
         const summary = artifact.comptime_dependencies.summaryForRootRequest(root.dependency_summary_request);
         for (summary.availability_values) |availability| {
             const prerequisite: ?CompileTimeRootPrerequisite = switch (availability) {
-                .local_root => |dependency| .{ .local_root = dependency },
+                .local_root => |dependency| blk: {
+                    if (selected_roots.contains(dependency)) {
+                        break :blk .{ .local_root = dependency };
+                    }
+                    verifyUnselectedLocalRootDependencyCoveredByConcreteUse(artifact, summary, dependency);
+                    break :blk null;
+                },
                 .imported_value => |imported| .{ .imported_value = imported },
                 .const_template,
                 .procedure_binding,
@@ -629,6 +636,84 @@ fn localRootDependenciesSatisfied(
         }
     }
     return true;
+}
+
+fn verifyUnselectedLocalRootDependencyCoveredByConcreteUse(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    summary: checked_artifact.ComptimeDependencySummary,
+    dependency: checked_artifact.ComptimeRootId,
+) void {
+    const root = artifact.compile_time_roots.root(dependency);
+    switch (root.kind) {
+        .constant => {
+            const pattern = root.pattern orelse {
+                compileTimeFinalizationInvariant("unselected local constant dependency had no top-level pattern");
+            };
+            const top_level = artifact.top_level_values.lookupByPattern(pattern) orelse {
+                compileTimeFinalizationInvariant("unselected local constant dependency had no top-level value");
+            };
+            const const_ref = switch (top_level.value) {
+                .const_ref => |ref| ref,
+                .procedure_binding => compileTimeFinalizationInvariant("unselected local constant dependency resolved to a procedure binding"),
+            };
+            for (summary.concrete_values) |value| {
+                switch (value) {
+                    .const_instance => |key| if (constRefEql(key.const_ref, const_ref)) return,
+                    .callable_binding_instance,
+                    .procedure_callable,
+                    .procedure_callable_with_payloads,
+                    => {},
+                }
+            }
+            compileTimeFinalizationInvariant("unselected local constant dependency had no matching concrete const instance");
+        },
+        .callable_binding => {
+            const pattern = root.pattern orelse {
+                compileTimeFinalizationInvariant("unselected local callable dependency had no top-level pattern");
+            };
+            const top_level = artifact.top_level_values.lookupByPattern(pattern) orelse {
+                compileTimeFinalizationInvariant("unselected local callable dependency had no top-level value");
+            };
+            const binding = switch (top_level.value) {
+                .procedure_binding => |binding| checked_artifact.ProcedureBindingRef{ .top_level = binding },
+                .const_ref => compileTimeFinalizationInvariant("unselected local callable dependency resolved to a const ref"),
+            };
+            for (summary.concrete_values) |value| {
+                switch (value) {
+                    .callable_binding_instance => |key| if (checked_artifact.procedureBindingRefEql(key.binding, binding)) return,
+                    .const_instance,
+                    .procedure_callable,
+                    .procedure_callable_with_payloads,
+                    => {},
+                }
+            }
+            compileTimeFinalizationInvariant("unselected local callable dependency had no matching concrete callable instance");
+        },
+        .expect => compileTimeFinalizationInvariant("compile-time dependency summary referenced an unselected expect root"),
+    }
+}
+
+fn constRefEql(a: checked_artifact.ConstRef, b: checked_artifact.ConstRef) bool {
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
+        constOwnerEql(a.owner, b.owner) and
+        a.template == b.template and
+        std.meta.eql(a.source_scheme.bytes, b.source_scheme.bytes);
+}
+
+fn constOwnerEql(a: checked_artifact.ConstOwner, b: checked_artifact.ConstOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level_binding => |left| blk: {
+            const right = b.top_level_binding;
+            break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
+        },
+        .promoted_capture => |left| blk: {
+            const right = b.promoted_capture;
+            break :blk left.capture_index == right.capture_index and
+                left.promoted_proc.module_idx == right.promoted_proc.module_idx and
+                canonical.procedureValueRefEql(left.promoted_proc.proc, right.promoted_proc.proc);
+        },
+    };
 }
 
 fn evaluateConstantRoot(

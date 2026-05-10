@@ -18,7 +18,6 @@ PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
-MISSING MAIN! FUNCTION - fuzz_crash_031.md:1:1:4:11
 # PROBLEMS
 **UNCLOSED SINGLE QUOTE**
 This single-quoted literal is missing a closing quote.
@@ -95,22 +94,6 @@ vavar t= '
          ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_031.md:1:1:4:11:**
-```roc
-mule []
-
-#el
-vavar t= '
-```
-
 
 # TOKENS
 ~~~zig

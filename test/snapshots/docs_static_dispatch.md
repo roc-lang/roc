@@ -63,7 +63,7 @@ main_for_host = main
     (entry
       (name "Counter")
       (kind nominal)
-      (type "Counter := " (record (field "count" (type-ref (name "U64")))))
+      (type "Counter := " (record (field "count" (type-ref (module "Builtin") (name "U64")))))
       (entry
         (name "new")
         (kind value)

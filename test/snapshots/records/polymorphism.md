@@ -14,15 +14,15 @@ type=expr
 }
 ~~~
 # EXPECTED
-MISSING METHOD - polymorphism.md:6:5:6:37
+MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
 **MISSING METHOD**
 This **to_str** method is being called on a value whose type doesn't have that method:
-**polymorphism.md:6:5:6:37:**
+**polymorphism.md:6:29:6:35:**
 ```roc
     { pair1, pair2, pair3 }.to_str()
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            ^^^^^^
 
 The value's type, which does not have a method named **to_str**, is:
 
@@ -115,7 +115,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call
+		(e-call (constraint-fn-var 11)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -123,7 +123,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call
+		(e-call (constraint-fn-var 18)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -131,12 +131,12 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call
+		(e-call (constraint-fn-var 25)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-method-call (method "to_str")
+	(e-dispatch-call (method "to_str") (constraint-fn-var 93)
 		(receiver
 			(e-record
 				(fields

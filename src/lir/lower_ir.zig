@@ -808,6 +808,41 @@ const Lowerer = struct {
         } });
     }
 
+    fn lowerListGetUnsafeInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        call: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const vars = self.input.store.sliceVarSpan(call.args);
+        if (vars.len != 2) {
+            lirInvariant("lir.lower_ir list_get_unsafe expected exactly list and index arguments");
+        }
+
+        const list = try self.lowerVar(vars[0]);
+        const index = try self.lowerVar(vars[1]);
+        const elem_layout = self.listElemLayout(self.store.getLocal(list).layout_idx);
+        const target_layout = self.store.getLocal(target).layout_idx;
+        const read_target = if (target_layout == elem_layout)
+            target
+        else
+            try self.store.addLocal(.{ .layout_idx = elem_layout });
+
+        const read_args = [_]LIR.LocalId{ list, index };
+        const after_read = if (read_target == target)
+            next
+        else
+            try self.lowerPhysicalSlotInto(target, read_target, next);
+
+        return try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = read_target,
+            .op = call.op,
+            .rc_effect = call.rc_effect,
+            .args = try self.store.addLocalSpan(&read_args),
+            .next = after_read,
+        } });
+    }
+
     fn lowerExprInto(self: *Lowerer, target: LIR.LocalId, expr: ir.Ast.Expr, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
         return switch (expr) {
             .var_ => |var_| try self.store.addCFStmt(.{ .assign_ref = .{
@@ -868,6 +903,10 @@ const Lowerer = struct {
                 } });
             },
             .call_low_level => |call| blk: {
+                if (call.op == .list_get_unsafe) {
+                    break :blk try self.lowerListGetUnsafeInto(target, call, next);
+                }
+
                 if (call.op == .box_box or call.op == .box_unbox) {
                     const target_layout = self.store.getLocal(target).layout_idx;
                     if (self.isErasedCallableLayout(target_layout)) {

@@ -11,20 +11,9 @@ type=expr
 }.Foo
 ~~~
 # EXPECTED
-RECORD BUILDER NOT SUPPORTED - record_builder_suffix.md:1:1:4:6
+NIL
 # PROBLEMS
-**RECORD BUILDER NOT SUPPORTED**
-The type `Foo` is used in a record builder expression, but does not implement `map2`:
-**record_builder_suffix.md:1:1:4:6:**
-```roc
-{
-    x: 5,
-    y: 0,
-}.Foo
-```
-
-Hint: To use `Foo` as a record builder, add a `map2` method to its type module.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

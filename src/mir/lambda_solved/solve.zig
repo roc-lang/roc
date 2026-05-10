@@ -12450,12 +12450,12 @@ const BodySolver = struct {
             .record => try self.publishConstBackedRecordAggregate(value, backing, resolved),
             .tuple => try self.publishConstBackedTupleAggregate(value, backing, resolved),
             .list => try self.publishConstBackedListAggregate(value, backing, resolved),
+            .box => try self.publishConstBackedBoxedValue(value, backing, resolved),
             .pending => lambdaInvariant("lambda-solved const-backed value reached pending schema"),
             .zst,
             .int,
             .frac,
             .str,
-            .box,
             .tag_union,
             .alias,
             .nominal,
@@ -12630,6 +12630,35 @@ const BodySolver = struct {
         try self.publishListAggregate(value, span);
     }
 
+    fn publishConstBackedBoxedValue(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        backing: repr.ConstBackedValueInfo,
+        resolved: ResolvedConstBackedValue,
+    ) Allocator.Error!void {
+        if (self.value_store.values.items[@intFromEnum(value)].boxed != null) return;
+        const value_info = self.value_store.values.items[@intFromEnum(value)];
+        const payload_ty = try self.logicalBoxPayloadType(value_info.logical_ty);
+        const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
+        const payload_source_root = try self.sourceChildRoot(source_root, .box_payload);
+        const payload_value = try self.newValue(payload_ty, if (payload_source_root) |source| source.key else .{});
+        try self.publishConstBackedValueMetadata(payload_value, self.constBackedBoxPayload(resolved, backing.const_instance));
+
+        const box_root = self.valueRoot(value);
+        const payload_root = self.valueRoot(payload_value);
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = box_root },
+            .to = .{ .local = payload_root },
+            .kind = .box_payload,
+        });
+        self.value_store.values.items[@intFromEnum(value)].boxed = .{
+            .box_root = box_root,
+            .payload_root = payload_root,
+            .payload_value = payload_value,
+            .boundary = null,
+        };
+    }
+
     fn constBackedProjectionChild(
         self: *BodySolver,
         backing: repr.ConstBackedValueInfo,
@@ -12640,6 +12669,26 @@ const BodySolver = struct {
             .record_field => |field| try self.constBackedRecordField(resolved, field, backing.const_instance),
             .tuple_elem => |index| self.constBackedTupleElem(resolved, index, backing.const_instance),
             .tag_payload => |payload| self.constBackedTagPayload(resolved, payload, backing.const_instance),
+        };
+    }
+
+    fn constBackedBoxPayload(
+        self: *BodySolver,
+        resolved: ResolvedConstBackedValue,
+        const_instance: checked_artifact.ConstInstanceRef,
+    ) repr.ConstBackedValueInfo {
+        const payload_schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .box => |payload| payload,
+            else => lambdaInvariant("lambda-solved const-backed box payload reached non-box schema"),
+        };
+        const payload_value = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .box => |payload| payload,
+            else => lambdaInvariant("lambda-solved const-backed box payload reached non-box value"),
+        };
+        return .{
+            .const_instance = const_instance,
+            .schema = payload_schema,
+            .value = payload_value,
         };
     }
 
@@ -13679,6 +13728,18 @@ const BodySolver = struct {
                 else => lambdaInvariant("lambda-solved list structural root attached to non-list type"),
             },
             else => lambdaInvariant("lambda-solved list structural root attached to unresolved type"),
+        };
+    }
+
+    fn logicalBoxPayloadType(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const root = self.type_importer.output.unlinkConst(logical_ty);
+        return switch (self.type_importer.output.getNode(root)) {
+            .nominal => |nominal| try self.logicalBoxPayloadType(nominal.backing),
+            .content => |content| switch (content) {
+                .box => |payload| payload,
+                else => lambdaInvariant("lambda-solved const-backed box value attached to non-box type"),
+            },
+            else => lambdaInvariant("lambda-solved const-backed box value attached to unresolved type"),
         };
     }
 

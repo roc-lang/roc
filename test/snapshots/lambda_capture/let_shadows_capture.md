@@ -74,7 +74,7 @@ EndOfFile,
 		(e-num (value "5")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-call
+		(e-call (constraint-fn-var 5)
 			(e-lambda
 				(args
 					(p-underscore))

@@ -568,7 +568,7 @@ pub const BuildEnv = struct {
 
         // Run coordinator loop
         try coord.coordinatorLoop();
-        if (self.finalize_executable_artifacts) {
+        if (self.finalize_executable_artifacts and !coord.hasUserErrors()) {
             try coord.finalizeExecutableArtifacts();
         }
 

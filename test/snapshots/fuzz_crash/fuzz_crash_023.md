@@ -1847,17 +1847,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-field-access
-											(e-question-suffix
-												(e-field-access
-													(e-question-suffix
-														(e-apply
-															(e-ident (raw "some_fn"))
-															(e-ident (raw "arg1"))))
-													(e-apply
-														(e-ident (raw "static_dispatch_method")))))
-											(e-apply
-												(e-ident (raw "next_static_dispatch_method")))))
+										(e-method-call (method ".next_static_dispatch_method")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".static_dispatch_method")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "some_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args)))
 									(e-ident (raw "record_field")))))
 						(e-question-suffix
 							(e-apply
@@ -2399,7 +2399,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 355)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2571,12 +2571,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-field-access (field "next_static_dispatch_method")
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1728)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-field-access (field "static_dispatch_method")
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1695)
 																			(receiver
 																				(e-match
 																					(match
@@ -2850,11 +2850,13 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-binop (op "eq")
-				(e-lookup-local
-					(p-assign (ident "blah")))
-				(e-lookup-local
-					(p-assign (ident "foo")))))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure

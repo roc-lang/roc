@@ -131,17 +131,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-closure
-				(captures
-					(capture (ident "x")))
-				(e-lambda
-					(args
-						(p-assign (ident "y")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y")))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -151,7 +141,7 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
-		(e-call
+		(e-call (constraint-fn-var 25)
 			(e-lookup-local
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
@@ -165,10 +155,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 40)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call
+				(e-call (constraint-fn-var 41)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -186,7 +176,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call
+			(e-call (constraint-fn-var 52)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda

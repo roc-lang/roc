@@ -319,7 +319,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call
+			(e-call (constraint-fn-var 75)
 				(e-lookup-local
 					(p-assign (ident "processComplex")))
 				(e-tag (name "Ok")

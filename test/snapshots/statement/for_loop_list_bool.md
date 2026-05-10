@@ -112,12 +112,14 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "eq")
-									(e-lookup-local
-										(p-assign (ident "b")))
-									(e-nominal-external
-										(builtin)
-										(e-tag (name "False"))))
+								(e-method-eq (negated "false")
+									(lhs
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(rhs
+										(e-nominal-external
+											(builtin)
+											(e-tag (name "False")))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "allTrue_"))
@@ -133,12 +135,14 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "False"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "False")))))))
 ~~~
 # TYPES
 ~~~clojure

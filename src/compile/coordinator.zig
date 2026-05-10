@@ -824,6 +824,13 @@ pub const Coordinator = struct {
     }
 
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
+        if (self.hasUserErrors()) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts called after user-facing errors", .{});
+            }
+            unreachable;
+        }
+
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
 
@@ -861,6 +868,22 @@ pub const Coordinator = struct {
             .relation_artifacts = &relation_artifacts,
             .platform_app_relation = relation,
         });
+    }
+
+    pub fn hasUserErrors(self: *const Coordinator) bool {
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                for (mod.reports.items) |rep| {
+                    switch (rep.severity) {
+                        .info, .warning => {},
+                        .runtime_error, .fatal => return true,
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     pub fn executableRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
@@ -1822,37 +1845,23 @@ pub const Coordinator = struct {
 
             if (pkg.module_names.get(import_name)) |imp_id| {
                 const imp = pkg.getModule(imp_id).?;
-                const artifact = imp.checkedArtifact() orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "checked artifact publication invariant violated: local import {s} has no published artifact",
-                            .{import_name},
-                        );
-                    }
-                    unreachable;
-                };
+                if (imp.checkedArtifact()) |artifact| {
+                    try imports.append(self.gpa, .{
+                        .module_idx = resolved_module_idx,
+                        .key = artifact.key,
+                        .view = check.CheckedArtifact.importedView(artifact),
+                    });
+                }
+                continue;
+            }
+
+            if (self.getExternalArtifact(pkg.name, import_name)) |artifact| {
                 try imports.append(self.gpa, .{
                     .module_idx = resolved_module_idx,
                     .key = artifact.key,
                     .view = check.CheckedArtifact.importedView(artifact),
                 });
-                continue;
             }
-
-            const artifact = self.getExternalArtifact(pkg.name, import_name) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact publication invariant violated: external import {s} has no published artifact",
-                        .{import_name},
-                    );
-                }
-                unreachable;
-            };
-            try imports.append(self.gpa, .{
-                .module_idx = resolved_module_idx,
-                .key = artifact.key,
-                .view = check.CheckedArtifact.importedView(artifact),
-            });
         }
 
         return try imports.toOwnedSlice(self.gpa);

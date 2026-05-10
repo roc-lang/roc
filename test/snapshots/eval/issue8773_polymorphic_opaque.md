@@ -191,7 +191,7 @@ NO CHANGE
 		(e-match
 			(match
 				(cond
-					(e-call
+					(e-call (constraint-fn-var 47)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -202,7 +202,7 @@ NO CHANGE
 							(pattern (degenerate false)
 								(p-applied-tag)))
 						(value
-							(e-call
+							(e-call (constraint-fn-var 53)
 								(e-lookup-local
 									(p-assign (ident "get_text")))
 								(e-lookup-local
@@ -226,11 +226,13 @@ NO CHANGE
 			(ty-tag-name (name "Text")
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-string
-				(e-literal (string "hello"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-string
+					(e-literal (string "hello")))))))
 ~~~
 # TYPES
 ~~~clojure

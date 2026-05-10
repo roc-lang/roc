@@ -12,21 +12,9 @@ match nestedList {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
  - :0:0:0:0
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `nestedList` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_list_scoping.md:1:7:1:17:**
-```roc
-match nestedList {
-```
-      ^^^^^^^^^^
-
-
 **MISSING METHOD**
 The value before this ***** operator has a type that doesn't have a **times** method:
 **nested_list_scoping.md:4:17:4:22:**

@@ -1451,17 +1451,17 @@ EndOfFile,
 						(e-question-suffix
 							(e-field-access
 								(e-question-suffix
-									(e-field-access
-										(e-question-suffix
-											(e-field-access
-												(e-question-suffix
-													(e-apply
-														(e-ident (raw "e_fn"))
-														(e-ident (raw "arg1"))))
-												(e-apply
-													(e-ident (raw "od")))))
-										(e-apply
-											(e-ident (raw "ned")))))
+									(e-method-call (method ".ned")
+										(receiver
+											(e-question-suffix
+												(e-method-call (method ".od")
+													(receiver
+														(e-question-suffix
+															(e-apply
+																(e-ident (raw "e_fn"))
+																(e-ident (raw "arg1")))))
+													(args))))
+										(args)))
 								(e-ident (raw "recd"))))
 						(e-apply
 							(e-tag (raw "Stdo!"))
@@ -1816,7 +1816,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 212)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1962,12 +1962,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-field-access (field "ned")
+													(e-dispatch-call (method "ned") (constraint-fn-var 1193)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-field-access (field "od")
+																		(e-dispatch-call (method "od") (constraint-fn-var 1160)
 																			(receiver
 																				(e-match
 																					(match

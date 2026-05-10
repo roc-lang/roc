@@ -1650,17 +1650,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-field-access
-											(e-question-suffix
-												(e-field-access
-													(e-question-suffix
-														(e-apply
-															(e-ident (raw "some_fn"))
-															(e-ident (raw "arg1"))))
-													(e-apply
-														(e-ident (raw "statod")))))
-											(e-apply
-												(e-ident (raw "ned")))))
+										(e-method-call (method ".ned")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".statod")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "some_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args)))
 									(e-ident (raw "recd")))))
 						(e-apply
 							(e-tag (raw "Stdoline!"))
@@ -2096,7 +2096,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 292)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2267,12 +2267,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-field-access (field "ned")
+													(e-dispatch-call (method "ned") (constraint-fn-var 1531)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-field-access (field "statod")
+																		(e-dispatch-call (method "statod") (constraint-fn-var 1498)
 																			(receiver
 																				(e-match
 																					(match
@@ -2485,11 +2485,13 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-binop (op "eq")
-				(e-lookup-local
-					(p-assign (ident "blah")))
-				(e-lookup-local
-					(p-assign (ident "foo")))))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure

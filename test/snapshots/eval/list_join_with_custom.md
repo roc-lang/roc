@@ -223,10 +223,10 @@ EndOfFile,
 			(ty (name "Str")))
 		(s-decl
 			(p-ident (raw "output"))
-			(e-field-access
-				(e-ident (raw "result"))
-				(e-apply
-					(e-ident (raw "to_str")))))
+			(e-method-call (method ".to_str")
+				(receiver
+					(e-ident (raw "result")))
+				(args)))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "output"))
@@ -310,7 +310,7 @@ expect output == "div | span | p"
 											(p-assign (ident "s")))))))))
 				(s-let
 					(p-assign (ident "joined"))
-					(e-call
+					(e-call (constraint-fn-var 33)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -344,20 +344,22 @@ expect output == "div | span | p"
 									(e-if
 										(if-branches
 											(if-branch
-												(e-binop (op "eq")
-													(e-lookup-local
-														(p-assign (ident "acc")))
-													(e-string
-														(e-literal (string ""))))
+												(e-method-eq (negated "false")
+													(lhs
+														(e-lookup-local
+															(p-assign (ident "acc"))))
+													(rhs
+														(e-string
+															(e-literal (string "")))))
 												(e-block
 													(e-lookup-local
 														(p-assign (ident "item_str"))))))
 										(if-else
 											(e-block
-												(e-call
+												(e-call (constraint-fn-var 57)
 													(e-lookup-external
 														(builtin))
-													(e-call
+													(e-call (constraint-fn-var 58)
 														(e-lookup-external
 															(builtin))
 														(e-lookup-local
@@ -433,7 +435,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
+		(e-call (constraint-fn-var 119)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -444,7 +446,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-field-access (field "to_str")
+		(e-dispatch-call (method "to_str") (constraint-fn-var 439)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))
@@ -457,11 +459,13 @@ expect output == "div | span | p"
 			(ty-tag-name (name "Raw")
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "output")))
-			(e-string
-				(e-literal (string "div | span | p"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "output"))))
+			(rhs
+				(e-string
+					(e-literal (string "div | span | p")))))))
 ~~~
 # TYPES
 ~~~clojure

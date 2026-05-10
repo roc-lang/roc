@@ -61,7 +61,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 13)
 	(e-lambda
 		(args
 			(p-record-destructure

@@ -5069,6 +5069,7 @@ pub fn canonicalizeExpr(
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |alias_name| {
                         if (self.lookupTypeVarAliasBinding(alias_name)) |binding| {
                             if (self.parse_ir.tokens.resolveIdentifier(ident_expr.token)) |method_name| {
+                                const method_name_region = self.methodNameRegionFromToken(ident_expr.token);
                                 const scratch_top = self.env.store.scratchExprTop();
                                 const args_slice = self.parse_ir.store.exprSlice(e.args);
                                 for (args_slice) |arg| {
@@ -5081,6 +5082,7 @@ pub fn canonicalizeExpr(
                                     .e_type_method_call = .{
                                         .type_var_alias_stmt = binding.statement_idx,
                                         .method_name = method_name,
+                                        .method_name_region = method_name_region,
                                         .args = args_span,
                                     },
                                 }, region);
@@ -5164,10 +5166,12 @@ pub fn canonicalizeExpr(
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         if (qualifier_tokens.len == 1) {
                             if (self.lookupTypeVarAliasBinding(module_alias)) |binding| {
+                                const method_name_region = self.methodNameRegionFromToken(e.token);
                                 const expr_idx = try self.env.addExpr(CIR.Expr{
                                     .e_type_method_call = .{
                                         .type_var_alias_stmt = binding.statement_idx,
                                         .method_name = ident,
+                                        .method_name_region = method_name_region,
                                         .args = .{ .span = DataSpan.empty() },
                                     },
                                 }, region);
@@ -13873,6 +13877,7 @@ fn canonicalizeMethodCall(self: *Self, method_call: @FieldType(AST.Expr, "method
         .e_method_call = .{
             .receiver = receiver_idx.idx,
             .method_name = try self.resolveIdentOrFallback(method_call.method_token),
+            .method_name_region = self.methodNameRegionFromToken(method_call.method_token),
             .args = args_span,
         },
     }, self.parse_ir.tokenizedRegionToRegion(method_call.region));
@@ -13950,6 +13955,24 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
             self.parse_ir.tokenizedRegionToRegion(field_access.region), // use whole region
         },
     };
+}
+
+fn methodNameRegionFromToken(self: *Self, token: Token.Idx) Region {
+    var region = self.parse_ir.tokens.resolve(token);
+    const token_tag = self.parse_ir.tokens.tokens.items(.tag)[@intCast(token)];
+    switch (token_tag) {
+        .NoSpaceDotLowerIdent,
+        .NoSpaceDotUpperIdent,
+        .DotLowerIdent,
+        .DotUpperIdent,
+        => {
+            if (region.start.offset < region.end.offset) {
+                region.start.offset += 1;
+            }
+        },
+        else => {},
+    }
+    return region;
 }
 
 /// Resolve an identifier token or return a synthetic "unknown" identifier.

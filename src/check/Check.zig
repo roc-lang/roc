@@ -1491,6 +1491,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
+    try self.validateToInspectMethodTypes(&env);
+
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
@@ -4464,13 +4466,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_var,
                     method_call.method_name,
                     env,
-                    expr_region,
+                    method_call.method_name_region,
                     expr_idx,
                 );
                 self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
                     method_call.receiver,
                     method_call.method_name,
+                    method_call.method_name_region,
                     method_call.args,
                     constraint_fn_var,
                 );
@@ -4558,13 +4561,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_var,
                     method_call.method_name,
                     env,
-                    expr_region,
+                    method_call.method_name_region,
                     expr_idx,
                 );
                 self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
                     method_call.type_var_alias_stmt,
                     method_call.method_name,
+                    method_call.method_name_region,
                     method_call.args,
                     constraint_fn_var,
                 );
@@ -4796,6 +4800,216 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
         },
         else => return null,
     }
+}
+
+fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr = self.cir.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_call => |call| {
+                if (!self.exprIsBuiltinStrInspect(call.func)) continue;
+                const args = self.cir.store.sliceExpr(call.args);
+                if (args.len != 1) continue;
+                try self.validateToInspectMethodTypeForArg(
+                    ModuleEnv.varFrom(args[0]),
+                    env,
+                    self.cir.store.getExprRegion(args[0]),
+                );
+            },
+            else => {},
+        }
+    }
+}
+
+fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_lookup_local => |lookup| {
+            const ident = self.getPatternIdent(lookup.pattern_idx) orelse return false;
+            return ident.eql(self.cir.idents.builtin_str_inspect);
+        },
+        .e_lookup_external => |ext| {
+            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
+            if (module_idx >= self.imported_modules.len) return false;
+            const other_env = self.imported_modules[module_idx];
+            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, ext.target_node_idx));
+            const ident = patternIdentInModule(other_env, def_idx) orelse return false;
+            return ident.eql(other_env.idents.builtin_str_inspect);
+        },
+        else => return false,
+    }
+}
+
+fn validateToInspectMethodTypeForArg(
+    self: *Self,
+    arg_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(arg_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.validateNominalToInspectMethodType(arg_var, nominal, env, region),
+            else => {},
+        },
+        .alias => |alias| try self.validateAliasToInspectMethodType(arg_var, alias, env, region),
+        .flex,
+        .rigid,
+        .err,
+        => {},
+    }
+}
+
+fn validateNominalToInspectMethodType(
+    self: *Self,
+    arg_var: Var,
+    nominal: types_mod.NominalType,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const method = try self.toInspectMethodVarForNominal(nominal, env, region) orelse return;
+    try self.validateToInspectMethodVar(arg_var, method.var_, method.dispatcher_name, env, region);
+}
+
+fn validateAliasToInspectMethodType(
+    self: *Self,
+    arg_var: Var,
+    alias: types_mod.Alias,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const method = try self.toInspectMethodVarForAlias(alias, env, region) orelse return;
+    try self.validateToInspectMethodVar(arg_var, method.var_, method.dispatcher_name, env, region);
+}
+
+const ToInspectMethodVar = struct {
+    var_: Var,
+    dispatcher_name: Ident.Idx,
+};
+
+fn validateToInspectMethodVar(
+    self: *Self,
+    arg_var: Var,
+    method_var: Var,
+    dispatcher_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const str_var = try self.freshStr(env, region);
+    const args_range = try self.types.appendVars(&.{arg_var});
+    const expected_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = str_var,
+        .needs_instantiation = false,
+    } } }, env, region);
+
+    const result = try self.unifyInContext(method_var, expected_fn_var, env, .{ .method_type = .{
+        .constraint_var = arg_var,
+        .dispatcher_name = dispatcher_name,
+        .method_name = self.cir.idents.to_inspect,
+    } });
+    if (result.isProblem()) {
+        try self.unifyWith(expected_fn_var, .err, env);
+    }
+}
+
+fn toInspectMethodVarForNominal(
+    self: *Self,
+    nominal: types_mod.NominalType,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?ToInspectMethodVar {
+    const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
+    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+        self.cir,
+        nominal.ident.ident_idx,
+        self.cir.idents.to_inspect,
+    ) orelse return null;
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, nominal.ident.ident_idx, env, region);
+}
+
+fn toInspectMethodVarForAlias(
+    self: *Self,
+    alias: types_mod.Alias,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?ToInspectMethodVar {
+    const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
+    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+        original_env,
+        alias.ident.ident_idx,
+        self.cir,
+        self.cir.idents.to_inspect,
+    ) orelse return null;
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, alias.ident.ident_idx, env, region);
+}
+
+fn methodOwnerEnv(self: *Self, origin_module: Ident.Idx) Allocator.Error!struct { *const ModuleEnv, bool } {
+    if (origin_module.eql(self.builtin_ctx.module_name)) return .{ self.cir, true };
+    if (origin_module.eql(self.cir.idents.builtin_module)) {
+        return .{ self.builtin_ctx.builtin_module orelse self.cir, self.builtin_ctx.builtin_module == null };
+    }
+    for (self.imported_modules) |imported_env| {
+        const imported_name = if (!imported_env.qualified_module_ident.isNone())
+            imported_env.getIdent(imported_env.qualified_module_ident)
+        else
+            imported_env.module_name;
+        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
+        if (imported_module_ident.eql(origin_module)) return .{ imported_env, false };
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic("type checker invariant violated: unable to find module environment for to_inspect owner {s}", .{self.cir.getIdent(origin_module)});
+    }
+    unreachable;
+}
+
+fn methodVarFromOriginalEnv(
+    self: *Self,
+    original_env: *const ModuleEnv,
+    is_this_module: bool,
+    method_ident: Ident.Idx,
+    dispatcher_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!ToInspectMethodVar {
+    const node_idx = original_env.getExposedNodeIndexById(method_ident) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: to_inspect method ident has no exposed definition", .{});
+        }
+        unreachable;
+    };
+    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
+    const def_var: Var = ModuleEnv.varFrom(def_idx);
+    const method_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+        }
+        break :blk def_var;
+    } else blk: {
+        const copied = try self.copyVar(def_var, original_env, region);
+        break :blk try self.instantiateVar(copied, env, .{ .explicit = region });
+    };
+    return .{ .var_ = method_var, .dispatcher_name = dispatcher_name };
+}
+
+fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ident.Idx {
+    const def = module_env.store.getDef(def_idx);
+    const pattern = module_env.store.getPattern(def.pattern);
+    return switch (pattern) {
+        .assign => |assign| assign.ident,
+        .as => |as_pattern| as_pattern.ident,
+        else => null,
+    };
+}
+
+fn isExprNodeTag(tag: CIR.Node.Tag) bool {
+    return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
 const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };

@@ -23,7 +23,7 @@ type=repl
 It's referenced here:
 **repl:1:1:1:10:**
 ```roc
-Bool.true
+Bool.true # incorrect, tags must be UPPERCASE
 ```
 ^^^^^^^^^
 ---

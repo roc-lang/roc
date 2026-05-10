@@ -17,19 +17,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `addOne` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tag_vs_function_calls.md:7:13:7:19:**
-```roc
-    result: addOne(5),
-```
-            ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -164,5 +154,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, Dec -> a]"))
+(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

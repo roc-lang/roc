@@ -60,7 +60,7 @@ EndOfFile,
 		(e-num (value "10")))
 	(s-let
 		(p-assign (ident "b"))
-		(e-call
+		(e-call (constraint-fn-var 10)
 			(e-closure
 				(captures
 					(capture (ident "a")))

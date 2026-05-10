@@ -62,19 +62,23 @@ NO CHANGE
 		(p-assign (ident "bytes"))
 		(e-bytes-literal (len "11")))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "text")))
-			(e-string
-				(e-literal (string "hello world")))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-external
-					(builtin))
+		(e-method-eq (negated "false")
+			(lhs
 				(e-lookup-local
-					(p-assign (ident "bytes"))))
-			(e-num (value "11")))))
+					(p-assign (ident "text"))))
+			(rhs
+				(e-string
+					(e-literal (string "hello world"))))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 11)
+					(e-lookup-external
+						(builtin))
+					(e-lookup-local
+						(p-assign (ident "bytes")))))
+			(rhs
+				(e-num (value "11"))))))
 ~~~
 # TYPES
 ~~~clojure

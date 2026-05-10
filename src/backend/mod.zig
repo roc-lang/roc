@@ -28,6 +28,7 @@ pub const X86_64MacBackend = dev.X86_64MacBackend;
 pub const X86_64WinBackend = dev.X86_64WinBackend;
 pub const AArch64Backend = dev.AArch64Backend;
 pub const Entrypoint = dev.Entrypoint;
+pub const StaticDataExport = dev.StaticDataExport;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationResult = dev.CompilationResult;
 pub const resolveBuiltinFunction = dev.resolveBuiltinFunction;

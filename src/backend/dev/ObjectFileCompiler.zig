@@ -36,6 +36,16 @@ pub const Entrypoint = struct {
     ret_layout: layout.Idx,
 };
 
+/// Immutable data symbol to emit into the target's readonly data section.
+pub const StaticDataExport = struct {
+    /// The exported symbol name (e.g. "roc__answer").
+    symbol_name: []const u8,
+    /// Fully materialized Roc ABI bytes for the constant.
+    bytes: []const u8,
+    /// Required alignment of the symbol inside the readonly section.
+    alignment: u32,
+};
+
 /// Result of compilation
 pub const CompilationResult = struct {
     /// The generated object file bytes
@@ -78,10 +88,11 @@ pub const ObjectFileCompiler = struct {
         lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
+        static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, proc_specs, target);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target);
     }
 
     /// Compile to an object file and write it to a path.
@@ -98,6 +109,7 @@ pub const ObjectFileCompiler = struct {
             lir_store,
             layout_store,
             entrypoints,
+            &.{},
             proc_specs,
             target,
         );
@@ -121,10 +133,11 @@ fn compileWithCodeGen(
     lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
+    static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
-    if (entrypoints.len == 0) {
+    if (entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -157,6 +170,32 @@ fn compileWithCodeGen(
     var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
     defer symbols.deinit(allocator);
 
+    var rodata = std.ArrayList(u8).empty;
+    defer rodata.deinit(allocator);
+
+    for (static_data_exports) |data_export| {
+        const alignment = @as(usize, @intCast(data_export.alignment));
+        const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
+        rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
+            return CompilationError.OutOfMemory;
+        };
+        rodata.appendSlice(allocator, data_export.bytes) catch {
+            return CompilationError.OutOfMemory;
+        };
+
+        symbols.append(allocator, .{
+            .name = data_export.symbol_name,
+            .offset = aligned_offset,
+            .size = data_export.bytes.len,
+            .is_global = true,
+            .is_function = false,
+            .is_external = false,
+            .section = .rodata,
+        }) catch {
+            return CompilationError.OutOfMemory;
+        };
+    }
+
     // Generate entrypoint wrappers
     for (entrypoints) |entrypoint| {
         const export_info = codegen.generateEntrypointWrapper(
@@ -173,6 +212,7 @@ fn compileWithCodeGen(
             .is_global = true,
             .is_function = true,
             .is_external = false,
+            .section = .text,
             // Unwind info for Windows x64
             .prologue_size = export_info.prologue_size,
             .stack_alloc = export_info.stack_alloc,
@@ -206,6 +246,7 @@ fn compileWithCodeGen(
                         .is_global = false,
                         .is_function = true,
                         .is_external = true,
+                        .section = .undef,
                     }) catch {
                         return CompilationError.OutOfMemory;
                     };
@@ -227,6 +268,7 @@ fn compileWithCodeGen(
                         .is_global = false,
                         .is_function = false,
                         .is_external = true,
+                        .section = .undef,
                     }) catch {
                         return CompilationError.OutOfMemory;
                     };
@@ -244,6 +286,7 @@ fn compileWithCodeGen(
         allocator,
         target,
         code,
+        rodata.items,
         symbols.items,
         relocations,
         &output,
@@ -267,6 +310,7 @@ fn crossCompileDispatch(
     lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
+    static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
@@ -282,6 +326,7 @@ fn crossCompileDispatch(
                     lir_store,
                     layout_store,
                     entrypoints,
+                    static_data_exports,
                     proc_specs,
                     comptime_target,
                 );

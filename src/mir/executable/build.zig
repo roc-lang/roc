@@ -4358,8 +4358,8 @@ fn lowerComptimeValueExpr(
         .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, materialization, expected_ty, items, value, allow_callable),
         .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, materialization, expected_ty, fields, value, allow_callable),
         .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, materialization, expected_ty, variants, value, allow_callable),
-        .alias => |alias| try lowerPureComptimeWrappedExpr(allocator, program, materialization, expected_ty, alias.type_name, alias.backing, value, .alias, allow_callable),
-        .nominal => |nominal| try lowerPureComptimeWrappedExpr(allocator, program, materialization, expected_ty, nominal.type_name, nominal.backing, value, .nominal, allow_callable),
+        .alias => |alias| try lowerPureComptimeAliasExpr(allocator, program, materialization, expected_ty, alias.backing, value, allow_callable),
+        .nominal => |nominal| try lowerPureComptimeNominalExpr(allocator, program, materialization, expected_ty, nominal.type_name, nominal.backing, value, allow_callable),
         .callable => blk: {
             if (!allow_callable) executableInvariant("executable pure compile-time materialization contained a callable slot");
             const leaf = switch (value) {
@@ -4612,7 +4612,31 @@ fn findPureComptimeTagType(
     return null;
 }
 
-fn lowerPureComptimeWrappedExpr(
+fn lowerPureComptimeAliasExpr(
+    allocator: Allocator,
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    backing_schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValue,
+    allow_callable: bool,
+) Allocator.Error!Ast.ExprId {
+    const backing_value = switch (value) {
+        .alias => |backing| backing,
+        else => executableInvariant("executable pure compile-time alias materialization value mismatch"),
+    };
+    return try lowerComptimeValueExpr(
+        allocator,
+        program,
+        materialization,
+        expected_ty,
+        backing_schema,
+        backing_value,
+        allow_callable,
+    );
+}
+
+fn lowerPureComptimeNominalExpr(
     allocator: Allocator,
     program: *Program,
     materialization: MaterializationStores,
@@ -4620,7 +4644,6 @@ fn lowerPureComptimeWrappedExpr(
     nominal: canonical.NominalTypeKey,
     backing_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
-    comptime wrapper: enum { alias, nominal },
     allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
     const expected_nominal = switch (program.types.getType(expected_ty)) {
@@ -4631,15 +4654,9 @@ fn lowerPureComptimeWrappedExpr(
     if (!nominalTypeKeyEql(expected_nominal.nominal, remapped_nominal)) {
         executableInvariant("executable pure compile-time wrapped materialization nominal key mismatch");
     }
-    const backing_value = switch (wrapper) {
-        .alias => switch (value) {
-            .alias => |backing| backing,
-            else => executableInvariant("executable pure compile-time alias materialization value mismatch"),
-        },
-        .nominal => switch (value) {
-            .nominal => |backing| backing,
-            else => executableInvariant("executable pure compile-time nominal materialization value mismatch"),
-        },
+    const backing_value = switch (value) {
+        .nominal => |backing| backing,
+        else => executableInvariant("executable pure compile-time nominal materialization value mismatch"),
     };
     const backing = try lowerComptimeValueExpr(
         allocator,

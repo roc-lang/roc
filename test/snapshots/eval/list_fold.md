@@ -143,7 +143,7 @@ expect sumResult == 10
 					(e-block
 						(s-reassign
 							(p-assign (ident "$state"))
-							(e-call
+							(e-call (constraint-fn-var 23)
 								(e-lookup-local
 									(p-assign (ident "step")))
 								(e-lookup-local
@@ -166,7 +166,7 @@ expect sumResult == 10
 				(ty-rigid-var-lookup (ty-rigid-var (name "state"))))))
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call
+		(e-call (constraint-fn-var 36)
 			(e-lookup-local
 				(p-assign (ident "fold")))
 			(e-list
@@ -188,10 +188,12 @@ expect sumResult == 10
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "sumResult")))
-			(e-num (value "10")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "sumResult"))))
+			(rhs
+				(e-num (value "10"))))))
 ~~~
 # TYPES
 ~~~clojure

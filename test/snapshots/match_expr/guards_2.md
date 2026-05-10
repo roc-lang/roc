@@ -57,10 +57,10 @@ EndOfFile,
 									(e-int (raw "5"))))
 							(e-string
 								(e-string-part (raw "long list starting with "))
-								(e-field-access
-									(e-ident (raw "first"))
-									(e-apply
-										(e-ident (raw "to_str"))))
+								(e-method-call (method ".to_str")
+									(receiver
+										(e-ident (raw "first")))
+									(args))
 								(e-string-part (raw ""))))
 						(branch
 							(p-list
@@ -72,10 +72,10 @@ EndOfFile,
 									(e-ident (raw "y"))))
 							(e-string
 								(e-string-part (raw "pair of equal values: "))
-								(e-field-access
-									(e-ident (raw "x"))
-									(e-apply
-										(e-ident (raw "to_str"))))
+								(e-method-call (method ".to_str")
+									(receiver
+										(e-ident (raw "x")))
+									(args))
 								(e-string-part (raw ""))))
 						(branch
 							(p-underscore)
@@ -116,7 +116,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "long list starting with "))
-									(e-field-access (field "to_str")
+									(e-dispatch-call (method "to_str") (constraint-fn-var 159)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "first"))))
@@ -124,7 +124,7 @@ describe = |value| match value {
 									(e-literal (string ""))))
 							(guard
 								(e-binop (op "gt")
-									(e-call
+									(e-call (constraint-fn-var 14)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -140,18 +140,20 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "pair of equal values: "))
-									(e-field-access (field "to_str")
+									(e-dispatch-call (method "to_str") (constraint-fn-var 211)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "eq")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-lookup-local
-										(p-assign (ident "y"))))))
+								(e-method-eq (negated "false")
+									(lhs
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(rhs
+										(e-lookup-local
+											(p-assign (ident "y")))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

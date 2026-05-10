@@ -18,7 +18,6 @@ PARSE ERROR - fuzz_crash_015.md:2:1:2:4
 PARSE ERROR - fuzz_crash_015.md:3:1:3:4
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 PARSE ERROR - fuzz_crash_015.md:4:1:4:3
-MISSING MAIN! FUNCTION - fuzz_crash_015.md:1:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -89,22 +88,6 @@ This is an unexpected parsing error. Please check your syntax.
 0_
 ```
 ^^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_015.md:1:1:4:3:**
-```roc
-0o0.0
-0_0
-0u8.0
-0_
-```
 
 
 # TOKENS

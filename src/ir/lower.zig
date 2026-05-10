@@ -87,6 +87,7 @@ pub fn fromExecutable(
         .expr_map = std.AutoHashMap(Exec.Ast.ExprId, Ast.Var).init(allocator),
         .proc_def_index = std.AutoHashMap(Exec.Ast.ExecutableProcId, usize).init(allocator),
         .layout_cache = std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef).init(allocator),
+        .nominal_layout_cache = std.AutoHashMap([32]u8, Ast.LayoutRef).init(allocator),
         .next_internal_value_ref = input.ast.next_value_ref,
     };
     defer lowerer.deinit();
@@ -108,9 +109,11 @@ const IrBuilder = struct {
     expr_map: std.AutoHashMap(Exec.Ast.ExprId, Ast.Var),
     proc_def_index: std.AutoHashMap(Exec.Ast.ExecutableProcId, usize),
     layout_cache: std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef),
+    nominal_layout_cache: std.AutoHashMap([32]u8, Ast.LayoutRef),
     next_internal_value_ref: u32,
 
     fn deinit(self: *IrBuilder) void {
+        self.nominal_layout_cache.deinit();
         self.layout_cache.deinit();
         self.proc_def_index.deinit();
         self.expr_map.deinit();
@@ -1284,7 +1287,19 @@ const IrBuilder = struct {
         const parent = try self.materializePatternPathValue(element.parent, scrutinee_values, path_values, stmts);
         const index = try self.listProbeIndex(parent, element.probe, stmts);
         const args = [_]Ast.Var{ parent, index };
-        return try self.bindAnonymous(try self.layoutForType(ty), .{ .call_low_level = .{
+        const result_layout = try self.layoutForType(ty);
+        if (@import("builtin").mode == .Debug) {
+            const parent_plan = self.input.ast.getPatternPathValuePlan(element.parent);
+            const elem_ty = self.listElementType(parent_plan.ty);
+            const elem_layout = try self.layoutForType(elem_ty);
+            if (layout_mod.graphRefKey(result_layout) != layout_mod.graphRefKey(elem_layout)) {
+                std.debug.panic(
+                    "IR lowering invariant violated: list element pattern result layout differs from parent list element layout (result={d}, elem={d})",
+                    .{ layout_mod.graphRefKey(result_layout), layout_mod.graphRefKey(elem_layout) },
+                );
+            }
+        }
+        return try self.bindAnonymous(result_layout, .{ .call_low_level = .{
             .op = .list_get_unsafe,
             .rc_effect = base.LowLevel.list_get_unsafe.rcEffect(),
             .args = try self.output.store.addVarSpan(&args),
@@ -2144,7 +2159,7 @@ const IrBuilder = struct {
             .placeholder => irInvariant("IR lowering received executable placeholder type"),
             .link => irInvariant("IR lowering type resolver returned a link"),
             .primitive => |prim| .{ .canonical = primitiveLayout(prim) },
-            .nominal => |nominal| try self.layoutForType(nominal.backing),
+            .nominal => |nominal| try self.layoutForNominalType(nominal.source_ty.bytes, nominal.backing),
             .list => |elem| blk: {
                 const node = try self.reserveCachedLayoutNode(resolved);
                 const child = try self.layoutForType(elem);
@@ -2192,6 +2207,26 @@ const IrBuilder = struct {
             },
             .vacant_callable_slot => .{ .canonical = .zst },
         };
+    }
+
+    fn layoutForNominalType(
+        self: *IrBuilder,
+        source_ty_bytes: [32]u8,
+        backing: Exec.Type.TypeId,
+    ) LowerResourceError!Ast.LayoutRef {
+        if (isEmptyCanonicalTypeKeyBytes(source_ty_bytes)) {
+            irInvariant("IR lowering nominal executable type was missing canonical source type identity");
+        }
+        if (self.nominal_layout_cache.get(source_ty_bytes)) |existing| return existing;
+
+        const node = try self.output.layouts.reserveNode(self.allocator);
+        const ref: Ast.LayoutRef = .{ .local = node };
+        try self.nominal_layout_cache.put(source_ty_bytes, ref);
+        errdefer _ = self.nominal_layout_cache.remove(source_ty_bytes);
+
+        const backing_layout = try self.layoutForType(backing);
+        self.output.layouts.setNode(node, .{ .nominal = backing_layout });
+        return ref;
     }
 
     fn reserveCachedLayoutNode(
@@ -2257,6 +2292,10 @@ const IrBuilder = struct {
         }
     }
 };
+
+fn isEmptyCanonicalTypeKeyBytes(bytes: [32]u8) bool {
+    return std.mem.allEqual(u8, bytes[0..], 0);
+}
 
 fn primitiveLayout(prim: Exec.Type.Prim) layout_mod.Idx {
     return switch (prim) {

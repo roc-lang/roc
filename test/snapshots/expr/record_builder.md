@@ -16,14 +16,6 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
-DOES NOT EXIST - record_builder.md:1:3:1:14
-UNRECOGNIZED SYNTAX - record_builder.md:1:15:1:17
-MALFORMED TYPE - record_builder.md:2:8:2:9
-UNRECOGNIZED SYNTAX - record_builder.md:2:9:2:10
-MALFORMED TYPE - record_builder.md:3:8:3:9
-UNRECOGNIZED SYNTAX - record_builder.md:3:9:3:10
-UNUSED VARIABLE - record_builder.md:2:5:2:9
-UNUSED VARIABLE - record_builder.md:3:5:3:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.
@@ -78,93 +70,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     y: 0,
 ```
         ^
-
-
-**DOES NOT EXIST**
-`Foo.Bar.baz` does not exist.
-
-**record_builder.md:1:3:1:14:**
-```roc
-{ Foo.Bar.baz <-
-```
-  ^^^^^^^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_builder.md:1:15:1:17:**
-```roc
-{ Foo.Bar.baz <-
-```
-              ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**record_builder.md:2:8:2:9:**
-```roc
-    x: 5,
-```
-       ^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_builder.md:2:9:2:10:**
-```roc
-    x: 5,
-```
-        ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**record_builder.md:3:8:3:9:**
-```roc
-    y: 0,
-```
-       ^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_builder.md:3:9:3:10:**
-```roc
-    y: 0,
-```
-        ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**record_builder.md:2:5:2:9:**
-```roc
-    x: 5,
-```
-    ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**record_builder.md:3:5:3:9:**
-```roc
-    y: 0,
-```
-    ^^^^
 
 
 # TOKENS

@@ -8,19 +8,9 @@ type=expr
 x.inspect()
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - method_call_inspect.md:1:1:1:2
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**method_call_inspect.md:1:1:1:2:**
-```roc
-x.inspect()
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
@@ -28,10 +18,10 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access
-	(e-ident (raw "x"))
-	(e-apply
-		(e-ident (raw "inspect"))))
+(e-method-call (method ".inspect")
+	(receiver
+		(e-ident (raw "x")))
+	(args))
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,7 +29,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-field-access (field "inspect")
+(e-method-call (method "inspect")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args))

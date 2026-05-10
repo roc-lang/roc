@@ -165,12 +165,16 @@ EndOfFile,
 		(e-binop (op "ge")
 			(e-num (value "4"))
 			(e-num (value "2")))
-		(e-binop (op "eq")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "ne")
-			(e-num (value "4"))
-			(e-num (value "2")))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-num (value "4")))
+			(rhs
+				(e-num (value "2"))))
+		(e-method-eq (negated "true")
+			(lhs
+				(e-num (value "4")))
+			(rhs
+				(e-num (value "2"))))
 		(e-binop (op "div_trunc")
 			(e-num (value "4"))
 			(e-num (value "2")))

@@ -1492,8 +1492,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
                             std.debug.panic(
-                                "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d}, elem={d})",
-                                .{ @intFromEnum(ll.ret_layout), @intFromEnum(list_elem_layout) },
+                                "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d} {s}, elem={d} {s})",
+                                .{ @intFromEnum(ll.ret_layout), @tagName(ret_layout_val.tag), @intFromEnum(list_elem_layout), @tagName(elem_layout_val.tag) },
                             );
                         }
                     }

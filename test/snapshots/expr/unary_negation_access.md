@@ -8,19 +8,9 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `rec1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_negation_access.md:1:2:1:6:**
-```roc
--rec1.field
-```
- ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,

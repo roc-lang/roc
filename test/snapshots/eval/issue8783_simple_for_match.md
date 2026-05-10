@@ -232,7 +232,7 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "count"))
-		(e-call
+		(e-call (constraint-fn-var 70)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -252,10 +252,12 @@ NO CHANGE
 			(ty-tag-name (name "Text")
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "count")))
-			(e-num (value "1")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "count"))))
+			(rhs
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure

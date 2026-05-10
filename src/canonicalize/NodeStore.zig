@@ -26,6 +26,7 @@ regions: Region.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
+method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
@@ -50,6 +51,15 @@ pub const SpanWithNode = extern struct {
     start: u32,
     len: u32,
     node: u32,
+};
+
+/// Method-call side data.
+/// Stores argument span plus the exact method-token source region.
+pub const MethodCallData = extern struct {
+    args_start: u32,
+    args_len: u32,
+    method_region_start: u32,
+    method_region_end: u32,
 };
 
 /// Match expression data.
@@ -207,6 +217,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8),
         .span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4),
         .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
+        .method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8),
         .match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8),
         .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8),
         .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
@@ -229,6 +240,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .int128_values = try self.int128_values.clone(gpa),
         .span2_data = try self.span2_data.clone(gpa),
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
+        .method_call_data = try self.method_call_data.clone(gpa),
         .match_data = try self.match_data.clone(gpa),
         .match_branch_data = try self.match_branch_data.clone(gpa),
         .closure_data = try self.closure_data.clone(gpa),
@@ -251,6 +263,7 @@ pub fn deinit(store: *NodeStore) void {
     store.int128_values.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
+    store.method_call_data.deinit(store.gpa);
     store.match_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
     store.closure_data.deinit(store.gpa);
@@ -273,6 +286,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.int128_values.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
+    store.method_call_data.relocate(offset);
     store.match_data.relocate(offset);
     store.match_branch_data.relocate(offset);
     store.closure_data.relocate(offset);
@@ -368,6 +382,33 @@ pub fn getAnnotationRegion(store: *const NodeStore, anno_idx: CIR.Annotation.Idx
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.getRegionAt(node_idx);
+}
+
+fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region: Region) Allocator.Error!u32 {
+    const data_idx: u32 = @intCast(store.method_call_data.len());
+    _ = try store.method_call_data.append(store.gpa, .{
+        .args_start = args.span.start,
+        .args_len = args.span.len,
+        .method_region_start = method_name_region.start.offset,
+        .method_region_end = method_name_region.end.offset,
+    });
+    return data_idx;
+}
+
+fn getMethodCallArgs(store: *const NodeStore, data_idx: u32) CIR.Expr.Span {
+    const data = store.method_call_data.items.items[data_idx];
+    return .{ .span = .{
+        .start = data.args_start,
+        .len = data.args_len,
+    } };
+}
+
+fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
+    const data = store.method_call_data.items.items[data_idx];
+    return .{
+        .start = .{ .offset = data.method_region_start },
+        .end = .{ .offset = data.method_region_end },
+    };
 }
 
 /// Retrieves a statement node from the store.
@@ -933,26 +974,20 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_method_call => {
             const p = payload.expr_method_call;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
             return CIR.Expr{ .e_method_call = .{
                 .receiver = @enumFromInt(p.receiver),
                 .method_name = @bitCast(p.method_name),
-                .args = .{ .span = .{
-                    .start = args_span.start,
-                    .len = args_span.len,
-                } },
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
             } };
         },
         .expr_dispatch_call => {
             const p = payload.expr_dispatch_call;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
             return CIR.Expr{ .e_dispatch_call = .{
                 .receiver = @enumFromInt(p.receiver),
                 .method_name = @bitCast(p.method_name),
-                .args = .{ .span = .{
-                    .start = args_span.start,
-                    .len = args_span.len,
-                } },
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
                 .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
@@ -975,26 +1010,20 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_type_method_call => {
             const p = payload.expr_type_method_call;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
             return CIR.Expr{ .e_type_method_call = .{
                 .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
                 .method_name = @bitCast(p.method_name),
-                .args = .{ .span = .{
-                    .start = args_span.start,
-                    .len = args_span.len,
-                } },
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
             } };
         },
         .expr_type_dispatch_call => {
             const p = payload.expr_type_dispatch_call;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
             return CIR.Expr{ .e_type_dispatch_call = .{
                 .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
                 .method_name = @bitCast(p.method_name),
-                .args = .{ .span = .{
-                    .start = args_span.start,
-                    .len = args_span.len,
-                } },
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
                 .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
@@ -1141,20 +1170,17 @@ pub fn replaceExprWithDispatchCall(
     expr_idx: CIR.Expr.Idx,
     receiver: CIR.Expr.Idx,
     method_name: base.Ident.Idx,
+    method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const args_span2_idx: u32 = @intCast(store.span2_data.len());
-    _ = store.span2_data.append(store.gpa, .{
-        .start = args.span.start,
-        .len = args.span.len,
-    }) catch unreachable;
+    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
     var node = Node.init(.expr_dispatch_call);
     node.setPayload(.{ .expr_dispatch_call = .{
         .receiver = @intFromEnum(receiver),
         .method_name = @bitCast(method_name),
-        .args_span2_idx = args_span2_idx,
+        .method_call_data_idx = method_call_data_idx,
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
@@ -1166,20 +1192,17 @@ pub fn replaceExprWithTypeDispatchCall(
     expr_idx: CIR.Expr.Idx,
     type_var_alias_stmt: CIR.Statement.Idx,
     method_name: base.Ident.Idx,
+    method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const args_span2_idx: u32 = @intCast(store.span2_data.len());
-    _ = store.span2_data.append(store.gpa, .{
-        .start = args.span.start,
-        .len = args.span.len,
-    }) catch unreachable;
+    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
     var node = Node.init(.expr_type_dispatch_call);
     node.setPayload(.{ .expr_type_dispatch_call = .{
         .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
         .method_name = @bitCast(method_name),
-        .args_span2_idx = args_span2_idx,
+        .method_call_data_idx = method_call_data_idx,
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
     } });
     store.nodes.set(node_idx, node);
@@ -2125,28 +2148,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_method_call => |e| {
             node.tag = .expr_method_call;
-            const args_span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.args.span.start,
-                .len = e.args.span.len,
-            });
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
             node.setPayload(.{ .expr_method_call = .{
                 .receiver = @intFromEnum(e.receiver),
                 .method_name = @bitCast(e.method_name),
-                .args_span2_idx = args_span2_idx,
+                .method_call_data_idx = method_call_data_idx,
             } });
         },
         .e_dispatch_call => |e| {
             node.tag = .expr_dispatch_call;
-            const args_span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.args.span.start,
-                .len = e.args.span.len,
-            });
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
             node.setPayload(.{ .expr_dispatch_call = .{
                 .receiver = @intFromEnum(e.receiver),
                 .method_name = @bitCast(e.method_name),
-                .args_span2_idx = args_span2_idx,
+                .method_call_data_idx = method_call_data_idx,
                 .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
             } });
         },
@@ -2169,28 +2184,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_type_method_call => |e| {
             node.tag = .expr_type_method_call;
-            const args_span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.args.span.start,
-                .len = e.args.span.len,
-            });
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
             node.setPayload(.{ .expr_type_method_call = .{
                 .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
                 .method_name = @bitCast(e.method_name),
-                .args_span2_idx = args_span2_idx,
+                .method_call_data_idx = method_call_data_idx,
             } });
         },
         .e_type_dispatch_call => |e| {
             node.tag = .expr_type_dispatch_call;
-            const args_span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.args.span.start,
-                .len = e.args.span.len,
-            });
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
             node.setPayload(.{ .expr_type_dispatch_call = .{
                 .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
                 .method_name = @bitCast(e.method_name),
-                .args_span2_idx = args_span2_idx,
+                .method_call_data_idx = method_call_data_idx,
                 .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
             } });
         },
@@ -4327,6 +4334,7 @@ pub const Serialized = extern struct {
     regions: Region.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
+    method_call_data: collections.SafeList(MethodCallData).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
     closure_data: collections.SafeList(ClosureData).Serialized,
@@ -4355,6 +4363,8 @@ pub const Serialized = extern struct {
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
         try self.span_with_node_data.serialize(&store.span_with_node_data, allocator, writer);
+        // Serialize method_call_data
+        try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
         // Serialize match_data
         try self.match_data.serialize(&store.match_data, allocator, writer);
         // Serialize match_branch_data
@@ -4387,6 +4397,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
@@ -4411,6 +4422,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),

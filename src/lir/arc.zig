@@ -49,6 +49,8 @@ const RewriteOptions = struct {
 const LinearRewriteFrame = struct {
     stmt: LIR.CFStmtId,
     head: LIR.CFStmtId,
+    retain_assign_ref_target: bool = true,
+    retain_set_target: bool = true,
 };
 
 const Inserter = struct {
@@ -83,9 +85,31 @@ const Inserter = struct {
             var current_start = cursor;
             switch (stmt) {
                 .assign_ref => |assign| {
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
-                    self.addOwnedIfRc(owned, assign.target);
-                    try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
+                    var retain_assign_ref_target = true;
+                    switch (assign.op) {
+                        .local => |source| {
+                            if (assign.target != source) {
+                                const move_value = try self.canMoveSetLocalValue(owned, source, assign.next, options.loop_keep);
+                                current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                                if (move_value) {
+                                    owned.unset(source);
+                                    retain_assign_ref_target = false;
+                                }
+                                self.addOwnedIfRc(owned, assign.target);
+                            } else {
+                                retain_assign_ref_target = false;
+                            }
+                        },
+                        else => {
+                            current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start);
+                            self.addOwnedIfRc(owned, assign.target);
+                        },
+                    }
+                    try frames.append(self.store.allocator, .{
+                        .stmt = cursor,
+                        .head = current_start,
+                        .retain_assign_ref_target = retain_assign_ref_target,
+                    });
                     cursor = assign.next;
                 },
                 .assign_literal => |assign| {
@@ -169,14 +193,24 @@ const Inserter = struct {
                     cursor = assign.next;
                 },
                 .set_local => |assign| {
+                    var retain_set_target = assign.target != assign.value;
                     if (assign.target != assign.value) {
+                        const move_value = try self.canMoveSetLocalValue(owned, assign.value, assign.next, options.loop_keep);
                         switch (assign.mode) {
                             .replace_existing => current_start = try self.releaseOldTargetIfNeeded(assign.target, owned, current_start),
                             .initialize_join_result, .initialize_join_param => {},
                         }
+                        if (move_value) {
+                            owned.unset(assign.value);
+                            retain_set_target = false;
+                        }
                         self.addOwnedIfRc(owned, assign.target);
                     }
-                    try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
+                    try frames.append(self.store.allocator, .{
+                        .stmt = cursor,
+                        .head = current_start,
+                        .retain_set_target = retain_set_target,
+                    });
                     cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
@@ -292,7 +326,9 @@ const Inserter = struct {
         var next = tail_start;
         switch (stmt) {
             .assign_ref => |assign| {
-                next = try self.retainLocalIfRc(assign.target, next);
+                if (frame.retain_assign_ref_target) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
                 self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
@@ -379,7 +415,7 @@ const Inserter = struct {
                 } };
             },
             .set_local => |assign| {
-                if (assign.target != assign.value) {
+                if (assign.target != assign.value and frame.retain_set_target) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
                 self.store.getCFStmtPtr(frame.stmt).* = .{ .set_local = .{
@@ -590,7 +626,16 @@ const Inserter = struct {
             const stmt = self.store.getCFStmt(cursor);
             switch (stmt) {
                 .assign_ref => |assign| {
-                    self.addOwnedIfRc(owned, assign.target);
+                    switch (assign.op) {
+                        .local => |source| {
+                            if (assign.target != source) {
+                                const move_value = try self.canMoveSetLocalValue(owned, source, assign.next, loop_keep);
+                                if (move_value) owned.unset(source);
+                                self.addOwnedIfRc(owned, assign.target);
+                            }
+                        },
+                        else => self.addOwnedIfRc(owned, assign.target),
+                    }
                     cursor = assign.next;
                 },
                 .assign_literal => |assign| {
@@ -642,6 +687,14 @@ const Inserter = struct {
                     cursor = assign.next;
                 },
                 .set_local => |assign| {
+                    if (assign.target != assign.value) {
+                        const move_value = try self.canMoveSetLocalValue(owned, assign.value, assign.next, loop_keep);
+                        switch (assign.mode) {
+                            .initialize_join_result, .initialize_join_param => {},
+                            .replace_existing => {},
+                        }
+                        if (move_value) owned.unset(assign.value);
+                    }
                     self.addOwnedIfRc(owned, assign.target);
                     cursor = assign.next;
                 },
@@ -707,6 +760,18 @@ const Inserter = struct {
         if (!owned.contains(target)) return next;
         owned.unset(target);
         return try self.releaseLocalIfRc(target, next);
+    }
+
+    fn canMoveSetLocalValue(
+        self: *Inserter,
+        owned: *const OwnedSet,
+        value: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        if (!owned.contains(value)) return false;
+        if (!self.localContainsRefcounted(value)) return false;
+        return !(try self.localUsedInPath(next, value, loop_keep));
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {

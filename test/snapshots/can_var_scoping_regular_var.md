@@ -170,7 +170,7 @@ NO CHANGE
 									(p-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call
+					(e-call (constraint-fn-var 32)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))

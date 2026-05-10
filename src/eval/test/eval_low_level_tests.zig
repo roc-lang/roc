@@ -2809,6 +2809,15 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "low_level - List.sort_with nested in len defaults literal item type",
+        .source =
+        \\{
+        \\List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
         .name = "low_level - List.sort_with with larger list",
         .source =
         \\{

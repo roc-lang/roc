@@ -14,7 +14,6 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
-func : Dec -> Dec
 func = |offset| {
 	condition = True
 	f = if (condition) |x| x + offset else |x| x * 2
@@ -22,7 +21,7 @@ func = |offset| {
 }
 
 result : Dec
-result = 11
+result = func(1)
 ~~~
 # FORMATTED
 ~~~roc
@@ -120,21 +119,24 @@ EndOfFile,
 									(e-lookup-local
 										(p-assign (ident "x")))
 									(e-num (value "2")))))))
-				(e-call
+				(e-call (constraint-fn-var 24)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "11"))))
+		(e-call (constraint-fn-var 29)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec -> Dec"))
+		(patt (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec -> Dec"))
+		(expr (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

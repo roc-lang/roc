@@ -163,32 +163,36 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 					(field (field "name")
 						(ty-lookup (name "Str") (builtin)))))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "getName")))
-				(e-nominal (nominal "Wrapper")
-					(e-tag (name "Simple")
-						(args
-							(e-string
-								(e-literal (string "foo")))))))
-			(e-string
-				(e-literal (string "foo")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 32)
+					(e-lookup-local
+						(p-assign (ident "getName")))
+					(e-nominal (nominal "Wrapper")
+						(e-tag (name "Simple")
+							(args
+								(e-string
+									(e-literal (string "foo"))))))))
+			(rhs
+				(e-string
+					(e-literal (string "foo"))))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "getName")))
-				(e-nominal (nominal "Wrapper")
-					(e-tag (name "WithRecord")
-						(args
-							(e-record
-								(fields
-									(field (name "name")
-										(e-string
-											(e-literal (string "hello"))))))))))
-			(e-string
-				(e-literal (string "hello"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 42)
+					(e-lookup-local
+						(p-assign (ident "getName")))
+					(e-nominal (nominal "Wrapper")
+						(e-tag (name "WithRecord")
+							(args
+								(e-record
+									(fields
+										(field (name "name")
+											(e-string
+												(e-literal (string "hello")))))))))))
+			(rhs
+				(e-string
+					(e-literal (string "hello")))))))
 ~~~
 # TYPES
 ~~~clojure

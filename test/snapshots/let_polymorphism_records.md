@@ -290,21 +290,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call
+		(e-call (constraint-fn-var 39)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call
+		(e-call (constraint-fn-var 43)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call
+		(e-call (constraint-fn-var 47)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -325,7 +325,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call
+		(e-call (constraint-fn-var 59)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -333,7 +333,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call
+		(e-call (constraint-fn-var 64)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -342,7 +342,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call
+		(e-call (constraint-fn-var 70)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -360,20 +360,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call
+		(e-call (constraint-fn-var 81)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call
+		(e-call (constraint-fn-var 85)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call
+		(e-call (constraint-fn-var 90)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -406,41 +406,41 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
-		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "List(Dec)"))
 		(patt (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, c -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: Dec, data: Dec }"))
+		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: List(_a) }"))
 		(patt (type "{ data: a, ..b }, a -> { data: a, ..b }"))
-		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, c -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: Dec, data: Dec }"))
+		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: Str }"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ value: Dec }"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "{ value: List(Dec) }"))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "List(Dec)"))
 		(expr (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, c -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: Dec, data: Dec }"))
+		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: List(_a) }"))
 		(expr (type "{ data: a, ..b }, a -> { data: a, ..b }"))
-		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, c -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: Dec, data: Dec }"))
+		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: Str }"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ value: Dec }"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "{ value: List(Dec) }"))
+		(expr (type "_arg -> Dec"))))
 ~~~

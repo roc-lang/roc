@@ -225,28 +225,33 @@ fn expectDevRuntimeDivisionByZero() !void {
 // test runner.
 
 /// Shared body for IO spec tests with a specific backend.
-fn runIoSpecTests(comptime opt_flag: []const u8) !void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
     const allocator = testing.allocator;
 
+    const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+        std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
+        return err;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    util.checkTestSuccess(result) catch |err| {
+        std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
+        if (spec.description.len > 0) {
+            std.debug.print("       Description: {s}\n", .{spec.description});
+        }
+        return err;
+    };
+}
+
+fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     var passed: usize = 0;
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
         if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
 
-        const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
-            std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
-            failed += 1;
-            continue;
-        };
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-
-        util.checkTestSuccess(result) catch |err| {
-            std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
-            if (spec.description.len > 0) {
-                std.debug.print("       Description: {s}\n", .{spec.description});
-            }
+        runIoSpecTest(opt_flag, spec) catch {
             failed += 1;
             continue;
         };
@@ -268,6 +273,20 @@ test "fx platform IO spec tests (interpreter)" {
 
 test "fx platform IO spec tests (dev backend)" {
     try runIoSpecTests("--opt=dev");
+}
+
+test "TODO: fx platform boxed erased callable host boundary (interpreter)" {
+    // TODO(#9401): Re-enable after arbitrary provided/static constants can be emitted
+    // as target-layout static object symbols, including host-visible boxed
+    // erased callable data and nested heap constants.
+    return error.SkipZigTest;
+}
+
+test "TODO: fx platform boxed erased callable host boundary (dev backend)" {
+    // TODO(#9401): Re-enable after arbitrary provided/static constants can be emitted
+    // as target-layout static object symbols, including host-visible boxed
+    // erased callable data and nested heap constants.
+    return error.SkipZigTest;
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
@@ -792,8 +811,7 @@ test "fx platform test_type_mismatch" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail compilation with a type mismatch error
-    // The to_inspect method returns I64 instead of Str
+    // This file is expected to fail compilation with a type mismatch error.
     switch (run_result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -806,6 +824,30 @@ test "fx platform test_type_mismatch" {
         },
         else => {
             // Abnormal termination should also indicate error
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+        },
+    }
+}
+
+test "fx platform inspect_wrong_sig reports type mismatch" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/inspect_wrong_sig_test.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            } else {
+                std.debug.print("Expected compilation error but succeeded\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);

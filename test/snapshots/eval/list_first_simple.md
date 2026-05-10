@@ -91,7 +91,7 @@ NO CHANGE
 		(e-match
 			(match
 				(cond
-					(e-call
+					(e-call (constraint-fn-var 13)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -113,10 +113,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "I64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-num (value "1")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -8,19 +8,9 @@ type=expr
 add(5, 3)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - function_call.md:1:1:1:4
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `add` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**function_call.md:1:1:1:4:**
-```roc
-add(5, 3)
-```
-^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,Int,Comma,Int,CloseRound,

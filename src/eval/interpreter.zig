@@ -2820,7 +2820,16 @@ pub const Interpreter = struct {
 
     fn evalI128Literal(self: *LirInterpreter, value: i128, layout_idx: layout_mod.Idx) Error!Value {
         const val = try self.alloc(layout_idx);
-        val.write(i128, value);
+        const size = self.helper.sizeOf(layout_idx);
+        const bits: u128 = @bitCast(value);
+        switch (size) {
+            1 => val.write(u8, @truncate(bits)),
+            2 => val.write(u16, @truncate(bits)),
+            4 => val.write(u32, @truncate(bits)),
+            8 => val.write(u64, @truncate(bits)),
+            16 => val.write(i128, value),
+            else => return error.RuntimeError,
+        }
         return val;
     }
 

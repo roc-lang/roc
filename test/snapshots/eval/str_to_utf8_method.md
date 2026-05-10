@@ -32,11 +32,11 @@ EndOfFile,
 				(ty (name "U8"))))
 		(s-decl
 			(p-ident (raw "bytes"))
-			(e-field-access
-				(e-string
-					(e-string-part (raw "hello")))
-				(e-apply
-					(e-ident (raw "to_utf8")))))
+			(e-method-call (method ".to_utf8")
+				(receiver
+					(e-string
+						(e-string-part (raw "hello"))))
+				(args)))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "bytes"))
@@ -56,7 +56,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "bytes"))
-		(e-field-access (field "to_utf8")
+		(e-dispatch-call (method "to_utf8") (constraint-fn-var 45)
 			(receiver
 				(e-string
 					(e-literal (string "hello"))))
@@ -65,16 +65,18 @@ NO CHANGE
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U8") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "bytes")))
-			(e-list
-				(elems
-					(e-num (value "104"))
-					(e-num (value "101"))
-					(e-num (value "108"))
-					(e-num (value "108"))
-					(e-num (value "111")))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "bytes"))))
+			(rhs
+				(e-list
+					(elems
+						(e-num (value "104"))
+						(e-num (value "101"))
+						(e-num (value "108"))
+						(e-num (value "108"))
+						(e-num (value "111"))))))))
 ~~~
 # TYPES
 ~~~clojure

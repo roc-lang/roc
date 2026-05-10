@@ -83,11 +83,11 @@ EndOfFile,
 					(p-underscore))
 				(e-apply
 					(e-ident (raw "processDict"))
-					(e-field-access
-						(e-apply
-							(e-ident (raw "Dict.empty")))
-						(e-apply
-							(e-ident (raw "insert"))
+					(e-method-call (method ".insert")
+						(receiver
+							(e-apply
+								(e-ident (raw "Dict.empty"))))
+						(args
 							(e-string
 								(e-string-part (raw "one")))
 							(e-int (raw "1")))))))))
@@ -120,7 +120,7 @@ NO CHANGE
 			(e-call
 				(e-lookup-local
 					(p-assign (ident "processDict")))
-				(e-field-access (field "insert")
+				(e-method-call (method "insert")
 					(receiver
 						(e-call
 							(e-runtime-error (tag "nested_value_not_found"))))

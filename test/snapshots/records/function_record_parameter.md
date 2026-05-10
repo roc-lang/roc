@@ -54,7 +54,7 @@ NO CHANGE
 		(e-lookup-local
 			(p-assign (ident "name")))
 		(e-literal (string ", you are "))
-		(e-method-call (method "to_str")
+		(e-dispatch-call (method "to_str") (constraint-fn-var 28)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "age"))))

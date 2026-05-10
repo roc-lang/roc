@@ -31,26 +31,9 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_tag_union_complex.md:7:1:7:52
+NIL
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_tag_union_complex.md:7:1:7:52:**
-```roc
-Try : [Success(Str), Error(Str), Warning(Str, I32)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_tag_union_complex.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -181,7 +164,7 @@ NO CHANGE
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Try") (builtin))
+				(ty-lookup (name "Try") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -220,7 +203,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Try") (builtin)))
+				(ty-lookup (name "Try") (local)))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl
@@ -243,7 +226,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(ok, err) -> Str"))
+		(patt (type "Try -> Str"))
 		(patt (type "Response -> Str"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -258,7 +241,7 @@ NO CHANGE
 		(alias (type "ConnectionState")
 			(ty-header (name "ConnectionState"))))
 	(expressions
-		(expr (type "Try(ok, err) -> Str"))
+		(expr (type "Try -> Str"))
 		(expr (type "Response -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -13,19 +13,9 @@ match result {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - branch_scoping.md:1:7:1:13
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `result` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**branch_scoping.md:1:7:1:13:**
-```roc
-match result {
-```
-      ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

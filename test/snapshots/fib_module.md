@@ -66,14 +66,14 @@ NO CHANGE
 							(p-assign (ident "n")))))
 				(if-else
 					(e-binop (op "add")
-						(e-call
+						(e-call (constraint-fn-var 8)
 							(e-lookup-local
 								(p-assign (ident "fib")))
 							(e-binop (op "sub")
 								(e-lookup-local
 									(p-assign (ident "n")))
 								(e-num (value "1"))))
-						(e-call
+						(e-call (constraint-fn-var 13)
 							(e-lookup-local
 								(p-assign (ident "fib")))
 							(e-binop (op "sub")
@@ -85,7 +85,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec -> Dec")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]")))
 	(expressions
-		(expr (type "Dec -> Dec"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]"))))
 ~~~

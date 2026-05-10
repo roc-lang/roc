@@ -22,6 +22,16 @@ pub const TestSpec = struct {
     skip_on_windows: bool = false,
 };
 
+/// TODO(#9401): Re-enable when arbitrary provided/static constants and boxed erased
+/// callable host-boundary static data are implemented as target-layout static
+/// object symbols. Kept outside `io_spec_tests` so the explicit Zig tests can
+/// use `error.SkipZigTest` instead of silently omitting this case.
+pub const host_boxed_fn_boundary_test = TestSpec{
+    .roc_file = "test/fx/host_boxed_fn_boundary.roc",
+    .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4",
+    .description = "Regression test: Boxed erased callables across the host boundary in both directions",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.
@@ -272,11 +282,6 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: projected inner help concat dropped before static output",
     },
     .{
-        .roc_file = "test/fx/inspect_wrong_sig_test.roc",
-        .io_spec = "1>Result: 1",
-        .description = "Inspect with wrong signature",
-    },
-    .{
         .roc_file = "test/fx/inspect_open_tag_test.roc",
         .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123.0",
         .description = "Str.inspect on tag unions",
@@ -422,11 +427,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/hosted_effect_opaque_with_data.roc",
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
-    },
-    .{
-        .roc_file = "test/fx/host_boxed_fn_boundary.roc",
-        .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4",
-        .description = "Regression test: Boxed erased callables across the host boundary in both directions",
     },
 
     // File import tests

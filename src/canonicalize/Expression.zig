@@ -339,11 +339,13 @@ pub const Expr = union(enum) {
     e_method_call: struct {
         receiver: Expr.Idx,
         method_name: Ident.Idx,
+        method_name_region: base.Region,
         args: Expr.Span,
     },
     e_dispatch_call: struct {
         receiver: Expr.Idx,
         method_name: Ident.Idx,
+        method_name_region: base.Region,
         args: Expr.Span,
         constraint_fn_var: TypeVar,
     },
@@ -372,11 +374,13 @@ pub const Expr = union(enum) {
     e_type_method_call: struct {
         type_var_alias_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
+        method_name_region: base.Region,
         args: Expr.Span,
     },
     e_type_dispatch_call: struct {
         type_var_alias_stmt: CIR.Statement.Idx,
         method_name: Ident.Idx,
+        method_name_region: base.Region,
         args: Expr.Span,
         constraint_fn_var: TypeVar,
     },

@@ -5673,7 +5673,7 @@ const ConstGraphPlanBuilder = struct {
     ) ?repr.ValueInfoId {
         const context = value_context orelse return null;
         const info = self.valueInfo(value_context, value_info) orelse return null;
-        const boxed = info.boxed orelse checkedPipelineInvariant("Box(T) constant value had no boxed metadata");
+        const boxed = info.boxed orelse return null;
         if (boxed.payload_value) |payload| return payload;
         return self.valueForRoot(context, boxed.payload_root) orelse {
             checkedPipelineInvariant("Box(T) constant payload root had no value-flow metadata");

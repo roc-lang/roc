@@ -22,7 +22,7 @@ add_five : Dec -> Dec
 add_five = make_adder(5)
 
 result : Dec
-result = 18
+result = add_five(3)
 ~~~
 # FORMATTED
 ~~~roc
@@ -99,13 +99,16 @@ EndOfFile,
 							(p-assign (ident "z"))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-call
+		(e-call (constraint-fn-var 18)
 			(e-lookup-local
 				(p-assign (ident "make_adder")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "18"))))
+		(e-call (constraint-fn-var 22)
+			(e-lookup-local
+				(p-assign (ident "add_five")))
+			(e-num (value "3")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -37,10 +37,10 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-ident (raw "a")))
-				(e-field-access
-					(e-ident (raw "a"))
-					(e-apply
-						(e-ident (raw "to_b"))))))))
+				(e-method-call (method ".to_b")
+					(receiver
+						(e-ident (raw "a")))
+					(args))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,7 +54,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-field-access (field "to_b")
+			(e-dispatch-call (method "to_b") (constraint-fn-var 26)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))

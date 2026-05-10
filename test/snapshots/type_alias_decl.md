@@ -49,29 +49,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_alias_decl.md:7:1:7:34
 OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_alias_decl.md:7:1:7:34:**
-```roc
-Try(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_alias_decl.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-^
-
-
 **OPEN EXT NOT ALLOWED IN TYPE DECLARATION**
 You cannot use a `..` inside a type declaration:
 
@@ -357,7 +338,7 @@ main! = |_| {
 		(ty-header (name "ApiResponse")
 			(ty-args
 				(ty-rigid-var (name "data"))))
-		(ty-apply (name "Try") (builtin)
+		(ty-apply (name "Try") (local)
 			(ty-rigid-var-lookup (ty-rigid-var (name "data")))
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl

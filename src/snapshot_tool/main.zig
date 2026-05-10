@@ -17,6 +17,7 @@ const compile = @import("compile");
 const lir = @import("lir");
 const layout = @import("layout");
 const backend = @import("backend");
+const builtins = @import("builtins");
 const fmt = @import("fmt");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
@@ -1347,9 +1348,13 @@ const ProcessContext = struct {
 fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
     const success = switch (work_item.kind) {
-        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch false,
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch |err| blk: {
+            std.debug.print("Snapshot processing error in {s}: {s}\n", .{ work_item.path, @errorName(err) });
+            break :blk false;
+        },
         .multi_file_snapshot => blk: {
-            const res = processMultiFileSnapshot(allocator, work_item.path, context.config) catch {
+            const res = processMultiFileSnapshot(allocator, work_item.path, context.config) catch |err| {
+                std.debug.print("Snapshot processing error in {s}: {s}\n", .{ work_item.path, @errorName(err) });
                 break :blk false;
             };
             break :blk res;
@@ -1359,6 +1364,7 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
     if (success) {
         _ = context.success_count.fetchAdd(1, .monotonic);
     } else {
+        std.debug.print("Snapshot failed: {s}\n", .{work_item.path});
         _ = context.failed_count.fetchAdd(1, .monotonic);
     }
 }
@@ -3060,11 +3066,16 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
             if (!isIdentReferencedIn(info.pattern_output, all_exprs.items)) continue;
         }
 
-        // Build the mono source: name : Type\nname = expr\n
-        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
-        try mono_buffer.appendSlice(output.gpa, " : ");
-        try mono_buffer.appendSlice(output.gpa, info.type_str);
-        try mono_buffer.appendSlice(output.gpa, "\n");
+        // Only monomorphic definitions get explicit annotations here. This
+        // snapshot emitter reconstructs source for tooling; constrained
+        // polymorphic helper types can contain static-dispatch constraints that
+        // are not valid as standalone generated source annotations.
+        if (!info.is_polymorphic) {
+            try mono_buffer.appendSlice(output.gpa, info.pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " : ");
+            try mono_buffer.appendSlice(output.gpa, info.type_str);
+            try mono_buffer.appendSlice(output.gpa, "\n");
+        }
         try mono_buffer.appendSlice(output.gpa, info.pattern_output);
         try mono_buffer.appendSlice(output.gpa, " = ");
         try mono_buffer.appendSlice(output.gpa, info.expr_output);
@@ -3463,6 +3474,7 @@ fn processDocsSnapshot(
         return false;
     };
     defer build_env.deinit();
+    build_env.setFinalizeExecutableArtifacts(false);
 
     build_env.build(app_path) catch |err| {
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
@@ -3815,6 +3827,193 @@ fn snapshotNativeEntrypoints(
     return try entrypoints.toOwnedSlice(allocator);
 }
 
+fn snapshotNativeStaticDataExports(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]backend.StaticDataExport {
+    var exports = std.ArrayList(backend.StaticDataExport).empty;
+    errdefer {
+        for (exports.items) |static_export| {
+            allocator.free(static_export.symbol_name);
+            allocator.free(static_export.bytes);
+        }
+        exports.deinit(allocator);
+    }
+
+    for (root_artifact.provided_exports.exports) |provided| {
+        const data = switch (provided) {
+            .data => |data| data,
+            .procedure => continue,
+        };
+
+        const binding = root_artifact.comptime_values.lookupBinding(data.pattern) orelse {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "snapshot invariant violated: provided data export has no published compile-time value",
+                    .{},
+                );
+            }
+            unreachable;
+        };
+
+        const entrypoint_name = root_artifact.canonical_names.externalSymbolNameText(data.ffi_symbol);
+        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
+        var symbol_name_owned = true;
+        errdefer if (symbol_name_owned) allocator.free(symbol_name);
+
+        const materialized = try snapshotMaterializeStaticDataExport(
+            allocator,
+            &root_artifact.comptime_values,
+            binding.schema,
+            binding.value,
+        );
+        var bytes_owned = true;
+        errdefer if (bytes_owned) allocator.free(materialized.bytes);
+
+        try exports.append(allocator, .{
+            .symbol_name = symbol_name,
+            .bytes = materialized.bytes,
+            .alignment = materialized.alignment,
+        });
+        symbol_name_owned = false;
+        bytes_owned = false;
+    }
+
+    return try exports.toOwnedSlice(allocator);
+}
+
+fn deinitSnapshotNativeStaticDataExports(
+    allocator: Allocator,
+    exports: []backend.StaticDataExport,
+) void {
+    for (exports) |static_export| {
+        allocator.free(static_export.symbol_name);
+        allocator.free(static_export.bytes);
+    }
+    allocator.free(exports);
+}
+
+const SnapshotMaterializedStaticData = struct {
+    bytes: []u8,
+    alignment: u32,
+};
+
+fn snapshotMaterializeStaticDataExport(
+    allocator: Allocator,
+    values: *const check.CheckedArtifact.CompileTimeValueStore,
+    schema_id: check.CheckedArtifact.ComptimeSchemaId,
+    value_id: check.CheckedArtifact.ComptimeValueId,
+) !SnapshotMaterializedStaticData {
+    const schema = values.schemas.items[@intFromEnum(schema_id)];
+    const value = values.values.items[@intFromEnum(value_id)];
+
+    switch (schema) {
+        .pending => snapshotStaticDataInvariant("provided data export has pending compile-time schema"),
+        .zst => return .{
+            .bytes = try allocator.alloc(u8, 0),
+            .alignment = 1,
+        },
+        .int => |precision| {
+            const int_bytes = switch (value) {
+                .int_bytes => |bytes| bytes,
+                else => snapshotStaticDataInvariant("provided integer data export has non-integer compile-time value"),
+            };
+            const size = @as(usize, @intCast(precision.size()));
+            const out = try allocator.alloc(u8, size);
+            @memcpy(out, int_bytes[0..size]);
+            return .{
+                .bytes = out,
+                .alignment = @as(u32, @intCast(precision.alignment().toByteUnits())),
+            };
+        },
+        .frac => |precision| switch (precision) {
+            .f32 => {
+                const bits = switch (value) {
+                    .f32 => |n| n,
+                    else => snapshotStaticDataInvariant("provided F32 data export has non-F32 compile-time value"),
+                };
+                const out = try allocator.alloc(u8, @sizeOf(f32));
+                @memcpy(out, std.mem.asBytes(&bits));
+                return .{ .bytes = out, .alignment = @alignOf(f32) };
+            },
+            .f64 => {
+                const bits = switch (value) {
+                    .f64 => |n| n,
+                    else => snapshotStaticDataInvariant("provided F64 data export has non-F64 compile-time value"),
+                };
+                const out = try allocator.alloc(u8, @sizeOf(f64));
+                @memcpy(out, std.mem.asBytes(&bits));
+                return .{ .bytes = out, .alignment = @alignOf(f64) };
+            },
+            .dec => {
+                const dec_bytes = switch (value) {
+                    .dec => |bytes| bytes,
+                    else => snapshotStaticDataInvariant("provided Dec data export has non-Dec compile-time value"),
+                };
+                const out = try allocator.alloc(u8, dec_bytes.len);
+                @memcpy(out, dec_bytes[0..]);
+                return .{ .bytes = out, .alignment = 16 };
+            },
+        },
+        .str => {
+            const str_bytes = switch (value) {
+                .str => |bytes| bytes,
+                else => snapshotStaticDataInvariant("provided Str data export has non-Str compile-time value"),
+            };
+            if (!builtins.str.RocStr.fitsInSmallStr(str_bytes.len)) {
+                snapshotStaticDataInvariant("provided non-small Str export requires static heap relocation materialization");
+            }
+            const roc_str = builtins.str.RocStr.fromSliceSmall(str_bytes);
+            const out = try allocator.alloc(u8, @sizeOf(builtins.str.RocStr));
+            @memcpy(out, std.mem.asBytes(&roc_str));
+            return .{
+                .bytes = out,
+                .alignment = builtins.str.RocStr.alignment,
+            };
+        },
+        .alias => |wrapped| {
+            const inner = switch (value) {
+                .alias => |inner| inner,
+                else => snapshotStaticDataInvariant("provided alias data export has non-alias compile-time value"),
+            };
+            return snapshotMaterializeStaticDataExport(allocator, values, wrapped.backing, inner);
+        },
+        .nominal => |wrapped| {
+            const inner = switch (value) {
+                .nominal => |inner| inner,
+                else => snapshotStaticDataInvariant("provided nominal data export has non-nominal compile-time value"),
+            };
+            return snapshotMaterializeStaticDataExport(allocator, values, wrapped.backing, inner);
+        },
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .tag_union,
+        .callable,
+        => snapshotStaticDataInvariant("provided data export requires full target static-data materialization"),
+    }
+}
+
+fn snapshotStaticDataInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("snapshot invariant violated: " ++ message, .{});
+    }
+    unreachable;
+}
+
+fn snapshotHasProvidedProcedureExports(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) bool {
+    for (root_artifact.provided_exports.exports) |provided| {
+        switch (provided) {
+            .procedure => return true,
+            .data => {},
+        }
+    }
+    return false;
+}
+
 /// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
 /// lower through checked artifacts to LIR, cross-compile for all targets, and
 /// record blake3 hashes.
@@ -3895,32 +4094,50 @@ fn processDevObjectSnapshot(
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        .{ .requests = root_artifact.root_requests.requests },
-        .{
-            .target_usize = base.target.TargetUsize.native,
-        },
-    );
-    defer lowered.deinit();
+    const static_data_exports = try snapshotNativeStaticDataExports(allocator, root_artifact);
+    defer deinitSnapshotNativeStaticDataExports(allocator, static_data_exports);
 
-    const entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, &lowered);
-    defer {
+    var lowered: ?lir.CheckedPipeline.LoweredProgram = null;
+    defer if (lowered) |*lowered_program| lowered_program.deinit();
+
+    var entrypoints: []backend.Entrypoint = &.{};
+    var entrypoints_owned = false;
+    defer if (entrypoints_owned) {
         for (entrypoints) |entrypoint| {
             allocator.free(entrypoint.symbol_name);
             allocator.free(entrypoint.arg_layouts);
         }
         allocator.free(entrypoints);
+    };
+
+    if (snapshotHasProvidedProcedureExports(root_artifact)) {
+        lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+            allocator,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                .imports = imported_artifacts,
+            },
+            .{ .requests = root_artifact.root_requests.requests },
+            .{
+                .target_usize = base.target.TargetUsize.native,
+            },
+        );
+
+        if (lowered) |*lowered_program| {
+            entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, lowered_program);
+        } else unreachable;
+        entrypoints_owned = true;
     }
 
-    if (entrypoints.len == 0) {
-        std.log.err("Failed to lower any exported platform entrypoints", .{});
+    if (entrypoints.len == 0 and static_data_exports.len == 0) {
+        std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;
     }
+
+    var empty_lir_store = lir.LirStore.init(allocator);
+    defer empty_lir_store.deinit();
+    var empty_layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer empty_layout_store.deinit();
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
@@ -3935,11 +4152,16 @@ fn processDevObjectSnapshot(
 
         const arch = target.toCpuArch();
         if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
+            const lir_store = if (lowered) |*lowered_program| &lowered_program.lir_result.store else &empty_lir_store;
+            const layout_store = if (lowered) |*lowered_program| &lowered_program.lir_result.layouts else &empty_layout_store;
+            const proc_specs = if (lowered) |*lowered_program| lowered_program.lir_result.store.getProcSpecs() else &.{};
+
             if (object_compiler.compileToObjectFile(
-                &lowered.lir_result.store,
-                &lowered.lir_result.layouts,
+                lir_store,
+                layout_store,
                 entrypoints,
-                lowered.lir_result.store.getProcSpecs(),
+                static_data_exports,
+                proc_specs,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});
@@ -4142,6 +4364,7 @@ const SnapshotReplSession = struct {
 const SnapshotReplInputKind = enum {
     definition,
     expression,
+    statement_expression,
 };
 
 const SnapshotReplDefinitionIdentity = struct {
@@ -4149,7 +4372,55 @@ const SnapshotReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+const SnapshotReplParsedLine = struct {
+    module_env: ModuleEnv,
+    ast: *AST,
+    statement: AST.Statement.Idx,
+
+    fn deinit(self: *@This()) void {
+        self.ast.deinit();
+        self.module_env.deinit();
+    }
+};
+
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?SnapshotReplParsedLine {
+    var module_env = try ModuleEnv.init(allocator, line);
+    errdefer module_env.deinit();
+    module_env.common.source = line;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = single_module.parseSingleModule(
+        &allocators,
+        &module_env,
+        .file,
+        .{ .module_name = "repl" },
+    ) catch return null;
+    errdefer ast.deinit();
+    if (ast.hasErrors()) {
+        ast.deinit();
+        module_env.deinit();
+        return null;
+    }
+
+    const file = ast.store.getFile();
+    const statements = ast.store.statementSlice(file.statements);
+    if (statements.len != 1) {
+        ast.deinit();
+        module_env.deinit();
+        return null;
+    }
+
+    return .{
+        .module_env = module_env,
+        .ast = ast,
+        .statement = statements[0],
+    };
+}
+
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -4161,9 +4432,29 @@ fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotR
 
     const ast = parse.parseStatement(&allocators, &env.common) catch return null;
     defer ast.deinit();
-    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+    if (ast.hasErrors()) return null;
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+}
+
+fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+    var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
+    const statement = if (maybe_file_parse) |*parsed| blk: {
+        defer parsed.deinit();
+        const file_statement = parsed.ast.store.getStatement(parsed.statement);
+        switch (file_statement) {
+            .decl,
+            .@"var",
+            .import,
+            .file_import,
+            .type_decl,
+            .type_anno,
+            => break :blk file_statement,
+            else => {},
+        }
+        break :blk (try parseSnapshotReplLineAsStatement(allocator, line)) orelse file_statement;
+    } else (try parseSnapshotReplLineAsStatement(allocator, line)) orelse return null;
+
     return switch (statement) {
         .expr => .expression,
         .decl,
@@ -4181,25 +4472,16 @@ fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotR
         .@"while",
         .@"return",
         .@"break",
-        => .expression,
+        => .statement_expression,
     };
 }
 
 fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) !?SnapshotReplDefinitionIdentity {
-    var env = try ModuleEnv.init(allocator, line);
-    defer env.deinit();
-    env.common.source = line;
-    try env.common.calcLineStarts(allocator);
+    var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
+    defer parsed.deinit();
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
-    defer ast.deinit();
-    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
-
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const ast = parsed.ast;
+    const statement = ast.store.getStatement(parsed.statement);
     return switch (statement) {
         .decl => |decl| blk: {
             const pattern = ast.store.getPattern(decl.pattern);
@@ -4289,7 +4571,11 @@ fn renderSnapshotReplTypeProblems(
     defer allocators.deinit();
 
     const parse_mode: single_module.ParseMode = switch (source_kind) {
-        .expr => .expr,
+        // REPL expression lines are classified through the statement parser once
+        // they are known not to be definitions. The diagnostic renderer must use
+        // that same shape instead of reparsing through expression-only or file
+        // mode, both of which accept different syntax at their roots.
+        .expr => .statement,
         .module => .file,
     };
     const parse_ast = try single_module.parseSingleModule(
@@ -4319,7 +4605,12 @@ fn renderSnapshotReplTypeProblems(
 
     const repl_expr = switch (source_kind) {
         .expr => blk: {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement = parse_ast.store.getStatement(statement_idx);
+            const expr_idx = switch (statement) {
+                .expr => |expr_stmt| expr_stmt.expr,
+                else => break :blk null,
+            };
             break :blk try czer.canonicalizeExpr(expr_idx);
         },
         .module => blk: {
@@ -4327,6 +4618,9 @@ fn renderSnapshotReplTypeProblems(
             break :blk null;
         },
     };
+    if (source_kind == .expr and can_ir.store.scratch != null) {
+        can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
+    }
 
     var imported_envs = std.array_list.Managed(*const ModuleEnv).init(allocator);
     defer imported_envs.deinit();
@@ -4359,10 +4653,14 @@ fn renderSnapshotReplTypeProblems(
     );
     defer checker.deinit();
 
-    switch (source_kind) {
-        .expr => try checker.checkExprRepl(repl_expr.?.idx),
-        .module => try checker.checkFile(),
-    }
+    const check_result: anyerror!void = switch (source_kind) {
+        .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
+        .module => checker.checkFile(),
+    };
+    check_result catch |err| switch (err) {
+        error.TypeCheckError => {},
+        else => return err,
+    };
 
     var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
     defer {
@@ -4371,7 +4669,25 @@ fn renderSnapshotReplTypeProblems(
         }
         reports.deinit();
     }
-    if (reports.items.len == 0) return error.TypeCheckError;
+    if (reports.items.len == 0) {
+        const diagnostics = try can_ir.getDiagnostics();
+        defer allocator.free(diagnostics);
+        std.debug.print(
+            "REPL diagnostic rendering invariant violated: TypeCheckError produced no reports. source_kind={s} tokenize={d} parse={d} canonicalize={d} check={d}\nsource:\n{s}\n",
+            .{
+                switch (source_kind) {
+                    .expr => "expr",
+                    .module => "module",
+                },
+                parse_ast.tokenize_diagnostics.items.len,
+                parse_ast.parse_diagnostics.items.len,
+                diagnostics.len,
+                checker.problems.problems.items.len,
+                source,
+            },
+        );
+        return error.TypeCheckError;
+    }
 
     var rendered: std.Io.Writer.Allocating = .init(allocator);
     errdefer rendered.deinit();
@@ -4395,6 +4711,9 @@ fn snapshotReplDefinitionStep(
     const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
     const identity = maybe_identity orelse
         return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
+    if (identity.kind == .type_annotation) {
+        return try allocator.dupe(u8, "Parse error: Type annotations are not supported in the REPL yet");
+    }
 
     const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
     const validation_main_source = if (defines_main or session.hasDefinition(.value, "main"))
@@ -4438,8 +4757,12 @@ fn snapshotReplExpressionStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
+    statement_body: bool,
 ) ![]const u8 {
-    const main_source = try std.fmt.allocPrint(allocator, "main = {s}", .{input});
+    const main_source = if (statement_body)
+        try std.fmt.allocPrint(allocator, "main = {{\n    {s}\n}}", .{input})
+    else
+        try std.fmt.allocPrint(allocator, "main = {s}", .{input});
     defer allocator.free(main_source);
 
     const source = try buildSnapshotReplModuleSource(
@@ -4452,7 +4775,10 @@ fn snapshotReplExpressionStep(
 
     var compiled = compileSnapshotReplInspectedModule(allocator, source) catch |err| {
         return switch (err) {
-            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
+            error.TypeCheckError => if (statement_body or session.definitions.items.len > 0)
+                renderSnapshotReplTypeProblems(allocator, .module, source, config)
+            else
+                renderSnapshotReplTypeProblems(allocator, .expr, input, config),
             else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
         };
     };
@@ -4478,7 +4804,8 @@ fn snapshotReplStep(
 
     return switch (input_kind) {
         .definition => snapshotReplDefinitionStep(allocator, session, trimmed, config),
-        .expression => snapshotReplExpressionStep(allocator, session, trimmed, config),
+        .expression => snapshotReplExpressionStep(allocator, session, trimmed, config, false),
+        .statement_expression => snapshotReplExpressionStep(allocator, session, trimmed, config, true),
     };
 }
 

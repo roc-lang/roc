@@ -107,7 +107,7 @@ main! = |_| {}
 			(args
 				(p-assign (ident "fn"))
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 11)
 				(e-lookup-local
 					(p-assign (ident "fn")))
 				(e-lookup-local

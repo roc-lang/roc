@@ -71,7 +71,7 @@ match person {
 						(e-lookup-local
 							(p-assign (ident "userName")))
 						(e-literal (string " is "))
-						(e-method-call (method "to_str")
+						(e-dispatch-call (method "to_str") (constraint-fn-var 32)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))

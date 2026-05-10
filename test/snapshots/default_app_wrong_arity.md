@@ -11,7 +11,6 @@ main! = |arg1, arg2| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
-MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `arg2` is not used anywhere in your code.
@@ -23,21 +22,6 @@ The unused variable is declared here:
 main! = |arg1, arg2| {
 ```
                ^^^^
-
-
-**MAIN! SHOULD TAKE 1 ARGUMENT**
-`main!` is defined but has the wrong number of arguments. `main!` should take 1 argument.
-
-Found `2` arguments.
-
-Change it to:
-`main! = |arg| { ... }`
-**default_app_wrong_arity.md:1:1:3:2:**
-```roc
-main! = |arg1, arg2| {
-    arg1
-}
-```
 
 
 # TOKENS

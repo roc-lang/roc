@@ -44,6 +44,7 @@ pub const MonoSpecializationReason = union(enum) {
     erased_promoted_wrapper_code: canonical.ProcedureTemplateRef,
     erased_finite_capture_member: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
     str_inspect_nested: canonical.ProcedureTemplateRef,
+    str_inspect_custom: canonical.ProcedureTemplateRef,
 };
 
 /// Public `Input` declaration.
@@ -2500,7 +2501,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex => |flex| self.lowerUnconstrainedFlexType(flex),
+            .flex => |flex| try self.lowerUnconstrainedFlexType(flex),
             .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
                 .{ .primitive = .dec }
             else
@@ -2587,7 +2588,7 @@ const TypeInstantiator = struct {
         switch (ext_payload) {
             .alias => |alias| try self.collectTemplateRecordFields(&.{}, alias.backing, out),
             .empty_record => {},
-            .flex => |flex| self.verifyClosableRowTail(flex),
+            .flex => |flex| try self.verifyClosableRowTail(flex),
             .record_unbound => |ext_fields| {
                 for (ext_fields) |field| {
                     try out.append(self.allocator, .{
@@ -2610,7 +2611,7 @@ const TypeInstantiator = struct {
         switch (payload) {
             .alias => |alias| try self.collectConcreteRecordFields(try self.concreteAliasBackingRef(ref, alias), out),
             .empty_record => {},
-            .flex => |flex| self.verifyClosableRowTail(flex),
+            .flex => |flex| try self.verifyClosableRowTail(flex),
             .record_unbound => |fields| {
                 for (fields) |field| {
                     try out.append(self.allocator, .{
@@ -2675,7 +2676,7 @@ const TypeInstantiator = struct {
             .alias => |alias| try self.collectTemplateTags(&.{}, alias.backing, out),
             .nominal => |nominal| try self.collectTemplateTags(&.{}, nominal.backing, out),
             .empty_tag_union => {},
-            .flex => |flex| self.verifyClosableRowTail(flex),
+            .flex => |flex| try self.verifyClosableRowTail(flex),
             .tag_union => |ext_tags| try self.collectTemplateTags(ext_tags.tags, ext_tags.ext, out),
             else => invariantViolation("mono specialization tag-union extension resolved to a non-tag-union type"),
         }
@@ -2690,7 +2691,7 @@ const TypeInstantiator = struct {
         switch (payload) {
             .alias => |alias| try self.collectConcreteTags(try self.concreteAliasBackingRef(ref, alias), out),
             .empty_tag_union => {},
-            .flex => |flex| self.verifyClosableRowTail(flex),
+            .flex => |flex| try self.verifyClosableRowTail(flex),
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| {
                     const name = try self.tagNameForConcreteRef(ref, tag.name);
@@ -4035,7 +4036,7 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
-        self.verifyClosableRowTail(flex);
+        try self.verifyClosableRowTail(flex);
         return try self.materializeSyntheticPayload(.empty_record);
     }
 
@@ -4043,7 +4044,7 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
-        self.verifyClosableRowTail(flex);
+        try self.verifyClosableRowTail(flex);
         return try self.materializeSyntheticPayload(.empty_tag_union);
     }
 
@@ -4052,16 +4053,16 @@ const TypeInstantiator = struct {
         flex: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         if (self.isMonoSpecializationNumericFlex(flex)) return try self.materializeDefaultDecPayload();
-        self.verifyUnconstrainedFlex(flex);
+        try self.verifyUnconstrainedFlex(flex);
         return .empty_record;
     }
 
     fn lowerUnconstrainedFlexType(
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
-    ) Type.Content {
+    ) Allocator.Error!Type.Content {
         if (self.isMonoSpecializationNumericFlex(flex)) return .{ .primitive = .dec };
-        self.verifyUnconstrainedFlex(flex);
+        try self.verifyUnconstrainedFlex(flex);
         return .{ .record = .{ .fields = &.{} } };
     }
 
@@ -4100,17 +4101,31 @@ const TypeInstantiator = struct {
     fn verifyClosableRowTail(
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
-    ) void {
-        self.verifyUnconstrainedFlex(flex);
+    ) Allocator.Error!void {
+        try self.verifyUnconstrainedFlex(flex);
     }
 
     fn verifyUnconstrainedFlex(
         self: *TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
-    ) void {
+    ) Allocator.Error!void {
         if (flex.constraints.len == 0) return;
         if (self.isMonoSpecializationNumericFlex(flex)) return;
+        if (try self.isEqualityOnlyFlex(flex)) return;
         invariantViolation("mono specialization reached a constrained flex variable where a concrete runtime type was required");
+    }
+
+    fn isEqualityOnlyFlex(
+        self: *TypeInstantiator,
+        flex: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!bool {
+        if (flex.constraints.len == 0) return false;
+        const is_eq = try self.program.canonical_names.internMethodName("is_eq");
+        for (flex.constraints) |constraint| {
+            const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            if (method != is_eq) return false;
+        }
+        return true;
     }
 
     fn isMonoSpecializationNumericFlex(
@@ -4513,6 +4528,8 @@ const BodyLowerer = struct {
         arg_expr: Ast.ExprId,
         arg_info: ConcreteTypeInfo,
     ) Allocator.Error!Ast.ExprId {
+        if (try self.lowerCustomStrInspectCallIfAvailable(ret_ty, arg_expr, arg_info)) |custom| return custom;
+
         return switch (self.program.types.getType(arg_info.ty)) {
             .primitive => |prim| switch (prim) {
                 .str => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .str_inspect, arg_expr),
@@ -4568,6 +4585,40 @@ const BodyLowerer = struct {
             .args = try self.program.ast.addExprSpan(&args),
             .requested_fn_ty = target.fn_ty,
             .requested_source_fn_ty = target.source_fn_ty,
+        } });
+    }
+
+    fn lowerCustomStrInspectCallIfAvailable(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
+    ) Allocator.Error!?Ast.ExprId {
+        const owner = (try self.methodOwnerForInspectSourceTypeMaybe(arg_info.source_ref)) orelse return null;
+        const method = try self.toInspectMethodName();
+        const method_target = (try self.lookupMethodTarget(owner, method)) orelse return null;
+
+        const inspect = try self.strInspectTemplate();
+        const requested_fn_ty = try self.strInspectFunctionTypeForArg(inspect, arg_info.source_ref);
+        const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
+        try self.type_instantiator.unifyConcreteRefs(requested_fn_ty, target_callable);
+
+        const template = try self.name_resolver.procedureTemplateRef(method_target.template orelse invariantViolation("mono Str.inspect custom method target did not publish a checked procedure template"));
+        const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+            .template = template,
+            .requested_fn_ty = requested_fn_ty,
+            .reason = .{ .str_inspect_custom = inspect.template },
+            .imported_closure = if (self.template_lookup.imported_closure) |closure|
+                if (importedClosureContainsProcedureTemplate(closure, template)) closure else null
+            else
+                null,
+        });
+        const args = [_]Ast.ExprId{arg_expr};
+        return try self.program.ast.addExpr(ret_ty, .{ .call_proc = .{
+            .proc = mirProcedureRefFromReserved(reserved),
+            .args = try self.program.ast.addExprSpan(&args),
+            .requested_fn_ty = try self.monoFunctionTypeForStrInspectCall(arg_info.ty, ret_ty),
+            .requested_source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
         } });
     }
 
@@ -5738,7 +5789,11 @@ const BodyLowerer = struct {
             unreachable;
         };
         const wrapper = entry_wrappers.get(wrapper_id);
-        const body = try self.lowerExpr(wrapper.body_expr);
+        const ret_ty = try self.returnTypeFromConcreteFunction(reserved.requested_fn_ty);
+        const previous_return_type = self.current_return_type;
+        self.current_return_type = ret_ty;
+        defer self.current_return_type = previous_return_type;
+        const body = try self.lowerExprConcreteExpected(wrapper.body_expr, ret_ty);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
             .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -5899,7 +5954,7 @@ const BodyLowerer = struct {
         const previous_return_type = self.current_return_type;
         self.current_return_type = ret_ty;
         defer self.current_return_type = previous_return_type;
-        const body = try self.lowerBodyWithParamDestructures(body_expr, ret_ty, params.destructures);
+        const body = try self.lowerBodyWithParamSetup(body_expr, ret_ty, params);
         const bind = Ast.TypedSymbol{
             .ty = fn_ty,
             .source_ty = reserved.proc.specialization.requested_mono_fn_ty,
@@ -5942,6 +5997,11 @@ const BodyLowerer = struct {
         param_ty: ConcreteTypeInfo,
     };
 
+    const MutableParamInit = struct {
+        param_symbol: Ast.Symbol,
+        bind: Ast.TypedSymbol,
+    };
+
     const PatternBinderAction = enum {
         declaration,
         reassignment,
@@ -5950,6 +6010,7 @@ const BodyLowerer = struct {
     const LoweredParamBundle = struct {
         args: Ast.Span(Ast.TypedSymbol),
         destructures: []ParamDestructure,
+        mutable_inits: []MutableParamInit,
     };
 
     fn lowerParamSpanFromFunction(
@@ -5961,6 +6022,9 @@ const BodyLowerer = struct {
         defer self.deinitParamBundle(bundle);
         if (bundle.destructures.len != 0) {
             invariantViolation("mono body lowering reached destructuring procedure parameters without a body to destructure");
+        }
+        if (bundle.mutable_inits.len != 0) {
+            invariantViolation("mono body lowering reached mutable procedure parameters without a body to initialize");
         }
         return bundle.args;
     }
@@ -5978,22 +6042,27 @@ const BodyLowerer = struct {
         if (patterns.len == 0) return .{
             .args = Ast.Span(Ast.TypedSymbol).empty(),
             .destructures = &.{},
+            .mutable_inits = &.{},
         };
         const args = try self.allocator.alloc(Ast.TypedSymbol, patterns.len);
         defer self.allocator.free(args);
         var destructures = std.ArrayList(ParamDestructure).empty;
         errdefer destructures.deinit(self.allocator);
+        var mutable_inits = std.ArrayList(MutableParamInit).empty;
+        errdefer mutable_inits.deinit(self.allocator);
         for (patterns, param_types, 0..) |pattern, param_ty, i| {
-            args[i] = try self.lowerEntryParamPatternWithType(pattern, param_ty, &destructures);
+            args[i] = try self.lowerEntryParamPatternWithType(pattern, param_ty, &destructures, &mutable_inits);
         }
         return .{
             .args = try self.program.ast.addTypedSymbolSpan(args),
             .destructures = if (destructures.items.len == 0) &.{} else try destructures.toOwnedSlice(self.allocator),
+            .mutable_inits = if (mutable_inits.items.len == 0) &.{} else try mutable_inits.toOwnedSlice(self.allocator),
         };
     }
 
     fn deinitParamBundle(self: *BodyLowerer, bundle: LoweredParamBundle) void {
         if (bundle.destructures.len != 0) self.allocator.free(bundle.destructures);
+        if (bundle.mutable_inits.len != 0) self.allocator.free(bundle.mutable_inits);
     }
 
     fn lowerEntryParamPatternWithType(
@@ -6001,12 +6070,27 @@ const BodyLowerer = struct {
         pattern_id: checked_artifact.CheckedPatternId,
         param_ty: ConcreteTypeInfo,
         destructures: *std.ArrayList(ParamDestructure),
+        mutable_inits: *std.ArrayList(MutableParamInit),
     ) Allocator.Error!Ast.TypedSymbol {
         const pattern = self.checkedPattern(pattern_id);
         const symbol = switch (pattern.data) {
             .assign => |binder| blk: {
                 try self.recordConcreteTypeForBinder(binder, param_ty);
-                break :blk try self.symbolForBinder(binder);
+                const binder_symbol = try self.symbolForBinder(binder);
+                if (!self.patternBinderIsReassignable(binder)) {
+                    break :blk binder_symbol;
+                }
+
+                const param_symbol = try self.program.addSyntheticSymbol();
+                try mutable_inits.append(self.allocator, .{
+                    .param_symbol = param_symbol,
+                    .bind = .{
+                        .ty = param_ty.ty,
+                        .source_ty = param_ty.source_ty,
+                        .symbol = binder_symbol,
+                    },
+                });
+                break :blk param_symbol;
             },
             .underscore => try self.program.addSyntheticSymbol(),
             else => blk: {
@@ -6024,6 +6108,34 @@ const BodyLowerer = struct {
             .source_ty = param_ty.source_ty,
             .symbol = symbol,
         };
+    }
+
+    fn lowerBodyWithParamSetup(
+        self: *BodyLowerer,
+        body_expr: checked_artifact.CheckedExprId,
+        ret_ty: ConcreteTypeInfo,
+        params: LoweredParamBundle,
+    ) Allocator.Error!Ast.ExprId {
+        const body = try self.lowerBodyWithParamDestructures(body_expr, ret_ty, params.destructures);
+        if (params.mutable_inits.len == 0) return body;
+
+        const stmts = try self.allocator.alloc(Ast.StmtId, params.mutable_inits.len);
+        defer self.allocator.free(stmts);
+
+        for (params.mutable_inits, 0..) |param_init, i| {
+            const param_expr = try self.program.ast.addExprWithSource(param_init.bind.ty, param_init.bind.source_ty, .{
+                .var_ = param_init.param_symbol,
+            });
+            stmts[i] = try self.program.ast.addStmt(.{ .var_decl = .{
+                .bind = param_init.bind,
+                .body = param_expr,
+            } });
+        }
+
+        return try self.program.ast.addExprWithSource(ret_ty.ty, ret_ty.source_ty, .{ .block = .{
+            .stmts = try self.program.ast.addStmtSpan(stmts),
+            .final_expr = body,
+        } });
     }
 
     fn lowerBodyWithParamDestructures(
@@ -6431,8 +6543,8 @@ const BodyLowerer = struct {
                 const child = try self.lowerReturnValue(ret.expr);
                 break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
             },
-            .binop => |binop| try self.lowerBinop(ty, binop),
-            .unary_minus => |child| try self.lowerUnaryMinus(ty, child),
+            .binop => |binop| try self.lowerBinop(expected_info, binop),
+            .unary_minus => |child| try self.lowerUnaryMinus(expected_info, child),
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
             .run_low_level => |run_low_level| try self.lowerRunLowLevel(ty, run_low_level.op, run_low_level.args),
             .nominal => |nominal| blk: {
@@ -6775,7 +6887,7 @@ const BodyLowerer = struct {
                 .symbol = instance_symbol,
             },
             .args = params.args,
-            .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
+            .body = try self.lowerBodyWithParamSetup(lambda.body, ret_ty, params),
         };
     }
 
@@ -7346,6 +7458,7 @@ const BodyLowerer = struct {
         out: *std.ArrayList(Ast.StmtId),
     ) Allocator.Error!void {
         const statement = self.checkedStatement(statement_id);
+        if (!self.checkedStatementIsRuntimeLoweringVisible(statement)) return;
         switch (statement.data) {
             .decl => |decl| {
                 if (self.localProcDeclForStatement(statement) != null) {
@@ -7357,6 +7470,37 @@ const BodyLowerer = struct {
             .reassign => |reassign| try self.lowerReassignPatternStmtInto(reassign.pattern, reassign.expr, out),
             else => try out.append(self.allocator, try self.lowerStmt(statement_id)),
         }
+    }
+
+    fn checkedStatementIsRuntimeLoweringVisible(
+        self: *const BodyLowerer,
+        statement: checked_artifact.CheckedStatement,
+    ) bool {
+        _ = self;
+        return switch (statement.data) {
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            => false,
+
+            .pending => invariantViolation("mono body lowering reached pending checked statement while projecting runtime statements"),
+
+            .decl,
+            .var_,
+            .reassign,
+            .dbg,
+            .expr,
+            .expect,
+            .crash,
+            .return_,
+            .break_,
+            .for_,
+            .while_,
+            .runtime_error,
+            => true,
+        };
     }
 
     fn lowerDeclPatternStmtInto(
@@ -7728,7 +7872,7 @@ const BodyLowerer = struct {
         const previous_return_type = self.current_return_type;
         self.current_return_type = ret_ty;
         defer self.current_return_type = previous_return_type;
-        const body = try self.lowerBodyWithParamDestructures(body_expr, ret_ty, params.destructures);
+        const body = try self.lowerBodyWithParamSetup(body_expr, ret_ty, params);
         const source_fn_ty = self.program.concrete_source_types.key(source_fn_ref);
         return try self.program.ast.addExpr(ty, .{ .clos = .{
             .site = self.nestedProcSite(site_expr, site_kind),
@@ -7891,11 +8035,65 @@ const BodyLowerer = struct {
     ) Allocator.Error!?ConcreteTypeInfo {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
         if (try self.concreteTypeForConstLookupExpr(expr_id)) |const_ty| return const_ty;
-        if (try self.exprPublishesClosedConcreteType(expr_id)) {
-            const expr = self.checkedExpr(expr_id);
-            return try self.concreteTypeInfoForChecked(expr.ty);
+        if (try self.exprPublishesMonoConcreteType(expr_id)) {
+            return try self.concreteResultTypeForExpr(expr_id, self.checkedExpr(expr_id).ty);
         }
         return null;
+    }
+
+    fn exprPublishesMonoConcreteType(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!bool {
+        if (try self.exprPublishesClosedConcreteType(expr_id)) {
+            return true;
+        }
+        const expr = self.checkedExpr(expr_id);
+        return switch (expr.data) {
+            .num => |num| switch (num.kind) {
+                .num_unbound,
+                .int_unbound,
+                => try self.checkedTypeIsMonoDefaultableNumeric(expr.ty),
+                else => false,
+            },
+            .list => |items| items.len != 0 and try self.exprSpanPublishesMonoConcreteTypes(items),
+            .tuple => |items| try self.exprSpanPublishesMonoConcreteTypes(items),
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (!try self.exprPublishesMonoConcreteType(field.value)) return false;
+                }
+                if (record.ext) |ext| return try self.exprPublishesMonoConcreteType(ext);
+                return true;
+            },
+            .tag => |tag| try self.exprSpanPublishesMonoConcreteTypes(tag.args),
+            .nominal => |nominal| try self.exprPublishesMonoConcreteType(nominal.backing_expr),
+            else => false,
+        };
+    }
+
+    fn exprSpanPublishesMonoConcreteTypes(
+        self: *BodyLowerer,
+        exprs: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!bool {
+        for (exprs) |expr| {
+            if (!try self.exprPublishesMonoConcreteType(expr)) return false;
+        }
+        return true;
+    }
+
+    fn checkedTypeIsMonoDefaultableNumeric(
+        self: *BodyLowerer,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var current = checked_ty;
+        while (true) {
+            switch (self.type_instantiator.templatePayload(current)) {
+                .alias => |alias| current = alias.backing,
+                .flex => |flex| return self.type_instantiator.isMonoSpecializationNumericFlex(flex),
+                .rigid => |rigid| return self.type_instantiator.isMonoSpecializationNumericFlex(rigid),
+                else => return false,
+            }
+        }
     }
 
     fn exprPublishesClosedConcreteType(
@@ -8066,14 +8264,7 @@ const BodyLowerer = struct {
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!Ast.ExprId {
-        var dispatch_instantiator = TypeInstantiator.init(
-            self.allocator,
-            self.input,
-            self.program,
-            self.type_instantiator.template_types,
-            self.name_resolver,
-            self.type_instantiator.template_artifact,
-        );
+        var dispatch_instantiator = try self.type_instantiator.fork();
         defer dispatch_instantiator.deinit();
 
         const previous_instantiator = self.type_instantiator;
@@ -8088,14 +8279,7 @@ const BodyLowerer = struct {
         plan_id: checked_artifact.StaticDispatchPlanId,
         expected_ret: ConcreteTypeInfo,
     ) Allocator.Error!ConcreteTypeInfo {
-        var dispatch_instantiator = TypeInstantiator.init(
-            self.allocator,
-            self.input,
-            self.program,
-            self.type_instantiator.template_types,
-            self.name_resolver,
-            self.type_instantiator.template_artifact,
-        );
+        var dispatch_instantiator = try self.type_instantiator.fork();
         defer dispatch_instantiator.deinit();
 
         const previous_instantiator = self.type_instantiator;
@@ -8113,13 +8297,13 @@ const BodyLowerer = struct {
         const plan = self.staticDispatchPlan(plan_id);
         try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected_ret.source_ref);
 
+        try self.bindStaticDispatchKnownArgumentTypes(plan);
         const dispatcher_info = try self.staticDispatchDispatcherType(plan);
         try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
-        try self.bindStaticDispatchKnownArgumentTypes(plan, dispatcher_info);
 
-        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_info.ty);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_info.source_ref);
         const method = try self.methodName(plan.method);
-        const target = try self.lookupMethodTarget(owner, method);
+        const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
         if (target) |method_target| {
             const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
@@ -8143,13 +8327,14 @@ const BodyLowerer = struct {
         const plan = self.staticDispatchPlan(plan_id);
         try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected.source_ref);
 
+        try self.bindStaticDispatchKnownArgumentTypes(plan);
+
         const dispatcher_info = try self.staticDispatchDispatcherType(plan);
         try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
-        try self.bindStaticDispatchKnownArgumentTypes(plan, dispatcher_info);
 
-        const owner = methodOwnerForDispatcherType(&self.program.types, dispatcher_info.ty);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_info.source_ref);
         const method = try self.methodName(plan.method);
-        const target = try self.lookupMethodTarget(owner, method);
+        const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
         if (target) |method_target| {
             const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
@@ -8224,7 +8409,6 @@ const BodyLowerer = struct {
     fn bindStaticDispatchKnownArgumentTypes(
         self: *BodyLowerer,
         plan: static_dispatch.StaticDispatchCallPlan,
-        dispatcher_info: ConcreteTypeInfo,
     ) Allocator.Error!void {
         const param_templates = try self.templateFunctionArgTypes(plan.callable_ty);
         if (param_templates.len != plan.args.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
@@ -8235,17 +8419,27 @@ const BodyLowerer = struct {
             .method_eq,
             => {
                 if (param_templates.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument slot");
-                try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_info.source_ref);
+                const dispatcher_ref = try self.type_instantiator.concreteRefForTemplateType(plan.dispatcher_ty);
+                try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_ref);
             },
             .type_dispatch_call => {},
             else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
         }
 
-        for (plan.args, param_templates) |arg, param_template| {
+        for (plan.args, param_templates, 0..) |arg, param_template, index| {
             const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse {
                 continue;
             };
             try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
+            switch (expr.data) {
+                .dispatch_call,
+                .method_eq,
+                => if (index == 0) {
+                    try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_ty.source_ref);
+                },
+                .type_dispatch_call => {},
+                else => unreachable,
+            }
         }
     }
 
@@ -8274,17 +8468,86 @@ const BodyLowerer = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!ConcreteTypeInfo {
         const expr = self.checkedExpr(plan.expr);
-        return switch (expr.data) {
+        switch (expr.data) {
             .dispatch_call,
             .method_eq,
-            => blk: {
-                if (plan.args.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument");
-                const receiver = plan.args[0];
-                break :blk try self.concreteResultTypeForExpr(receiver, self.checkedExpr(receiver).ty);
-            },
-            .type_dispatch_call => try self.concreteTypeInfoForChecked(plan.dispatcher_ty),
+            .type_dispatch_call,
+            => {},
             else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
-        };
+        }
+        return try self.concreteTypeInfoForChecked(plan.dispatcher_ty);
+    }
+
+    fn methodOwnerForDispatcherSourceTypeMaybe(
+        self: *BodyLowerer,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!?static_dispatch.MethodOwner {
+        var current = source_ref;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| {
+                    current = try self.type_instantiator.concreteAliasBackingRef(current, alias);
+                },
+                .nominal => |nominal| {
+                    if (nominal.builtin) |builtin| {
+                        return .{ .builtin = methodOwnerForCheckedBuiltinNominal(builtin) };
+                    }
+                    return .{ .nominal = try self.type_instantiator.nominalKeyForConcreteRef(
+                        current,
+                        nominal.origin_module,
+                        nominal.name,
+                    ) };
+                },
+                .record,
+                .tuple,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return null,
+                .pending,
+                .flex,
+                .rigid,
+                .record_unbound,
+                .function,
+                => invariantViolation("mono static dispatch dispatcher source type did not resolve to an allowed method owner"),
+            }
+        }
+    }
+
+    fn methodOwnerForInspectSourceTypeMaybe(
+        self: *BodyLowerer,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!?static_dispatch.MethodOwner {
+        var current = source_ref;
+        while (true) {
+            switch (self.type_instantiator.concretePayload(current)) {
+                .alias => |alias| {
+                    current = try self.type_instantiator.concreteAliasBackingRef(current, alias);
+                },
+                .nominal => |nominal| {
+                    if (nominal.builtin) |builtin| {
+                        return .{ .builtin = methodOwnerForCheckedBuiltinNominal(builtin) };
+                    }
+                    return .{ .nominal = try self.type_instantiator.nominalKeyForConcreteRef(
+                        current,
+                        nominal.origin_module,
+                        nominal.name,
+                    ) };
+                },
+                .record,
+                .tuple,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                .record_unbound,
+                .function,
+                => return null,
+                .pending,
+                .flex,
+                .rigid,
+                => invariantViolation("mono Str.inspect source type did not resolve before custom inspect lookup"),
+            }
+        }
     }
 
     fn lookupMethodTarget(
@@ -8475,20 +8738,21 @@ const BodyLowerer = struct {
 
     fn lowerBinop(
         self: *BodyLowerer,
-        ty: Type.TypeId,
+        expected: ConcreteTypeInfo,
         binop: anytype,
     ) Allocator.Error!Ast.ExprId {
+        const ty = expected.ty;
         return switch (binop.op) {
-            .add => try self.lowerBinaryLowLevel(ty, .num_plus, binop.lhs, binop.rhs),
-            .sub => try self.lowerBinaryLowLevel(ty, .num_minus, binop.lhs, binop.rhs),
-            .mul => try self.lowerBinaryLowLevel(ty, .num_times, binop.lhs, binop.rhs),
-            .div => try self.lowerBinaryLowLevel(ty, .num_div_by, binop.lhs, binop.rhs),
-            .rem => try self.lowerBinaryLowLevel(ty, .num_rem_by, binop.lhs, binop.rhs),
-            .div_trunc => try self.lowerBinaryLowLevel(ty, .num_div_trunc_by, binop.lhs, binop.rhs),
-            .lt => try self.lowerBinaryLowLevel(ty, .num_is_lt, binop.lhs, binop.rhs),
-            .gt => try self.lowerBinaryLowLevel(ty, .num_is_gt, binop.lhs, binop.rhs),
-            .le => try self.lowerBinaryLowLevel(ty, .num_is_lte, binop.lhs, binop.rhs),
-            .ge => try self.lowerBinaryLowLevel(ty, .num_is_gte, binop.lhs, binop.rhs),
+            .add => try self.lowerBinaryLowLevel(expected, .num_plus, binop.lhs, binop.rhs),
+            .sub => try self.lowerBinaryLowLevel(expected, .num_minus, binop.lhs, binop.rhs),
+            .mul => try self.lowerBinaryLowLevel(expected, .num_times, binop.lhs, binop.rhs),
+            .div => try self.lowerBinaryLowLevel(expected, .num_div_by, binop.lhs, binop.rhs),
+            .rem => try self.lowerBinaryLowLevel(expected, .num_rem_by, binop.lhs, binop.rhs),
+            .div_trunc => try self.lowerBinaryLowLevel(expected, .num_div_trunc_by, binop.lhs, binop.rhs),
+            .lt => try self.lowerBinaryLowLevel(expected, .num_is_lt, binop.lhs, binop.rhs),
+            .gt => try self.lowerBinaryLowLevel(expected, .num_is_gt, binop.lhs, binop.rhs),
+            .le => try self.lowerBinaryLowLevel(expected, .num_is_lte, binop.lhs, binop.rhs),
+            .ge => try self.lowerBinaryLowLevel(expected, .num_is_gte, binop.lhs, binop.rhs),
             .eq => blk: {
                 const lhs = try self.lowerExpr(binop.lhs);
                 const rhs = try self.lowerExpr(binop.rhs);
@@ -8523,36 +8787,63 @@ const BodyLowerer = struct {
 
     fn lowerBinaryLowLevel(
         self: *BodyLowerer,
-        ty: Type.TypeId,
+        result: ConcreteTypeInfo,
         op: base.LowLevel,
         lhs_expr: checked_artifact.CheckedExprId,
         rhs_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const lhs = try self.lowerExpr(lhs_expr);
-        const rhs = try self.lowerExpr(rhs_expr);
+        const operand_info = try self.lowLevelBinaryOperandInfo(result, op, lhs_expr, rhs_expr);
+        const lhs = try self.lowerExprConcreteExpected(lhs_expr, operand_info);
+        const rhs = try self.lowerExprConcreteExpected(rhs_expr, operand_info);
         const args = [_]Ast.ExprId{ lhs, rhs };
-        const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(lhs_expr).ty);
-        return try self.program.ast.addExpr(ty, .{ .low_level = .{
+        return try self.program.ast.addExpr(result.ty, .{ .low_level = .{
             .op = op,
             .rc_effect = op.rcEffect(),
             .args = try self.program.ast.addExprSpan(&args),
-            .source_constraint_ty = source_constraint_ty,
+            .source_constraint_ty = operand_info.ty,
         } });
+    }
+
+    fn lowLevelBinaryOperandInfo(
+        self: *BodyLowerer,
+        result: ConcreteTypeInfo,
+        op: base.LowLevel,
+        lhs_expr: checked_artifact.CheckedExprId,
+        rhs_expr: checked_artifact.CheckedExprId,
+    ) Allocator.Error!ConcreteTypeInfo {
+        switch (op) {
+            .num_plus,
+            .num_minus,
+            .num_times,
+            .num_div_by,
+            .num_rem_by,
+            .num_div_trunc_by,
+            => return result,
+            .num_is_lt,
+            .num_is_gt,
+            .num_is_lte,
+            .num_is_gte,
+            => {},
+            else => invariantViolation("mono body lowering requested binary operand type for a non-binary numeric low-level op"),
+        }
+
+        if (try self.knownConcreteResultTypeForExpr(lhs_expr)) |lhs_info| return lhs_info;
+        if (try self.knownConcreteResultTypeForExpr(rhs_expr)) |rhs_info| return rhs_info;
+        return try self.concreteResultTypeForExpr(lhs_expr, self.checkedExpr(lhs_expr).ty);
     }
 
     fn lowerUnaryMinus(
         self: *BodyLowerer,
-        ty: Type.TypeId,
+        expected: ConcreteTypeInfo,
         child_expr: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const child = try self.lowerExpr(child_expr);
+        const child = try self.lowerExprConcreteExpected(child_expr, expected);
         const args = [_]Ast.ExprId{child};
-        const source_constraint_ty = try self.type_instantiator.lowerTemplateType(self.checkedExpr(child_expr).ty);
-        return try self.program.ast.addExpr(ty, .{ .low_level = .{
+        return try self.program.ast.addExpr(expected.ty, .{ .low_level = .{
             .op = .num_negate,
             .rc_effect = base.LowLevel.num_negate.rcEffect(),
             .args = try self.program.ast.addExprSpan(&args),
-            .source_constraint_ty = source_constraint_ty,
+            .source_constraint_ty = expected.ty,
         } });
     }
 
@@ -8826,7 +9117,7 @@ const BodyLowerer = struct {
             },
             .empty_tag_union => invariantViolation("mono body lowering concrete tag constructor was missing from source union type"),
             .flex => |flex| {
-                self.type_instantiator.verifyClosableRowTail(flex);
+                try self.type_instantiator.verifyClosableRowTail(flex);
                 invariantViolation("mono body lowering concrete tag constructor was missing from closed source union tail");
             },
             else => invariantViolation("mono body lowering expected concrete source tag-union type"),
@@ -9005,7 +9296,7 @@ const BodyLowerer = struct {
                     .recursive = false,
                     .bind = bind,
                     .args = params.args,
-                    .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
+                    .body = try self.lowerBodyWithParamSetup(lambda.body, ret_ty, params),
                 };
             },
             .closure => |closure| blk: {
@@ -9022,7 +9313,7 @@ const BodyLowerer = struct {
                             .recursive = false,
                             .bind = bind,
                             .args = params.args,
-                            .body = try self.lowerBodyWithParamDestructures(lambda.body, ret_ty, params.destructures),
+                            .body = try self.lowerBodyWithParamSetup(lambda.body, ret_ty, params),
                         };
                     },
                     else => invariantViolation("mono body lowering expected local closure declaration to reference a checked lambda"),
@@ -9058,6 +9349,10 @@ const BodyLowerer = struct {
         method: canonical.MethodNameId,
     ) Allocator.Error!canonical.MethodNameId {
         return try self.name_resolver.methodName(self.template_lookup.artifact, method);
+    }
+
+    fn toInspectMethodName(self: *BodyLowerer) Allocator.Error!canonical.MethodNameId {
+        return try self.program.canonical_names.internMethodName("to_inspect");
     }
 
     fn recordUpdateHasRemappedField(
@@ -9098,6 +9393,14 @@ const BodyLowerer = struct {
         const raw = @intFromEnum(id);
         if (raw >= self.template_lookup.checked_bodies.patterns.len) invariantViolation("mono body lowering received pattern id outside checked body store");
         return self.template_lookup.checked_bodies.patterns[raw];
+    }
+
+    fn patternBinderIsReassignable(self: *const BodyLowerer, binder: checked_artifact.PatternBinderId) bool {
+        const raw = @intFromEnum(binder);
+        if (raw >= self.template_lookup.checked_bodies.pattern_binders.len) {
+            invariantViolation("mono body lowering received pattern binder id outside checked body store");
+        }
+        return self.template_lookup.checked_bodies.pattern_binders[raw].reassignable;
     }
 
     fn checkedStatement(self: *const BodyLowerer, id: checked_artifact.CheckedStatementId) checked_artifact.CheckedStatement {
@@ -10449,40 +10752,27 @@ fn methodTargetEql(a: static_dispatch.MethodTarget, b: static_dispatch.MethodTar
         b.template == null;
 }
 
-fn methodOwnerForDispatcherType(
-    types: *const Type.Store,
-    ty: Type.TypeId,
-) static_dispatch.MethodOwner {
-    return switch (types.getTypePreservingNominal(ty)) {
-        .nominal => |nominal| .{ .nominal = nominal.nominal },
-        .primitive => |prim| .{ .builtin = switch (prim) {
-            .bool => .bool,
-            .str => .str,
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64 => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-            .erased => invariantViolation("mono static dispatch reached erased function representation before lambda solving"),
-        } },
-        .list => .{ .builtin = .list },
-        .box => .{ .builtin = .box },
-        .link => unreachable,
-        .placeholder,
-        .unbd,
-        .func,
-        .tuple,
-        .tag_union,
-        .record,
-        => invariantViolation("mono static dispatch dispatcher type did not resolve to an allowed method owner"),
+fn methodOwnerForCheckedBuiltinNominal(
+    builtin: checked_artifact.CheckedBuiltinNominal,
+) static_dispatch.BuiltinOwner {
+    return switch (builtin) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .list => .list,
+        .box => .box,
     };
 }
 

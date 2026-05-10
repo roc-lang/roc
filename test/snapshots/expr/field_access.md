@@ -8,19 +8,9 @@ type=expr
 person.name
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - field_access.md:1:1:1:7
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**field_access.md:1:1:1:7:**
-```roc
-person.name
-```
-^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,

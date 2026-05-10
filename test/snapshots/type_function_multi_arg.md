@@ -146,7 +146,7 @@ main! = |_| {}
 						(e-lambda
 							(args
 								(p-assign (ident "y")))
-							(e-call
+							(e-call (constraint-fn-var 16)
 								(e-lookup-local
 									(p-assign (ident "fn")))
 								(e-lookup-local

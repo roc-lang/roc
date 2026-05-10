@@ -55,7 +55,7 @@ main_for_host = main
     (entry
       (name "Id")
       (kind opaque)
-      (type "Id :: " (type-ref (name "U64")))
+      (type "Id :: " (type-ref (module "Builtin") (name "U64")))
       (doc "An opaque identifier.")
     )
   )

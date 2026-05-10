@@ -19,15 +19,15 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - StructuralMethodError.md:11:5:11:14
+MISSING METHOD - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
 **MISSING METHOD**
 This **greet** method is being called on a value whose type doesn't have that method:
-**StructuralMethodError.md:11:5:11:14:**
+**StructuralMethodError.md:11:7:11:12:**
 ```roc
     x.greet()
 ```
-    ^^^^^^^^^
+      ^^^^^
 
 The value's type, which does not have a method named **greet**, is:
 

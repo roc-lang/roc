@@ -378,6 +378,7 @@ test "NodeStore round trip - Expressions" {
         .e_method_call = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
         },
     });
@@ -385,6 +386,7 @@ test "NodeStore round trip - Expressions" {
         .e_dispatch_call = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .constraint_fn_var = rand_idx(types.Var),
         },
@@ -408,6 +410,7 @@ test "NodeStore round trip - Expressions" {
         .e_type_method_call = .{
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
             .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
         },
     });
@@ -415,6 +418,7 @@ test "NodeStore round trip - Expressions" {
         .e_type_dispatch_call = .{
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
             .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .constraint_fn_var = rand_idx(types.Var),
         },

@@ -359,6 +359,111 @@ pub const ProvidesRequiresMetadata = struct {
     }
 };
 
+/// Public `ProvidedProcedureExport` declaration.
+pub const ProvidedProcedureExport = struct {
+    source_name: canonical.ExportNameId,
+    ffi_symbol: canonical.ExternalSymbolNameId,
+    def: CIR.Def.Idx,
+    pattern: CheckedPatternId,
+    checked_type: CheckedTypeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    binding: TopLevelProcedureBindingRef,
+};
+
+/// Public `ProvidedDataExport` declaration.
+pub const ProvidedDataExport = struct {
+    source_name: canonical.ExportNameId,
+    ffi_symbol: canonical.ExternalSymbolNameId,
+    def: CIR.Def.Idx,
+    pattern: CheckedPatternId,
+    checked_type: CheckedTypeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    const_ref: ConstRef,
+};
+
+/// Public `ProvidedExport` declaration.
+pub const ProvidedExport = union(enum) {
+    procedure: ProvidedProcedureExport,
+    data: ProvidedDataExport,
+};
+
+/// Public `ProvidedExportTable` declaration.
+pub const ProvidedExportTable = struct {
+    exports: []ProvidedExport = &.{},
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_types: *const CheckedTypePublication,
+        top_level_values: *const TopLevelValueTable,
+        published_provides: []const ProvidesEntry,
+    ) Allocator.Error!ProvidedExportTable {
+        const module_env = module.moduleEnvConst();
+        const source = module_env.provides_entries.items.items;
+        if (source.len != published_provides.len) {
+            checkedArtifactInvariant("published provides metadata disagrees with ModuleEnv provides count", .{});
+        }
+
+        var exports = std.ArrayList(ProvidedExport).empty;
+        errdefer exports.deinit(allocator);
+
+        for (source, published_provides) |provides_entry, published| {
+            const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: provided entry {s} has no top-level definition",
+                        .{module_env.getIdent(provides_entry.ident)},
+                    );
+                }
+                unreachable;
+            };
+            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+            const top_level = top_level_values.lookupByDef(def_idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: provided entry {s} has no top-level value",
+                        .{module_env.getIdent(provides_entry.ident)},
+                    );
+                }
+                unreachable;
+            };
+            const checked_type = try checkedTypeIdForRootSource(
+                allocator,
+                module,
+                checked_types,
+                .{ .def = def_idx },
+            );
+            switch (top_level.value) {
+                .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
+                    .source_name = published.source_name,
+                    .ffi_symbol = published.ffi_symbol,
+                    .def = def_idx,
+                    .pattern = top_level.pattern,
+                    .checked_type = checked_type,
+                    .source_scheme = top_level.source_scheme,
+                    .binding = binding,
+                } }),
+                .const_ref => |const_ref| try exports.append(allocator, .{ .data = .{
+                    .source_name = published.source_name,
+                    .ffi_symbol = published.ffi_symbol,
+                    .def = def_idx,
+                    .pattern = top_level.pattern,
+                    .checked_type = checked_type,
+                    .source_scheme = top_level.source_scheme,
+                    .const_ref = const_ref,
+                } }),
+            }
+        }
+
+        return .{ .exports = try exports.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: *ProvidedExportTable, allocator: Allocator) void {
+        allocator.free(self.exports);
+        self.* = .{};
+    }
+};
+
 /// Public `RootRequestKind` declaration.
 pub const RootRequestKind = enum {
     runtime_entrypoint,
@@ -441,6 +546,7 @@ pub const RootRequestTable = struct {
         compile_time_roots: *const CompileTimeRootTable,
         entry_wrappers: *const EntryWrapperTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
+        provided_exports: *const ProvidedExportTable,
         checked_bodies: *const CheckedBodyStore,
         resolved_value_refs: *const ResolvedValueRefTable,
         explicit_roots: []const ExplicitRootRequestInput,
@@ -463,7 +569,7 @@ pub const RootRequestTable = struct {
             });
         }
 
-        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types);
+        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types, provided_exports);
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
@@ -810,28 +916,22 @@ fn appendPublishedEntrypointRoots(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
+    provided_exports: *const ProvidedExportTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
 
-    for (module_env.provides_entries.items.items) |provides_entry| {
-        const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: provided entry {s} has no top-level definition",
-                    .{module_env.getIdent(provides_entry.ident)},
-                );
-            }
-            unreachable;
-        };
-        const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
-        try appendRoot(requests, allocator, .{
-            .module_idx = module.moduleIndex(),
-            .kind = .provided_export,
-            .source = .{ .def = def_idx },
-            .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = def_idx }),
-            .abi = .platform,
-            .exposure = .exported,
-        });
+    for (provided_exports.exports) |provided| {
+        switch (provided) {
+            .procedure => |procedure| try appendRoot(requests, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .provided_export,
+                .source = .{ .def = procedure.def },
+                .checked_type = procedure.checked_type,
+                .abi = .platform,
+                .exposure = .exported,
+            }),
+            .data => {},
+        }
     }
 
     switch (module_env.module_kind) {
@@ -3519,6 +3619,7 @@ pub const CheckedBody = struct {
 pub const CheckedPatternBinder = struct {
     id: PatternBinderId,
     pattern: CheckedPatternId,
+    reassignable: bool,
 };
 
 /// Public `CheckedStringLiteralId` declaration.
@@ -4001,6 +4102,12 @@ pub const CheckedBodyStore = struct {
     pub fn patternBinderForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?PatternBinderId {
         const checked_pattern = self.patternIdForSource(pattern) orelse return null;
         return self.patternBinderForCheckedPattern(checked_pattern);
+    }
+
+    pub fn patternBinderIsReassignable(self: *const CheckedBodyStore, binder: PatternBinderId) bool {
+        const raw = @intFromEnum(binder);
+        if (raw >= self.pattern_binders.len) checkedArtifactInvariant("checked artifact invariant violated: pattern binder id out of range", .{});
+        return self.pattern_binders[raw].reassignable;
     }
 
     pub fn attachStaticDispatchPlans(
@@ -4666,9 +4773,18 @@ const CheckedBodyPayloadCopier = struct {
         try self.pattern_binders.append(self.allocator, .{
             .id = id,
             .pattern = checked_pattern,
+            .reassignable = self.sourcePatternBinderIsReassignable(pattern),
         });
         self.pattern_binder_by_pattern[raw] = id;
         return id;
+    }
+
+    fn sourcePatternBinderIsReassignable(self: *const @This(), pattern: CIR.Pattern.Idx) bool {
+        return switch (self.module.pattern(pattern).data) {
+            .assign => |assign| assign.ident.attributes.reassignable,
+            .as => |as| as.ident.attributes.reassignable,
+            else => checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{}),
+        };
     }
 
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
@@ -14853,6 +14969,7 @@ pub const CheckedModuleArtifact = struct {
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
     provides_requires: ProvidesRequiresMetadata,
+    provided_exports: ProvidedExportTable = .{},
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
@@ -15070,6 +15187,7 @@ pub const CheckedModuleArtifact = struct {
         self.resolved_value_refs.deinit(allocator);
         self.static_dispatch_plans.deinit(allocator);
         self.method_registry.deinit(allocator);
+        self.provided_exports.deinit(allocator);
         self.provides_requires.deinit(allocator);
         self.exported_const_templates.deinit(allocator);
         self.exported_procedure_bindings.deinit(allocator);
@@ -15524,6 +15642,44 @@ pub const CheckedModuleArtifact = struct {
             };
         }
 
+        if (self.provided_exports.exports.len != self.provides_requires.provides.len) {
+            std.debug.panic("checked artifact invariant violated: provided export table does not match provides metadata", .{});
+        }
+        for (self.provided_exports.exports, self.provides_requires.provides) |provided, metadata| {
+            switch (provided) {
+                .procedure => |procedure| {
+                    std.debug.assert(procedure.source_name == metadata.source_name);
+                    std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(@intFromEnum(procedure.checked_type) < self.checked_types.roots.len);
+                    const top_level = self.top_level_values.lookupByDef(procedure.def) orelse {
+                        std.debug.panic("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
+                    };
+                    std.debug.assert(top_level.pattern == procedure.pattern);
+                    std.debug.assert(top_level.source_name == procedure.source_name);
+                    std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, procedure.source_scheme.bytes));
+                    switch (top_level.value) {
+                        .procedure_binding => |binding| std.debug.assert(binding == procedure.binding),
+                        .const_ref => std.debug.panic("checked artifact invariant violated: provided procedure export references const top-level value", .{}),
+                    }
+                },
+                .data => |data| {
+                    std.debug.assert(data.source_name == metadata.source_name);
+                    std.debug.assert(data.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(@intFromEnum(data.checked_type) < self.checked_types.roots.len);
+                    const top_level = self.top_level_values.lookupByDef(data.def) orelse {
+                        std.debug.panic("checked artifact invariant violated: provided data export references missing top-level value", .{});
+                    };
+                    std.debug.assert(top_level.pattern == data.pattern);
+                    std.debug.assert(top_level.source_name == data.source_name);
+                    std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, data.source_scheme.bytes));
+                    switch (top_level.value) {
+                        .const_ref => |const_ref| std.debug.assert(constRefEql(const_ref, data.const_ref)),
+                        .procedure_binding => std.debug.panic("checked artifact invariant violated: provided data export references procedure top-level value", .{}),
+                    }
+                },
+            }
+        }
+
         self.const_templates.verifySealed();
         self.executable_type_payloads.verifyPublished(self.key, &self.erased_fn_abis);
         self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
@@ -15645,6 +15801,7 @@ pub const ImportedModuleView = struct {
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
+    provided_exports: *const ProvidedExportTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
     const_templates: *const ConstTemplateTable,
@@ -15694,6 +15851,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
+        .provided_exports = &artifact.provided_exports,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .const_templates = &artifact.const_templates,
@@ -17083,6 +17241,15 @@ pub fn publishFromTypedModule(
     errdefer resolved_value_refs.deinit(allocator);
     checked_bodies.attachResolvedValueRefs(&resolved_value_refs);
 
+    var provided_exports = try ProvidedExportTable.fromModule(
+        allocator,
+        module,
+        &checked_type_publication,
+        &top_level_values,
+        provides,
+    );
+    errdefer provided_exports.deinit(allocator);
+
     var root_requests = try RootRequestTable.fromModule(
         allocator,
         module,
@@ -17090,6 +17257,7 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         &entry_wrappers,
         &platform_required_bindings,
+        &provided_exports,
         &checked_bodies,
         &resolved_value_refs,
         inputs.explicit_roots,
@@ -17195,6 +17363,7 @@ pub fn publishFromTypedModule(
             .provides = provides,
             .requires = requires,
         },
+        .provided_exports = provided_exports,
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
@@ -17374,6 +17543,9 @@ fn expectProvidedExportClassification(
     );
     defer top_level_values.deinit(allocator);
 
+    const provides = try publishProvidesMetadata(allocator, module_env, &canonical_names);
+    defer allocator.free(provides);
+
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         &modules,
@@ -17390,6 +17562,15 @@ fn expectProvidedExportClassification(
     );
     defer resolved_value_refs.deinit(allocator);
 
+    var provided_exports = try ProvidedExportTable.fromModule(
+        allocator,
+        module,
+        &checked_type_publication,
+        &top_level_values,
+        provides,
+    );
+    defer provided_exports.deinit(allocator);
+
     var root_requests = try RootRequestTable.fromModule(
         allocator,
         module,
@@ -17397,6 +17578,7 @@ fn expectProvidedExportClassification(
         &compile_time_roots,
         &entry_wrappers,
         &platform_required_bindings,
+        &provided_exports,
         &checked_bodies,
         &resolved_value_refs,
         &.{},
@@ -17410,23 +17592,10 @@ fn expectProvidedExportClassification(
 
     var provided_data_exports: usize = 0;
     var provided_procedure_exports: usize = 0;
-    for (module_env.provides_entries.items.items) |provides_entry| {
-        const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("test invariant violated: provided entry has no definition", .{});
-            }
-            unreachable;
-        };
-        const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
-        const top_level = top_level_values.lookupByDef(def_idx) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("test invariant violated: provided entry has no top-level value", .{});
-            }
-            unreachable;
-        };
-        switch (top_level.value) {
-            .const_ref => provided_data_exports += 1,
-            .procedure_binding => provided_procedure_exports += 1,
+    for (provided_exports.exports) |provided| {
+        switch (provided) {
+            .data => provided_data_exports += 1,
+            .procedure => provided_procedure_exports += 1,
         }
     }
 

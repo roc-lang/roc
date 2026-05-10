@@ -64,12 +64,14 @@ foo = |a| {
 				(p-assign (ident "a")))
 			(e-block
 				(s-expect
-					(e-binop (op "eq")
-						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-nominal-external
-							(builtin)
-							(e-tag (name "True")))))
+					(e-method-eq (negated "false")
+						(lhs
+							(e-lookup-local
+								(p-assign (ident "a"))))
+						(rhs
+							(e-nominal-external
+								(builtin)
+								(e-tag (name "True"))))))
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation

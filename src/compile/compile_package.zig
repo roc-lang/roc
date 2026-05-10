@@ -320,6 +320,23 @@ fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
     return false;
 }
 
+fn importedArtifactsCoverImportedEnvs(
+    imported_envs: []const *ModuleEnv,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+) bool {
+    for (imported_envs, 0..) |_, module_idx| {
+        var found = false;
+        for (imported_artifacts) |artifact| {
+            if (artifact.module_idx == module_idx) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
 /// Per-package module build orchestrator
 pub const PackageEnv = struct {
     gpa: Allocator,
@@ -1315,7 +1332,10 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
-        if (checkerHasArtifactBlockingProblems(&checker) or env.types.containsErrContent()) {
+        if (checkerHasArtifactBlockingProblems(&checker) or
+            env.types.containsErrContent() or
+            !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
+        {
             return .{
                 .checker = checker,
                 .checked_artifact = null,
@@ -1434,20 +1454,13 @@ pub const PackageEnv = struct {
                         const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                         try imported_envs.append(self.gpa, ext_env_ptr);
                         env.imports.setResolvedModule(import_idx, resolved_module_idx);
-                        const artifact = r.getArtifact(r.ctx, self.package_name, import_name) orelse {
-                            if (@import("builtin").mode == .Debug) {
-                                std.debug.panic(
-                                    "checked artifact publication invariant violated: external import {s} has no checked artifact",
-                                    .{import_name},
-                                );
-                            }
-                            unreachable;
-                        };
-                        try imported_artifacts.append(self.gpa, .{
-                            .module_idx = resolved_module_idx,
-                            .key = artifact.key,
-                            .view = CheckedArtifact.importedView(artifact),
-                        });
+                        if (r.getArtifact(r.ctx, self.package_name, import_name)) |artifact| {
+                            try imported_artifacts.append(self.gpa, .{
+                                .module_idx = resolved_module_idx,
+                                .key = artifact.key,
+                                .view = CheckedArtifact.importedView(artifact),
+                            });
+                        }
                     }
                     // External env not ready; skip (tryUnblock should have prevented this)
                 }
@@ -1459,20 +1472,13 @@ pub const PackageEnv = struct {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, child_env_ptr);
                 env.imports.setResolvedModule(import_idx, resolved_module_idx);
-                const artifact = child.checkedArtifact() orelse {
-                    if (@import("builtin").mode == .Debug) {
-                        std.debug.panic(
-                            "checked artifact publication invariant violated: local import {s} has no checked artifact",
-                            .{child.name},
-                        );
-                    }
-                    unreachable;
-                };
-                try imported_artifacts.append(self.gpa, .{
-                    .module_idx = resolved_module_idx,
-                    .key = artifact.key,
-                    .view = CheckedArtifact.importedView(artifact),
-                });
+                if (child.checkedArtifact()) |artifact| {
+                    try imported_artifacts.append(self.gpa, .{
+                        .module_idx = resolved_module_idx,
+                        .key = artifact.key,
+                        .view = CheckedArtifact.importedView(artifact),
+                    });
+                }
             }
         }
 

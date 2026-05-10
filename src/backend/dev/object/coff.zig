@@ -232,6 +232,12 @@ pub const CoffWriter = struct {
         try self.text.appendSlice(self.allocator, code);
     }
 
+    /// Set read-only data section contents.
+    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+        self.rdata.clearRetainingCapacity();
+        try self.rdata.appendSlice(self.allocator, rodata);
+    }
+
     /// Add a symbol to the object file
     pub fn addSymbol(self: *Self, symbol: Symbol) !u32 {
         const idx: u32 = @intCast(self.symbols.items.len);
@@ -287,16 +293,18 @@ pub const CoffWriter = struct {
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
+        const has_rdata = self.rdata.items.len > 0;
+        const SECT_RDATA: i16 = if (has_rdata) 2 else 0;
 
         // Check if we need unwind sections (Windows x64 only with functions defined)
         const need_unwind = self.arch == .x86_64 and self.functions.items.len > 0;
-        // Section indices: 1=.text, 2=.pdata, 3=.xdata
-        const SECT_XDATA: i16 = if (need_unwind) 3 else 0;
+        const SECT_PDATA: i16 = if (need_unwind) (if (has_rdata) 3 else 2) else 0;
+        const SECT_XDATA: i16 = if (need_unwind) SECT_PDATA + 1 else 0;
 
         // Calculate layout
         const header_size: u32 = @sizeOf(CoffHeader);
         const section_header_size: u32 = @sizeOf(SectionHeader);
-        const num_sections: u16 = if (need_unwind) 3 else 1; // .text, .pdata, .xdata
+        const num_sections: u16 = 1 + @as(u16, if (has_rdata) 1 else 0) + @as(u16, if (need_unwind) 2 else 0);
 
         // Calculate .pdata and .xdata sizes
         // .pdata: 12 bytes per RUNTIME_FUNCTION (BeginAddress, EndAddress, UnwindData)
@@ -333,8 +341,11 @@ pub const CoffWriter = struct {
         const text_offset: u32 = section_headers_offset + section_header_size * num_sections;
         const text_size: u32 = @intCast(self.text.items.len);
 
-        // .pdata follows .text
-        const pdata_offset: u32 = text_offset + text_size;
+        const rdata_offset: u32 = text_offset + text_size;
+        const rdata_size: u32 = @intCast(self.rdata.items.len);
+
+        // .pdata follows .text and .rdata
+        const pdata_offset: u32 = rdata_offset + rdata_size;
         // .xdata follows .pdata
         const xdata_offset: u32 = pdata_offset + pdata_size;
 
@@ -396,7 +407,7 @@ pub const CoffWriter = struct {
                 break :blk switch (sym.section) {
                     .text => SECT_TEXT,
                     .data => 0, // Would be section 2 if we had .data
-                    .rdata => if (need_unwind) SECT_XDATA else 0,
+                    .rdata => SECT_RDATA,
                     .bss => 0,
                     .undef => COFF.IMAGE_SYM_UNDEFINED,
                 };
@@ -459,6 +470,27 @@ pub const CoffWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&text_header));
 
+        if (has_rdata) {
+            var rdata_name: [8]u8 = std.mem.zeroes([8]u8);
+            @memcpy(rdata_name[0..6], ".rdata");
+
+            const rdata_header = SectionHeader{
+                .name = rdata_name,
+                .virtual_size = 0,
+                .virtual_address = 0,
+                .size_of_raw_data = rdata_size,
+                .pointer_to_raw_data = rdata_offset,
+                .pointer_to_relocations = 0,
+                .pointer_to_line_numbers = 0,
+                .number_of_relocations = 0,
+                .number_of_line_numbers = 0,
+                .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
+                    COFF.IMAGE_SCN_MEM_READ |
+                    COFF.IMAGE_SCN_ALIGN_16BYTES,
+            };
+            try output.appendSlice(self.allocator, std.mem.asBytes(&rdata_header));
+        }
+
         // Write .pdata section header (if needed)
         if (need_unwind) {
             var pdata_name: [8]u8 = std.mem.zeroes([8]u8);
@@ -503,6 +535,10 @@ pub const CoffWriter = struct {
 
         // Write .text section content
         try output.appendSlice(self.allocator, self.text.items);
+
+        if (has_rdata) {
+            try output.appendSlice(self.allocator, self.rdata.items);
+        }
 
         // Write .pdata section content (RUNTIME_FUNCTION entries)
         if (need_unwind) {

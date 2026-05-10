@@ -87,12 +87,12 @@ EndOfFile,
 							(ty-var (raw "item")))
 						(s-decl
 							(p-ident (raw "result"))
-							(e-field-access
-								(e-apply
-									(e-ident (raw "List.first"))
-									(e-ident (raw "list")))
-								(e-apply
-									(e-ident (raw "ok_or"))
+							(e-method-call (method ".ok_or")
+								(receiver
+									(e-apply
+										(e-ident (raw "List.first"))
+										(e-ident (raw "list"))))
+								(args
 									(e-ident (raw "fallback")))))
 						(e-ident (raw "result"))))))
 		(s-decl
@@ -136,9 +136,9 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-field-access (field "ok_or")
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 78)
 						(receiver
-							(e-call
+							(e-call (constraint-fn-var 18)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

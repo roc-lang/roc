@@ -43,6 +43,7 @@ const ELF = struct {
 
     // Symbol type
     const STT_NOTYPE = 0;
+    const STT_OBJECT = 1;
     const STT_FUNC = 2;
 
     // Special section indices
@@ -201,6 +202,12 @@ pub const ElfWriter = struct {
         try self.text.appendSlice(self.allocator, code);
     }
 
+    /// Set the read-only data section contents.
+    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+        self.rodata.clearRetainingCapacity();
+        try self.rodata.appendSlice(self.allocator, rodata);
+    }
+
     /// Allocate space in the rodata section for a constant value.
     /// Returns the offset within rodata and a pointer to write the value.
     pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
@@ -264,13 +271,15 @@ pub const ElfWriter = struct {
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Section indices
         const SHIDX_TEXT = 1;
-        const SHIDX_SYMTAB = 3;
-        const SHIDX_STRTAB = 4;
-        const SHIDX_SHSTRTAB = 5;
-        const NUM_SECTIONS = 6;
+        const SHIDX_RODATA = 2;
+        const SHIDX_SYMTAB = 4;
+        const SHIDX_STRTAB = 5;
+        const SHIDX_SHSTRTAB = 6;
+        const NUM_SECTIONS = 7;
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
+        const shname_rodata = try self.addString(&self.shstrtab, ".rodata");
         const shname_rela_text = try self.addString(&self.shstrtab, ".rela.text");
         const shname_symtab = try self.addString(&self.shstrtab, ".symtab");
         const shname_strtab = try self.addString(&self.shstrtab, ".strtab");
@@ -292,14 +301,14 @@ pub const ElfWriter = struct {
 
             const st_info: u8 = blk: {
                 const bind: u8 = if (sym.is_global) ELF.STB_GLOBAL else ELF.STB_LOCAL;
-                const sym_type: u8 = if (sym.is_function) ELF.STT_FUNC else ELF.STT_NOTYPE;
+                const sym_type: u8 = if (sym.is_function) ELF.STT_FUNC else if (sym.section == .rodata) ELF.STT_OBJECT else ELF.STT_NOTYPE;
                 break :blk (bind << 4) | sym_type;
             };
 
             const st_shndx: u16 = switch (sym.section) {
                 .text => SHIDX_TEXT,
                 .data => 0, // Would be data section index
-                .rodata => 0,
+                .rodata => SHIDX_RODATA,
                 .bss => 0,
                 .undef => ELF.SHN_UNDEF,
             };
@@ -347,6 +356,9 @@ pub const ElfWriter = struct {
         const text_offset = alignUp(offset, 16);
         offset = text_offset + self.text.items.len;
 
+        const rodata_offset = alignUp(offset, 16);
+        offset = rodata_offset + self.rodata.items.len;
+
         const rela_offset = alignUp(offset, 8);
         offset = rela_offset + rela.items.len;
 
@@ -393,6 +405,9 @@ pub const ElfWriter = struct {
         try self.padTo(output, text_offset);
         try output.appendSlice(self.allocator, self.text.items);
 
+        try self.padTo(output, rodata_offset);
+        try output.appendSlice(self.allocator, self.rodata.items);
+
         // Pad to rela section
         try self.padTo(output, rela_offset);
         try output.appendSlice(self.allocator, rela.items);
@@ -429,7 +444,22 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_text));
 
-        // 2: .rela.text
+        // 2: .rodata
+        const shdr_rodata = Elf64_Shdr{
+            .sh_name = shname_rodata,
+            .sh_type = ELF.SHT_PROGBITS,
+            .sh_flags = ELF.SHF_ALLOC,
+            .sh_addr = 0,
+            .sh_offset = rodata_offset,
+            .sh_size = self.rodata.items.len,
+            .sh_link = 0,
+            .sh_info = 0,
+            .sh_addralign = 16,
+            .sh_entsize = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rodata));
+
+        // 3: .rela.text
         const shdr_rela = Elf64_Shdr{
             .sh_name = shname_rela_text,
             .sh_type = ELF.SHT_RELA,
@@ -444,7 +474,7 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela));
 
-        // 3: .symtab
+        // 4: .symtab
         const shdr_symtab = Elf64_Shdr{
             .sh_name = shname_symtab,
             .sh_type = ELF.SHT_SYMTAB,
@@ -459,7 +489,7 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_symtab));
 
-        // 4: .strtab
+        // 5: .strtab
         const shdr_strtab = Elf64_Shdr{
             .sh_name = shname_strtab,
             .sh_type = ELF.SHT_STRTAB,
@@ -474,7 +504,7 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_strtab));
 
-        // 5: .shstrtab
+        // 6: .shstrtab
         const shdr_shstrtab = Elf64_Shdr{
             .sh_name = shname_shstrtab,
             .sh_type = ELF.SHT_STRTAB,

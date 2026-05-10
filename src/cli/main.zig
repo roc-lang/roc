@@ -1053,11 +1053,12 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, args.allow_errors);
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path);
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
-    if (shm_result.error_count > 0 and !args.allow_errors) {
+    if (shm_result.error_count > 0) {
+        if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
 
@@ -1363,10 +1364,11 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
         return ctx.fail(.{ .file_write_failed = .{ .path = echo_module_path, .err = err } });
     };
 
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, args.allow_errors);
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path);
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0 and !args.allow_errors) {
+    if (shm_result.error_count > 0) {
+        if (args.allow_errors) return;
         return error.TypeCheckingFailed;
     }
 
@@ -1920,7 +1922,7 @@ fn buildPlatformEntrypoints(
 /// publication, MIR lowering, IR lowering, LIR lowering, and ARC insertion.
 /// The child process maps only the LIR runtime image and never
 /// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
-pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
+pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []const u8) !SharedMemoryResult {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try createSharedMemory(page_size);
     errdefer shm.deinit(ctx.gpa);
@@ -2023,7 +2025,7 @@ pub fn buildLirRuntimeImageWithCoordinator(ctx: *CliContext, roc_file_path: []co
     try coord.coordinatorLoop();
 
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (counts.errors > 0 and !allow_errors) {
+    if (counts.errors > 0) {
         shm.updateHeader();
         return sharedMemoryResult(&shm, counts, &.{});
     }
@@ -4822,6 +4824,7 @@ fn checkFileWithBuildEnv(
     };
 
     build_env.compiler_version = build_options.compiler_version;
+    build_env.setFinalizeExecutableArtifacts(false);
     defer build_env.deinit();
 
     // Set up cache manager if caching is enabled

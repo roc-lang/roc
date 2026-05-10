@@ -30,7 +30,7 @@ result2 = c.plus(d)
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
-MISSING METHOD - plus_operator_vs_method.md:21:11:21:20
+MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -48,11 +48,11 @@ The value's type, which does not have a method named **plus**, is:
 
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
-**plus_operator_vs_method.md:21:11:21:20:**
+**plus_operator_vs_method.md:21:13:21:17:**
 ```roc
 result2 = c.plus(d)
 ```
-          ^^^^^^^^^
+            ^^^^
 
 The value's type, which does not have a method named **plus**, is:
 
@@ -186,7 +186,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-method-call (method "plus")
+		(e-dispatch-call (method "plus") (constraint-fn-var 329)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))

@@ -50,10 +50,10 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-ident (raw "list")))
-				(e-field-access
-					(e-ident (raw "list"))
-					(e-apply
-						(e-ident (raw "len"))))))
+				(e-method-call (method ".len")
+					(receiver
+						(e-ident (raw "list")))
+					(args))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -86,7 +86,7 @@ main! = |_| processList(["one", "two", "three"])
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-field-access (field "len")
+			(e-dispatch-call (method "len") (constraint-fn-var 56)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -101,7 +101,7 @@ main! = |_| processList(["one", "two", "three"])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call
+			(e-call (constraint-fn-var 15)
 				(e-lookup-local
 					(p-assign (ident "processList")))
 				(e-list

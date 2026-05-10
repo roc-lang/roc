@@ -45,8 +45,8 @@ main = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
-MISSING METHOD - Adv.md:23:13:23:33
-MISSING METHOD - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:23:17:23:28
+MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -62,11 +62,11 @@ Other code expects this to have the type:
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
-**Adv.md:23:13:23:33:**
+**Adv.md:23:17:23:28:**
 ```roc
 	next_val = val.update_strr(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^^
+	               ^^^^^^^^^^^
 
 The value's type, which does not have a method named **update_strr**, is:
 
@@ -76,11 +76,11 @@ The value's type, which does not have a method named **update_strr**, is:
 
 **MISSING METHOD**
 This **update** method is being called on a value whose type doesn't have that method:
-**Adv.md:28:13:28:32:**
+**Adv.md:28:21:28:27:**
 ```roc
 	next_val = "Hello".update(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                   ^^^^^^
 
 The value's type, which does not have a method named **update**, is:
 
@@ -401,7 +401,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-method-call (method "update_str")
+				(e-dispatch-call (method "update_str") (constraint-fn-var 422)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -428,9 +428,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-method-call (method "update_u64")
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 601)
 					(receiver
-						(e-method-call (method "update_str")
+						(e-dispatch-call (method "update_str") (constraint-fn-var 589)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -441,12 +441,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-method-call (method "to_str")
+					(e-dispatch-call (method "to_str") (constraint-fn-var 648)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-method-call (method "to_u64")
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 650)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

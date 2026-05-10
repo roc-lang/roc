@@ -259,6 +259,12 @@ pub const MachOWriter = struct {
         try self.text.appendSlice(self.allocator, code);
     }
 
+    /// Set read-only data section contents.
+    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+        self.rodata.clearRetainingCapacity();
+        try self.rodata.appendSlice(self.allocator, rodata);
+    }
+
     /// Allocate space in the rodata section for a constant value.
     /// Returns the offset within rodata and a pointer to write the value.
     pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
@@ -314,7 +320,8 @@ pub const MachOWriter = struct {
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Calculate sizes
         const header_size: u32 = @sizeOf(MachHeader64);
-        const segment_cmd_size: u32 = @sizeOf(SegmentCommand64) + @sizeOf(Section64);
+        const section_count: u32 = 2;
+        const segment_cmd_size: u32 = @sizeOf(SegmentCommand64) + section_count * @sizeOf(Section64);
         const symtab_cmd_size: u32 = @sizeOf(SymtabCommand);
         const dysymtab_cmd_size: u32 = @sizeOf(DysymtabCommand);
         const build_version_cmd_size: u32 = @sizeOf(BuildVersionCommand);
@@ -324,7 +331,10 @@ pub const MachOWriter = struct {
         const text_offset: u32 = header_size + total_cmd_size;
         const text_size: u32 = @intCast(self.text.items.len);
 
-        const reloc_offset: u32 = text_offset + text_size;
+        const rodata_offset: u32 = text_offset + text_size;
+        const rodata_size: u32 = @intCast(self.rodata.items.len);
+
+        const reloc_offset: u32 = rodata_offset + rodata_size;
         const reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
 
         const symtab_offset: u32 = reloc_offset + reloc_size;
@@ -378,12 +388,12 @@ pub const MachOWriter = struct {
             .cmdsize = segment_cmd_size,
             .segname = segname,
             .vmaddr = 0,
-            .vmsize = text_size,
+            .vmsize = text_size + rodata_size,
             .fileoff = text_offset,
-            .filesize = text_size,
+            .filesize = text_size + rodata_size,
             .maxprot = 7, // rwx
             .initprot = 7,
-            .nsects = 1,
+            .nsects = section_count,
             .flags = 0,
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&segment_cmd));
@@ -409,6 +419,27 @@ pub const MachOWriter = struct {
             .reserved3 = 0,
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&text_section));
+
+        var const_sectname: [16]u8 = std.mem.zeroes([16]u8);
+        @memcpy(const_sectname[0..7], "__const");
+        var const_segname: [16]u8 = std.mem.zeroes([16]u8);
+        @memcpy(const_segname[0..6], "__DATA");
+
+        const rodata_section = Section64{
+            .sectname = const_sectname,
+            .segname = const_segname,
+            .addr = text_size,
+            .size = rodata_size,
+            .offset = rodata_offset,
+            .@"align" = 4,
+            .reloff = 0,
+            .nreloc = 0,
+            .flags = 0,
+            .reserved1 = 0,
+            .reserved2 = 0,
+            .reserved3 = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&rodata_section));
 
         // Write symtab command
         const symtab_cmd = SymtabCommand{
@@ -460,6 +491,9 @@ pub const MachOWriter = struct {
 
         // Write text section content
         try output.appendSlice(self.allocator, self.text.items);
+
+        // Write read-only data section content
+        try output.appendSlice(self.allocator, self.rodata.items);
 
         // Write relocations
         for (self.text_relocs.items) |rel| {

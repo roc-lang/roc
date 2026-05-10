@@ -16,8 +16,20 @@ handleTry = |result| {
 }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - nominal_external_fully_qualified.md:3:24:3:34
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
+**MODULE NOT FOUND**
+The type `MyTryType` is qualified by the module `MyTryModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_external_fully_qualified.md:3:24:3:34:**
+```roc
+handleTry : MyTryModule.MyTryType(Str, I32) -> Str
+```
+                       ^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `code` is not used anywhere in your code.
 
@@ -99,7 +111,8 @@ handleTry = |result| {
 				(e-match
 					(match
 						(cond
-							(e-runtime-error (tag "erroneous_value_use")))
+							(e-lookup-local
+								(p-assign (ident "result"))))
 						(branches
 							(branch
 								(patterns
@@ -119,9 +132,7 @@ handleTry = |result| {
 										(e-literal (string "Error: $(code.toStr())"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "MyTryType") (external-module "MyTryModule")
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "I32") (builtin)))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(s-import (module "MyTryModule")
 		(exposes)))

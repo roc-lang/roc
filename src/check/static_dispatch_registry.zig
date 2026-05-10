@@ -304,7 +304,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
-                        .result_mode = .value,
+                        .result_mode = staticDispatchResultModeForCheckedValueCall(module, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
@@ -317,7 +317,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
-                        .result_mode = .value,
+                        .result_mode = staticDispatchResultModeForCheckedValueCall(module, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
                 .e_method_eq => |eq| {
@@ -374,6 +374,82 @@ pub const StaticDispatchPlanTable = struct {
         self.* = .{};
     }
 };
+
+fn staticDispatchResultModeForCheckedValueCall(
+    module: TypedCIR.Module,
+    method_name: Ident.Idx,
+    constraint_fn_var: Var,
+) StaticDispatchResultMode {
+    const common = module.commonIdents();
+    if (!method_name.eql(common.is_eq)) return .value;
+
+    if (staticDispatchConstraintForFnVar(module, constraint_fn_var)) |constraint| {
+        if (constraint.origin == .desugared_binop) {
+            return .{ .equality = .{
+                .structural_allowed = true,
+                .negated = constraint.binop_negated,
+            } };
+        }
+    }
+
+    if (sourceCallableHasEqualityShape(module, constraint_fn_var)) {
+        return .{ .equality = .{
+            .structural_allowed = true,
+            .negated = false,
+        } };
+    }
+
+    return .value;
+}
+
+fn staticDispatchConstraintForFnVar(
+    module: TypedCIR.Module,
+    fn_var: Var,
+) ?types.StaticDispatchConstraint {
+    const store = module.typeStoreConst();
+    for (store.static_dispatch_constraints.items.items) |constraint| {
+        if (constraint.fn_var == fn_var) return constraint;
+    }
+    return null;
+}
+
+fn sourceCallableHasEqualityShape(
+    module: TypedCIR.Module,
+    fn_var: Var,
+) bool {
+    const store = module.typeStoreConst();
+    const resolved = store.resolveVar(fn_var);
+    const func = resolved.desc.content.unwrapFunc() orelse return false;
+    const args = store.sliceVars(func.args);
+    if (args.len != 2) return false;
+    if (store.resolveVar(args[0]).var_ != store.resolveVar(args[1]).var_) return false;
+    return sourceVarIsBool(module, func.ret);
+}
+
+fn sourceVarIsBool(module: TypedCIR.Module, var_: Var) bool {
+    const store = module.typeStoreConst();
+    var current = var_;
+    while (true) {
+        const resolved = store.resolveVar(current);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| {
+                    const common = module.commonIdents();
+                    const builtin_origin = nominal.origin_module.eql(common.builtin_module) or
+                        module.identStoreConst().idxTextEql(nominal.origin_module, common.builtin_module);
+                    return builtin_origin and (nominal.ident.ident_idx.eql(common.bool) or
+                        nominal.ident.ident_idx.eql(common.bool_type));
+                },
+                else => return false,
+            },
+            .alias => |alias| current = store.getAliasBackingVar(alias),
+            .flex,
+            .rigid,
+            .err,
+            => return false,
+        }
+    }
+}
 
 fn checkedTypeIdForVar(
     _: Allocator,

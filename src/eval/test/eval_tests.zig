@@ -21,6 +21,27 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int minus dec type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int times dec type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
+    .{
+        .name = "problem: to_inspect must return Str",
+        .source_kind = .module,
+        .source =
+        \\BadColor := [Red, Green, Blue].{
+        \\    to_inspect : BadColor -> I64
+        \\    to_inspect = |color| match color {
+        \\        Red => 1
+        \\        Green => 2
+        \\        Blue => 3
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    red : BadColor
+        \\    red = Red
+        \\    Str.inspect(red)
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
 
     // Basic expressions and control flow
     .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42.0" } },
@@ -30,6 +51,63 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: string literal", .source = "\"hello\"", .expected = .{ .inspect_str = "\"hello\"" } },
     .{ .name = "inspect: empty string literal", .source = "\"\"", .expected = .{ .inspect_str = "\"\"" } },
+    .{
+        .name = "inspect: Str.inspect uses nominal to_inspect",
+        .source_kind = .module,
+        .source =
+        \\Color := [Red, Green, Blue].{
+        \\    to_inspect : Color -> Str
+        \\    to_inspect = |color| match color {
+        \\        Red => "Color::Red"
+        \\        Green => "Color::Green"
+        \\        Blue => "Color::Blue"
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    red : Color
+        \\    red = Red
+        \\    Str.inspect(red) == "Color::Red"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: Str.inspect default when no to_inspect exists",
+        .source_kind = .module,
+        .source =
+        \\ColorDefault := [Red, Green, Blue]
+        \\
+        \\main = {
+        \\    red : ColorDefault
+        \\    red = Red
+        \\    Str.inspect(red) == "Red"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: nested Str.inspect uses payload to_inspect",
+        .source_kind = .module,
+        .source =
+        \\Color := [Red, Green, Blue].{
+        \\    to_inspect : Color -> Str
+        \\    to_inspect = |color| match color {
+        \\        Red => "Color::Red"
+        \\        Green => "Color::Green"
+        \\        Blue => "Color::Blue"
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    red : Color
+        \\    red = Red
+        \\    record = { color: red, count: 42, name: "test" }
+        \\    Str.inspect(record) == "{ color: Color::Red, count: 42.0, name: \"test\" }"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
     .{ .name = "inspect: arithmetic", .source = "2 + 3 * 4", .expected = .{ .inspect_str = "14.0" } },
     .{ .name = "inspect: subtraction", .source = "5 - 3", .expected = .{ .inspect_str = "2.0" } },
     .{ .name = "inspect: multiplication", .source = "4 * 5", .expected = .{ .inspect_str = "20.0" } },
@@ -2264,6 +2342,100 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: List.contains false for missing element", .source = "List.contains([-1, -2, -3, 1, 2, 3], 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.contains true when element is found", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.contains false on empty list", .source = "List.contains([], 3333)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: U32 literal survives call boundary", .source = "(|x| x)(1.U32)", .expected = .{ .inspect_str = "1" } },
+    .{ .name = "inspect: U32 parameter computes with static dispatch", .source = "(|current| current + 1)(1.U32)", .expected = .{ .inspect_str = "2" } },
+    .{
+        .name = "inspect: mutable parameter reads initial value",
+        .source =
+        \\{
+        \\    read = |var $current| $current
+        \\    read(1.U32)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "inspect: local mutable U32 reassigns computed value",
+        .source =
+        \\{
+        \\    var $current = 1.U32
+        \\    $current = $current + 1
+        \\    $current
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: mutable parameter reassigns literal",
+        .source =
+        \\{
+        \\    set = |var $current| {
+        \\        $current = 2.U32
+        \\        $current
+        \\    }
+        \\    set(1.U32)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: mutable parameter computes from initial value",
+        .source =
+        \\{
+        \\    bump = |var $current| $current + 1
+        \\    bump(1.U32)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: mutable parameter reassign reads updated value",
+        .source =
+        \\{
+        \\    bump = |var $current| {
+        \\        $current = $current + 1
+        \\        $current
+        \\    }
+        \\    bump(1.U32)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: mutable parameter while loop counts through bound",
+        .source =
+        \\{
+        \\    count_to = |var $current, end| {
+        \\        var $count = 0.U32
+        \\        while $current <= end {
+        \\            $count = $count + 1
+        \\            $current = $current + 1
+        \\        }
+        \\        $count
+        \\    }
+        \\    count_to(1.U32, 5.U32)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "inspect: local while loop appends full U32 range",
+        .source =
+        \\{
+        \\    var $current = 1.U32
+        \\    var $answer = []
+        \\    while $current <= 5.U32 {
+        \\        $answer = $answer.append($current)
+        \\        $current = $current + 1
+        \\    }
+        \\    $answer
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
+    },
+    .{ .name = "inspect: U32.to builds inclusive range", .source = "1.U32.to(5.U32)", .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" } },
+    .{ .name = "inspect: U32.until builds exclusive range", .source = "0.U32.until(3.U32)", .expected = .{ .inspect_str = "[0, 1, 2]" } },
+    .{ .name = "inspect: I64.until builds exclusive range", .source = "-2.I64.until(2.I64)", .expected = .{ .inspect_str = "[-2, -1, 0, 1]" } },
     .{
         .name = "inspect: generic local attached method specialization on nominal",
         .source_kind = .module,
@@ -2317,6 +2489,54 @@ const core_tests = [_]TestCase{
             ,
         }},
         .expected = .{ .inspect_str = "41" },
+    },
+    .{
+        .name = "inspect: static dispatch receiver result feeds another method call",
+        .source_kind = .module,
+        .source =
+        \\Utf8Fmt := [Fmt].{
+        \\  encode_bool : Utf8Fmt, Bool -> Try(List(U8), [])
+        \\  encode_bool = |_fmt, b| {
+        \\    if b {
+        \\      Ok([116, 114, 117, 101])
+        \\    } else {
+        \\      Ok([102, 97, 108, 115, 101])
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main = {
+        \\  fmt : Utf8Fmt
+        \\  fmt = Fmt
+        \\
+        \\  my_bool : Bool
+        \\  my_bool = True
+        \\
+        \\  bytes = my_bool.encode(fmt).ok_or([])
+        \\  Str.from_utf8_lossy(bytes)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"true\"" },
+    },
+    .{
+        .name = "inspect: structural tag equality through function call result issue 8897",
+        .source_kind = .module,
+        .source =
+        \\nth : List(Str), U64 -> Try(Str, [Nope])
+        \\nth = |l, i| {
+        \\  match List.get(l, i) {
+        \\    Ok(e) => Ok(e)
+        \\    Err(OutOfBounds) => Err(Nope)
+        \\  }
+        \\}
+        \\
+        \\main = {
+        \\  first = nth(["a", "b", "c", "d", "e"], 2) == Ok("c")
+        \\  second = nth(["a"], 2) == Err(Nope)
+        \\  (first, second)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True)" },
     },
     .{
         .name = "inspect: cross-module polymorphic attached method specialization from helper module",
@@ -2433,6 +2653,102 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "inspect: recursive tuple list split does not leak or corrupt result",
+        .source_kind = .module,
+        .source =
+        \\split_by_digit_count : (U64, U64) -> List((U64, U64))
+        \\split_by_digit_count = |(start, end)| {
+        \\    start_digits = count_digits(start)
+        \\    end_digits = count_digits(end)
+        \\
+        \\    if start_digits == end_digits {
+        \\        [(start, end)]
+        \\    } else {
+        \\        boundary = pow(10, start_digits) - 1
+        \\        first_range = (start, boundary)
+        \\        split_by_digit_count((boundary + 1, end)).append(first_range)
+        \\    }
+        \\}
+        \\
+        \\count_digits : U64 -> U64
+        \\count_digits = |n| {
+        \\    if n == 0 { return 1 }
+        \\    var $count = 0
+        \\    var $num = n
+        \\    while $num > 0 {
+        \\        $count = $count + 1
+        \\        $num = $num // 10
+        \\    }
+        \\    $count
+        \\}
+        \\
+        \\pow : U64, U64 -> U64
+        \\pow = |base, exp| {
+        \\    if exp == 0 {
+        \\        1
+        \\    } else {
+        \\        var $result = 1
+        \\        var $b = base
+        \\        var $e = exp
+        \\        while $e > 0 {
+        \\            if $e % 2 == 1 {
+        \\                $result = $result * $b
+        \\            }
+        \\            $b = $b * $b
+        \\            $e = $e // 2
+        \\        }
+        \\        $result
+        \\    }
+        \\}
+        \\
+        \\main = split_by_digit_count((1, 1000)).len()
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "inspect: dbg preserves recursive tag union in list child",
+        .source_kind = .module,
+        .source =
+        \\Node := [
+        \\    Text(Str),
+        \\    Element(Str, List(Node)),
+        \\].{
+        \\    text : Str -> Node
+        \\    text = |content| {
+        \\        result = Text(content)
+        \\        dbg result
+        \\        result
+        \\    }
+        \\
+        \\    element : Str, List(Node) -> Node
+        \\    element = |tag, children| {
+        \\        result = Element(tag, children)
+        \\        dbg result
+        \\        result
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    text_node = Node.text("hello")
+        \\    elem = Node.element("div", [text_node])
+        \\
+        \\    match elem {
+        \\        Element(_tag, children) =>
+        \\            match List.first(children) {
+        \\                Ok(child) =>
+        \\                    match child {
+        \\                        Text(content) => content == "hello"
+        \\                        Element(_, _) => False
+        \\                    }
+        \\                Err(_) => False
+        \\            }
+        \\        Text(_) => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
     },
 };
 

@@ -32,7 +32,7 @@ func = |x| {
 }
 
 answer : Dec
-answer = 52
+answer = func(42)
 ~~~
 # FORMATTED
 ~~~roc
@@ -134,7 +134,7 @@ EndOfFile,
 																(p-assign (ident "x")))
 															(e-lookup-local
 																(p-assign (ident "y")))))))
-											(e-call
+											(e-call (constraint-fn-var 17)
 												(e-lookup-local
 													(p-assign (ident "add_x")))
 												(e-num (value "10"))))))
@@ -148,15 +148,18 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-num (value "52"))))
+		(e-call (constraint-fn-var 31)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "42")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec -> Dec"))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec -> Dec"))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
 		(expr (type "Dec"))))
 ~~~

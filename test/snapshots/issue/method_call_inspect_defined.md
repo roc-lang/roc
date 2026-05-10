@@ -9,7 +9,6 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
-UNRECOGNIZED SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **;** is not expected in an expression.
@@ -21,17 +20,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
              ^
 
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**method_call_inspect_defined.md:1:14:1:15:**
-```roc
-{ x = "hello"; x.inspect() }
-```
-             ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -47,10 +35,10 @@ EndOfFile,
 			(e-string
 				(e-string-part (raw "hello"))))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-field-access
-			(e-ident (raw "x"))
-			(e-apply
-				(e-ident (raw "inspect"))))))
+		(e-method-call (method ".inspect")
+			(receiver
+				(e-ident (raw "x")))
+			(args))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -68,7 +56,7 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-field-access (field "inspect")
+	(e-dispatch-call (method "inspect") (constraint-fn-var 23)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))
