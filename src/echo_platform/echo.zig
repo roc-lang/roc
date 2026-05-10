@@ -381,7 +381,7 @@ export fn compileAndRun(source_ptr: [*]const u8, source_len: usize) u8 {
 }
 
 fn compileAndRunInner(source: []const u8) !u8 {
-    _ = fba.reset(.retain_capacity);
+    fba.reset();
     allocator = fba.allocator();
 
     const app_abs_path = "/app/main.roc";

@@ -121,12 +121,26 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
 
 /// Returns the stored statement for the given id.
 pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
+    self.verifyCFStmtId(id);
     return self.cf_stmts.items[@intFromEnum(id)];
 }
 
 /// Returns a mutable pointer to the stored statement for the given id.
 pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
+    self.verifyCFStmtId(id);
     return &self.cf_stmts.items[@intFromEnum(id)];
+}
+
+fn verifyCFStmtId(self: *const Self, id: CFStmtId) void {
+    if (builtin.mode == .Debug) {
+        const idx = @intFromEnum(id);
+        if (idx >= self.cf_stmts.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: statement id {d} exceeds statement storage len {d}",
+                .{ idx, self.cf_stmts.items.len },
+            );
+        }
+    }
 }
 
 /// Appends switch branches and returns the corresponding flat-storage span.

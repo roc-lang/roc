@@ -543,10 +543,11 @@ const Inserter = struct {
                 }
                 var default_owned_terminal = try owned.clone();
                 defer default_owned_terminal.deinit();
+                const default_branch = try self.rewritePath(switch_stmt.default_branch, &default_owned_terminal, options);
                 self.store.getCFStmtPtr(start).* = .{ .switch_stmt = .{
                     .cond = switch_stmt.cond,
                     .branches = switch_stmt.branches,
-                    .default_branch = try self.rewritePath(switch_stmt.default_branch, &default_owned_terminal, options),
+                    .default_branch = default_branch,
                     .continuation = switch_stmt.continuation,
                 } };
                 return start;
@@ -599,10 +600,11 @@ const Inserter = struct {
         }
         var default_owned = try owned.clone();
         defer default_owned.deinit();
+        const default_branch = try self.rewritePath(switch_stmt.default_branch, &default_owned, options);
         self.store.getCFStmtPtr(start).* = .{ .switch_stmt = .{
             .cond = switch_stmt.cond,
             .branches = switch_stmt.branches,
-            .default_branch = try self.rewritePath(switch_stmt.default_branch, &default_owned, options),
+            .default_branch = default_branch,
             .continuation = null,
         } };
         return start;

@@ -7711,7 +7711,7 @@ const BodyLowerer = struct {
         out: *std.ArrayList(Ast.StmtId),
     ) Allocator.Error!void {
         const statement = self.checkedStatement(statement_id);
-        if (!self.checkedStatementIsRuntimeLoweringVisible(statement)) return;
+        if (!checkedStatementIsRuntimeLoweringVisible(statement)) return;
         switch (statement.data) {
             .decl => |decl| {
                 if (self.localProcDeclForStatement(statement) != null) {
@@ -7725,11 +7725,7 @@ const BodyLowerer = struct {
         }
     }
 
-    fn checkedStatementIsRuntimeLoweringVisible(
-        self: *const BodyLowerer,
-        statement: checked_artifact.CheckedStatement,
-    ) bool {
-        _ = self;
+    fn checkedStatementIsRuntimeLoweringVisible(statement: checked_artifact.CheckedStatement) bool {
         return switch (statement.data) {
             .import_,
             .alias_decl,
@@ -10085,14 +10081,13 @@ const BodyLowerer = struct {
         binding_key: checked_artifact.ProcedureBindingRef,
         requested_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!canonical.ProcedureCallableRef {
-        _ = owner;
         const binding = bindings.get(binding_ref);
         return switch (binding.body) {
             .direct_template => |direct| .{
                 .template = direct.template,
                 .source_fn_ty = requested_key,
             },
-            .callable_eval_template => try self.callableFromCallableBindingInstance(self.input.root.artifact.key, binding_key, requested_key),
+            .callable_eval_template => try self.callableFromCallableBindingInstance(owner, binding_key, requested_key),
         };
     }
 
@@ -10113,7 +10108,7 @@ const BodyLowerer = struct {
                             .source_fn_ty = requested_key,
                         },
                         .callable_eval_template => try self.callableFromCallableBindingInstance(
-                            self.input.root.artifact.key,
+                            view.key,
                             .{ .imported = imported },
                             requested_key,
                         ),
@@ -10133,7 +10128,7 @@ const BodyLowerer = struct {
                             .source_fn_ty = requested_key,
                         },
                         .callable_eval_template => try self.callableFromCallableBindingInstance(
-                            self.input.root.artifact.key,
+                            view.key,
                             .{ .imported = imported },
                             requested_key,
                         ),
@@ -10753,11 +10748,10 @@ fn templateFromRootTopLevelBinding(
     binding_key: checked_artifact.ProcedureBindingRef,
     requested_key: canonical.CanonicalTypeKey,
 ) ?canonical.ProcedureTemplateRef {
-    _ = owner;
     const binding = bindings.get(binding_ref);
     return switch (binding.body) {
         .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
-        .callable_eval_template => templateFromCallableBindingInstanceForRoot(input, input.root.artifact.key, binding_key, requested_key),
+        .callable_eval_template => templateFromCallableBindingInstanceForRoot(input, owner, binding_key, requested_key),
     };
 }
 

@@ -10,7 +10,6 @@ const builtins = @import("builtins");
 const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const ipc = @import("ipc");
 const lir = @import("lir");
 
 const builtin_loading = @import("builtin_loading.zig");
@@ -31,7 +30,39 @@ const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const RuntimeImage = lir.RuntimeImage;
-const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
+const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct {
+    base_ptr: [*]align(1) u8 = undefined,
+
+    fn getSystemPageSize() !usize {
+        return error.UnsupportedPlatform;
+    }
+
+    fn create(_: usize, _: usize) !@This() {
+        return error.UnsupportedPlatform;
+    }
+
+    fn deinit(_: *@This(), _: Allocator) void {}
+
+    fn allocator(_: *@This()) Allocator {
+        return std.heap.wasm_allocator;
+    }
+
+    fn getUsedSize(_: *const @This()) usize {
+        return 0;
+    }
+
+    fn updateHeader(_: *@This()) void {}
+} else @import("ipc").SharedMemoryAllocator;
+
+const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
+    fn start() !@This() {
+        return .{};
+    }
+
+    fn read(_: *@This()) u64 {
+        return 0;
+    }
+} else std.time.Timer;
 
 /// Public `SourceKind` declaration.
 pub const SourceKind = enum {
@@ -579,7 +610,7 @@ pub fn parseCheckModule(
     errdefer allocators.deinit();
 
     var parse_elapsed: u64 = 0;
-    var parse_timer = try std.time.Timer.start();
+    var parse_timer = try StageTimer.start();
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     parse_elapsed = parse_timer.read();
     errdefer {
@@ -625,7 +656,7 @@ pub fn parseCheckModule(
     });
     errdefer czer.deinit();
 
-    var can_timer = try std.time.Timer.start();
+    var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
     if (hosted_transform) {
         var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
@@ -659,7 +690,7 @@ pub fn parseCheckModule(
         builtin_ctx,
     );
     errdefer checker.deinit();
-    var check_timer = try std.time.Timer.start();
+    var check_timer = try StageTimer.start();
     try checker.checkFile();
     const check_elapsed = check_timer.read();
 

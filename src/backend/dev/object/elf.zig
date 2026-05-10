@@ -292,8 +292,6 @@ pub const ElfWriter = struct {
         // Section indices
         const SHIDX_TEXT = 1;
         const SHIDX_RODATA = 2;
-        const SHIDX_RELA_TEXT = 3;
-        const SHIDX_RELA_RODATA = 4;
         const SHIDX_SYMTAB = 5;
         const SHIDX_STRTAB = 6;
         const SHIDX_SHSTRTAB = 7;
@@ -533,9 +531,6 @@ pub const ElfWriter = struct {
             .sh_entsize = @sizeOf(Elf64_Rela),
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela_rodata));
-
-        _ = SHIDX_RELA_TEXT;
-        _ = SHIDX_RELA_RODATA;
 
         // 5: .symtab
         const shdr_symtab = Elf64_Shdr{

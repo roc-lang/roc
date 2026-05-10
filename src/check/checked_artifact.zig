@@ -9072,8 +9072,8 @@ const PlatformAppRelationTypeResolver = struct {
                 .tag_union => try self.finalize(app_root, context),
                 else => checkedArtifactInvariant("platform/app relation expected tag-compatible app payload", .{}),
             },
-            .record, .record_unbound => try self.mergeRecordRoots(platform_root, app_root, context),
-            .tag_union => try self.mergeTagUnionRoots(platform_root, app_root, context),
+            .record, .record_unbound => try self.mergeRecordRoots(platform_root, app_root),
+            .tag_union => try self.mergeTagUnionRoots(platform_root, app_root),
             .tuple => |platform_items| blk: {
                 const app_items = switch (app_payload) {
                     .tuple => |items| items,
@@ -9112,12 +9112,11 @@ const PlatformAppRelationTypeResolver = struct {
 
     fn mergeIdentityWith(
         self: *PlatformAppRelationTypeResolver,
-        identity_root: CheckedTypeId,
+        _: CheckedTypeId,
         other_root: CheckedTypeId,
         other_payload: CheckedTypePayload,
         context: PlatformAppRelationMergeContext,
     ) Allocator.Error!CheckedTypeId {
-        _ = identity_root;
         if (checkedTypePayloadIsIdentity(other_payload)) {
             return switch (context) {
                 .record_tail => try self.emptyRecordRoot(),
@@ -9281,16 +9280,14 @@ const PlatformAppRelationTypeResolver = struct {
         self: *PlatformAppRelationTypeResolver,
         platform_root: CheckedTypeId,
         app_root: CheckedTypeId,
-        context: PlatformAppRelationMergeContext,
     ) Allocator.Error!CheckedTypeId {
-        _ = context;
         const platform_payload = self.payload(platform_root);
         const app_payload = self.payload(app_root);
         const platform_parts = recordParts(platform_payload) orelse {
             checkedArtifactInvariant("platform/app relation expected platform record payload", .{});
         };
         const app_parts = recordParts(app_payload) orelse switch (app_payload) {
-            .alias => |alias| return try self.mergeRecordRoots(platform_root, alias.backing, .value),
+            .alias => |alias| return try self.mergeRecordRoots(platform_root, alias.backing),
             else => checkedArtifactInvariant("platform/app relation expected app record payload", .{}),
         };
         const platform_row = try self.flattenRecordRow(platform_parts.fields, platform_parts.ext);
@@ -9311,9 +9308,7 @@ const PlatformAppRelationTypeResolver = struct {
         self: *PlatformAppRelationTypeResolver,
         platform_root: CheckedTypeId,
         app_root: CheckedTypeId,
-        context: PlatformAppRelationMergeContext,
     ) Allocator.Error!CheckedTypeId {
-        _ = context;
         const platform_payload = self.payload(platform_root);
         const app_payload = self.payload(app_root);
         const platform_union = switch (platform_payload) {
@@ -9322,7 +9317,7 @@ const PlatformAppRelationTypeResolver = struct {
         };
         const app_union = switch (app_payload) {
             .tag_union => |tag_union| tag_union,
-            .alias => |alias| return try self.mergeTagUnionRoots(platform_root, alias.backing, .value),
+            .alias => |alias| return try self.mergeTagUnionRoots(platform_root, alias.backing),
             .empty_tag_union => CheckedTagUnionType{
                 .tags = &.{},
                 .ext = try self.emptyTagUnionRoot(),
