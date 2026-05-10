@@ -242,6 +242,7 @@ pub const SyntaxChecker = struct {
         defer self.allocator.free(cwd);
         var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
+        env.setFinalizeExecutableArtifacts(false);
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);

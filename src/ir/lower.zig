@@ -416,11 +416,9 @@ const IrBuilder = struct {
         call: anytype,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
-        _ = call.sig_key;
         const func = self.value_env.get(call.func) orelse irInvariant("IR lowering call_erased function value was not bound");
         const args = try self.lowerVarSpanFromValueRefSpan(call.args);
         defer if (args.len > 0) self.allocator.free(args);
-        _ = call.capture_ty;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .call_erased = .{
             .func = func,
             .args = try self.output.store.addVarSpan(args),
@@ -2218,9 +2216,8 @@ const IrBuilder = struct {
     fn erasedFnLayout(
         self: *IrBuilder,
         node: Layout.NodeId,
-        erased: Exec.Type.ErasedFnType,
+        _: Exec.Type.ErasedFnType,
     ) LowerResourceError!void {
-        _ = erased;
         self.output.layouts.setNode(node, .erased_callable);
     }
 

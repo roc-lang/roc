@@ -230,7 +230,7 @@ pub fn init(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    try preflightForTypeChecking(mutable_cir, imported_modules);
+    try preflightForTypeChecking(mutable_cir);
     return initAssumePrepared(
         gpa,
         types,
@@ -246,13 +246,13 @@ pub fn init(
 /// This is intentionally private so `Check.init` is the only public entry point.
 fn preflightForTypeChecking(
     cir: *ModuleEnv,
-    imported_modules: []const *const ModuleEnv,
 ) std.mem.Allocator.Error!void {
     try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
     const import_count: usize = @intCast(cir.imports.imports.items.items.len);
     for (0..import_count) |i| {
         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
         if (cir.imports.getResolvedModule(import_idx) != null) continue;
+        if (cir.imports.importFailedBeforeChecking(import_idx)) continue;
 
         const import_name = cir.getString(cir.imports.imports.items.items[i]);
         std.debug.panic(
@@ -260,7 +260,6 @@ fn preflightForTypeChecking(
             .{ import_name, cir.module_name },
         );
     }
-    _ = imported_modules;
 }
 
 fn initAssumePrepared(

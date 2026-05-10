@@ -317,7 +317,7 @@ pub const CanonicalCallableSetDescriptor = struct {
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
 const RootTypeKey = struct {
-    class: RepresentationClassId = @enumFromInt(0),
+    class: RepresentationClassId = undefined,
     layer: enum {
         primitive,
         nominal,
@@ -1271,8 +1271,8 @@ fn cloneSessionValueTransformTagCases(
     if (cases.len == 0) return &.{};
     const cloned = try allocator.alloc(SessionValueTransformTagCase, cases.len);
     @memset(cloned, .{
-        .source_tag = @enumFromInt(0),
-        .target_tag = @enumFromInt(0),
+        .source_tag = undefined,
+        .target_tag = undefined,
         .payloads = &.{},
     });
     errdefer {
@@ -1473,9 +1473,9 @@ pub fn cloneFiniteSetEraseAdapterBranches(
     @memset(cloned, .{
         .member = .{
             .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
-            .member_index = @enumFromInt(0),
+            .member_index = undefined,
         },
-        .target_instance = @enumFromInt(0),
+        .target_instance = undefined,
         .arg_transforms = &.{},
         .capture_transforms = &.{},
         .result_transform = null,
@@ -2739,7 +2739,7 @@ pub const RepresentationStore = struct {
             .result = result,
             .source_fn_ty = source_fn_ty,
             .callable_set_key = .{},
-            .selected_member = @enumFromInt(0),
+            .selected_member = canonical.onlyCallableSetMemberId(),
             .target_instance = target_instance,
             .capture_values = capture_values,
         });
@@ -3015,7 +3015,7 @@ pub const RepresentationStore = struct {
 
         const owned_members = try self.allocator.alloc(CanonicalCallableSetMember, members.len);
         for (owned_members) |*member| member.* = .{
-            .member = @enumFromInt(0),
+            .member = undefined,
             .proc_value = members[0].proc_value,
             .source_fn_ty_payload = members[0].source_fn_ty_payload,
             .source_proc = members[0].source_proc,
@@ -4406,7 +4406,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.row_shapes.tagUnionTags(shape).len != tags.len) representationInvariant("erased boundary tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, tags.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -4925,7 +4925,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.row_shapes.tagUnionTags(shape).len != tags.len) representationInvariant("session executable root tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, tags.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -5083,7 +5083,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (self.row_shapes.tagUnionTags(shape).len != tags.len) representationInvariant("session executable tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, tags.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -5494,7 +5494,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (shape_tags.len != source_tags.len) representationInvariant("session executable tag payload shape/logical arity mismatch");
 
         const out = try self.allocator.alloc(SessionExecutableTagVariantPayload, source_tags.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -5549,11 +5549,10 @@ const SessionExecutableTypePayloadBuilder = struct {
     }
 
     fn tagPayloadRoot(
-        self: *SessionExecutableTypePayloadBuilder,
+        _: *SessionExecutableTypePayloadBuilder,
         tag_value: anytype,
         payload: row.TagPayloadId,
     ) RepRootId {
-        _ = self;
         for (tag_value.payload_roots) |payload_root| {
             if (payload_root.payload == payload) return payload_root.root;
         }
@@ -5561,11 +5560,10 @@ const SessionExecutableTypePayloadBuilder = struct {
     }
 
     fn selectedTagPayloadValue(
-        self: *SessionExecutableTypePayloadBuilder,
+        _: *SessionExecutableTypePayloadBuilder,
         tag_value: anytype,
         payload: row.TagPayloadId,
     ) ?ValueInfoId {
-        _ = self;
         for (tag_value.payloads) |selected| {
             if (selected.payload == payload) return selected.value;
         }
@@ -6219,11 +6217,10 @@ const ExecValueTypeKeyBuilder = struct {
 
     fn writeTagUnionRootPayloadKeys(
         self: *ExecValueTypeKeyBuilder,
-        value_root: RepRootId,
+        _: RepRootId,
         logical_ty: TypeVarId,
         tag_value: anytype,
     ) std.mem.Allocator.Error!void {
-        _ = value_root;
         const source_tags = try self.logicalTagUnionTags(logical_ty);
         const shape_tags = self.rowShapes().tagUnionTags(tag_value.union_shape);
         if (shape_tags.len != source_tags.len) representationInvariant("executable value type key tag shape/logical arity mismatch");
@@ -6397,16 +6394,14 @@ const ExecValueTypeKeyBuilder = struct {
         };
     }
 
-    fn tagPayloadRoot(self: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) RepRootId {
-        _ = self;
+    fn tagPayloadRoot(_: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) RepRootId {
         for (tag_value.payload_roots) |payload_root| {
             if (payload_root.payload == payload) return payload_root.root;
         }
         representationInvariant("executable value type key tag payload root metadata omitted a payload");
     }
 
-    fn selectedTagPayloadValue(self: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) ?ValueInfoId {
-        _ = self;
+    fn selectedTagPayloadValue(_: *ExecValueTypeKeyBuilder, tag_value: anytype, payload: row.TagPayloadId) ?ValueInfoId {
         for (tag_value.payloads) |selected| {
             if (selected.payload == payload) return selected.value;
         }

@@ -44,13 +44,11 @@ const wasm_erased_callable_on_drop_offset: u32 = 4;
 
 const Self = @This();
 
-fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
-    _ = site;
+fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_idx: layout.Idx) bool {
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
-fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_idx: layout.Idx) bool {
-    _ = site;
+fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_idx: layout.Idx) bool {
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
@@ -62,8 +60,7 @@ const BuiltinListAbi = struct {
     elements_refcounted: bool,
 };
 
-fn builtinInternalListAbi(self: *const Self, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
-    _ = site;
+fn builtinInternalListAbi(self: *const Self, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = self.getLayoutStore().builtinListAbi(list_layout_idx);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,

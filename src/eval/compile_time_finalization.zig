@@ -298,7 +298,7 @@ fn constInstantiationPayloadForKey(
     const_use: checked_artifact.ConstUseTemplate,
     key: checked_artifact.ConstInstantiationKey,
 ) Allocator.Error!checked_artifact.CheckedTypeId {
-    if (std.mem.eql(u8, &key.requested_source_ty.bytes, &const_use.requested_source_ty_template.bytes)) {
+    if (std.meta.eql(key.requested_source_ty.bytes, const_use.requested_source_ty_template.bytes)) {
         return const_use.requested_source_ty_payload orelse {
             compileTimeFinalizationInvariant("constant use had no requested source type payload");
         };
@@ -501,7 +501,7 @@ fn appendDependencyArtifactView(
     candidate: checked_artifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (views.items) |existing| {
-        if (std.mem.eql(u8, &existing.key.bytes, &candidate.key.bytes)) return;
+        if (std.meta.eql(existing.key.bytes, candidate.key.bytes)) return;
     }
     try views.append(allocator, candidate);
 }
@@ -520,7 +520,7 @@ fn checkedArtifactKeyEql(
     a: checked_artifact.CheckedModuleArtifactKey,
     b: checked_artifact.CheckedModuleArtifactKey,
 ) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn orderCompileTimeRootRequests(
@@ -763,7 +763,7 @@ fn evaluateCallableBindingRoot(
             erased,
         ),
     };
-    if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &requested_source_fn_ty.bytes)) {
+    if (!std.meta.eql(callable.proc_value.source_fn_ty.bytes, requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable root result source type differed from checked root type");
     }
     const dependency_summary = try appendConcreteDependencySummaryForCallableRoot(
@@ -1040,8 +1040,7 @@ fn ensureConstInstanceRequest(
                 ),
             });
         },
-        .eval_template => |eval| {
-            _ = eval;
+        .eval_template => {
             artifact.const_instances.markEvaluating(instance_ref);
             const dependency_summary = try dependencySummaryForCompileTimeRequest(
                 allocator,
@@ -1133,7 +1132,7 @@ fn sourceBindingForConstInstanceRequest(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     ref: checked_artifact.ConstRef,
 ) ?checked_artifact.CheckedPatternId {
-    if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return null;
+    if (!std.meta.eql(ref.artifact.bytes, artifact.key.bytes)) return null;
     return switch (ref.owner) {
         .top_level_binding => |top_level| top_level.pattern,
         .promoted_capture => null,
@@ -1268,9 +1267,9 @@ fn checkedTypePayloadForConstInstanceDependency(
     var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, import_views);
     defer projector.deinit();
 
-    if (!std.mem.eql(u8, &key.const_ref.artifact.bytes, &artifact.key.bytes)) {
+    if (!std.meta.eql(key.const_ref.artifact.bytes, artifact.key.bytes)) {
         for (import_views) |imported| {
-            if (!std.mem.eql(u8, &imported.key.bytes, &key.const_ref.artifact.bytes)) continue;
+            if (!std.meta.eql(imported.key.bytes, key.const_ref.artifact.bytes)) continue;
             if (try projector.projectImportedCheckedTypeForKey(imported, key.requested_source_ty)) |projected| {
                 return projected;
             }
@@ -1461,7 +1460,7 @@ fn ensureCallableBindingInstanceRequest(
             erased,
         ),
     };
-    if (!std.mem.eql(u8, &callable.proc_value.source_fn_ty.bytes, &request.key.requested_source_fn_ty.bytes)) {
+    if (!std.meta.eql(callable.proc_value.source_fn_ty.bytes, request.key.requested_source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("callable binding instance result source type differed from requested source function type");
     }
 
@@ -1500,7 +1499,7 @@ fn sourceBindingForCallableBindingRequest(
             }
             break :blk null;
         },
-        .platform_required => |required| if (std.mem.eql(u8, &required.artifact.bytes, &artifact.key.bytes))
+        .platform_required => |required| if (std.meta.eql(required.artifact.bytes, artifact.key.bytes))
             required.app_value.pattern
         else
             null,
@@ -1578,9 +1577,9 @@ fn topLevelProcedureBindingsForArtifact(
     import_views: []const checked_artifact.ImportedModuleView,
     owner: checked_artifact.CheckedModuleArtifactKey,
 ) ?*const checked_artifact.TopLevelProcedureBindingTable {
-    if (std.mem.eql(u8, &artifact.key.bytes, &owner.bytes)) return &artifact.top_level_procedure_bindings;
+    if (std.meta.eql(artifact.key.bytes, owner.bytes)) return &artifact.top_level_procedure_bindings;
     for (import_views) |view| {
-        if (std.mem.eql(u8, &view.key.bytes, &owner.bytes)) return view.top_level_procedure_bindings;
+        if (std.meta.eql(view.key.bytes, owner.bytes)) return view.top_level_procedure_bindings;
     }
     return null;
 }
@@ -1590,7 +1589,7 @@ fn importedProcedureBindingView(
     binding: checked_artifact.ImportedProcedureBindingRef,
 ) ?checked_artifact.ImportedProcedureBindingView {
     for (import_views) |view| {
-        if (!std.mem.eql(u8, &view.key.bytes, &binding.artifact.bytes)) continue;
+        if (!std.meta.eql(view.key.bytes, binding.artifact.bytes)) continue;
         for (view.exported_procedure_bindings.bindings) |candidate| {
             if (importedProcedureBindingRefEql(candidate.binding, binding)) return candidate;
         }
@@ -1602,7 +1601,7 @@ fn importedProcedureBindingRefEql(
     a: checked_artifact.ImportedProcedureBindingRef,
     b: checked_artifact.ImportedProcedureBindingRef,
 ) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.def == b.def and
         a.pattern == b.pattern;
 }
@@ -1712,12 +1711,11 @@ fn appendConcreteDependencySummaryForCallableRoot(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     root: checked_artifact.CompileTimeRoot,
-    result_plan: checked_artifact.CallableResultPlanId,
+    _: checked_artifact.CallableResultPlanId,
     published_proc: canonical.ProcedureCallableRef,
 ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
     var collector = ConcreteDependencyCollector.init(allocator, artifact);
     defer collector.deinit();
-    _ = result_plan;
     try collector.appendProcedureCallable(published_proc);
     return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
 }
@@ -2004,7 +2002,7 @@ fn constTemplateSourceForRef(
     import_views: []const checked_artifact.ImportedModuleView,
     ref: checked_artifact.ConstRef,
 ) ConstTemplateSource {
-    if (std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) {
+    if (std.meta.eql(ref.artifact.bytes, artifact.key.bytes)) {
         return .{
             .template = artifact.const_templates.get(ref),
             .checked_types = artifact.checked_types.view(),
@@ -2014,7 +2012,7 @@ fn constTemplateSourceForRef(
         };
     }
     for (import_views) |view| {
-        if (!std.mem.eql(u8, &ref.artifact.bytes, &view.key.bytes)) continue;
+        if (!std.meta.eql(ref.artifact.bytes, view.key.bytes)) continue;
         return .{
             .template = view.const_templates.get(ref),
             .checked_types = view.checked_types,
@@ -2446,7 +2444,7 @@ fn selectedFiniteCallableRequiresPromotion(
     if (selected.planned_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.published_proc_value == null) return true;
-    if (!std.mem.eql(u8, &selected.descriptor_member.published_proc_value.?.source_fn_ty.bytes, &selected.result_plan.source_fn_ty.bytes)) return true;
+    if (!repr.canonicalTypeKeyEql(selected.descriptor_member.published_proc_value.?.source_fn_ty, selected.result_plan.source_fn_ty)) return true;
     if (selected.descriptor_member.published_source_proc == null) {
         compileTimeFinalizationInvariant("finite callable descriptor published procedure identity was not paired with published source procedure");
     }
@@ -2577,11 +2575,11 @@ fn artifactOwnedCallableForSelectedMember(
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!canonical.ProcedureCallableRef {
     if (selected.descriptor_member.published_proc_value) |published| {
-        if (std.mem.eql(u8, &published.source_fn_ty.bytes, &selected.result_plan.source_fn_ty.bytes)) return published;
+        if (std.meta.eql(published.source_fn_ty.bytes, selected.result_plan.source_fn_ty.bytes)) return published;
     }
 
     return switch (selected.planned_member.member_proc.template) {
-        .lifted => |lifted| if (!std.mem.eql(u8, &lifted.owner_mono_specialization.template.artifact.bytes, &artifact.key.bytes))
+        .lifted => |lifted| if (!std.meta.eql(lifted.owner_mono_specialization.template.artifact.bytes, artifact.key.bytes))
             selected.planned_member.member_proc
         else
             .{
@@ -2604,7 +2602,7 @@ fn artifactOwnedOwnerTemplateForLiftedMember(
     artifact: *checked_artifact.CheckedModuleArtifact,
     lowered_template: canonical.ProcedureTemplateRef,
 ) canonical.ProcedureTemplateRef {
-    if (!std.mem.eql(u8, &lowered_template.artifact.bytes, &artifact.key.bytes)) {
+    if (!std.meta.eql(lowered_template.artifact.bytes, artifact.key.bytes)) {
         compileTimeFinalizationInvariant("promoted finite callable selected lifted member owner artifact was unavailable");
     }
     const raw_template: usize = @intFromEnum(lowered_template.template);
@@ -2953,7 +2951,7 @@ fn persistConcreteFiniteAdapterAsSingleton(
             .{ .finite_callable_set = .{
                 .source_fn_ty = selected.result_plan.source_fn_ty,
                 .callable_set_key = callable_set_key,
-                .selected_member = @enumFromInt(0),
+                .selected_member = canonical.onlyCallableSetMemberId(),
                 .captures = &.{},
             } },
         ) },
@@ -2981,12 +2979,12 @@ fn persistedSingletonAdapterBranches(
     @memset(branches, .{
         .member = .{
             .callable_set_key = adapter.callable_set_key,
-            .member_index = @enumFromInt(0),
+            .member_index = undefined,
         },
-        .member_proc_source_fn_ty_payload = @enumFromInt(0),
+        .member_proc_source_fn_ty_payload = undefined,
         .member_lifted_owner_source_fn_ty_payload = null,
         .target_key = .{
-            .base = @enumFromInt(0),
+            .base = undefined,
             .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
             .exec_arg_tys = &.{},
             .exec_ret_ty = .{ .bytes = [_]u8{0} ** 32 },
@@ -2997,7 +2995,7 @@ fn persistedSingletonAdapterBranches(
         .capture_transforms = &.{},
         .result_transform = .{
             .artifact = artifact.key,
-            .transform = @enumFromInt(0),
+            .transform = undefined,
         },
     });
     errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
@@ -3028,7 +3026,7 @@ fn persistedSingletonAdapterBranches(
     branches[0] = .{
         .member = .{
             .callable_set_key = adapter.callable_set_key,
-            .member_index = @enumFromInt(0),
+            .member_index = canonical.onlyCallableSetMemberId(),
         },
         .member_proc_source_fn_ty_payload = member_proc_source_fn_ty_payload,
         .member_lifted_owner_source_fn_ty_payload = member_lifted_owner_source_fn_ty_payload,
@@ -3090,7 +3088,7 @@ fn persistedSingletonAdapterMemberTarget(
     erased: checked_artifact.ErasedCallableResultPlan,
     original_target: canonical.ExecutableSpecializationKey,
 ) Allocator.Error!canonical.ExecutableSpecializationKey {
-    if (!std.mem.eql(u8, &proc_value.source_fn_ty.bytes, &original_target.requested_fn_ty.bytes)) {
+    if (!std.meta.eql(proc_value.source_fn_ty.bytes, original_target.requested_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("persisted singleton adapter member source function type differs from original target");
     }
     if (original_target.exec_arg_tys.len != erased.executable_signature_payloads.param_exec_ty_keys.len) {
@@ -3133,7 +3131,7 @@ fn publishPersistedSingletonCallableSetDescriptor(
     source_proc: canonical.MirProcedureRef,
 ) Allocator.Error!void {
     const members = [_]canonical.CanonicalCallableSetMember{.{
-        .member = @enumFromInt(0),
+        .member = canonical.onlyCallableSetMemberId(),
         .proc_value = proc_value,
         .source_proc = source_proc,
         .capture_slots = &.{},
@@ -3164,7 +3162,7 @@ fn publishPersistedSingletonCallableSetPayload(
     var members_owned = true;
     errdefer if (members_owned) allocator.free(members);
     members[0] = .{
-        .member = @enumFromInt(0),
+        .member = canonical.onlyCallableSetMemberId(),
         .payload_ty = null,
         .payload_ty_key = null,
     };
@@ -3202,7 +3200,7 @@ fn materializeErasedPromotedCapture(
             const expected = erased.sig_key.capture_ty orelse {
                 compileTimeFinalizationInvariant("erased callable zero-sized capture had no hidden capture type");
             };
-            if (!std.mem.eql(u8, &expected.bytes, &ty.bytes)) {
+            if (!std.meta.eql(expected.bytes, ty.bytes)) {
                 compileTimeFinalizationInvariant("erased callable zero-sized capture type differs from signature hidden capture type");
             }
             break :blk .{ .zero_sized_typed = ty };
@@ -3216,7 +3214,6 @@ fn materializeErasedPromotedCapture(
             ) orelse {
                 compileTimeFinalizationInvariant("erased callable whole hidden capture had no returned hidden capture payload");
             };
-            _ = capture.source_ty;
             break :blk try capture_builder.executablePlan(capture.plan, physical);
         },
         .proc_capture_tuple => |captures| blk: {
@@ -3239,7 +3236,6 @@ fn materializeErasedPromotedCapture(
             }
             for (captures, 0..) |capture, i| {
                 const field = structFieldValue(&lowered.lir_result.layouts, tuple_layout, physical.value, @intCast(i));
-                _ = capture.source_ty;
                 tuple_items[i] = try capture_builder.executablePlan(capture.plan, field);
             }
             break :blk .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
@@ -3302,7 +3298,6 @@ fn materializedFiniteCallableSetValue(
         if (slot.slot != @as(u32, @intCast(i))) {
             compileTimeFinalizationInvariant("materialized finite erased capture slots are not canonical");
         }
-        _ = slot.source_ty;
         captures[i] = try capture_builder.executablePlan(
             slot_plan,
             captureSlotValue(&lowered.lir_result.layouts, selected, @intCast(i)),
@@ -3781,7 +3776,7 @@ const PublishedValueTransformPlanner = struct {
         self: *PublishedValueTransformPlanner,
         endpoint: checked_artifact.ExecutableValueEndpoint,
     ) void {
-        if (!std.mem.eql(u8, &endpoint.ty.artifact.bytes, &self.artifact.key.bytes)) {
+        if (!std.meta.eql(endpoint.ty.artifact.bytes, self.artifact.key.bytes)) {
             compileTimeFinalizationInvariant("published erased-wrapper value transform endpoint points at a different artifact");
         }
         const actual = self.artifact.executable_type_payloads.keyFor(endpoint.ty.payload);
@@ -3791,11 +3786,10 @@ const PublishedValueTransformPlanner = struct {
     }
 
     fn transformPayloadInvariant(
-        self: *PublishedValueTransformPlanner,
+        _: *PublishedValueTransformPlanner,
         from: checked_artifact.ExecutableTypePayload,
         to: checked_artifact.ExecutableTypePayload,
     ) noreturn {
-        _ = self;
         if (@import("builtin").mode == .Debug) {
             std.debug.panic(
                 "compile-time finalization invariant violated: erased promoted wrapper value transform has incompatible executable payloads: {s} -> {s}",
@@ -3869,8 +3863,8 @@ const PublishedValueTransformPlanner = struct {
     ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
         const cases = try self.allocator.alloc(checked_artifact.ValueTransformTagCase, source.len);
         @memset(cases, .{
-            .source_tag = @enumFromInt(0),
-            .target_tag = @enumFromInt(0),
+            .source_tag = undefined,
+            .target_tag = undefined,
             .payloads = &.{},
         });
         errdefer {
@@ -4086,7 +4080,7 @@ fn buildErasedPromotedProcedureExecutableSignature(
     params: []const checked_artifact.PromotedWrapperParam,
 ) Allocator.Error!checked_artifact.ErasedPromotedProcedureExecutableSignature {
     const payloads = erased.executable_signature_payloads;
-    if (!std.mem.eql(u8, &payloads.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(payloads.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
         compileTimeFinalizationInvariant("erased callable signature payload source type differs from result plan");
     }
     if (payloads.param_exec_tys.len != params.len or payloads.param_exec_ty_keys.len != params.len) {
@@ -4242,24 +4236,24 @@ const PrivateCaptureBuilder = struct {
         const plan = self.artifact.comptime_plans.captureSlot(plan_id);
         switch (plan) {
             .serializable_leaf => |leaf| {
-                if (!std.mem.eql(u8, &leaf.requested_source_ty.bytes, &source_ty.bytes)) {
+                if (!std.meta.eql(leaf.requested_source_ty.bytes, source_ty.bytes)) {
                     compileTimeFinalizationInvariant("private capture serializable leaf source type disagrees with descriptor capture slot");
                 }
             },
             .callable_leaf => |result_plan| switch (self.artifact.comptime_plans.callableResult(result_plan)) {
                 .finite => |finite| {
-                    if (!std.mem.eql(u8, &finite.source_fn_ty.bytes, &source_ty.bytes)) {
+                    if (!std.meta.eql(finite.source_fn_ty.bytes, source_ty.bytes)) {
                         compileTimeFinalizationInvariant("private capture callable leaf source type disagrees with descriptor capture slot");
                     }
                 },
                 .erased => |erased| {
-                    if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &source_ty.bytes)) {
+                    if (!std.meta.eql(erased.source_fn_ty.bytes, source_ty.bytes)) {
                         compileTimeFinalizationInvariant("private capture erased callable leaf source type disagrees with descriptor capture slot");
                     }
                 },
             },
             .callable_schema => |schema| {
-                if (!std.mem.eql(u8, &schema.bytes, &source_ty.bytes)) {
+                if (!std.meta.eql(schema.bytes, source_ty.bytes)) {
                     compileTimeFinalizationInvariant("private capture callable schema source type disagrees with descriptor capture slot");
                 }
             },
@@ -5018,7 +5012,12 @@ fn hashPathTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
 
 fn hashPathU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bytes, value, .little);
+    bytes = .{
+        @as(u8, @truncate(value)),
+        @as(u8, @truncate(value >> 8)),
+        @as(u8, @truncate(value >> 16)),
+        @as(u8, @truncate(value >> 24)),
+    };
     hasher.update(&bytes);
 }
 

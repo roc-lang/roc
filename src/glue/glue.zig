@@ -1744,10 +1744,8 @@ fn writeTypeRepr(
         .bool_ => "RocBool",
         .box => |inner_id| {
             const tag_index = writer.tagIndex("TypeRepr", "RocBox");
-            const payload_layout = writer.variantPayloadLayout(type_repr_layout, tag_index);
             writer.writeValue(value_base, u64, inner_id);
             writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
-            _ = payload_layout;
             return;
         },
         .dec => "RocDec",

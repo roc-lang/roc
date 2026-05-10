@@ -3,8 +3,23 @@
 
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
+const canonical = @import("../canonical_names.zig");
+const checked_ids = @import("../checked_ids.zig");
+const static_dispatch = @import("../static_dispatch_registry.zig");
+const TypedCIR = @import("../typed_cir.zig");
+const types = @import("types");
 
 const testing = std.testing;
+
+const MethodRegistryTestCheckedTypes = struct {
+    pub fn rootForSourceVar(
+        _: *const @This(),
+        _: TypedCIR.Module,
+        _: types.Var,
+    ) ?checked_ids.CheckedTypeId {
+        unreachable;
+    }
+};
 
 // primitives - nums //
 
@@ -740,10 +755,13 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
+    // Numeric literals inside generalized functions stay overloaded so each
+    // call site can choose the concrete numeric type. Non-function values still
+    // default to Dec after checking.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "_arg -> Dec",
+        "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
     );
 }
 
@@ -1295,6 +1313,50 @@ test "check type - basic nominal" {
         \\x = MyNominal.MyNominal
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
+}
+
+test "checked artifact method registry skips nominal associated values" {
+    const source =
+        \\Basic := [Val(Str)].{
+        \\  rec = { foo: "hello", bar: 42 }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+        .{ .precompiled = test_env.builtin_module.env },
+    };
+    var modules = try TypedCIR.Modules.init(testing.allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
+    defer testing.allocator.free(by_def);
+    @memset(by_def, null);
+
+    const template_lookup = static_dispatch.ProcedureTemplateLookup{
+        .module_idx = module.moduleIndex(),
+        .by_def = by_def,
+    };
+    const checked_types = MethodRegistryTestCheckedTypes{};
+
+    var names = canonical.CanonicalNameStore.init(testing.allocator);
+    defer names.deinit();
+
+    var registry = try static_dispatch.MethodRegistry.fromModule(
+        testing.allocator,
+        module,
+        &names,
+        &template_lookup,
+        &checked_types,
+    );
+    defer registry.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), registry.entries.len);
 }
 
 test "check type - nominal with tag arg" {
@@ -3875,19 +3937,7 @@ test "qualified imports don't produce MODULE NOT FOUND during canonicalization" 
         \\}
     ;
 
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer test_env.gpa.free(diagnostics);
-
-    // Count MODULE NOT FOUND errors
-    var module_not_found_count: usize = 0;
-    for (diagnostics) |diag| {
-        if (diag == .module_not_found) {
-            module_not_found_count += 1;
-        }
-    }
+    const module_not_found_count = try TestEnv.countModuleNotFoundDiagnosticsAfterCanonicalization("Test", source);
 
     // Qualified imports (json.Json, http.Client, utils.String) should NOT produce
     // MODULE NOT FOUND errors - they're handled by the workspace resolver
@@ -4164,6 +4214,9 @@ test "check type - range inferred" {
         \\  $answer
         \\}
     ;
+    // The literal `1` must remain overloaded in this generalized helper. Builtin
+    // integer range methods reuse this shape for U8, I8, I16, etc.; defaulting
+    // it once at the template level would make later instantiations invalid.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
@@ -4172,8 +4225,9 @@ test "check type - range inferred" {
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, Dec -> a,
+        \\    a.plus : a, b -> a,
         \\    a.to_u64 : a -> U64,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );

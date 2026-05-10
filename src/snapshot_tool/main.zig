@@ -15,6 +15,7 @@ const reporting = @import("reporting");
 const check = @import("check");
 const compile = @import("compile");
 const lir = @import("lir");
+const layout = @import("layout");
 const backend = @import("backend");
 const fmt = @import("fmt");
 const eval_mod = @import("eval");
@@ -1131,6 +1132,7 @@ fn processSnapshotContent(
         }
         can_ir.imports.clearResolvedModules();
         can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+        can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         var checker = try Check.init(
             allocator,
@@ -1160,7 +1162,7 @@ fn processSnapshotContent(
             // This way it stays alive until the defer at line 1249
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
-            var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 &allocators,
                 allocator,
                 can_ir,
@@ -1183,6 +1185,7 @@ fn processSnapshotContent(
             }
             can_ir.imports.clearResolvedModules();
             can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+            can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
             var checker = try Check.init(
                 allocator,
@@ -2858,11 +2861,16 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         return false;
     };
 
+    const imported_modules: []const *const ModuleEnv = &.{builtin_env};
+    validation_env.imports.clearResolvedModules();
+    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules);
+    validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
+
     var checker = Check.init(
         allocator,
         &validation_env.types,
         &validation_env,
-        &.{}, // No imported modules
+        imported_modules,
         &module_envs_map,
         &validation_env.store.regions,
         builtin_ctx,
@@ -4264,10 +4272,125 @@ fn compileSnapshotReplInspectedModule(allocator: Allocator, source: []const u8) 
     return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
 }
 
+fn renderSnapshotReplTypeProblems(
+    allocator: Allocator,
+    source_kind: eval_mod.test_helpers.SourceKind,
+    source: []const u8,
+    config: *const Config,
+) ![]const u8 {
+    const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
+
+    var module_env = try single_module.ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+    var can_ir = &module_env;
+
+    var allocators: single_module.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const parse_mode: single_module.ParseMode = switch (source_kind) {
+        .expr => .expr,
+        .module => .file,
+    };
+    const parse_ast = try single_module.parseSingleModule(
+        &allocators,
+        can_ir,
+        parse_mode,
+        .{ .module_name = "repl" },
+    );
+    defer parse_ast.deinit();
+
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try can_ir.insertIdent(base.Ident.for_text("repl")),
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
+    };
+
+    var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+    });
+    defer czer.deinit();
+
+    const repl_expr = switch (source_kind) {
+        .expr => blk: {
+            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+            break :blk try czer.canonicalizeExpr(expr_idx);
+        },
+        .module => blk: {
+            try czer.canonicalizeFile();
+            break :blk null;
+        },
+    };
+
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(allocator);
+    defer imported_envs.deinit();
+    for (can_ir.imports.imports.items.items) |str_idx| {
+        const import_name = can_ir.getString(str_idx);
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            try imported_envs.append(builtin_env);
+        }
+    }
+    if (imported_envs.items.len == 0) {
+        try imported_envs.append(builtin_env);
+    }
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+
+    can_ir.imports.clearResolvedModules();
+    can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
+    can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+
+    var checker = try Check.init(
+        allocator,
+        &can_ir.types,
+        can_ir,
+        imported_envs.items,
+        &module_envs,
+        &can_ir.store.regions,
+        builtin_ctx,
+    );
+    defer checker.deinit();
+
+    switch (source_kind) {
+        .expr => try checker.checkExprRepl(repl_expr.?.idx),
+        .module => try checker.checkFile(),
+    }
+
+    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
+    defer {
+        for (reports.items) |*report| {
+            report.deinit();
+        }
+        reports.deinit();
+    }
+    if (reports.items.len == 0) return error.TypeCheckError;
+
+    var rendered: std.Io.Writer.Allocating = .init(allocator);
+    errdefer rendered.deinit();
+    for (reports.items) |report| {
+        try report.render(&rendered.writer, .markdown);
+    }
+    const raw = try rendered.toOwnedSlice();
+    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    if (trimmed.len == raw.len) return raw;
+    const out = try allocator.dupe(u8, trimmed);
+    allocator.free(raw);
+    return out;
+}
+
 fn snapshotReplDefinitionStep(
     allocator: Allocator,
     session: *SnapshotReplSession,
     input: []const u8,
+    config: *const Config,
 ) ![]const u8 {
     const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
     const identity = maybe_identity orelse
@@ -4299,7 +4422,10 @@ fn snapshotReplDefinitionStep(
     defer if (validation_main_source != null) allocator.free(validation_with_main);
 
     var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main) catch |err| {
-        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+        return switch (err) {
+            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
+            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        };
     };
     compiled.deinit(allocator);
 
@@ -4311,6 +4437,7 @@ fn snapshotReplExpressionStep(
     allocator: Allocator,
     session: *SnapshotReplSession,
     input: []const u8,
+    config: *const Config,
 ) ![]const u8 {
     const main_source = try std.fmt.allocPrint(allocator, "main = {s}", .{input});
     defer allocator.free(main_source);
@@ -4324,7 +4451,10 @@ fn snapshotReplExpressionStep(
     defer allocator.free(source);
 
     var compiled = compileSnapshotReplInspectedModule(allocator, source) catch |err| {
-        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+        return switch (err) {
+            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
+            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        };
     };
     defer compiled.deinit(allocator);
 
@@ -4337,6 +4467,7 @@ fn snapshotReplStep(
     allocator: Allocator,
     session: *SnapshotReplSession,
     input: []const u8,
+    config: *const Config,
 ) ![]const u8 {
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
@@ -4346,8 +4477,8 @@ fn snapshotReplStep(
         return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
     return switch (input_kind) {
-        .definition => snapshotReplDefinitionStep(allocator, session, trimmed),
-        .expression => snapshotReplExpressionStep(allocator, session, trimmed),
+        .definition => snapshotReplDefinitionStep(allocator, session, trimmed, config),
+        .expression => snapshotReplExpressionStep(allocator, session, trimmed, config),
     };
 }
 
@@ -4426,7 +4557,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     };
 
     for (inputs.items) |input| {
-        const repl_output = try snapshotReplStep(output.gpa, &session, input);
+        const repl_output = try snapshotReplStep(output.gpa, &session, input, config);
         try actual_outputs.append(repl_output);
     }
 

@@ -357,6 +357,20 @@ const PublishedRootMode = union(enum) {
     published_roots_only,
 };
 
+fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .redundant_pattern, .unmatchable_pattern => false,
+        else => true,
+    };
+}
+
+fn checkedModuleHasArtifactBlockingProblems(module: *const CheckedModule) bool {
+    for (module.checker.problems.problems.items) |problem| {
+        if (problemBlocksCheckedArtifact(problem)) return true;
+    }
+    return module.module_env.types.containsErrContent();
+}
+
 fn parseAndCanonicalizeProgramWithRootMode(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -404,6 +418,10 @@ fn parseAndCanonicalizeProgramWithRootMode(
             builtin_indices,
             available_imports,
         );
+        if (checkedModuleHasArtifactBlockingProblems(&checked)) {
+            cleanupCheckedModule(allocator, checked);
+            return error.TypeCheckError;
+        }
         try extra_modules.append(allocator, checked);
     }
 
@@ -440,6 +458,9 @@ fn parseAndCanonicalizeProgramWithRootMode(
         main_imports,
     );
     errdefer cleanupCheckedModule(allocator, main_checked);
+    if (checkedModuleHasArtifactBlockingProblems(&main_checked)) {
+        return error.TypeCheckError;
+    }
 
     var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
     defer allocator.free(all_module_envs);
@@ -885,7 +906,7 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
         for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
             for (module_envs, 0..) |candidate_env, module_idx| {
-                if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                if (base.Ident.textEql(candidate_env.module_name, import_name)) {
                     module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
                     break;
                 }
@@ -899,7 +920,7 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
         for (imported_envs, 0..) |candidate_env, module_idx| {
-            if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+            if (base.Ident.textEql(candidate_env.module_name, import_name)) {
                 module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
                 break;
             }

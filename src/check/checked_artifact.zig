@@ -141,7 +141,12 @@ fn hashBytes(bytes: []const u8) [32]u8 {
 
 fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bytes, value, .little);
+    bytes = .{
+        @as(u8, @truncate(value)),
+        @as(u8, @truncate(value >> 8)),
+        @as(u8, @truncate(value >> 16)),
+        @as(u8, @truncate(value >> 24)),
+    };
     hasher.update(&bytes);
 }
 
@@ -831,15 +836,7 @@ fn appendPublishedEntrypointRoots(
 
     switch (module_env.module_kind) {
         .default_app => {
-            const main_ident = module_env.common.findIdent("main!") orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: default app has no main! identifier",
-                        .{},
-                    );
-                }
-                unreachable;
-            };
+            const main_ident = module_env.idents.main_bang;
             const main_node_idx = module_env.getExposedNodeIndexById(main_ident) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
@@ -902,12 +899,11 @@ fn platformRequiredBindingCheckedType(binding: PlatformRequiredBinding) CheckedT
 }
 
 fn checkedTypeIdForVar(
-    allocator: Allocator,
+    _: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
-    _ = allocator;
     return checked_types.rootForSourceVar(module, var_) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: root request type was not published", .{});
@@ -1014,14 +1010,13 @@ fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Intr
         .e_anno_only => |anno| anno.ident,
         else => return null,
     };
-    const expr_name = module.getIdent(expr_ident);
-    if (std.mem.eql(u8, expr_name, "Builtin.Str.inspect")) return .str_inspect;
-    if (std.mem.endsWith(u8, expr_name, ".is_eq")) return .structural_eq;
+    const common = module.commonIdents();
+    if (expr_ident.eql(common.builtin_str_inspect)) return .str_inspect;
+    if (Ident.textEndsWith(module.getIdent(expr_ident), ".is_eq")) return .structural_eq;
 
     if (def.patternName()) |pattern_ident| {
-        const pattern_name = module.getIdent(pattern_ident);
-        if (std.mem.eql(u8, pattern_name, "Builtin.Str.inspect")) return .str_inspect;
-        if (std.mem.endsWith(u8, pattern_name, ".is_eq")) return .structural_eq;
+        if (pattern_ident.eql(common.builtin_str_inspect)) return .str_inspect;
+        if (Ident.textEndsWith(module.getIdent(pattern_ident), ".is_eq")) return .structural_eq;
     }
 
     return null;
@@ -1185,7 +1180,7 @@ pub const CheckedTypeStoreView = struct {
     /// Looks up a published checked type root by canonical source type key.
     pub fn rootForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
         for (self.roots) |root| {
-            if (std.mem.eql(u8, &root.key.bytes, &key.bytes)) return root.id;
+            if (std.meta.eql(root.key.bytes, key.bytes)) return root.id;
         }
         return null;
     }
@@ -1193,7 +1188,7 @@ pub const CheckedTypeStoreView = struct {
     /// Looks up a published checked source scheme by canonical scheme key.
     pub fn schemeForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
         for (self.schemes) |scheme| {
-            if (std.mem.eql(u8, &scheme.key.bytes, &key.bytes)) return scheme;
+            if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme;
         }
         return null;
     }
@@ -1484,14 +1479,14 @@ pub const CheckedTypeStore = struct {
 
     pub fn rootForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
         for (self.roots) |root| {
-            if (std.mem.eql(u8, root.key.bytes[0..], key.bytes[0..])) return root.id;
+            if (std.meta.eql(root.key.bytes, key.bytes)) return root.id;
         }
         return null;
     }
 
     pub fn schemeForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
         for (self.schemes) |scheme| {
-            if (std.mem.eql(u8, scheme.key.bytes[0..], key.bytes[0..])) return scheme;
+            if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme;
         }
         return null;
     }
@@ -1824,7 +1819,7 @@ pub const CheckedTypeStore = struct {
     ) Allocator.Error![]const CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try allocator.alloc(CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| allocator.free(tag.args);
             allocator.free(out);
@@ -2045,7 +2040,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     statement_idx: CIR.Statement.Idx,
     header_idx: CIR.TypeHeader.Idx,
     anno_idx: CIR.TypeAnno.Idx,
-    is_opaque: bool,
+    _: bool,
 ) Allocator.Error!void {
     if (anno_idx == .placeholder) return;
 
@@ -2110,7 +2105,6 @@ fn appendCheckedNominalDeclarationFromStatement(
         .backing = backing,
         .args = formal_args,
     } };
-    _ = is_opaque;
     formal_args_owned = false;
 
     const declaration_root = try appendNominalDeclarationRootPayload(
@@ -2364,7 +2358,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
     const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
     if (annos.len == 0) return &.{};
     const out = try allocator.alloc(CheckedTag, annos.len);
-    for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
     errdefer deinitCheckedTags(allocator, out);
 
     for (annos, 0..) |anno_idx, i| {
@@ -2849,7 +2843,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
         self.writeU32(@intCast(fields.items.len));
         for (fields.items, 0..) |field, index| {
-            if (index > 0 and std.mem.eql(u8, self.names.recordFieldLabelText(fields.items[index - 1].name), self.names.recordFieldLabelText(field.name))) {
+            if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
             }
             self.writeBytes(self.names.recordFieldLabelText(field.name));
@@ -2913,7 +2907,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
         self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
-            if (index > 0 and std.mem.eql(u8, self.names.tagLabelText(tags.items[index - 1].name), self.names.tagLabelText(tag.name))) {
+            if (index > 0 and self.names.tagLabelTextEql(tags.items[index - 1].name, tag.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate tags", .{});
             }
             self.writeBytes(self.names.tagLabelText(tag.name));
@@ -3017,11 +3011,11 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     }
 
     fn recordFieldForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
-        return std.mem.lessThan(u8, self.names.recordFieldLabelText(lhs.name), self.names.recordFieldLabelText(rhs.name));
+        return self.names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
     }
 
     fn tagForKeyLessThan(self: *SubstitutedCheckedTypeKeyBuilder, lhs: TagForKey, rhs: TagForKey) bool {
-        return std.mem.lessThan(u8, self.names.tagLabelText(lhs.name), self.names.tagLabelText(rhs.name));
+        return self.names.tagLabelTextLessThan(lhs.name, rhs.name);
     }
 
     fn writeConstraints(
@@ -3060,7 +3054,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
 
     fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) void {
         var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, value, .little);
+        bytes = .{
+            @as(u8, @truncate(value)),
+            @as(u8, @truncate(value >> 8)),
+            @as(u8, @truncate(value >> 16)),
+            @as(u8, @truncate(value >> 24)),
+        };
         self.hasher.update(&bytes);
     }
 };
@@ -3383,7 +3382,7 @@ fn copyCheckedTags(
     if (tag_names.len == 0) return &.{};
 
     const out = try allocator.alloc(CheckedTag, tag_names.len);
-    for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
     errdefer {
         for (out[0..tag_names.len]) |tag| allocator.free(tag.args);
         allocator.free(out);
@@ -3426,7 +3425,7 @@ fn copyCheckedStaticDispatchConstraints(
 fn classifyBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
     const common = module.moduleEnvConst().idents;
     const is_builtin_origin = nominal.origin_module.eql(common.builtin_module) or
-        std.mem.eql(u8, module.getIdent(nominal.origin_module), module.getIdent(common.builtin_module));
+        module.identStoreConst().idxTextEql(nominal.origin_module, common.builtin_module);
     if (!is_builtin_origin) return null;
 
     const ident = nominal.ident.ident_idx;
@@ -3497,14 +3496,14 @@ fn deinitCheckedTypePayload(allocator: Allocator, payload: *CheckedTypePayload) 
 
 fn findCheckedTypeRoot(roots: []const CheckedTypeRoot, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
     for (roots) |root| {
-        if (std.mem.eql(u8, root.key.bytes[0..], key.bytes[0..])) return root.id;
+        if (std.meta.eql(root.key.bytes, key.bytes)) return root.id;
     }
     return null;
 }
 
 fn findCheckedTypeScheme(schemes: []const CheckedTypeScheme, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeSchemeId {
     for (schemes) |scheme| {
-        if (std.mem.eql(u8, scheme.key.bytes[0..], key.bytes[0..])) return scheme.id;
+        if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme.id;
     }
     return null;
 }
@@ -4525,11 +4524,10 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn representativeBinderForIdent(
-        self: *@This(),
+        _: *@This(),
         representative_binders: []const SourcePatternBinder,
         ident: Ident.Idx,
     ) ?PatternBinderId {
-        _ = self;
         for (representative_binders) |representative| {
             if (representative.ident.eql(ident)) return representative.binder;
         }
@@ -4645,7 +4643,6 @@ const CheckedBodyPayloadCopier = struct {
         var_: Var,
         comptime message: []const u8,
     ) Allocator.Error!CheckedTypeId {
-        _ = self.allocator;
         return self.checked_types.rootForSourceVar(self.module, var_) orelse checkedArtifactInvariant(message, .{});
     }
 
@@ -4814,15 +4811,15 @@ fn verifyCheckedStatementDataPublished(data: CheckedStatementData) void {
 }
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
-    return std.mem.startsWith(u8, @tagName(tag), "expr_");
+    return Ident.textStartsWith(@tagName(tag), "expr_");
 }
 
 fn isPatternNodeTag(tag: CIR.Node.Tag) bool {
-    return std.mem.startsWith(u8, @tagName(tag), "pattern_");
+    return Ident.textStartsWith(@tagName(tag), "pattern_");
 }
 
 fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
-    return std.mem.startsWith(u8, @tagName(tag), "statement_");
+    return Ident.textStartsWith(@tagName(tag), "statement_");
 }
 
 /// Public `CheckedProcedureBody` declaration.
@@ -5896,7 +5893,7 @@ pub const PromotedCallableWrapperTable = struct {
 
         for (self.wrappers, 0..) |wrapper, i| {
             std.debug.assert(@intFromEnum(wrapper.id) == i);
-            if (!std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &artifact_key.bytes)) {
+            if (!std.meta.eql(wrapper.promoted_proc.artifact.bytes, artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper procedure belongs to a different artifact", .{});
             }
             if (wrapper.promoted_proc.proc_base != wrapper.proc_base_key) {
@@ -5910,7 +5907,7 @@ pub const PromotedCallableWrapperTable = struct {
                     std.debug.panic("checked artifact invariant violated: promoted callable wrapper source binding is out of range", .{});
                 }
             }
-            if (!std.mem.eql(u8, &wrapper.source_fn_ty.bytes, &checked_types.roots[@intFromEnum(wrapper.checked_fn_root)].key.bytes)) {
+            if (!std.meta.eql(wrapper.source_fn_ty.bytes, checked_types.roots[@intFromEnum(wrapper.checked_fn_root)].key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted callable wrapper source function type differs from checked root", .{});
             }
             if (@intFromEnum(wrapper.body_plan) >= body_plans.plans.len) {
@@ -6322,19 +6319,17 @@ pub const ResolvedValueRefTable = struct {
 };
 
 fn classifyValueRef(
-    allocator: Allocator,
+    _: Allocator,
     module: TypedCIR.Module,
     expr_idx: CIR.Expr.Idx,
     imports: []const PublishImportArtifact,
-    templates: *const CheckedProcedureTemplateTable,
+    _: *const CheckedProcedureTemplateTable,
     hosted_procs: *const HostedProcTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
     checked_bodies: *const CheckedBodyStore,
 ) Allocator.Error!ResolvedValueRef {
-    _ = templates;
-    _ = allocator;
     const expr = module.expr(expr_idx);
     return switch (expr.data) {
         .e_lookup_local => |local| classifyLocalValueRef(
@@ -6435,7 +6430,7 @@ fn constUseRequestPayload(
     use_key: canonical.CanonicalTypeKey,
     use_payload: CheckedTypeId,
 ) Allocator.Error!ConstUseRequestPayload {
-    if (!std.mem.eql(u8, &const_ref.artifact.bytes, &artifact_key.bytes)) {
+    if (!std.meta.eql(const_ref.artifact.bytes, artifact_key.bytes)) {
         return .{ .key = use_key, .payload = use_payload };
     }
 
@@ -7935,13 +7930,13 @@ pub const HostedProcTable = struct {
     ) Allocator.Error![]const u8 {
         const module_env = module.moduleEnvConst();
         var module_name = module_env.module_name;
-        if (std.mem.endsWith(u8, module_name, ".roc")) {
+        if (Ident.textEndsWith(module_name, ".roc")) {
             module_name = module_name[0 .. module_name.len - 4];
         }
 
         const local_name = module.getIdent(symbol_name);
         const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
-        if (!std.mem.endsWith(u8, qualified_name, "!")) return qualified_name;
+        if (!Ident.textEndsWith(qualified_name, "!")) return qualified_name;
 
         const stripped = try allocator.dupe(u8, qualified_name[0 .. qualified_name.len - 1]);
         allocator.free(qualified_name);
@@ -8217,7 +8212,7 @@ pub const PlatformRequirementRelationTable = struct {
                 }
                 unreachable;
             }
-            if (!std.mem.eql(u8, &input.app_value.artifact.bytes, &active_relation.app_artifact.bytes)) {
+            if (!std.meta.eql(input.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
@@ -8348,7 +8343,7 @@ pub const PlatformRequiredBindingTable = struct {
                 }
                 unreachable;
             }
-            if (!std.mem.eql(u8, &binding.app_value.artifact.bytes, &active_relation.app_artifact.bytes)) {
+            if (!std.meta.eql(binding.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: platform/app binding {d} points at a value outside the app artifact",
@@ -8423,7 +8418,7 @@ fn validatePlatformAppRelationForModule(
         module_identity,
         declarations.identityHash(names),
     );
-    if (!std.mem.eql(u8, &active_relation.requirement_context.bytes, &expected_requirement_context.bytes)) {
+    if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
@@ -8436,7 +8431,7 @@ fn validatePlatformAppRelationForModule(
         active_relation.app_artifact,
         active_relation.requirement_context,
     );
-    if (!std.mem.eql(u8, &active_relation.key.bytes, &expected_key.bytes)) {
+    if (!std.meta.eql(active_relation.key.bytes, expected_key.bytes)) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
@@ -8554,7 +8549,7 @@ fn relationArtifactByKey(
     key: CheckedModuleArtifactKey,
 ) ?ImportedModuleView {
     for (relation_artifacts) |artifact| {
-        if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+        if (std.meta.eql(artifact.key.bytes, key.bytes)) return artifact;
     }
     return null;
 }
@@ -8572,7 +8567,7 @@ fn appAliasCheckedRootForName(
             else => continue,
         };
         const header = app_env.store.getTypeHeader(alias.header);
-        if (!std.mem.eql(u8, app_env.getIdent(header.relative_name), alias_name)) continue;
+        if (!Ident.textEql(app_env.getIdent(header.relative_name), alias_name)) continue;
 
         const key = try canonical_type_keys.fromVar(
             allocator,
@@ -8602,7 +8597,7 @@ fn validatePlatformBindingRelation(
         }
         unreachable;
     }
-    if (!std.mem.eql(u8, &relation.app_value.artifact.bytes, &binding.app_value.artifact.bytes) or
+    if (!std.meta.eql(relation.app_value.artifact.bytes, binding.app_value.artifact.bytes) or
         relation.app_value.pattern != binding.app_value.pattern)
     {
         if (builtin.mode == .Debug) {
@@ -8809,7 +8804,7 @@ fn appTopLevelValueByName(
 ) ?TopLevelValueEntry {
     for (app_artifact.top_level_values.entries) |entry| {
         const app_name = app_artifact.canonical_names.exportNameText(entry.source_name);
-        if (std.mem.eql(u8, app_name, required_name)) return entry;
+        if (Ident.textEql(app_name, required_name)) return entry;
     }
     return null;
 }
@@ -9244,7 +9239,6 @@ pub const ModuleInterfaceCapabilities = struct {
         }
         for (self.opaque_atomic_proofs, 0..) |entry, i| {
             std.debug.assert(@intFromEnum(entry.id) == i);
-            _ = entry.proof;
         }
         for (self.hosted_representations, 0..) |entry, i| {
             std.debug.assert(@intFromEnum(entry.id) == i);
@@ -9286,7 +9280,7 @@ const NominalCapabilitySeenKey = struct {
 };
 
 fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
@@ -10421,20 +10415,20 @@ fn verifyPrivateCaptureHandle(store: *const CompileTimePlanStore, ref: PrivateCa
 }
 
 fn canonicalCallableSetKeyEql(a: canonical.CanonicalCallableSetKey, b: canonical.CanonicalCallableSetKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn canonicalExecValueTypeKeyEql(a: canonical.CanonicalExecValueTypeKey, b: canonical.CanonicalExecValueTypeKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn captureShapeKeyEql(a: canonical.CaptureShapeKey, b: canonical.CaptureShapeKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn callableSetCaptureSlotEql(a: canonical.CallableSetCaptureSlot, b: canonical.CallableSetCaptureSlot) bool {
     return a.slot == b.slot and
-        std.mem.eql(u8, &a.source_ty.bytes, &b.source_ty.bytes) and
+        std.meta.eql(a.source_ty.bytes, b.source_ty.bytes) and
         canonicalExecValueTypeKeyEql(a.exec_value_ty, b.exec_value_ty);
 }
 
@@ -10476,7 +10470,6 @@ fn verifyCallableSetDescriptor(descriptor: canonical.CanonicalCallableSetDescrip
 }
 
 fn verifyErasedCaptureSlotReificationRef(store: *const CompileTimePlanStore, ref: ErasedCaptureSlotReificationRef) void {
-    _ = ref.source_ty;
     verifyCaptureSlotRef(store, ref.plan);
 }
 
@@ -10534,7 +10527,7 @@ fn verifyCallableResultPlan(
                         }
                     },
                 }
-                if (!std.mem.eql(u8, &callableResultMemberTargetSourceTy(member.target).bytes, &finite.source_fn_ty.bytes)) {
+                if (!std.meta.eql(callableResultMemberTargetSourceTy(member.target).bytes, finite.source_fn_ty.bytes)) {
                     std.debug.panic("checked artifact invariant violated: finite callable result member target source type differs from result plan", .{});
                 }
                 for (member.capture_slots) |capture| verifyCaptureSlotRef(store, capture);
@@ -10544,25 +10537,25 @@ fn verifyCallableResultPlan(
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased callable result plan has no Box(T) provenance", .{});
             }
-            if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &erased.sig_key.source_fn_ty.bytes)) {
+            if (!std.meta.eql(erased.source_fn_ty.bytes, erased.sig_key.source_fn_ty.bytes)) {
                 std.debug.panic("checked artifact invariant violated: erased callable result source type differs from signature source type", .{});
             }
-            if (!std.mem.eql(u8, &erased.executable_signature_payloads.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+            if (!std.meta.eql(erased.executable_signature_payloads.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
                 std.debug.panic("checked artifact invariant violated: erased callable result signature payload source type differs from result source type", .{});
             }
             switch (erased.code_plan) {
                 .materialized_by_lowering => |code| switch (code) {
                     .direct_proc_value => |direct| {
-                        if (!std.mem.eql(u8, &direct.proc_value.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+                        if (!std.meta.eql(direct.proc_value.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
                             std.debug.panic("checked artifact invariant violated: direct erased result code source type differs from result source type", .{});
                         }
                     },
                     .finite_set_adapter => |adapter| {
-                        if (!std.mem.eql(u8, &adapter.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+                        if (!std.meta.eql(adapter.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
                             std.debug.panic("checked artifact invariant violated: finite adapter erased result code source type differs from result source type", .{});
                         }
-                        if (!std.mem.eql(u8, &adapter.erased_fn_sig_key.source_fn_ty.bytes, &erased.sig_key.source_fn_ty.bytes) or
-                            !std.mem.eql(u8, &adapter.erased_fn_sig_key.abi.bytes, &erased.sig_key.abi.bytes))
+                        if (!std.meta.eql(adapter.erased_fn_sig_key.source_fn_ty.bytes, erased.sig_key.source_fn_ty.bytes) or
+                            !std.meta.eql(adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes))
                         {
                             std.debug.panic("checked artifact invariant violated: finite adapter erased result code signature differs from result signature", .{});
                         }
@@ -10599,7 +10592,7 @@ fn verifyCheckedTypePayloadKey(
     if (raw >= checked_types.roots.len) {
         std.debug.panic("checked artifact invariant violated: checked type payload id is out of range", .{});
     }
-    if (!std.mem.eql(u8, &checked_types.roots[raw].key.bytes, &key.bytes)) {
+    if (!std.meta.eql(checked_types.roots[raw].key.bytes, key.bytes)) {
         std.debug.panic("checked artifact invariant violated: " ++ message, .{});
     }
 }
@@ -10649,10 +10642,9 @@ fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: Ca
 
 fn verifyPrivateCaptureNode(
     store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
+    _: *const CallableSetDescriptorStore,
     node: PrivateCaptureNode,
 ) void {
-    _ = callable_set_descriptors;
     switch (node) {
         .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
         .const_instance_leaf => {},
@@ -10702,7 +10694,7 @@ fn verifyMaterializedFiniteCallableSetValue(
     const member = selected orelse {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture selects missing callable-set member", .{});
     };
-    if (!std.mem.eql(u8, &member.proc_value.source_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
+    if (!std.meta.eql(member.proc_value.source_fn_ty.bytes, finite.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture member source type differs from capture source type", .{});
     }
     if (member.capture_slots.len != finite.captures.len) {
@@ -10747,9 +10739,7 @@ fn verifyErasedCaptureExecutableMaterializationNode(
         .pending => std.debug.panic("checked artifact invariant violated: published erased capture materialization node is pending", .{}),
         .const_instance => {},
         .pure_const => {},
-        .pure_value => |pure| {
-            _ = pure.no_reachable_callable_slots;
-        },
+        .pure_value => {},
         .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetValue(store, callable_set_descriptors, finite),
         .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, erased),
         .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, field.value),
@@ -10776,7 +10766,7 @@ fn verifyExecutableTypePayloadRef(
     artifact_key: CheckedModuleArtifactKey,
     ref: ExecutableTypePayloadRef,
 ) void {
-    if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact_key.bytes)) {
+    if (!std.meta.eql(ref.artifact.bytes, artifact_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: executable type payload ref belongs to a different artifact", .{});
     }
     if (@intFromEnum(ref.payload) >= payloads.entries.len) {
@@ -10792,7 +10782,7 @@ fn verifyExecutableTypePayloadRefKey(
 ) void {
     verifyExecutableTypePayloadRef(payloads, artifact_key, ref);
     const actual_key = payloads.keyFor(ref.payload);
-    if (!std.mem.eql(u8, &actual_key.bytes, &expected_key.bytes)) {
+    if (!std.meta.eql(actual_key.bytes, expected_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: executable type payload ref key differs from endpoint key", .{});
     }
 }
@@ -10857,13 +10847,13 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature ABI is not published", .{});
     };
-    if (!std.mem.eql(u8, &signature.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(signature.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature source type differs from wrapper source type", .{});
     }
-    if (!std.mem.eql(u8, &erased.sig_key.source_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(erased.sig_key.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature key source type differs from wrapper source type", .{});
     }
-    if (!std.mem.eql(u8, &signature.specialization_key.requested_fn_ty.bytes, &erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(signature.specialization_key.requested_fn_ty.bytes, erased.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable specialization source type differs from wrapper source type", .{});
     }
     if (signature.specialization_key.callable_repr_mode != .erased_callable) {
@@ -10879,7 +10869,7 @@ fn verifyErasedPromotedProcedureExecutableSignature(
         if (param_payload.param.index != wrapper_param.index) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable signature param order differs from wrapper params", .{});
         }
-        if (!std.mem.eql(u8, &param_payload.exec_ty_key.bytes, &arg_key.bytes)) {
+        if (!std.meta.eql(param_payload.exec_ty_key.bytes, arg_key.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable param key differs from specialization key", .{});
         }
         verifyExecutableTypePayloadRefKey(payloads, artifact_key, param_payload.exec_ty, param_payload.exec_ty_key);
@@ -10892,18 +10882,18 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     for (signature.erased_call_args, signature.erased_call_arg_keys) |arg, arg_key| {
         verifyExecutableTypePayloadRefKey(payloads, artifact_key, arg, arg_key);
     }
-    if (!std.mem.eql(u8, &signature.wrapper_ret_key.bytes, &signature.specialization_key.exec_ret_ty.bytes)) {
+    if (!std.meta.eql(signature.wrapper_ret_key.bytes, signature.specialization_key.exec_ret_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
     }
     if (signature.erased_call_arg_keys.len != abi.fixed_arity) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arity differs from ABI payload", .{});
     }
     for (signature.erased_call_arg_keys, abi.arg_exec_keys) |arg_key, abi_arg_key| {
-        if (!std.mem.eql(u8, &arg_key.bytes, &abi_arg_key.bytes)) {
+        if (!std.meta.eql(arg_key.bytes, abi_arg_key.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg key differs from ABI payload", .{});
         }
     }
-    if (!std.mem.eql(u8, &signature.erased_call_ret_key.bytes, &abi.ret_exec_key.bytes)) {
+    if (!std.meta.eql(signature.erased_call_ret_key.bytes, abi.ret_exec_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from ABI payload", .{});
     }
     if ((erased.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
@@ -10914,7 +10904,7 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     }
     if (signature.hidden_capture) |hidden| {
         const capture_ty = erased.sig_key.capture_ty orelse unreachable;
-        if (!std.mem.eql(u8, &hidden.exec_ty_key.bytes, &capture_ty.bytes)) {
+        if (!std.meta.eql(hidden.exec_ty_key.bytes, capture_ty.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture key differs from signature key", .{});
         }
         verifyExecutableTypePayloadRefKey(payloads, artifact_key, hidden.exec_ty, hidden.exec_ty_key);
@@ -10932,7 +10922,7 @@ fn verifyPublishedExecutableValueTransformRef(
     artifact_key: CheckedModuleArtifactKey,
     transform: PublishedExecutableValueTransformRef,
 ) void {
-    if (!std.mem.eql(u8, &transform.artifact.bytes, &artifact_key.bytes)) {
+    if (!std.meta.eql(transform.artifact.bytes, artifact_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: published executable value transform points at a different artifact", .{});
     }
     verifyExecutableValueTransformRef(store, transform.transform);
@@ -11007,7 +10997,7 @@ fn verifyPromotedCallableBodyPlan(
                     }
                 },
             }
-            if (!std.mem.eql(u8, &callableResultMemberTargetSourceTy(finite.member_target).bytes, &finite.source_fn_ty.bytes)) {
+            if (!std.meta.eql(callableResultMemberTargetSourceTy(finite.member_target).bytes, finite.source_fn_ty.bytes)) {
                 std.debug.panic("checked artifact invariant violated: finite promoted callable body member target source type differs from wrapper source type", .{});
             }
             if (finite.member_capture_slots.len != finite.captures.len) {
@@ -11331,10 +11321,10 @@ pub const PromotedProcedureTable = struct {
                     std.debug.panic("checked artifact invariant violated: promoted procedure template appears more than once", .{});
                 }
             }
-            if (!std.mem.eql(u8, &procedure.proc.artifact.bytes, &artifact_key.bytes)) {
+            if (!std.meta.eql(procedure.proc.artifact.bytes, artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure value belongs to a different artifact", .{});
             }
-            if (!std.mem.eql(u8, &procedure.template.artifact.bytes, &artifact_key.bytes)) {
+            if (!std.meta.eql(procedure.template.artifact.bytes, artifact_key.bytes)) {
                 std.debug.panic("checked artifact invariant violated: promoted procedure template belongs to a different artifact", .{});
             }
             if (procedure.source_binding) |source_binding| {
@@ -11356,7 +11346,7 @@ pub const PromotedProcedureTable = struct {
             switch (template.body) {
                 .promoted_callable_wrapper => |wrapper_id| {
                     const wrapper = wrappers.get(wrapper_id);
-                    if (!std.mem.eql(u8, &wrapper.source_fn_ty.bytes, &procedure.source_fn_ty.bytes)) {
+                    if (!std.meta.eql(wrapper.source_fn_ty.bytes, procedure.source_fn_ty.bytes)) {
                         std.debug.panic("checked artifact invariant violated: promoted procedure source function type differs from wrapper", .{});
                     }
                     if (!optionalCheckedPatternIdEql(wrapper.source_binding, procedure.source_binding)) {
@@ -11958,12 +11948,10 @@ pub const ComptimeDependencySummaryStore = struct {
     pub fn verifySealed(self: *const ComptimeDependencySummaryStore) void {
         if (builtin.mode != .Debug) return;
 
-        for (self.summaries.items, 0..) |summary, i| {
-            _ = summary;
+        for (self.summaries.items, 0..) |_, i| {
             std.debug.assert(i <= std.math.maxInt(u32));
         }
-        for (self.proc_summaries.items, 0..) |summary, i| {
-            _ = summary;
+        for (self.proc_summaries.items, 0..) |_, i| {
             std.debug.assert(i <= std.math.maxInt(u32));
         }
         for (self.root_requests, 0..) |summary_id, i| {
@@ -12674,7 +12662,7 @@ const ImportedTemplateClosureBuilder = struct {
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
         const ref = ArtifactCheckedBodyRef{ .artifact = self.artifact_key, .body = body };
         for (self.checked_bodies.items) |existing| {
-            if (existing.body == ref.body and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.checked_bodies.append(self.allocator, ref);
     }
@@ -12682,7 +12670,7 @@ const ImportedTemplateClosureBuilder = struct {
     fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
         const ref = ArtifactCheckedConstBodyRef{ .artifact = self.artifact_key, .body = body };
         for (self.checked_const_bodies.items) |existing| {
-            if (existing.body == ref.body and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.checked_const_bodies.append(self.allocator, ref);
     }
@@ -12690,7 +12678,7 @@ const ImportedTemplateClosureBuilder = struct {
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
         const ref = ArtifactCheckedTypeRef{ .artifact = self.artifact_key, .ty = ty };
         for (self.checked_type_roots.items) |existing| {
-            if (existing.ty == ref.ty and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.ty == ref.ty and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.checked_type_roots.append(self.allocator, ref);
     }
@@ -12707,7 +12695,7 @@ const ImportedTemplateClosureBuilder = struct {
         };
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.artifact_key, .scheme = scheme.id };
         for (self.checked_type_schemes.items) |existing| {
-            if (existing.scheme == ref.scheme and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.scheme == ref.scheme and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.checked_type_schemes.append(self.allocator, ref);
     }
@@ -12719,7 +12707,7 @@ const ImportedTemplateClosureBuilder = struct {
         if (table.len == 0) return;
         const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.artifact_key, .table = table };
         for (self.nested_proc_sites.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.nested_proc_sites.append(self.allocator, ref);
     }
@@ -12731,7 +12719,7 @@ const ImportedTemplateClosureBuilder = struct {
         if (table.len == 0) return;
         const ref = ArtifactResolvedValueRefTableRef{ .artifact = self.artifact_key, .table = table };
         for (self.resolved_value_refs.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.resolved_value_refs.append(self.allocator, ref);
     }
@@ -12743,7 +12731,7 @@ const ImportedTemplateClosureBuilder = struct {
         if (table.len == 0) return;
         const ref = ArtifactStaticDispatchPlanTableRef{ .artifact = self.artifact_key, .table = table };
         for (self.static_dispatch_plans.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.mem.eql(u8, &existing.artifact.bytes, &ref.artifact.bytes)) return;
+            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
         }
         try self.static_dispatch_plans.append(self.allocator, ref);
     }
@@ -12838,7 +12826,7 @@ const ImportedTemplateClosureBuilder = struct {
         ref: ImportedProcedureBindingRef,
     ) ImportedProcedureBindingView {
         for (self.imports) |import| {
-            if (!std.mem.eql(u8, &import.key.bytes, &ref.artifact.bytes)) continue;
+            if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
             for (import.view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
                     binding.binding.pattern == ref.pattern)
@@ -12855,7 +12843,7 @@ const ImportedTemplateClosureBuilder = struct {
         ref: ConstRef,
     ) ImportedConstTemplateView {
         for (self.imports) |import| {
-            if (!std.mem.eql(u8, &import.key.bytes, &ref.artifact.bytes)) continue;
+            if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
             for (import.view.exported_const_templates.templates) |template| {
                 if (constRefEql(template.const_ref, ref)) return template;
             }
@@ -12908,7 +12896,7 @@ const ImportedTemplateClosureBuilder = struct {
         }
         try self.const_templates.append(self.allocator, const_ref);
 
-        if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.artifact_key.bytes)) return;
+        if (!std.meta.eql(const_ref.artifact.bytes, self.artifact_key.bytes)) return;
 
         const scheme = self.checked_types.schemeForKey(const_ref.source_scheme) orelse {
             if (builtin.mode == .Debug) {
@@ -12957,10 +12945,9 @@ const ImportedTemplateClosureBuilder = struct {
     }
 
     fn constRefForResolvedValueRef(
-        self: *ImportedTemplateClosureBuilder,
+        _: *ImportedTemplateClosureBuilder,
         ref: ResolvedValueRef,
     ) ?ConstRef {
-        _ = self;
         return switch (ref) {
             .top_level_const,
             => |const_use| const_use.const_ref,
@@ -13170,7 +13157,7 @@ pub const ExportedProcedureBindingTable = struct {
 
     pub fn fromModule(
         allocator: Allocator,
-        module: TypedCIR.Module,
+        _: TypedCIR.Module,
         published_exports: []const CIR.Def.Idx,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
@@ -13184,7 +13171,6 @@ pub const ExportedProcedureBindingTable = struct {
         imports: []const PublishImportArtifact,
         artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
-        _ = module;
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
         errdefer {
             for (bindings.items) |*binding| deinitImportedTemplateClosure(allocator, &binding.template_closure);
@@ -13446,7 +13432,7 @@ pub const ConstTemplateTable = struct {
         template: ConstEvalTemplate,
     ) void {
         const record = self.recordForRef(ref);
-        if (!std.mem.eql(u8, &record.source_scheme.bytes, &template.source_scheme.bytes)) {
+        if (!std.meta.eql(record.source_scheme.bytes, template.source_scheme.bytes)) {
             checkedArtifactInvariant("constant eval template source scheme does not match reserved ConstRef", .{});
         }
         switch (record.state) {
@@ -13474,7 +13460,7 @@ pub const ConstTemplateTable = struct {
         }
         const template = self.templates.items[idx];
         if (!constOwnerEql(template.owner, ref.owner) or
-            !std.mem.eql(u8, &template.source_scheme.bytes, &ref.source_scheme.bytes))
+            !std.meta.eql(template.source_scheme.bytes, ref.source_scheme.bytes))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
         }
@@ -13503,7 +13489,7 @@ pub const ConstTemplateTable = struct {
         }
         const record = &self.templates.items[idx];
         if (!constOwnerEql(record.owner, ref.owner) or
-            !std.mem.eql(u8, &record.source_scheme.bytes, &ref.source_scheme.bytes))
+            !std.meta.eql(record.source_scheme.bytes, ref.source_scheme.bytes))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
         }
@@ -13779,7 +13765,7 @@ pub const ConstInstantiationStore = struct {
                             .{i},
                         );
                     }
-                    if (std.mem.eql(u8, &record.key.const_ref.artifact.bytes, &self.owner.bytes)) {
+                    if (std.meta.eql(record.key.const_ref.artifact.bytes, self.owner.bytes)) {
                         const template = const_templates.get(record.key.const_ref);
                         switch (template.state) {
                             .eval_template => {
@@ -13838,7 +13824,7 @@ pub const ConstInstantiationStore = struct {
     }
 
     fn recordForRef(self: *ConstInstantiationStore, ref: ConstInstanceRef) *ConstInstantiationRecord {
-        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
             checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
         }
         const idx = @intFromEnum(ref.instance);
@@ -13853,7 +13839,7 @@ pub const ConstInstantiationStore = struct {
     }
 
     fn recordForConstRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) *const ConstInstantiationRecord {
-        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
             checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
         }
         const idx = @intFromEnum(ref.instance);
@@ -13887,7 +13873,7 @@ fn verifyConstInstantiationRequest(
         checkedArtifactInvariant("constant instantiation request type payload is out of range", .{});
     }
     const payload_key = checked_types.roots[idx].key;
-    if (!std.mem.eql(u8, &payload_key.bytes, &request.key.requested_source_ty.bytes)) {
+    if (!std.meta.eql(payload_key.bytes, request.key.requested_source_ty.bytes)) {
         checkedArtifactInvariant("constant instantiation request key disagrees with checked type payload", .{});
     }
 }
@@ -14094,7 +14080,7 @@ pub const CallableBindingInstantiationStore = struct {
     }
 
     fn recordForRef(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *CallableBindingInstantiationRecord {
-        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
             checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
         }
         const idx = @intFromEnum(ref.instance);
@@ -14109,7 +14095,7 @@ pub const CallableBindingInstantiationStore = struct {
     }
 
     fn recordForConstRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *const CallableBindingInstantiationRecord {
-        if (!std.mem.eql(u8, &ref.owner.bytes, &self.owner.bytes)) {
+        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
             checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
         }
         const idx = @intFromEnum(ref.instance);
@@ -14143,7 +14129,7 @@ fn verifyCallableBindingInstantiationRequest(
         checkedArtifactInvariant("callable binding instantiation request type payload is out of range", .{});
     }
     const payload_key = checked_types.roots[idx].key;
-    if (!std.mem.eql(u8, &payload_key.bytes, &request.key.requested_source_fn_ty.bytes)) {
+    if (!std.meta.eql(payload_key.bytes, request.key.requested_source_fn_ty.bytes)) {
         checkedArtifactInvariant("callable binding instantiation request key disagrees with checked type payload", .{});
     }
 }
@@ -14164,7 +14150,7 @@ fn verifyCallableBindingInstance(
     if (@intFromEnum(instance.dependency_summary) >= comptime_dependencies.summaries.items.len) {
         std.debug.panic("checked artifact invariant violated: callable binding instance {d} references missing dependency summary", .{index});
     }
-    if (!std.mem.eql(u8, &instance.proc_value.source_fn_ty.bytes, &key.requested_source_fn_ty.bytes)) {
+    if (!std.meta.eql(instance.proc_value.source_fn_ty.bytes, key.requested_source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: callable binding instance {d} proc value type differs from row key", .{index});
     }
 
@@ -14489,7 +14475,7 @@ fn verifySemanticInstantiationProcedure(
                 .{index},
             ),
         }
-        if (!std.mem.eql(u8, &semanticInstantiationProcedureKeySourceTy(key).bytes, &promoted_record.source_fn_ty.bytes)) {
+        if (!std.meta.eql(semanticInstantiationProcedureKeySourceTy(key).bytes, promoted_record.source_fn_ty.bytes)) {
             std.debug.panic(
                 "checked artifact invariant violated: semantic instantiation procedure {d} source type differs from promoted procedure",
                 .{index},
@@ -14528,7 +14514,7 @@ fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noretur
 }
 
 fn checkedArtifactKeyEql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn closureArtifactRefIsLocal(
@@ -14691,26 +14677,26 @@ fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey)
 }
 
 fn constRefEql(a: ConstRef, b: ConstRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         constOwnerEql(a.owner, b.owner) and
         a.template == b.template and
-        std.mem.eql(u8, &a.source_scheme.bytes, &b.source_scheme.bytes);
+        std.meta.eql(a.source_scheme.bytes, b.source_scheme.bytes);
 }
 
 /// Public `constInstantiationKeyEql` function.
 pub fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
     return constRefEql(a.const_ref, b.const_ref) and
-        std.mem.eql(u8, &a.requested_source_ty.bytes, &b.requested_source_ty.bytes);
+        std.meta.eql(a.requested_source_ty.bytes, b.requested_source_ty.bytes);
 }
 
 fn importedProcedureBindingRefEql(a: ImportedProcedureBindingRef, b: ImportedProcedureBindingRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.def == b.def and
         a.pattern == b.pattern;
 }
 
 fn topLevelValueRefEql(a: TopLevelValueRef, b: TopLevelValueRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and a.pattern == b.pattern;
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and a.pattern == b.pattern;
 }
 
 fn hostedProcRefEql(a: HostedProcRef, b: HostedProcRef) bool {
@@ -14721,7 +14707,7 @@ fn hostedProcRefEql(a: HostedProcRef, b: HostedProcRef) bool {
 }
 
 fn requiredAppProcedureRefEql(a: RequiredAppProcedureRef, b: RequiredAppProcedureRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         topLevelValueRefEql(a.app_value, b.app_value) and
         a.procedure_binding == b.procedure_binding;
 }
@@ -14751,25 +14737,25 @@ fn promotedProcedureProvenanceEql(
             break :blk left.root == right.root and
                 constInstantiationKeyEql(left.instance, right.instance) and
                 left.result_plan == right.result_plan and
-                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes);
+                std.meta.eql(left.value_path.bytes, right.value_path.bytes);
         },
         .callable_binding_instance_result => |left| blk: {
             const right = b.callable_binding_instance_result;
             break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
                 left.result_plan == right.result_plan and
-                std.mem.eql(u8, &left.callable_path.bytes, &right.callable_path.bytes);
+                std.meta.eql(left.callable_path.bytes, right.callable_path.bytes);
         },
         .const_instance_callable_leaf => |left| blk: {
             const right = b.const_instance_callable_leaf;
             break :blk constInstantiationKeyEql(left.instance, right.instance) and
                 left.result_plan == right.result_plan and
-                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes);
+                std.meta.eql(left.value_path.bytes, right.value_path.bytes);
         },
         .private_capture_callable_leaf => |left| blk: {
             const right = b.private_capture_callable_leaf;
             break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
                 left.result_plan == right.result_plan and
-                std.mem.eql(u8, &left.capture_path.bytes, &right.capture_path.bytes);
+                std.meta.eql(left.capture_path.bytes, right.capture_path.bytes);
         },
     };
 }
@@ -14811,7 +14797,7 @@ pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bo
 /// Public `callableBindingInstantiationKeyEql` function.
 pub fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
     return procedureBindingRefEql(a.binding, b.binding) and
-        std.mem.eql(u8, &a.requested_source_fn_ty.bytes, &b.requested_source_fn_ty.bytes);
+        std.meta.eql(a.requested_source_fn_ty.bytes, b.requested_source_fn_ty.bytes);
 }
 
 fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b: SemanticInstantiationProcedureKey) bool {
@@ -14820,20 +14806,20 @@ fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b:
         .const_instance_callable_leaf => |left| blk: {
             const right = b.const_instance_callable_leaf;
             break :blk constInstantiationKeyEql(left.instance, right.instance) and
-                std.mem.eql(u8, &left.value_path.bytes, &right.value_path.bytes) and
-                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+                std.meta.eql(left.value_path.bytes, right.value_path.bytes) and
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
         },
         .callable_binding_promoted_leaf => |left| blk: {
             const right = b.callable_binding_promoted_leaf;
             break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
-                std.mem.eql(u8, &left.callable_path.bytes, &right.callable_path.bytes) and
-                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+                std.meta.eql(left.callable_path.bytes, right.callable_path.bytes) and
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
         },
         .private_capture_callable_leaf => |left| blk: {
             const right = b.private_capture_callable_leaf;
             break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
-                std.mem.eql(u8, &left.capture_path.bytes, &right.capture_path.bytes) and
-                std.mem.eql(u8, &left.source_fn_ty.bytes, &right.source_fn_ty.bytes);
+                std.meta.eql(left.capture_path.bytes, right.capture_path.bytes) and
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
         },
     };
 }
@@ -15218,11 +15204,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        std.debug.assert(std.mem.eql(
-            u8,
-            &self.key.direct_import_artifact_keys_hash,
-            &hashDirectImportArtifactKeys(self.direct_import_artifact_keys),
-        ));
+        std.debug.assert(std.meta.eql(self.key.direct_import_artifact_keys_hash, hashDirectImportArtifactKeys(self.direct_import_artifact_keys)));
 
         for (self.hosted_procs.procs, 0..) |proc, i| {
             std.debug.assert(proc.deterministic_index == i);
@@ -15293,7 +15275,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.proc_base_key == template.proc_base);
                     std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
                     std.debug.assert(wrapper.promoted_proc.proc_base == template.proc_base);
-                    std.debug.assert(std.mem.eql(u8, &wrapper.promoted_proc.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(std.meta.eql(wrapper.promoted_proc.artifact.bytes, self.key.bytes));
                     std.debug.assert(@intFromEnum(wrapper.body_plan) < self.promoted_callable_body_plans.plans.len);
                 },
                 .intrinsic_wrapper => |wrapper_id| {
@@ -15301,7 +15283,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
                     std.debug.assert(wrapper.template.template == template.template_id);
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
-                    std.debug.assert(std.mem.eql(u8, &wrapper.template.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
                 },
                 .entry_wrapper => |wrapper_id| {
                     const wrapper = self.entry_wrappers.get(wrapper_id);
@@ -15310,7 +15292,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
                     std.debug.assert(wrapper.template.template == template.template_id);
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
-                    std.debug.assert(std.mem.eql(u8, &wrapper.template.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
                 },
             }
 
@@ -15321,7 +15303,7 @@ pub const CheckedModuleArtifact = struct {
                 const site = self.nested_proc_sites.sites[@intFromEnum(site_id)];
                 std.debug.assert(site.owner_template.template == template.template_id);
                 std.debug.assert(site.owner_template.proc_base == template.proc_base);
-                std.debug.assert(std.mem.eql(u8, &site.owner_template.artifact.bytes, &self.key.bytes));
+                std.debug.assert(std.meta.eql(site.owner_template.artifact.bytes, self.key.bytes));
             }
         }
 
@@ -15334,7 +15316,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.exported_procedure_templates.templates) |exported| {
-            std.debug.assert(std.mem.eql(u8, &exported.template.artifact.bytes, &self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.template.artifact.bytes, self.key.bytes));
             std.debug.assert(@intFromEnum(exported.template.template) < self.checked_procedure_templates.templates.len);
             std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
             std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
@@ -15355,13 +15337,10 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
                 }
             }
-            for (exported.template_closure.interface_capabilities) |capability_ref| {
-                _ = capability_ref;
-            }
         }
 
         for (self.exported_procedure_bindings.bindings) |exported| {
-            std.debug.assert(std.mem.eql(u8, &exported.binding.artifact.bytes, &self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.binding.artifact.bytes, self.key.bytes));
             switch (exported.body) {
                 .direct_template => {
                     std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
@@ -15375,13 +15354,10 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(exported.template_closure.interface_capabilities.len > 0);
                 },
             }
-            for (exported.template_closure.interface_capabilities) |capability_ref| {
-                _ = capability_ref;
-            }
         }
 
         for (self.exported_const_templates.templates) |exported| {
-            std.debug.assert(std.mem.eql(u8, &exported.const_ref.artifact.bytes, &self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.const_ref.artifact.bytes, self.key.bytes));
             std.debug.assert(@intFromEnum(exported.const_ref.template) < self.const_templates.templates.items.len);
             std.debug.assert(exported.template_closure.const_templates.len > 0);
             std.debug.assert(exported.template_closure.checked_type_roots.len > 0);
@@ -15390,7 +15366,7 @@ pub const CheckedModuleArtifact = struct {
             switch (exported.template.state) {
                 .eval_template => |eval| {
                     std.debug.assert(@intFromEnum(eval.body) < self.checked_const_bodies.bodies.len);
-                    std.debug.assert(std.mem.eql(u8, &eval.entry_template.artifact.bytes, &self.key.bytes));
+                    std.debug.assert(std.meta.eql(eval.entry_template.artifact.bytes, self.key.bytes));
                     std.debug.assert(@intFromEnum(eval.entry_template.template) < self.checked_procedure_templates.templates.len);
                     std.debug.assert(exported.template_closure.checked_const_bodies.len > 0);
                     std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
@@ -15423,9 +15399,6 @@ pub const CheckedModuleArtifact = struct {
                 if (closureArtifactRefIsLocal(self, body_ref.artifact)) {
                     std.debug.assert(@intFromEnum(body_ref.body) < self.checked_const_bodies.bodies.len);
                 }
-            }
-            for (exported.template_closure.interface_capabilities) |capability_ref| {
-                _ = capability_ref;
             }
         }
 
@@ -15513,7 +15486,7 @@ pub const CheckedModuleArtifact = struct {
                     };
                     std.debug.assert(owner.module_idx == self.module_identity.module_idx);
                     std.debug.assert(owner.pattern == entry.pattern);
-                    std.debug.assert(std.mem.eql(u8, &const_ref.source_scheme.bytes, &entry.source_scheme.bytes));
+                    std.debug.assert(std.meta.eql(const_ref.source_scheme.bytes, entry.source_scheme.bytes));
                 },
                 .procedure_binding => |binding_ref| {
                     const binding = self.top_level_procedure_bindings.get(binding_ref);
@@ -15523,11 +15496,11 @@ pub const CheckedModuleArtifact = struct {
                             switch (direct.template) {
                                 .checked => |template| {
                                     std.debug.assert(template.proc_base == direct.proc_value.proc_base);
-                                    std.debug.assert(std.mem.eql(u8, &template.artifact.bytes, &direct.proc_value.artifact.bytes));
+                                    std.debug.assert(std.meta.eql(template.artifact.bytes, direct.proc_value.artifact.bytes));
                                 },
                                 .synthetic => |synthetic| {
                                     std.debug.assert(synthetic.template.proc_base == direct.proc_value.proc_base);
-                                    std.debug.assert(std.mem.eql(u8, &synthetic.template.artifact.bytes, &direct.proc_value.artifact.bytes));
+                                    std.debug.assert(std.meta.eql(synthetic.template.artifact.bytes, direct.proc_value.artifact.bytes));
                                     std.debug.assert(@intFromEnum(synthetic.template.template) < self.checked_procedure_templates.templates.len);
                                 },
                                 .lifted => std.debug.panic(
@@ -15616,11 +15589,7 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
 
     switch (binding.value_use) {
         .const_value => |const_use| {
-            std.debug.assert(std.mem.eql(
-                u8,
-                &const_use.const_use.const_ref.artifact.bytes,
-                &binding.app_value.artifact.bytes,
-            ));
+            std.debug.assert(std.meta.eql(const_use.const_use.const_ref.artifact.bytes, binding.app_value.artifact.bytes));
             const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
                 std.debug.panic("checked artifact invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
             };
@@ -15628,11 +15597,7 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
         },
         .procedure_value => |proc_use| switch (proc_use.procedure.binding) {
             .platform_required => |required| {
-                std.debug.assert(std.mem.eql(
-                    u8,
-                    &required.artifact.bytes,
-                    &binding.app_value.artifact.bytes,
-                ));
+                std.debug.assert(std.meta.eql(required.artifact.bytes, binding.app_value.artifact.bytes));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
                 if (proc_use.relation_template_closure.interface_capabilities.len == 0) {
                     std.debug.panic(
@@ -15784,8 +15749,7 @@ pub const ArtifactNamePublisher = struct {
         lowering_names: *const canonical.CanonicalNameStore,
         lowering_label: canonical.RecordFieldLabelId,
     ) bool {
-        return std.mem.eql(
-            u8,
+        return Ident.textEql(
             self.target.canonical_names.recordFieldLabelText(artifact_label),
             lowering_names.recordFieldLabelText(lowering_label),
         );
@@ -15797,8 +15761,7 @@ pub const ArtifactNamePublisher = struct {
         lowering_names: *const canonical.CanonicalNameStore,
         lowering_label: canonical.TagLabelId,
     ) bool {
-        return std.mem.eql(
-            u8,
+        return Ident.textEql(
             self.target.canonical_names.tagLabelText(artifact_label),
             lowering_names.tagLabelText(lowering_label),
         );
@@ -15881,7 +15844,7 @@ pub const CheckedTypeProjector = struct {
         key: canonical.CanonicalTypeKey,
     ) Allocator.Error!?CheckedTypeId {
         const imported_root = for (imported.checked_types.roots) |root| {
-            if (std.mem.eql(u8, &root.key.bytes, &key.bytes)) break root.id;
+            if (std.meta.eql(root.key.bytes, key.bytes)) break root.id;
         } else return null;
 
         return try self.projectImportedCheckedType(imported, imported_root);
@@ -15912,7 +15875,7 @@ pub const CheckedTypeProjector = struct {
         key: canonical.CanonicalTypeKey,
     ) Allocator.Error!?CheckedTypeId {
         const source_root = for (source.roots) |root| {
-            if (std.mem.eql(u8, &root.key.bytes, &key.bytes)) break root.id;
+            if (std.meta.eql(root.key.bytes, key.bytes)) break root.id;
         } else return null;
 
         return try self.projectCheckedTypeViewRoot(source, source_root);
@@ -16081,7 +16044,7 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error![]const CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -16205,12 +16168,10 @@ pub const CheckedTypeProjector = struct {
         target_nominal: canonical.NominalTypeKey,
         imported_nominal: canonical.NominalTypeKey,
     ) bool {
-        return std.mem.eql(
-            u8,
+        return Ident.textEql(
             self.target.canonical_names.moduleNameText(target_nominal.module_name),
             imported.canonical_names.moduleNameText(imported_nominal.module_name),
-        ) and std.mem.eql(
-            u8,
+        ) and Ident.textEql(
             self.target.canonical_names.typeNameText(target_nominal.type_name),
             imported.canonical_names.typeNameText(imported_nominal.type_name),
         );
@@ -16421,7 +16382,7 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error![]const CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -16639,7 +16600,7 @@ const CheckedTypeStoreImportProjector = struct {
     ) Allocator.Error![]const CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -17271,6 +17232,293 @@ pub fn publishFromTypedModule(
     );
     artifact.verifyPublished();
     return artifact;
+}
+
+const ProvidedExportClassificationExpectation = struct {
+    procedure_roots: usize,
+    data_exports: usize,
+    procedure_exports: usize,
+};
+
+fn expectProvidedExportClassification(
+    source: []const u8,
+    expected: ProvidedExportClassificationExpectation,
+) !void {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("PlatformDataExportTest", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+        .{ .precompiled = test_env.builtin_module.env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+
+    const module = modules.module(0);
+    const module_env = module.moduleEnvConst();
+
+    var canonical_names = canonical.CanonicalNameStore.init(allocator);
+    defer canonical_names.deinit();
+    try internLoweringVisibleNames(module_env, &canonical_names);
+
+    const module_name = try canonical_names.internModuleName(module_env.module_name);
+    const display_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.display_module_name_idx);
+    const qualified_module_name = try canonical_names.internModuleIdent(module.identStoreConst(), module_env.qualified_module_ident);
+    const module_identity = ModuleIdentity{
+        .stable_hash = computeStableModuleIdentityHash(module_env),
+        .module_idx = module.moduleIndex(),
+        .module_name = module_name,
+        .display_module_name = display_module_name,
+        .qualified_module_name = qualified_module_name,
+        .kind = module_env.module_kind,
+    };
+
+    const artifact_key = CheckedModuleArtifactKey{};
+    const owner_artifact = artifactRef(artifact_key);
+
+    var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
+    defer platform_required_declarations.deinit(allocator);
+
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names);
+    defer checked_type_publication.deinit(allocator);
+    const checked_types = &checked_type_publication.store;
+
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication);
+    defer checked_bodies.deinit(allocator);
+
+    var intrinsic_wrappers = IntrinsicWrapperTable{};
+    defer intrinsic_wrappers.deinit(allocator);
+
+    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &checked_type_publication,
+        &checked_bodies,
+        &intrinsic_wrappers,
+    );
+    defer checked_procedure_templates.deinit(allocator);
+
+    var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
+    defer hosted_procs.deinit(allocator);
+
+    var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
+        allocator,
+        module,
+        module_identity,
+        &canonical_names,
+        &checked_type_publication,
+        &platform_required_declarations,
+        null,
+    );
+    defer platform_requirement_relations.deinit(allocator);
+
+    var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
+        allocator,
+        module,
+        module_identity,
+        &canonical_names,
+        &platform_required_declarations,
+        &platform_requirement_relations,
+        null,
+    );
+    defer platform_required_bindings.deinit(allocator);
+
+    var compile_time_roots = try CompileTimeRootTable.fromModule(
+        allocator,
+        module,
+        &checked_type_publication,
+        &checked_bodies,
+        &checked_procedure_templates,
+    );
+    defer compile_time_roots.deinit(allocator);
+
+    var entry_wrappers = EntryWrapperTable{};
+    defer entry_wrappers.deinit(allocator);
+    try checked_procedure_templates.appendEntryWrappersForRoots(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        checked_types,
+        &entry_wrappers,
+        &compile_time_roots,
+    );
+
+    var callable_eval_templates = CallableEvalTemplateTable{};
+    defer callable_eval_templates.deinit(allocator);
+
+    var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
+    defer top_level_procedure_bindings.deinit(allocator);
+
+    var const_templates = ConstTemplateTable{};
+    defer const_templates.deinit(allocator);
+
+    var top_level_values = try TopLevelValueTable.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        &checked_bodies,
+        &checked_procedure_templates,
+        &callable_eval_templates,
+        &top_level_procedure_bindings,
+        &const_templates,
+        artifact_key,
+        &compile_time_roots,
+    );
+    defer top_level_values.deinit(allocator);
+
+    var resolved_value_refs = try ResolvedValueRefTable.fromModule(
+        allocator,
+        &modules,
+        module.moduleIndex(),
+        artifact_key,
+        &.{},
+        &checked_procedure_templates,
+        &hosted_procs,
+        &platform_required_declarations,
+        &platform_required_bindings,
+        &top_level_values,
+        &checked_type_publication,
+        &checked_bodies,
+    );
+    defer resolved_value_refs.deinit(allocator);
+
+    var root_requests = try RootRequestTable.fromModule(
+        allocator,
+        module,
+        &checked_type_publication,
+        &compile_time_roots,
+        &entry_wrappers,
+        &platform_required_bindings,
+        &checked_bodies,
+        &resolved_value_refs,
+        &.{},
+    );
+    defer root_requests.deinit(allocator);
+
+    var provided_runtime_roots: usize = 0;
+    for (root_requests.requests) |root| {
+        if (root.kind == .provided_export) provided_runtime_roots += 1;
+    }
+
+    var provided_data_exports: usize = 0;
+    var provided_procedure_exports: usize = 0;
+    for (module_env.provides_entries.items.items) |provides_entry| {
+        const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("test invariant violated: provided entry has no definition", .{});
+            }
+            unreachable;
+        };
+        const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+        const top_level = top_level_values.lookupByDef(def_idx) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("test invariant violated: provided entry has no top-level value", .{});
+            }
+            unreachable;
+        };
+        switch (top_level.value) {
+            .const_ref => provided_data_exports += 1,
+            .procedure_binding => provided_procedure_exports += 1,
+        }
+    }
+
+    try testing.expectEqual(expected.procedure_roots, provided_runtime_roots);
+    try testing.expectEqual(expected.data_exports, provided_data_exports);
+    try testing.expectEqual(expected.procedure_exports, provided_procedure_exports);
+}
+
+test "provided primitive constant is a data export, not a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { answer_for_host: "answer" }
+        \\
+        \\answer_for_host : I64
+        \\answer_for_host = 42
+    ;
+
+    try expectProvidedExportClassification(source, .{
+        .procedure_roots = 0,
+        .data_exports = 1,
+        .procedure_exports = 0,
+    });
+}
+
+test "provided nested record constant is a data export, not a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { profile_for_host: "profile" }
+        \\
+        \\profile_for_host : {
+        \\    user : { name : Str, scores : List(I64) },
+        \\    meta : { active : Bool, label : Str },
+        \\}
+        \\profile_for_host = {
+        \\    user: { name: "Ada", scores: [10, 20, 30] },
+        \\    meta: { active: True, label: "founder" },
+        \\}
+    ;
+
+    try expectProvidedExportClassification(source, .{
+        .procedure_roots = 0,
+        .data_exports = 1,
+        .procedure_exports = 0,
+    });
+}
+
+test "provided nested heap constant is a data export, not a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { table_for_host: "table" }
+        \\
+        \\table_for_host : List(List(Str))
+        \\table_for_host = [
+        \\    ["alpha", "beta"],
+        \\    [],
+        \\    ["gamma", "delta", "epsilon"],
+        \\]
+    ;
+
+    try expectProvidedExportClassification(source, .{
+        .procedure_roots = 0,
+        .data_exports = 1,
+        .procedure_exports = 0,
+    });
+}
+
+test "provided procedure remains a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { add_one_for_host: "add_one" }
+        \\
+        \\add_one_for_host : I64 -> I64
+        \\add_one_for_host = |value| value + 1
+    ;
+
+    try expectProvidedExportClassification(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
 }
 
 test "artifact views are read-only projections" {

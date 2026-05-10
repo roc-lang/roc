@@ -446,8 +446,7 @@ const BodyLifter = struct {
         return self.local_procs.contains(symbol) or self.capture_proc_symbols.contains(symbol);
     }
 
-    fn localProcValue(self: *BodyLifter, ty: Type.TypeId, local_proc: LocalProcInfo) Allocator.Error!Ast.Expr.Data {
-        _ = ty;
+    fn localProcValue(self: *BodyLifter, _: Type.TypeId, local_proc: LocalProcInfo) Allocator.Error!Ast.Expr.Data {
         const slots = self.output.sliceCaptureSlotSpan(local_proc.capture_slots);
         if (slots.len == 0) {
             return .{ .proc_value = .{
@@ -1240,8 +1239,7 @@ const BodyLifter = struct {
         return try self.output.addTypedSymbolSpan(output_items);
     }
 
-    fn lowerTypedSymbol(self: *BodyLifter, symbol: MonoRow.Ast.TypedSymbol) Ast.TypedSymbol {
-        _ = self;
+    fn lowerTypedSymbol(_: *BodyLifter, symbol: MonoRow.Ast.TypedSymbol) Ast.TypedSymbol {
         return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
     }
 

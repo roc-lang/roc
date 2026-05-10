@@ -200,7 +200,6 @@ pub const RuntimeValueSchemaStore = struct {
         program: *const mir.Executable.Build.Program,
         nominal: anytype,
     ) Allocator.Error!void {
-        _ = nominal.source_ty;
         const raw_type_name = program.canonical_names.typeNameText(nominal.nominal.type_name);
         const type_name = runtimeSchemaTypeDisplayName(raw_type_name);
         switch (program.types.getType(nominal.backing)) {
@@ -215,9 +214,6 @@ pub const RuntimeValueSchemaStore = struct {
         program: *const mir.LambdaSolved.Solve.Program,
         nominal: mir.LambdaSolved.Type.Nominal,
     ) Allocator.Error!void {
-        _ = nominal.source_ty;
-        _ = nominal.is_opaque;
-        _ = nominal.args;
         const raw_type_name = program.canonical_names.typeNameText(nominal.nominal.type_name);
         const type_name = runtimeSchemaTypeDisplayName(raw_type_name);
         const backing_root = program.types.unlinkConst(nominal.backing);
@@ -1924,10 +1920,9 @@ const CompileTimeDependencySummaryBuilder = struct {
     fn collectCallableLeafInstance(
         self: *CompileTimeDependencySummaryBuilder,
         leaf: checked_artifact.CallableLeafInstance,
-        availability: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
+        _: *std.ArrayList(checked_artifact.ComptimeAvailabilityUse),
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
-        _ = availability;
         switch (leaf) {
             .finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
             .erased_boxed => |erased| switch (erased.code) {
@@ -2234,12 +2229,11 @@ const ExecutableTypePayloadBuilder = struct {
 
     fn payloadForValueInStore(
         self: *ExecutableTypePayloadBuilder,
-        value_store_id: repr.ValueInfoStoreId,
+        _: repr.ValueInfoStoreId,
         value_store: *const repr.ValueInfoStore,
         representation_store: *const repr.RepresentationStore,
         value: repr.ValueInfoId,
     ) Allocator.Error!ExecutablePayloadWithKey {
-        _ = value_store_id;
         const info = value_store.values.items[@intFromEnum(value)];
         const endpoint = info.exec_ty orelse {
             checkedPipelineInvariant("artifact executable payload value has no published session endpoint");
@@ -2427,7 +2421,7 @@ const ExecutableTypePayloadBuilder = struct {
     ) Allocator.Error![]const checked_artifact.ExecutableTagVariantPayload {
         if (tag_union.variants.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.ExecutableTagVariantPayload, tag_union.variants.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| self.allocator.free(variant.payloads);
             self.allocator.free(out);
@@ -2569,13 +2563,12 @@ const ExecutableTypePayloadBuilder = struct {
                 if (erased.sig_key.capture_ty != null) checkedPipelineInvariant("already-erased executable payload has no capture but signature has capture type");
                 break :blk null;
             },
-            .zero_sized_ty => |ty| blk: {
+            .zero_sized_ty => blk: {
                 if (erased.sig_key.capture_ty) |expected| {
                     const capture = try self.payloadForCurrentSessionKey(expected);
                     if (!repr.canonicalExecValueTypeKeyEql(capture.key, expected)) {
                         checkedPipelineInvariant("already-erased executable payload zero-sized capture key differs from signature");
                     }
-                    _ = ty;
                     break :blk capture;
                 } else {
                     checkedPipelineInvariant("already-erased executable payload zero-sized capture has no signature capture type");
@@ -2943,6 +2936,9 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
     const abi = representation_store.erased_fn_abis.abiFor(sig_key.abi) orelse {
         checkedPipelineInvariant("erased promoted executable signature references missing erased ABI payload");
     };
+    if (!repr.canonicalExecValueTypeKeyEql(abi.ret_exec_key, expected_wrapper_ret_key)) {
+        checkedPipelineInvariant("erased promoted executable signature ABI result key differs from expected wrapper result key");
+    }
     const params = value_store.sliceValueSpan(instance.public_roots.params);
     if (abi.fixed_arity != @as(u32, @intCast(params.len)) or abi.arg_exec_keys.len != params.len) {
         checkedPipelineInvariant("erased promoted executable signature ABI arity differs from wrapper parameter arity");
@@ -2980,7 +2976,6 @@ fn erasedPromotedSignaturePayloadsForProcInstance(
     const erased_call_ret = builder.artifact.executable_type_payloads.refForKey(builder.artifactRef(), abi.ret_exec_key) orelse {
         checkedPipelineInvariant("erased promoted executable signature ABI result key has no published executable payload");
     };
-    _ = expected_wrapper_ret_key;
 
     if ((sig_key.capture_ty == null) != (hidden_capture == null)) {
         checkedPipelineInvariant("erased promoted executable signature hidden capture presence differs from erased signature key");
@@ -5150,7 +5145,7 @@ const ConstGraphPlanBuilder = struct {
         }
 
         const variants = try self.allocator.alloc(checked_artifact.ConstTagVariantPlan, tag_union.variants.len);
-        for (variants) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (variants) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (variants) |variant| self.allocator.free(variant.payloads);
             self.allocator.free(variants);
@@ -5195,7 +5190,10 @@ const ConstGraphPlanBuilder = struct {
             checkedPipelineInvariant("tag-union constant tag payload executable arity disagrees with checked type arity");
         }
         const payloads = try self.allocator.alloc(checked_artifact.ConstTagPayloadPlan, variant.payloads.len);
-        for (payloads) |*payload| payload.* = .{ .index = 0, .value = @enumFromInt(0) };
+        for (payloads) |*payload| payload.* = .{
+            .index = 0,
+            .value = undefined, // overwritten from executable payload metadata before use
+        };
         errdefer self.allocator.free(payloads);
         var seen = try self.allocator.alloc(bool, variant.payloads.len);
         defer self.allocator.free(seen);
@@ -5538,11 +5536,10 @@ const ConstGraphPlanBuilder = struct {
     }
 
     fn resolveValueInfoId(
-        self: *const ConstGraphPlanBuilder,
+        _: *const ConstGraphPlanBuilder,
         context: ConstValueContext,
         value_info: repr.ValueInfoId,
     ) repr.ValueInfoId {
-        _ = self;
         var current = value_info;
         var remaining = context.value_store.values.items.len;
         while (remaining != 0) : (remaining -= 1) {
@@ -5659,11 +5656,10 @@ const ConstGraphPlanBuilder = struct {
     }
 
     fn valueForRoot(
-        self: *const ConstGraphPlanBuilder,
+        _: *const ConstGraphPlanBuilder,
         context: ConstValueContext,
         root: repr.RepRootId,
     ) ?repr.ValueInfoId {
-        _ = self;
         for (context.value_store.values.items, 0..) |value, i| {
             if (value.root == root) return @enumFromInt(@as(u32, @intCast(i)));
         }

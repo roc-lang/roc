@@ -83,20 +83,20 @@ pub const MirProcedureRef = struct {
 
 /// Public `procedureValueRefEql` function.
 pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.proc_base == b.proc_base;
 }
 
 /// Public `procedureTemplateRefEql` function.
 pub fn procedureTemplateRefEql(a: ProcedureTemplateRef, b: ProcedureTemplateRef) bool {
-    return std.mem.eql(u8, &a.artifact.bytes, &b.artifact.bytes) and
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.proc_base == b.proc_base and
         a.template == b.template;
 }
 
 /// Public `monoSpecializationKeyEql` function.
 pub fn monoSpecializationKeyEql(a: MonoSpecializationKey, b: MonoSpecializationKey) bool {
-    return std.mem.eql(u8, &a.requested_mono_fn_ty.bytes, &b.requested_mono_fn_ty.bytes) and
+    return std.meta.eql(a.requested_mono_fn_ty.bytes, b.requested_mono_fn_ty.bytes) and
         procedureTemplateRefEql(a.template, b.template);
 }
 
@@ -151,6 +151,14 @@ pub const ProcedureCallableRef = struct {
 pub const BoxBoundaryId = enum(u32) { _ };
 /// Public `CallableSetMemberId` declaration.
 pub const CallableSetMemberId = enum(u32) { _ };
+
+/// The only valid member id for a callable set that has exactly one member.
+/// This is not a placeholder or default; it is the semantic index of the sole
+/// member in a one-member callable-set descriptor.
+pub fn onlyCallableSetMemberId() CallableSetMemberId {
+    const only_member_index: u32 = 0;
+    return @enumFromInt(only_member_index);
+}
 
 /// Public `CanonicalCallableSetKey` declaration.
 pub const CanonicalCallableSetKey = struct {
@@ -366,7 +374,7 @@ pub const ErasedCallableCodeRef = union(enum) {
 /// Public `procedureCallableRefEql` function.
 pub fn procedureCallableRefEql(a: ProcedureCallableRef, b: ProcedureCallableRef) bool {
     return callableProcedureTemplateRefEql(a.template, b.template) and
-        std.mem.eql(u8, &a.source_fn_ty.bytes, &b.source_fn_ty.bytes);
+        std.meta.eql(a.source_fn_ty.bytes, b.source_fn_ty.bytes);
 }
 
 /// Public `callableProcedureTemplateRefEql` function.
@@ -441,7 +449,7 @@ pub const NominalTypeKey = struct {
 
 /// Public `erasedFnAbiKeyEql` function.
 pub fn erasedFnAbiKeyEql(a: ErasedFnAbiKey, b: ErasedFnAbiKey) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 /// Public `computeErasedFnAbiKey` function.
@@ -528,7 +536,12 @@ fn writeHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
 
 fn writeHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bytes, value, .little);
+    bytes = .{
+        @as(u8, @truncate(value)),
+        @as(u8, @truncate(value >> 8)),
+        @as(u8, @truncate(value >> 16)),
+        @as(u8, @truncate(value >> 24)),
+    };
     hasher.update(&bytes);
 }
 
@@ -737,8 +750,28 @@ pub const CanonicalNameStore = struct {
         return self.record_field_labels.items[@intFromEnum(id)];
     }
 
+    /// Compare two record field label ids by their canonical text.
+    pub fn recordFieldLabelTextEql(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
+        return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+    }
+
+    /// Order record field labels by their canonical text.
+    pub fn recordFieldLabelTextLessThan(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
+        return Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+    }
+
     pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
         return self.tag_labels.items[@intFromEnum(id)];
+    }
+
+    /// Compare two tag label ids by their canonical text.
+    pub fn tagLabelTextEql(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
+        return Ident.textEql(self.tagLabelText(a), self.tagLabelText(b));
+    }
+
+    /// Order tag labels by their canonical text.
+    pub fn tagLabelTextLessThan(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
+        return Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b));
     }
 
     pub fn externalSymbolNameText(self: *const CanonicalNameStore, id: ExternalSymbolNameId) []const u8 {
@@ -844,10 +877,11 @@ test "proc base identity includes nested owner mono specialization" {
         .ordinal = 1,
         .source_def_idx = 1,
     });
+    const first_template_index: u32 = 0;
     const owner_template = ProcedureTemplateRef{
         .artifact = .{ .bytes = [_]u8{1} ** 32 },
         .proc_base = owner_base,
-        .template = @enumFromInt(0),
+        .template = @enumFromInt(first_template_index),
     };
 
     var i64_key = CanonicalTypeKey{};
@@ -855,9 +889,10 @@ test "proc base identity includes nested owner mono specialization" {
     var str_key = CanonicalTypeKey{};
     str_key.bytes[0] = 2;
 
+    const first_site_index: u32 = 0;
     const nested_site = NestedProcSiteKey{
         .owner_template = owner_template,
-        .site = @enumFromInt(0),
+        .site = @enumFromInt(first_site_index),
     };
     const lifted_i64 = try names.internProcBase(.{
         .module_name = module_name,

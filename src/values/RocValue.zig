@@ -347,6 +347,7 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                 .opaque_ptr => return self.readOpaquePtr() == other.readOpaquePtr(),
             };
         },
+        .erased_callable => unreachable, // Function values are not equality-comparable Roc values.
         .zst => return true,
         .struct_ => {
             const s_fields = ctx.layout_store.struct_fields.sliceRange(

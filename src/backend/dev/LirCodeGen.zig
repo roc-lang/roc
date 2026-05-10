@@ -88,8 +88,7 @@ const RcHelperKey = layout.RcHelperKey;
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
 
-fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime site: []const u8, layout_val: layout.Layout) bool {
-    _ = site;
+fn explicitRcLayoutValContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_val: layout.Layout) bool {
     return ls.layoutContainsRefcounted(layout_val);
 }
 
@@ -101,8 +100,7 @@ const BuiltinListAbi = struct {
     elements_refcounted: bool,
 };
 
-fn builtinInternalListAbi(ls: *const LayoutStore, comptime site: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
-    _ = site;
+fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = ls.builtinListAbi(list_layout_idx);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
@@ -13833,13 +13831,7 @@ const TestLayoutState = struct {
     fn init(allocator: Allocator) !TestLayoutState {
         const module_env = try allocator.create(@import("can").ModuleEnv);
         module_env.* = try @import("can").ModuleEnv.init(allocator, "");
-        var module_env_ptrs: [1]*const @import("can").ModuleEnv = .{module_env};
-        const layout_store = try layout.Store.init(
-            &module_env_ptrs,
-            null,
-            allocator,
-            base.target.TargetUsize.native,
-        );
+        const layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
         return .{ .layout_store = layout_store, .module_env = module_env };
     }
 

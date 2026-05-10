@@ -1020,11 +1020,11 @@ test "keyId does not intern containers with function leaves" {
         .ret = i64_ty,
     } });
     const record_a = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
-        .name = @enumFromInt(0),
+        .name = undefined,
         .ty = fn_ty,
     }}) } });
     const record_b = try store.addType(.{ .record = .{ .fields = try store.dupeFields(&.{.{
-        .name = @enumFromInt(0),
+        .name = undefined,
         .ty = fn_ty,
     }}) } });
 

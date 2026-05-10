@@ -2283,15 +2283,14 @@ pub const Interpreter = struct {
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
         context.interpreter.callInterpreterErasedCallable(context, ops, ret, args) catch |err| switch (err) {
-            error.OutOfMemory => @panic("LIR/interpreter erased callable trampoline ran out of memory"),
-            error.RuntimeError => @panic("LIR/interpreter erased callable trampoline hit runtime error"),
-            error.DivisionByZero => @panic("LIR/interpreter erased callable trampoline hit division by zero"),
-            error.Crash => @panic("LIR/interpreter erased callable trampoline hit Roc crash"),
+            error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
+            error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
+            error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
+            error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
         };
     }
 
-    fn interpreterErasedCallableOnDrop(capture: ?[*]u8, ops: *RocOps) callconv(.c) void {
-        _ = ops;
+    fn interpreterErasedCallableOnDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
         const capture_layout: layout_mod.Idx = if (context.capture_layout_plus_one == 0)
             return
@@ -2309,11 +2308,10 @@ pub const Interpreter = struct {
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
         context: *ErasedCallableInterpreterContext,
-        ops: *RocOps,
+        _: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
     ) Error!void {
-        _ = ops;
         const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
@@ -2921,13 +2919,12 @@ pub const Interpreter = struct {
 
     fn performBuiltinInternalRc(
         self: *LirInterpreter,
-        comptime site: []const u8,
+        comptime _: []const u8,
         op: RcOp,
         val: Value,
         layout_idx: layout_mod.Idx,
         count: u16,
     ) void {
-        _ = site;
         self.performRawRc(op, val, layout_idx, count);
     }
 
@@ -2935,8 +2932,7 @@ pub const Interpreter = struct {
         self.performRawRc(op, val, layout_idx, count);
     }
 
-    fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime site: []const u8, layout_idx: layout_mod.Idx) bool {
-        _ = site;
+    fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
         return self.helper.containsRefcounted(layout_idx);
     }
 
@@ -3146,11 +3142,9 @@ pub const Interpreter = struct {
     fn performErasedCallableFinalDrop(
         self: *LirInterpreter,
         data_ptr: ?[*]u8,
-        op: layout_mod.RcOp,
-        count: u16,
+        _: layout_mod.RcOp,
+        _: u16,
     ) void {
-        _ = op;
-        _ = count;
         const ptr = data_ptr orelse return;
         const payload = builtins.erased_callable.payloadPtr(ptr);
         if (payload.on_drop) |on_drop| {

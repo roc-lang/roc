@@ -306,6 +306,20 @@ pub const ArtifactPublicationInputs = struct {
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
 };
 
+fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .redundant_pattern, .unmatchable_pattern => false,
+        else => true,
+    };
+}
+
+fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
+    for (checker.problems.problems.items) |problem| {
+        if (problemBlocksCheckedArtifact(problem)) return true;
+    }
+    return false;
+}
+
 /// Per-package module build orchestrator
 pub const PackageEnv = struct {
     gpa: Allocator,
@@ -1145,6 +1159,10 @@ pub const PackageEnv = struct {
         try czer.validateForChecking();
         czer.deinit();
 
+        env.imports.clearResolvedModules();
+        env.imports.resolveImportsByExactModuleName(env, imported_envs);
+        env.imports.markUnresolvedImportsFailedBeforeChecking();
+
         // Type check using the SAME module_envs_map
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1263,8 +1281,8 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
-        target: roc_target.RocTarget,
-        io: ?Io,
+        _: roc_target.RocTarget,
+        _: ?Io,
     ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -1297,6 +1315,13 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
+        if (checkerHasArtifactBlockingProblems(&checker) or env.types.containsErrContent()) {
+            return .{
+                .checker = checker,
+                .checked_artifact = null,
+            };
+        }
+
         var checked_artifact = try publishCheckedArtifactFromCheckedModule(
             gpa,
             env,
@@ -1310,9 +1335,6 @@ pub const PackageEnv = struct {
             },
         );
         errdefer checked_artifact.deinit(gpa);
-
-        _ = target;
-        _ = io;
 
         return .{
             .checker = checker,
@@ -1472,7 +1494,9 @@ pub const PackageEnv = struct {
             self.io,
         );
         defer typecheck_output.deinit();
-        st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
+        if (typecheck_output.checked_artifact != null) {
+            st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
+        }
         const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         if (!threading.is_freestanding) {
             self.total_type_checking_ns += @intCast(check_end - check_start);

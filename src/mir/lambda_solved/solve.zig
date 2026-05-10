@@ -1278,9 +1278,9 @@ fn cloneLocalFiniteSetEraseBranches(
     @memset(cloned, .{
         .member = .{
             .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
-            .member_index = @enumFromInt(0),
+            .member_index = undefined,
         },
-        .target_instance = @enumFromInt(0),
+        .target_instance = undefined,
         .arg_transforms = &.{},
         .capture_transforms = &.{},
         .result_transform = null,
@@ -1769,13 +1769,12 @@ const SessionExecutablePayloadPublisher = struct {
 
     fn boundaryEndpointForExpectedKey(
         self: *SessionExecutablePayloadPublisher,
-        instance_id: repr.ProcRepresentationInstanceId,
+        _: repr.ProcRepresentationInstanceId,
         instance: *const repr.ProcRepresentationInstance,
         value_store: *const repr.ValueInfoStore,
         value: repr.ValueInfoId,
         expected_key: repr.CanonicalExecValueTypeKey,
     ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
-        _ = instance_id;
         if (instance.boundary_payloads) |boundary_payloads| {
             return try self.importArtifactBoundaryEndpoint(boundary_payloads, expected_key);
         }
@@ -2089,7 +2088,7 @@ const ArtifactExecutablePayloadImporter = struct {
         }
 
         const out = try self.allocator.alloc(repr.SessionExecutableTagVariantPayload, variants.len);
-        for (out) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -2474,11 +2473,10 @@ const FiniteErasedAdapterDemandPublisher = struct {
     fn publishForAdapter(
         self: *FiniteErasedAdapterDemandPublisher,
         adapter: repr.ErasedAdapterKey,
-        result_ty: repr.CanonicalExecValueTypeKey,
+        _: repr.CanonicalExecValueTypeKey,
         member_targets: []const repr.ExecutableSpecializationKey,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!bool {
-        _ = result_ty;
         if (provenance.len == 0) {
             lambdaInvariant("lambda-solved finite erased adapter demand publication has no Box(T) provenance");
         }
@@ -2839,11 +2837,10 @@ const FiniteErasedAdapterDemandPublisher = struct {
     }
 
     fn callableSetMemberPayloadById(
-        self: *FiniteErasedAdapterDemandPublisher,
+        _: *FiniteErasedAdapterDemandPublisher,
         set: repr.SessionExecutableCallableSetPayload,
         member_id: repr.CallableSetMemberId,
     ) ?repr.SessionExecutableCallableSetMemberPayload {
-        _ = self;
         for (set.members) |member| {
             if (member.member == member_id) return member;
         }
@@ -3517,7 +3514,7 @@ const CrossProcedureRepresentationLinker = struct {
     }
 
     fn appendProcValueEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
-        for (self.value_store.values.items, 0..) |value_info, raw_value| {
+        for (self.value_store.values.items) |value_info| {
             const callable = value_info.callable orelse continue;
             const source = switch (callable.source) {
                 .proc_value => |source| source,
@@ -3543,7 +3540,6 @@ const CrossProcedureRepresentationLinker = struct {
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
                 .kind = .function_return,
             });
-            _ = raw_value;
             for (source_captures, target_captures) |source_capture, target_capture| {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(source_capture) },
@@ -3568,11 +3564,10 @@ const CrossProcedureRepresentationLinker = struct {
     }
 
     fn publicFunctionRootRef(
-        self: *CrossProcedureRepresentationLinker,
+        _: *CrossProcedureRepresentationLinker,
         target_id: repr.ProcRepresentationInstanceId,
         root: repr.RepRootId,
     ) repr.ProcPublicFunctionRootRef {
-        _ = self;
         return .{
             .instance = target_id,
             .rep_root = root,
@@ -3704,10 +3699,9 @@ const RepresentationClassSolver = struct {
     }
 
     fn structuralProjectionKind(
-        self: *RepresentationClassSolver,
+        _: *RepresentationClassSolver,
         kind: repr.RepresentationEdgeKind,
     ) ?StructuralProjectionKind {
-        _ = self;
         return switch (kind) {
             .record_field => |field| .{
                 .tag = .record_field,
@@ -4919,7 +4913,7 @@ const CallableEmissionAssigner = struct {
 
     fn synthesizeAlreadyErasedCallableInfo(
         self: *CallableEmissionAssigner,
-        record: *const ProcBuildRecord,
+        _: *const ProcBuildRecord,
         value_store: *const repr.ValueInfoStore,
         value_id: repr.ValueInfoId,
         value_info: repr.ValueInfo,
@@ -4931,7 +4925,6 @@ const CallableEmissionAssigner = struct {
             .erased_fn => |erased| erased,
             else => lambdaInvariant("lambda-solved erased function slot endpoint did not publish erased callable payload"),
         };
-        _ = record;
 
         const plan = repr.AlreadyErasedCallablePlan{
             .sig_key = erased.sig_key,
@@ -5084,11 +5077,10 @@ const CallableEmissionAssigner = struct {
     }
 
     fn memberIdInClassSet(
-        self: *CallableEmissionAssigner,
+        _: *CallableEmissionAssigner,
         class_set: *const CallableClassSet,
         selected: repr.CanonicalCallableSetMember,
     ) repr.CallableSetMemberId {
-        _ = self;
         for (class_set.members.items) |member| {
             if (callableSetMemberEquivalent(member, selected)) return member.member;
         }
@@ -5100,16 +5092,13 @@ const CallableEmissionAssigner = struct {
 
     fn erasedEmissionPlanForValue(
         self: *CallableEmissionAssigner,
-        record: *const ProcBuildRecord,
-        value_id: repr.ValueInfoId,
-        callable: repr.CallableValueInfo,
+        _: *const ProcBuildRecord,
+        _: repr.ValueInfoId,
+        _: repr.CallableValueInfo,
         class_set: *const CallableClassSet,
         class_key: repr.CanonicalCallableSetKey,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
-        _ = record;
-        _ = value_id;
-        _ = callable;
         if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty Box(T) provenance");
         return try self.appendFiniteSetErasePlan(class_set, class_key, provenance);
     }
@@ -5145,7 +5134,7 @@ const CallableEmissionAssigner = struct {
         );
 
         return .{
-            .member = @enumFromInt(0),
+            .member = canonical.onlyCallableSetMemberId(),
             .proc_value = source.proc.callable,
             .source_fn_ty_payload = source.source_fn_ty_payload,
             .source_proc = target_record.proc,
@@ -5651,7 +5640,7 @@ const BoxPayloadPlanFinalizer = struct {
     ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
         if (tag_union.variants.len == 0) return .unchanged;
         const variants = try self.allocator.alloc(repr.BoxPayloadTagPlan, tag_union.variants.len);
-        for (variants) |*variant| variant.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (variants) |*variant| variant.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (variants) |variant| {
                 if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
@@ -5750,13 +5739,12 @@ const BoxPayloadPlanFinalizer = struct {
     }
 
     fn capabilityInArtifact(
-        self: *BoxPayloadPlanFinalizer,
+        _: *BoxPayloadPlanFinalizer,
         artifact: checked_artifact.CheckedModuleArtifactKey,
         is_root: bool,
         capabilities: *const checked_artifact.ModuleInterfaceCapabilities,
         source_ty: canonical.CanonicalTypeKey,
     ) ?NominalCapabilityResolution {
-        _ = self;
         const capability = capabilities.boxPayloadCapabilityForSource(source_ty) orelse return null;
         return .{
             .artifact = artifact,
@@ -7549,12 +7537,10 @@ const ValueTransformFinalizer = struct {
     }
 
     fn joinBoundaryKind(
-        self: *ValueTransformFinalizer,
-        join_id: repr.JoinInfoId,
+        _: *ValueTransformFinalizer,
+        _: repr.JoinInfoId,
         source: repr.JoinInputSource,
     ) repr.ValueTransformBoundaryKind {
-        _ = self;
-        _ = join_id;
         return switch (source) {
             .if_branch => |if_branch| .{ .if_branch_result = .{
                 .if_expr = if_branch.if_expr,
@@ -8041,9 +8027,9 @@ const ValueTransformFinalizer = struct {
         @memset(branches, .{
             .member = .{
                 .callable_set_key = adapter.callable_set_key,
-                .member_index = @enumFromInt(0),
+                .member_index = undefined,
             },
-            .target_instance = @enumFromInt(0),
+            .target_instance = undefined,
             .arg_transforms = &.{},
             .capture_transforms = &.{},
             .result_transform = null,
@@ -8184,10 +8170,9 @@ const ValueTransformFinalizer = struct {
     }
 
     fn verifyCallSiteUnfinalized(
-        self: *ValueTransformFinalizer,
+        _: *ValueTransformFinalizer,
         call_site: *const repr.CallSiteInfo,
     ) void {
-        _ = self;
         if (!call_site.arg_transforms.isEmpty() or
             call_site.result_transform != null)
         {
@@ -8341,17 +8326,12 @@ const ValueTransformFinalizer = struct {
     }
 
     fn transformPayloadInvariant(
-        self: *ValueTransformFinalizer,
-        from: repr.SessionExecutableValueEndpoint,
-        to: repr.SessionExecutableValueEndpoint,
-        from_payload: repr.SessionExecutableTypePayload,
-        to_payload: repr.SessionExecutableTypePayload,
+        _: *ValueTransformFinalizer,
+        _: repr.SessionExecutableValueEndpoint,
+        _: repr.SessionExecutableValueEndpoint,
+        _: repr.SessionExecutableTypePayload,
+        _: repr.SessionExecutableTypePayload,
     ) noreturn {
-        _ = self;
-        _ = from;
-        _ = to;
-        _ = from_payload;
-        _ = to_payload;
         lambdaInvariant("lambda-solved value transform has incompatible executable payloads");
         unreachable;
     }
@@ -8466,8 +8446,8 @@ const ValueTransformFinalizer = struct {
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
         const cases = try self.allocator.alloc(repr.SessionValueTransformTagCase, source.variants.len);
         @memset(cases, .{
-            .source_tag = @enumFromInt(0),
-            .target_tag = @enumFromInt(0),
+            .source_tag = undefined,
+            .target_tag = undefined,
             .payloads = &.{},
         });
         defer {
@@ -8776,11 +8756,10 @@ const ValueTransformFinalizer = struct {
     }
 
     fn rootErasureProvenance(
-        self: *ValueTransformFinalizer,
+        _: *ValueTransformFinalizer,
         store: *const repr.RepresentationStore,
         root: repr.RepRootId,
     ) []const repr.BoxErasureProvenance {
-        _ = self;
         return store.classErasureProvenance(store.classForRoot(root));
     }
 
@@ -8949,10 +8928,9 @@ const ValueTransformFinalizer = struct {
     }
 
     fn provenanceFor(
-        self: *ValueTransformFinalizer,
+        _: *ValueTransformFinalizer,
         provenance: []const repr.BoxErasureProvenance,
     ) checked_artifact.ValueTransformProvenance {
-        _ = self;
         return if (provenance.len == 0) .none else .{ .box_erasure = provenance };
     }
 
@@ -9521,10 +9499,9 @@ const ValueTransformFinalizer = struct {
     }
 
     fn procedureBoundaryProvenance(
-        self: *ValueTransformFinalizer,
+        _: *ValueTransformFinalizer,
         target_instance: *const repr.ProcRepresentationInstance,
     ) []const repr.BoxErasureProvenance {
-        _ = self;
         return target_instance.boundary_provenance;
     }
 
@@ -11501,8 +11478,7 @@ const BodySolver = struct {
         });
     }
 
-    fn lowerForExpr(self: *BodySolver, value: repr.ValueInfoId, for_: anytype) Allocator.Error!Ast.Expr.Data {
-        _ = value;
+    fn lowerForExpr(self: *BodySolver, _: repr.ValueInfoId, for_: anytype) Allocator.Error!Ast.Expr.Data {
         const lowered = try self.lowerForParts(for_);
         return .{ .for_ = .{
             .patt = lowered.patt,
@@ -12379,24 +12355,21 @@ const BodySolver = struct {
         return try self.output.addTagPayloadAssemblySpan(output_items);
     }
 
-    fn recordAggregateFieldValue(self: *const BodySolver, record: anytype, field: MonoRow.RecordFieldId) repr.ValueInfoId {
-        _ = self;
+    fn recordAggregateFieldValue(_: *const BodySolver, record: anytype, field: MonoRow.RecordFieldId) repr.ValueInfoId {
         for (record.fields) |field_info| {
             if (field_info.field == field) return field_info.value;
         }
         lambdaInvariant("lambda-solved record aggregate projection referenced a missing field");
     }
 
-    fn tupleAggregateElemValue(self: *const BodySolver, tuple: []const repr.ElemValueInfo, elem_index: u32) repr.ValueInfoId {
-        _ = self;
+    fn tupleAggregateElemValue(_: *const BodySolver, tuple: []const repr.ElemValueInfo, elem_index: u32) repr.ValueInfoId {
         for (tuple) |elem| {
             if (elem.index == elem_index) return elem.value;
         }
         lambdaInvariant("lambda-solved tuple aggregate projection referenced a missing element");
     }
 
-    fn tagAggregatePayloadValue(self: *const BodySolver, tag: anytype, payload: MonoRow.TagPayloadId) repr.ValueInfoId {
-        _ = self;
+    fn tagAggregatePayloadValue(_: *const BodySolver, tag: anytype, payload: MonoRow.TagPayloadId) repr.ValueInfoId {
         for (tag.payloads) |payload_info| {
             if (payload_info.payload == payload) return payload_info.value;
         }
@@ -12905,11 +12878,10 @@ const BodySolver = struct {
     }
 
     fn constSchema(
-        self: *const BodySolver,
+        _: *const BodySolver,
         materialization: ConstMaterializationView,
         id: checked_artifact.ComptimeSchemaId,
     ) checked_artifact.ComptimeSchema {
-        _ = self;
         const index: usize = @intFromEnum(id);
         if (index >= materialization.values.schemas.items.len) {
             lambdaInvariant("lambda-solved const-backed schema id out of range");
@@ -12918,11 +12890,10 @@ const BodySolver = struct {
     }
 
     fn constValue(
-        self: *const BodySolver,
+        _: *const BodySolver,
         materialization: ConstMaterializationView,
         id: checked_artifact.ComptimeValueId,
     ) checked_artifact.ComptimeValue {
-        _ = self;
         const index: usize = @intFromEnum(id);
         if (index >= materialization.values.values.items.len) {
             lambdaInvariant("lambda-solved const-backed value id out of range");
@@ -13279,11 +13250,10 @@ const BodySolver = struct {
     }
 
     fn representationEdgeKindMatches(
-        self: *BodySolver,
+        _: *BodySolver,
         left: repr.RepresentationEdgeKind,
         right: repr.RepresentationEdgeKind,
     ) bool {
-        _ = self;
         return switch (left) {
             .value_alias => switch (right) {
                 .value_alias => true,
@@ -13406,9 +13376,8 @@ const BodySolver = struct {
     fn projectionSourceRoot(
         self: *BodySolver,
         source: repr.ValueInfoId,
-        kind: repr.ProjectionKind,
+        _: repr.ProjectionKind,
     ) repr.RepRootId {
-        _ = kind;
         const source_info = self.value_store.values.items[@intFromEnum(source)];
         const source_root = self.valueRoot(source);
         const root_ty = self.type_importer.output.unlinkConst(source_info.logical_ty);
@@ -13750,11 +13719,10 @@ const BodySolver = struct {
     }
 
     fn logicalTagByLabel(
-        self: *BodySolver,
+        _: *BodySolver,
         tags: []const Type.Tag,
         label: canonical.TagLabelId,
     ) Type.Tag {
-        _ = self;
         for (tags) |tag| {
             if (tag.name == label) return tag;
         }
@@ -13834,10 +13802,9 @@ const BodySolver = struct {
     }
 
     fn resolvedSourcePayload(
-        self: *const BodySolver,
+        _: *const BodySolver,
         source: ConcreteSourceTypeView,
     ) ?ConcreteSourceTypeView {
-        _ = self;
         var current = source;
         while (true) {
             switch (checkedTypePayload(current.view, current.root)) {

@@ -2071,6 +2071,15 @@ fn findPattern4(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8) ?usize {
     return null;
 }
 
+fn findPattern7(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8, b4: u8, b5: u8, b6: u8) ?usize {
+    if (buf.len < 7) return null;
+    for (0..buf.len - 6) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3 and
+            buf[i + 4] == b4 and buf[i + 5] == b5 and buf[i + 6] == b6) return i;
+    }
+    return null;
+}
+
 // x86_64 MOV reg,reg encoding reference (opcode 0x89, MOV r/m64, r64):
 // REX = 0x40 | (W<<3) | (R<<2) | B, where R=src.rexR, B=dst.rexB
 // ModRM = 0xC0 | (src.enc()<<3) | dst.enc()
@@ -2471,10 +2480,13 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`
     // and the second would then read through the clobbered RDI.
     try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0x3F) == null);
+    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xBF, 0x00, 0x00, 0x00, 0x00) == null);
     try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x77, 0x08) == null);
+    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xB7, 0x08, 0x00, 0x00, 0x00) == null);
 
     // The original RDI is read into scratch before parameter registers move.
-    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x8B, 0x1F) != null);
+    // The x86 emitter currently uses the disp32 memory form even for offset 0.
+    try std.testing.expect(findPattern7(emit.buf.items, 0x4C, 0x8B, 0x9F, 0x00, 0x00, 0x00, 0x00) != null);
     try std.testing.expectEqual(@as(usize, 1), relocs.items.len);
 }
 

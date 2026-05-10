@@ -392,6 +392,60 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     };
 }
 
+/// Canonicalize a source module without type checking and count module-not-found diagnostics.
+pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) !usize {
+    const gpa = std.testing.allocator;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var module_env = try ModuleEnv.init(gpa, source);
+    defer module_env.deinit();
+
+    module_env.common.source = source;
+    module_env.module_name = module_name;
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
+    try module_env.common.calcLineStarts(gpa);
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
+    parse_ast.store.emptyScratch();
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    defer builtin_module.deinit();
+
+    try module_env.initCIRFields(module_name);
+
+    var czer = try Can.initModule(&allocators, &module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try module_env.getDiagnostics();
+    defer gpa.free(diagnostics);
+
+    var module_not_found_count: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .module_not_found) {
+            module_not_found_count += 1;
+        }
+    }
+
+    return module_not_found_count;
+}
+
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !TestEnv {
     const gpa = std.testing.allocator;

@@ -1704,14 +1704,13 @@ fn reserveLoweringProcedureCallableDependency(
 }
 
 fn reserveLoweringProcedureCallableDependencyWithConcreteRef(
-    input: Input,
+    _: Input,
     program: *Program,
     queue: *Queue,
     callable: canonical.ProcedureCallableRef,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
 ) Allocator.Error!canonical.MirProcedureRef {
-    _ = input;
     const requested_key = program.concrete_source_types.key(requested_fn_ty);
     if (!std.mem.eql(u8, &requested_key.bytes, &callable.source_fn_ty.bytes)) {
         invariantViolation("mono dependency reservation explicit callable source type disagreed with callable occurrence");
@@ -2241,7 +2240,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error![]const checked_artifact.CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -2262,7 +2261,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error![]const checked_artifact.CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -2480,7 +2479,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error![]const checked_artifact.CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -3417,7 +3416,7 @@ const TypeInstantiator = struct {
         residual_tail: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
         const tags = try self.allocator.alloc(checked_artifact.CheckedTag, entries.len);
-        for (tags) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (tags) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (tags) |tag| self.allocator.free(tag.args);
             self.allocator.free(tags);
@@ -4115,10 +4114,9 @@ const TypeInstantiator = struct {
     }
 
     fn isMonoSpecializationNumericFlex(
-        self: *const TypeInstantiator,
+        _: *const TypeInstantiator,
         flex: checked_artifact.CheckedTypeVariable,
     ) bool {
-        _ = self;
         if (flex.numeric_default_phase != .mono_specialization) return false;
         return true;
     }
@@ -4231,7 +4229,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error![]const checked_artifact.CheckedTag {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
-        for (out) |*tag| tag.* = .{ .name = @enumFromInt(0), .args = &.{} };
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.args);
             self.allocator.free(out);
@@ -4714,11 +4712,10 @@ const BodyLowerer = struct {
     }
 
     fn exportedTemplateClosureForImported(
-        self: *const BodyLowerer,
+        _: *const BodyLowerer,
         imported: checked_artifact.ImportedModuleView,
         template: canonical.ProcedureTemplateRef,
     ) ?checked_artifact.ImportedTemplateClosureView {
-        _ = self;
         for (imported.exported_procedure_templates.templates) |exported| {
             if (exported.template.template == template.template) return exported.template_closure;
         }
@@ -5857,7 +5854,7 @@ const BodyLowerer = struct {
     }
 
     fn countHostedDispatchEntriesBefore(
-        self: *BodyLowerer,
+        _: *BodyLowerer,
         target_artifact: checked_artifact.CheckedModuleArtifactKey,
         target: checked_artifact.HostedProc,
         candidate_artifact: checked_artifact.CheckedModuleArtifactKey,
@@ -5865,7 +5862,6 @@ const BodyLowerer = struct {
         index: *u32,
         found: *bool,
     ) void {
-        _ = self;
         for (candidates.procs) |candidate| {
             if (std.mem.eql(u8, &candidate_artifact.bytes, &target_artifact.bytes) and
                 candidate.def_idx == target.def_idx)
@@ -6217,10 +6213,9 @@ const BodyLowerer = struct {
     }
 
     fn binderForSimplePatternMaybe(
-        self: *BodyLowerer,
+        _: *BodyLowerer,
         data: checked_artifact.CheckedPatternData,
     ) ?checked_artifact.PatternBinderId {
-        _ = self;
         return switch (data) {
             .assign => |binder| binder,
             .as => |as| as.binder,
@@ -6421,7 +6416,6 @@ const BodyLowerer = struct {
             .match_ => |match_| try self.lowerMatch(ty, match_, expected_ty),
             .tag => |tag| try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), tag.args),
             .zero_argument_tag => |tag| blk: {
-                _ = tag.closure_name;
                 break :blk try self.lowerTag(ty, expected_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
             .closure => |closure| try self.lowerCheckedClosureExpr(ty, expected_info.source_ref, expr_id, closure),
@@ -6434,8 +6428,6 @@ const BodyLowerer = struct {
                 } });
             },
             .return_ => |ret| blk: {
-                _ = ret.lambda;
-                _ = ret.context;
                 const child = try self.lowerReturnValue(ret.expr);
                 break :blk try self.program.ast.addExpr(ty, .{ .return_ = child });
             },
@@ -6444,7 +6436,6 @@ const BodyLowerer = struct {
             .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
             .run_low_level => |run_low_level| try self.lowerRunLowLevel(ty, run_low_level.op, run_low_level.args),
             .nominal => |nominal| blk: {
-                _ = nominal.backing_type;
                 const backing_info = try self.concreteNominalBackingInfo(expected_info);
                 const backing = try self.lowerExprConcreteExpected(nominal.backing_expr, backing_info);
                 break :blk try self.program.ast.addExpr(ty, .{ .nominal_reinterpret = backing });
@@ -6484,7 +6475,6 @@ const BodyLowerer = struct {
         const lowered = switch (expr.data) {
             .tag => |tag| try self.lowerTag(bool_ty, bool_info.source_ref, try self.tagLabel(tag.name), tag.args),
             .zero_argument_tag => |tag| blk: {
-                _ = tag.closure_name;
                 break :blk try self.lowerTag(bool_ty, bool_info.source_ref, try self.tagLabel(tag.name), &.{});
             },
             .unary_not => |child| blk: {
@@ -7405,10 +7395,9 @@ const BodyLowerer = struct {
     }
 
     fn patternCanLowerAsSingleDeclaration(
-        self: *const BodyLowerer,
+        _: *const BodyLowerer,
         data: checked_artifact.CheckedPatternData,
     ) bool {
-        _ = self;
         return switch (data) {
             .assign,
             .underscore,
@@ -7756,8 +7745,6 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
         closure: anytype,
     ) Allocator.Error!Ast.ExprId {
-        _ = closure.captures;
-        _ = closure.tag_name;
         const lambda_expr = self.checkedExpr(closure.lambda);
         return switch (lambda_expr.data) {
             .lambda => |lambda| try self.lowerClosureExpr(ty, source_fn_ref, expr_id, .closure, lambda.args, lambda.body),
@@ -7807,8 +7794,6 @@ const BodyLowerer = struct {
         call_expr: checked_artifact.CheckedExprId,
         call: anytype,
     ) Allocator.Error!Ast.ExprId {
-        _ = call.called_via;
-
         var call_instantiator = try self.type_instantiator.fork();
         defer call_instantiator.deinit();
 
@@ -8743,11 +8728,10 @@ const BodyLowerer = struct {
     }
 
     fn representativeBinderForCandidate(
-        self: *const BodyLowerer,
+        _: *const BodyLowerer,
         binder: checked_artifact.PatternBinderId,
         binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
     ) checked_artifact.PatternBinderId {
-        _ = self;
         for (binder_remaps) |remap| {
             if (remap.candidate_binder == binder) return remap.representative_binder;
         }
@@ -10621,21 +10605,20 @@ test "mono specialization queue reserves once" {
     defer concrete.deinit();
 
     const requested_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{1} ** 32 };
-    const owned_key = try std.testing.allocator.dupe(u8, requested_key.bytes[0..]);
-    try concrete.roots.append(std.testing.allocator, .{
-        .key = requested_key,
-        .source = .{ .local = @enumFromInt(0) },
-    });
-    try concrete.by_key.put(owned_key, @enumFromInt(0));
+    const requested_checked_ty = try concrete.reserveLocalRoot(requested_key);
+    const requested_source_ty = try concrete.sealLocalRoot(requested_checked_ty, requested_key);
 
+    const first_proc_base_index: u32 = 0;
+    const first_template_index: u32 = 0;
     const template = canonical.ProcedureTemplateRef{
-        .proc_base = @enumFromInt(0),
-        .template = @enumFromInt(0),
+        .proc_base = @enumFromInt(first_proc_base_index),
+        .template = @enumFromInt(first_template_index),
     };
+    const first_summary_index: u32 = 0;
     const request = MonoSpecializationRequest{
         .template = template,
-        .requested_fn_ty = @enumFromInt(0),
-        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
+        .requested_fn_ty = requested_source_ty,
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(first_summary_index) },
     };
 
     const first = try queue.reserve(&concrete, request);
@@ -10651,30 +10634,34 @@ test "mono specialization queue accepts equivalent payload refs for one key" {
     defer concrete.deinit();
 
     const requested_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{2} ** 32 };
-    try concrete.roots.append(std.testing.allocator, .{
-        .key = requested_key,
-        .source = .{ .local = @enumFromInt(0) },
-    });
+    const first_checked_ty = try concrete.reserveLocalRoot(requested_key);
+    const first_source_ty = try concrete.sealLocalRoot(first_checked_ty, requested_key);
+
+    const second_checked_ty: checked_artifact.CheckedTypeId = @enumFromInt(@as(u32, @intCast(concrete.local_roots.items.len)));
     try concrete.roots.append(std.testing.allocator, .{
         .key = requested_key,
         .source = .{
-            .artifact = .{ .artifact = .{ .bytes = [_]u8{3} ** 32 }, .ty = @enumFromInt(1) },
+            .artifact = .{ .artifact = .{ .bytes = [_]u8{3} ** 32 }, .ty = second_checked_ty },
         },
     });
+    const second_source_ty: ConcreteSourceType.ConcreteSourceTypeRef = @enumFromInt(@as(u32, @intCast(concrete.roots.items.len - 1)));
 
+    const first_proc_base_index: u32 = 0;
+    const first_template_index: u32 = 0;
     const template = canonical.ProcedureTemplateRef{
-        .proc_base = @enumFromInt(0),
-        .template = @enumFromInt(0),
+        .proc_base = @enumFromInt(first_proc_base_index),
+        .template = @enumFromInt(first_template_index),
     };
+    const first_summary_index: u32 = 0;
     const first_request = MonoSpecializationRequest{
         .template = template,
-        .requested_fn_ty = @enumFromInt(0),
-        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
+        .requested_fn_ty = first_source_ty,
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(first_summary_index) },
     };
     const second_request = MonoSpecializationRequest{
         .template = template,
-        .requested_fn_ty = @enumFromInt(1),
-        .reason = .{ .comptime_dependency_summary = @enumFromInt(0) },
+        .requested_fn_ty = second_source_ty,
+        .reason = .{ .comptime_dependency_summary = @enumFromInt(first_summary_index) },
     };
 
     const first = try queue.reserve(&concrete, first_request);

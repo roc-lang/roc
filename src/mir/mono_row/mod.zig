@@ -897,8 +897,7 @@ const BodyFinalizer = struct {
         return try self.output.addTypedSymbolSpan(output_items);
     }
 
-    fn lowerTypedSymbol(self: *BodyFinalizer, symbol: Mono.Ast.TypedSymbol) Ast.TypedSymbol {
-        _ = self;
+    fn lowerTypedSymbol(_: *BodyFinalizer, symbol: Mono.Ast.TypedSymbol) Ast.TypedSymbol {
         return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
     }
 
@@ -932,11 +931,10 @@ const BodyFinalizer = struct {
     }
 
     fn recordEvalIndex(
-        self: *const BodyFinalizer,
+        _: *const BodyFinalizer,
         evals: []const Ast.RecordFieldEval,
         field_id: RecordFieldId,
     ) u32 {
-        _ = self;
         for (evals, 0..) |eval, i| {
             if (eval.field == field_id) return @intCast(i);
         }

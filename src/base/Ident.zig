@@ -26,6 +26,26 @@ pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring
 pub const NEGATE_METHOD_NAME = "negate";
 
+/// Compare two identifier texts exactly.
+pub fn textEql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
+}
+
+/// Compare two identifier texts in deterministic lexicographic order.
+pub fn textLessThan(a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// Check whether identifier text starts with a fixed prefix.
+pub fn textStartsWith(text: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, text, prefix);
+}
+
+/// Check whether identifier text ends with a fixed suffix.
+pub fn textEndsWith(text: []const u8, suffix: []const u8) bool {
+    return std.mem.endsWith(u8, text, suffix);
+}
+
 /// The original text of the identifier.
 raw_text: []const u8,
 
@@ -438,6 +458,16 @@ pub const Store = struct {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
+    /// Compare the texts behind two identifiers from this store.
+    pub fn idxTextEql(self: *const Store, a: Idx, b: Idx) bool {
+        return textEql(self.getText(a), self.getText(b));
+    }
+
+    /// Compare the texts behind two identifiers from this store.
+    pub fn idxTextLessThan(self: *const Store, a: Idx, b: Idx) bool {
+        return textLessThan(self.getText(a), self.getText(b));
+    }
+
     /// Check if an identifier text already exists in the store.
     pub fn contains(self: *const Store, text: []const u8) bool {
         return self.interner.contains(text);
@@ -455,6 +485,16 @@ pub const Store = struct {
             .attributes = Attributes.fromString(text),
             .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
         };
+    }
+
+    /// Return the already-interned Builtin module identifier.
+    pub fn builtinModuleIdent(self: *const Store) Idx {
+        return self.findByString("Builtin") orelse unreachable;
+    }
+
+    /// Return the already-interned Builtin.Num.Dec type identifier.
+    pub fn builtinDecTypeIdent(self: *const Store) Idx {
+        return self.findByString("Builtin.Num.Dec") orelse unreachable;
     }
 
     /// Calculate the size needed to serialize this Ident.Store

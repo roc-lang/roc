@@ -1522,12 +1522,12 @@ fn clonePublishedFiniteSetEraseAdapterBranches(
     @memset(out, .{
         .member = .{
             .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
-            .member_index = @enumFromInt(0),
+            .member_index = undefined,
         },
-        .member_proc_source_fn_ty_payload = @enumFromInt(0),
+        .member_proc_source_fn_ty_payload = undefined,
         .member_lifted_owner_source_fn_ty_payload = null,
         .target_key = .{
-            .base = @enumFromInt(0),
+            .base = undefined,
             .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
             .exec_arg_tys = &.{},
             .exec_ret_ty = .{ .bytes = [_]u8{0} ** 32 },
@@ -1538,7 +1538,7 @@ fn clonePublishedFiniteSetEraseAdapterBranches(
         .capture_transforms = &.{},
         .result_transform = .{
             .artifact = .{ .bytes = [_]u8{0} ** 32 },
-            .transform = @enumFromInt(0),
+            .transform = undefined,
         },
     });
     errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, out);
@@ -2552,9 +2552,8 @@ fn lowerPublishedErasedFiniteAdapterBranchCaptureArg(
     capture_payload: Ast.ExecutableValueRef,
     capture_payload_ty: Type.TypeId,
     capture_transforms: []const checked_artifact.PublishedExecutableValueTransformRef,
-    target_instance: repr.ProcRepresentationInstance,
+    _: repr.ProcRepresentationInstance,
 ) Allocator.Error!Ast.ExecutableValueRef {
-    _ = target_instance;
     const source_items = switch (program.types.getType(capture_payload_ty)) {
         .tuple => |items| items,
         else => executableInvariant("published erased finite-set adapter branch capture payload type is not a tuple"),
@@ -2752,9 +2751,7 @@ fn lowerErasedPromotedWrapperBody(
         .body = packed_expr,
     } }));
 
-    for (wrapper_args, signature.erased_call_args, signature.erased_call_arg_keys, 0..) |arg, erased_arg, erased_arg_key, i| {
-        _ = erased_arg;
-        _ = erased_arg_key;
+    for (wrapper_args, 0..) |arg, i| {
         call_args[i] = try applyPublishedExecutableValueTransformRef(
             program,
             materialization,
@@ -3461,11 +3458,10 @@ fn tagTypeForLabel(
 }
 
 fn recordFieldForId(
-    program: *const Program,
+    _: *const Program,
     record: Type.RecordType,
     field_id: MonoRow.RecordFieldId,
 ) Type.RecordFieldType {
-    _ = program;
     for (record.fields) |field| {
         if (field.field == field_id) return field;
     }
@@ -3501,11 +3497,10 @@ fn findSessionValueTransformTupleElem(
 }
 
 fn tagTypeForId(
-    program: *const Program,
+    _: *const Program,
     tag_union: Type.TagUnionType,
     tag_id: MonoRow.TagId,
 ) Type.TagType {
-    _ = program;
     for (tag_union.tags) |tag| {
         if (tag.tag == tag_id) return tag;
     }
@@ -3713,7 +3708,6 @@ fn applyCallableToErasedValueTransform(
                 executableInvariant("finite callable erasure transform source function type differs from adapter key");
             }
 
-            _ = erased_ty.capture_ty;
             const hidden_capture_ty = if (finite.adapter_key.erased_fn_sig_key.capture_ty) |capture_key| blk: {
                 const capture_ref = published_types.payloads.refForKey(artifactRefFromKey(materialization.owner), capture_key) orelse {
                     executableInvariant("finite callable erasure transform hidden capture key has no published payload");
@@ -3936,9 +3930,7 @@ fn lowerErasedPromotedCapture(
     }
     switch (capture) {
         .none => executableInvariant("executable erased promoted wrapper has hidden capture type but no capture materialization"),
-        .zero_sized_typed => |key| {
-            _ = key;
-        },
+        .zero_sized_typed => {},
         .node => |node| return try lowerErasedCaptureExecutableMaterializationNode(allocator, program, materialization, ty, node),
     }
     const value = program.ast.freshValueRef();
@@ -3979,8 +3971,7 @@ fn lowerErasedCaptureExecutableMaterializationPlanExpr(
 ) Allocator.Error!Ast.ExprId {
     return switch (plan) {
         .none => executableInvariant("executable erased capture materialization required a value but got none"),
-        .zero_sized_typed => |key| blk: {
-            _ = key;
+        .zero_sized_typed => blk: {
             const value = program.ast.freshValueRef();
             break :blk try program.ast.addExpr(expected_ty, value, .unit);
         },
@@ -4045,11 +4036,10 @@ fn lowerPureConstInstanceExpr(
 fn lowerConstInstanceExpr(
     allocator: Allocator,
     program: *Program,
-    materialization: MaterializationStores,
+    _: MaterializationStores,
     expected_ty: Type.TypeId,
     const_instance: checked_artifact.ConstInstanceRef,
 ) Allocator.Error!Ast.ExprId {
-    _ = materialization;
     const resolved = resolveConstInstanceForExecutable(program, const_instance);
     return try lowerComptimeValueExpr(
         allocator,
@@ -5541,7 +5531,7 @@ const PublishedTypeLowerer = struct {
         if (self.row_shapes.tagUnionTags(shape).len != variants.len) executableInvariant("executable published tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(Type.TagType, variants.len);
-        for (out) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*tag| tag.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.payloads);
             self.allocator.free(out);
@@ -5802,7 +5792,7 @@ const SessionTypeLowerer = struct {
             .tags = &.{},
         } };
         const out = try self.allocator.alloc(Type.TagType, tag_union.variants.len);
-        for (out) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (out) |*tag| tag.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (out) |tag| self.allocator.free(tag.payloads);
             self.allocator.free(out);
@@ -5997,7 +5987,7 @@ const TypeLowerer = struct {
         if (self.row_shapes.tagUnionTags(shape).len != source_tags.len) executableInvariant("executable type lowering tag-union shape arity mismatch");
 
         const tags = try self.allocator.alloc(Type.TagType, source_tags.len);
-        for (tags) |*tag| tag.* = .{ .tag = @enumFromInt(0), .payloads = &.{} };
+        for (tags) |*tag| tag.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
             for (tags[0..source_tags.len]) |tag| {
                 if (tag.payloads.len > 0) self.allocator.free(tag.payloads);
@@ -6252,12 +6242,11 @@ const BodyBuilder = struct {
 
     fn lowerExecutableValueTypeInStore(
         self: *BodyBuilder,
-        logical_ty: LambdaSolved.Type.TypeVarId,
+        _: LambdaSolved.Type.TypeVarId,
         value_info_id: repr.ValueInfoId,
         value_store: *const repr.ValueInfoStore,
         representation_store: *const repr.RepresentationStore,
     ) Allocator.Error!Type.TypeId {
-        _ = logical_ty;
         const value_info = value_store.values.items[@intFromEnum(value_info_id)];
         const endpoint = value_info.exec_ty orelse {
             executableInvariant("executable value type has no published endpoint");
@@ -7337,7 +7326,7 @@ const BodyBuilder = struct {
     }
 
     fn verifyJoinInputBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         input: repr.JoinInputInfo,
     ) void {
@@ -7383,7 +7372,6 @@ const BodyBuilder = struct {
                 }
             },
         }
-        _ = self;
     }
 
     fn buildSourceMatchDecisionPlan(
@@ -7630,11 +7618,10 @@ const BodyBuilder = struct {
     }
 
     fn firstTestIndexAtPath(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         tests: []const PendingPatternTest,
         path_value: Ast.PatternPathValuePlanId,
     ) ?usize {
-        _ = self;
         for (tests, 0..) |pending_test, i| {
             if (pending_test.path_value == path_value) return i;
         }
@@ -7675,11 +7662,10 @@ const BodyBuilder = struct {
     }
 
     fn patternTestEql(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         a: Ast.PatternTest,
         b: Ast.PatternTest,
     ) bool {
-        _ = self;
         return switch (a) {
             .tag => |left| switch (b) {
                 .tag => |right| left.union_shape == right.union_shape and left.tag == right.tag,
@@ -7739,11 +7725,10 @@ const BodyBuilder = struct {
     }
 
     fn patternPathStepEql(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         a: Ast.PatternPathStep,
         b: Ast.PatternPathStep,
     ) bool {
-        _ = self;
         return switch (a) {
             .tag_payload_record => |left| switch (b) {
                 .tag_payload_record => |right| left == right,
@@ -7781,11 +7766,10 @@ const BodyBuilder = struct {
     }
 
     fn patternPathValueSourceEql(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         a: Ast.PatternPathValueSource,
         b: Ast.PatternPathValueSource,
     ) bool {
-        _ = self;
         return switch (a) {
             .scrutinee => |left| switch (b) {
                 .scrutinee => |right| left == right,
@@ -8099,8 +8083,7 @@ const BodyBuilder = struct {
         };
     }
 
-    fn recordFieldType(self: *BodyBuilder, record: Type.RecordType, field_id: MonoRow.RecordFieldId) Type.TypeId {
-        _ = self;
+    fn recordFieldType(_: *BodyBuilder, record: Type.RecordType, field_id: MonoRow.RecordFieldId) Type.TypeId {
         for (record.fields) |field| {
             if (field.field == field_id) return field.ty;
         }
@@ -9639,13 +9622,12 @@ const BodyBuilder = struct {
     }
 
     fn verifyCallProcResultBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         call_site_id: repr.CallSiteInfoId,
         target_instance_id: repr.ProcRepresentationInstanceId,
         target_instance: repr.ProcRepresentationInstance,
     ) void {
-        _ = self;
         const kind = switch (boundary.kind) {
             .call_result => |call_result| call_result,
             else => executableInvariant("executable call_proc result transform has non-call-result boundary kind"),
@@ -10455,7 +10437,7 @@ const BodyBuilder = struct {
     }
 
     fn verifyCallableMatchBranchArgBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         call_site_id: repr.CallSiteInfoId,
         member_ref: repr.CallableSetMemberRef,
@@ -10464,7 +10446,6 @@ const BodyBuilder = struct {
         target_instance: repr.ProcRepresentationInstance,
         index: u32,
     ) void {
-        _ = self;
         const kind = switch (boundary.kind) {
             .callable_match_branch_arg => |branch_arg| branch_arg,
             else => executableInvariant("executable callable_match argument boundary has non-branch-arg kind"),
@@ -10502,7 +10483,7 @@ const BodyBuilder = struct {
     }
 
     fn verifyCallableMatchBranchResultBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         call_site_id: repr.CallSiteInfoId,
         member_ref: repr.CallableSetMemberRef,
@@ -10537,18 +10518,16 @@ const BodyBuilder = struct {
         if (!repr.canonicalExecValueTypeKeyEql(boundary.from_endpoint.exec_ty.key, target_instance.executable_specialization_key.exec_ret_ty)) {
             executableInvariant("executable callable_match result boundary source key differs from branch specialization");
         }
-        _ = self;
     }
 
     fn verifyErasedFiniteAdapterBranchArgBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         member_ref: repr.CallableSetMemberRef,
         target_instance_id: repr.ProcRepresentationInstanceId,
         target_instance: repr.ProcRepresentationInstance,
         index: u32,
     ) void {
-        _ = self;
         const kind = switch (boundary.kind) {
             .erased_finite_adapter_arg => |branch_arg| branch_arg,
             else => executableInvariant("executable erased finite adapter argument boundary has non-adapter-arg kind"),
@@ -10631,14 +10610,13 @@ const BodyBuilder = struct {
     }
 
     fn verifyErasedFiniteAdapterBranchResultBoundary(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         boundary: repr.ValueTransformBoundary,
         adapter: repr.ErasedAdapterKey,
         member_ref: repr.CallableSetMemberRef,
         target_instance_id: repr.ProcRepresentationInstanceId,
         target_instance: repr.ProcRepresentationInstance,
     ) void {
-        _ = self;
         const kind = switch (boundary.kind) {
             .erased_finite_adapter_result => |branch_result| branch_result,
             else => executableInvariant("executable erased finite adapter result boundary has non-adapter-result kind"),

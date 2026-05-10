@@ -2420,15 +2420,16 @@ pub const Coordinator = struct {
         self.gpa.free(task.imported_artifacts);
         self.gpa.free(task.available_artifacts);
 
-        const checked_artifact = typecheck_output.takeCheckedArtifact();
-
         return .{
             .type_checked = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .semantic = self.createOwnedSemanticResult(env, checked_artifact),
+                .semantic = self.createOwnedSemanticResult(
+                    env,
+                    if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null,
+                ),
                 .reports = reports,
                 .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
                 .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,

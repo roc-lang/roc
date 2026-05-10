@@ -173,7 +173,7 @@ pub const Lowerer = struct {
         try self.collectTags(tag_union.tags, tag_union.ext, &source_tags);
 
         const tags = try self.allocator.alloc(Type.Tag, source_tags.items.len);
-        @memset(tags, .{ .name = @enumFromInt(0), .args = &.{} });
+        @memset(tags, .{ .name = undefined, .args = &.{} });
         errdefer {
             for (tags[0..source_tags.items.len]) |tag| {
                 if (tag.args.len > 0) self.allocator.free(tag.args);

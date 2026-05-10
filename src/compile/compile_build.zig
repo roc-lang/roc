@@ -145,6 +145,12 @@ pub const BuildEnv = struct {
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
+    /// Source tooling type-checks modules and reports diagnostics, but it must
+    /// not force executable platform/app relation publication. That relation is
+    /// post-check lowering input for valid executable builds; invalid in-editor
+    /// programs should produce diagnostics, not compiler invariant panics.
+    finalize_executable_artifacts: bool = true,
+
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
 
@@ -338,6 +344,10 @@ pub const BuildEnv = struct {
     /// Must be called before compileDiscovered() if target needs to change after discovery.
     pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
         self.target = target;
+    }
+
+    pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
+        self.finalize_executable_artifacts = enabled;
     }
 
     /// Build an app file specifically (validates it's an app)
@@ -558,7 +568,9 @@ pub const BuildEnv = struct {
 
         // Run coordinator loop
         try coord.coordinatorLoop();
-        try coord.finalizeExecutableArtifacts();
+        if (self.finalize_executable_artifacts) {
+            try coord.finalizeExecutableArtifacts();
+        }
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});

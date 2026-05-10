@@ -752,11 +752,20 @@ pub const Import = struct {
     };
 
     pub const ResolvedModuleIdx = enum(u32) {
+        failed_before_checking = std.math.maxInt(u32) - 1,
         none = std.math.maxInt(u32),
         _,
 
         pub fn isNone(self: ResolvedModuleIdx) bool {
             return self == .none;
+        }
+
+        pub fn isFailedBeforeChecking(self: ResolvedModuleIdx) bool {
+            return self == .failed_before_checking;
+        }
+
+        pub fn isResolved(self: ResolvedModuleIdx) bool {
+            return !self.isNone() and !self.isFailedBeforeChecking();
         }
     };
 
@@ -868,8 +877,17 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved.isNone()) return null;
+            if (!resolved.isResolved()) return null;
             return @intFromEnum(resolved);
+        }
+
+        /// Return true when import resolution has already reported a user-facing
+        /// diagnostic before type checking. Type checking may continue for source
+        /// tooling, but post-check lowering must never consume this import.
+        pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return false;
+            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
@@ -877,6 +895,24 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
                 self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
+            }
+        }
+
+        /// Mark one import as intentionally unavailable because an earlier stage
+        /// already owns the user-facing diagnostic.
+        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = .failed_before_checking;
+            }
+        }
+
+        /// Diagnostics-only tooling can continue type inspection after unresolved
+        /// imports have been reported. This makes that state explicit instead of
+        /// leaving imports in the pre-resolution state.
+        pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                if (resolved.isNone()) resolved.* = .failed_before_checking;
             }
         }
 
@@ -906,7 +942,8 @@ pub const Import = struct {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
-                if (self.getResolvedModule(import_idx) != null) continue;
+                const current = self.resolved_modules.items.items[i];
+                if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 

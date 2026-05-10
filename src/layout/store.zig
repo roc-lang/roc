@@ -2007,7 +2007,7 @@ pub const Store = struct {
 test "layout store commits struct fields with a stable alignment sort" {
     const testing = std.testing;
 
-    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
     const semantic_fields = [_]StructField{
@@ -2042,7 +2042,7 @@ test "layout store commits struct fields with a stable alignment sort" {
 test "uninterned struct layouts use the same stable alignment sort as interned ones" {
     const testing = std.testing;
 
-    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
     const semantic_fields = [_]StructField{
@@ -2080,7 +2080,7 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
 test "layout store records explicit resolved list layout facts for boxed lists" {
     const testing = std.testing;
 
-    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
     const list_idx = try store.insertLayout(Layout.list(.u8));
@@ -2098,7 +2098,7 @@ test "layout store records explicit resolved list layout facts for boxed lists" 
 test "ZST containers are refcounted layouts with no refcounted children" {
     const testing = std.testing;
 
-    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
     const list_zst_idx = try store.insertLayout(Layout.listOfZst());

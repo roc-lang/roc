@@ -133,13 +133,11 @@ pub const MethodRegistry = struct {
             };
             const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
             const template = local_templates.templateForDef(def_idx) orelse {
-                if (@import("builtin").mode == .Debug) {
-                    std.debug.panic(
-                        "checked static dispatch registry invariant violated: method def {d} has no checked procedure template",
-                        .{@intFromEnum(def_idx)},
-                    );
-                }
-                unreachable;
+                // Associated values without arguments are checked field access,
+                // not static-dispatch call targets. The method registry is a
+                // procedure-target table for mono MIR static dispatch lowering,
+                // so only procedure-backed entries belong here.
+                continue;
             };
             const export_name = try names.internExportIdent(idents, entry.value);
             const proc_base = try names.internProcBase(.{
@@ -191,7 +189,7 @@ fn builtinOwnerForRegistryEntry(
     const common = module.moduleEnvConst().idents;
     const module_ident = module.qualifiedModuleIdent();
     const is_builtin_module = module_ident.eql(common.builtin_module) or
-        std.mem.eql(u8, module.getIdent(module_ident), module.getIdent(common.builtin_module));
+        module.identStoreConst().idxTextEql(module_ident, common.builtin_module);
     if (!is_builtin_module) return null;
 
     if (type_ident.eql(common.bool) or type_ident.eql(common.bool_type)) return .bool;
@@ -378,12 +376,11 @@ pub const StaticDispatchPlanTable = struct {
 };
 
 fn checkedTypeIdForVar(
-    allocator: Allocator,
+    _: Allocator,
     module: TypedCIR.Module,
     checked_types: anytype,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
-    _ = allocator;
     return checked_types.rootForSourceVar(module, var_) orelse {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});

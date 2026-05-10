@@ -193,11 +193,10 @@ const Builder = struct {
                 }
                 invariantViolation("canonical type key reached an unsolved flex without its root identity");
             },
-            .rigid => |rigid| {
+            .rigid => {
                 if (self.require_concrete) {
                     invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
                 }
-                _ = rigid;
                 invariantViolation("canonical type key reached an unsolved rigid without its root identity");
             },
             .alias => |alias| {
@@ -356,7 +355,7 @@ const Builder = struct {
         std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
         self.writeU32(@intCast(fields.items.len));
         for (fields.items, 0..) |field, index| {
-            if (index > 0 and std.mem.eql(u8, self.idents.getText(fields.items[index - 1].name), self.idents.getText(field.name))) {
+            if (index > 0 and self.idents.idxTextEql(fields.items[index - 1].name, field.name)) {
                 invariantViolation("canonical type key row normalization found duplicate record fields");
             }
             self.writeIdent(field.name);
@@ -424,7 +423,7 @@ const Builder = struct {
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
         self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
-            if (index > 0 and std.mem.eql(u8, self.idents.getText(tags.items[index - 1].name), self.idents.getText(tag.name))) {
+            if (index > 0 and self.idents.idxTextEql(tags.items[index - 1].name, tag.name)) {
                 invariantViolation("canonical type key row normalization found duplicate tags");
             }
             self.writeIdent(tag.name);
@@ -438,11 +437,11 @@ const Builder = struct {
     }
 
     fn recordFieldForKeyLessThan(self: *Builder, lhs: RecordFieldForKey, rhs: RecordFieldForKey) bool {
-        return std.mem.lessThan(u8, self.idents.getText(lhs.name), self.idents.getText(rhs.name));
+        return self.idents.idxTextLessThan(lhs.name, rhs.name);
     }
 
     fn tagForKeyLessThan(self: *Builder, lhs: TagForKey, rhs: TagForKey) bool {
-        return std.mem.lessThan(u8, self.idents.getText(lhs.name), self.idents.getText(rhs.name));
+        return self.idents.idxTextLessThan(lhs.name, rhs.name);
     }
 
     fn writeConstraints(self: *Builder, range: types.StaticDispatchConstraint.SafeList.Range) Allocator.Error!void {
@@ -490,17 +489,22 @@ const Builder = struct {
 
     fn writeU32(self: *Builder, value: u32) void {
         var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, value, .little);
+        bytes = .{
+            @as(u8, @truncate(value)),
+            @as(u8, @truncate(value >> 8)),
+            @as(u8, @truncate(value >> 16)),
+            @as(u8, @truncate(value >> 24)),
+        };
         self.hasher.update(&bytes);
     }
 };
 
 fn builtinDecTypeIdent(idents: *const Ident.Store) Ident.Idx {
-    return idents.findByString("Builtin.Num.Dec") orelse invariantViolation("canonical type key requested Dec default but Builtin.Num.Dec was not interned");
+    return idents.builtinDecTypeIdent();
 }
 
 fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
-    return idents.findByString("Builtin") orelse invariantViolation("canonical type key requested Dec default but Builtin module name was not interned");
+    return idents.builtinModuleIdent();
 }
 
 fn writeIdentText(hasher: *std.crypto.hash.sha2.Sha256, idents: *const Ident.Store, ident: Ident.Idx) void {
@@ -519,7 +523,12 @@ fn writeBoolValue(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
 
 fn writeU32Value(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bytes, value, .little);
+    bytes = .{
+        @as(u8, @truncate(value)),
+        @as(u8, @truncate(value >> 8)),
+        @as(u8, @truncate(value >> 16)),
+        @as(u8, @truncate(value >> 24)),
+    };
     hasher.update(&bytes);
 }
 
