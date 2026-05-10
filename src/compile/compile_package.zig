@@ -1387,13 +1387,24 @@ pub const PackageEnv = struct {
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
     ) !CheckedArtifact.CheckedModuleArtifact {
-        var source_modules = try gpa.alloc(CheckedModuleSource, imported_envs.len + 1);
-        defer gpa.free(source_modules);
-        for (imported_envs, 0..) |imported_env, i| {
-            source_modules[i] = .{ .precompiled = @constCast(imported_env) };
+        var imported_source_count: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            imported_source_count += 1;
         }
 
-        const checked_module_idx_usize = imported_envs.len;
+        var source_modules = try gpa.alloc(CheckedModuleSource, imported_source_count + 1);
+        defer gpa.free(source_modules);
+        var source_index: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            source_modules[source_index] = .{ .precompiled = @constCast(imported_env) };
+            source_index += 1;
+        }
+
+        const checked_module_idx_usize = imported_source_count;
         const checked_module_idx: u32 = @intCast(checked_module_idx_usize);
         source_modules[checked_module_idx_usize] = .{ .precompiled = env };
 

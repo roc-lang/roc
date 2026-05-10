@@ -338,6 +338,7 @@ const BodyLifter = struct {
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_callable_instance => |key| .{ .pending_callable_instance = key },
             .pending_local_root => |root| .{ .pending_local_root = root },
             .tag => |tag| .{ .tag = .{
                 .union_shape = tag.union_shape,
@@ -833,6 +834,7 @@ const BodyLifter = struct {
             .str_lit,
             .const_instance,
             .const_ref,
+            .pending_callable_instance,
             .pending_local_root,
             .unit,
             .crash,
@@ -1453,6 +1455,7 @@ fn collectDirectCallsFromExpr(
         .str_lit,
         .const_instance,
         .const_ref,
+        .pending_callable_instance,
         .pending_local_root,
         .unit,
         .crash,

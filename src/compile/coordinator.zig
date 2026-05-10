@@ -147,6 +147,8 @@ pub const ModuleState = struct {
     name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
+    /// Source-relative import base override for materialized modules.
+    source_dir_override: ?[]const u8 = null,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -237,6 +239,10 @@ pub const ModuleState = struct {
         }
     }
 
+    fn canonicalSourceDir(self: *const ModuleState) []const u8 {
+        return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse "");
+    }
+
     fn replaceCheckedArtifact(self: *ModuleState, artifact: check.CheckedArtifact.CheckedModuleArtifact) void {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
@@ -311,6 +317,7 @@ pub const ModuleState = struct {
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: freeing path and name\n", .{self.name});
         }
+        if (self.source_dir_override) |source_dir| gpa.free(source_dir);
         gpa.free(self.path);
         gpa.free(self.name);
     }
@@ -1731,8 +1738,7 @@ pub const Coordinator = struct {
             });
         }
         for (mod.external_imports.items) |ext_name| {
-            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse
-                std.debug.panic("compile.coordinator.buildCanonicalizeImports missing external env for {s}", .{ext_name});
+            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
             try imports.append(self.gpa, .{
                 .import_name = ext_name,
                 .module_env = ext_env,
@@ -1808,6 +1814,8 @@ pub const Coordinator = struct {
                 }
             }
         }
+
+        mod.moduleEnv().?.imports.markUnresolvedImportsFailedBeforeChecking();
 
         if (builtin.mode == .Debug) {
             for (mod.imports.items) |imp_id| {
@@ -1906,6 +1914,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .source_dir = mod.canonicalSourceDir(),
                 .module_env = mod.moduleEnv().?,
                 .cached_ast = mod.cached_ast orelse
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
@@ -2302,7 +2311,7 @@ pub const Coordinator = struct {
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
             task.imported_modules,
-            std.fs.path.dirname(task.path) orelse "",
+            task.source_dir,
         ) catch {};
         self.gpa.free(task.imported_modules);
 

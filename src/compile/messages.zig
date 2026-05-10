@@ -77,6 +77,8 @@ pub const CanonicalizeTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
+    /// Source-relative import base directory.
+    source_dir: []const u8,
     /// Dependency depth
     depth: u32,
     /// Module environment (ownership transferred from coordinator)

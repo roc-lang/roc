@@ -1632,6 +1632,50 @@ pub const CheckedTypeStore = struct {
         return id;
     }
 
+    pub fn appendSyntheticPayloadRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        payload: CheckedTypePayload,
+    ) Allocator.Error!CheckedTypeId {
+        var owned_payload = payload;
+        var payload_owned = true;
+        errdefer if (payload_owned) deinitCheckedTypePayload(allocator, &owned_payload);
+
+        const key = try checkedTypePayloadKey(allocator, names, self.roots, self.payloads, owned_payload);
+        if (self.rootForKey(key)) |existing| {
+            deinitCheckedTypePayload(allocator, &owned_payload);
+            payload_owned = false;
+            return existing;
+        }
+
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+
+        const old_roots = self.roots;
+        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
+        @memcpy(new_roots[0..old_roots.len], old_roots);
+        new_roots[old_roots.len] = .{ .id = id, .key = key };
+        errdefer allocator.free(new_roots);
+
+        const old_payloads = self.payloads;
+        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
+        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
+        new_payloads[old_payloads.len] = owned_payload;
+        payload_owned = false;
+        errdefer {
+            deinitCheckedTypePayload(allocator, &new_payloads[old_payloads.len]);
+            allocator.free(new_payloads);
+        }
+
+        allocator.free(old_roots);
+        allocator.free(old_payloads);
+        self.roots = new_roots;
+        self.payloads = new_payloads;
+
+        try self.ensureSyntheticSchemeForRoot(allocator, id, key);
+        return id;
+    }
+
     /// Reserve a checked type root whose payload will be filled after recursive
     /// cloning has finished.
     pub fn reserveSyntheticTypeRoot(
@@ -6107,9 +6151,15 @@ pub const ConstUseTemplate = struct {
     requested_source_ty_payload: ?CheckedTypeId = null,
 };
 
+/// Public `ArtifactTopLevelProcedureBindingRef` declaration.
+pub const ArtifactTopLevelProcedureBindingRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    binding: TopLevelProcedureBindingRef,
+};
+
 /// Public `ProcedureBindingRef` declaration.
 pub const ProcedureBindingRef = union(enum) {
-    top_level: TopLevelProcedureBindingRef,
+    top_level: ArtifactTopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
     platform_required: RequiredAppProcedureRef,
@@ -6365,6 +6415,7 @@ pub const ResolvedValueRefTable = struct {
             var resolved_ref = try classifyValueRef(
                 allocator,
                 module,
+                artifact_key,
                 expr_idx,
                 imports,
                 templates,
@@ -6437,6 +6488,7 @@ pub const ResolvedValueRefTable = struct {
 fn classifyValueRef(
     _: Allocator,
     module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
     expr_idx: CIR.Expr.Idx,
     imports: []const PublishImportArtifact,
     _: *const CheckedProcedureTemplateTable,
@@ -6450,6 +6502,7 @@ fn classifyValueRef(
     return switch (expr.data) {
         .e_lookup_local => |local| classifyLocalValueRef(
             module,
+            artifact_key,
             local.pattern_idx,
             hosted_procs,
             top_level_values,
@@ -6649,6 +6702,7 @@ fn checkedTagsAreConcreteConstProducerScheme(
 
 fn classifyLocalValueRef(
     module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
     pattern: CIR.Pattern.Idx,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
@@ -6693,7 +6747,10 @@ fn classifyLocalValueRef(
                     } };
                 }
                 return .{ .top_level_proc = .{
-                    .binding = .{ .top_level = binding },
+                    .binding = .{ .top_level = .{
+                        .artifact = artifact_key,
+                        .binding = binding,
+                    } },
                     .source_fn_ty_template = .{},
                 } };
             },
@@ -8200,6 +8257,7 @@ pub const PlatformRequirementRelationInput = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
+    declared_source_ty: canonical.CanonicalTypeKey,
     requested_source_ty: canonical.CanonicalTypeKey,
     app_value_source_scheme: canonical.CanonicalTypeSchemeKey,
     value_kind: PlatformRequiredValueKind,
@@ -8250,6 +8308,7 @@ pub const PlatformRequirementRelation = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
+    declared_source_ty: canonical.CanonicalTypeKey,
     requested_source_ty: canonical.CanonicalTypeKey,
     requested_source_ty_payload: CheckedTypeId,
     app_value_source_scheme: canonical.CanonicalTypeSchemeKey,
@@ -8264,9 +8323,10 @@ pub const PlatformRequirementRelationTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         module_identity: ModuleIdentity,
-        names: *const canonical.CanonicalNameStore,
-        checked_types: *const CheckedTypePublication,
+        names: *canonical.CanonicalNameStore,
+        checked_types: *CheckedTypePublication,
         declarations: *const PlatformRequiredDeclarationTable,
+        relation_artifacts: []const ImportedModuleView,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         const active_relation = relation orelse return .{};
@@ -8337,7 +8397,17 @@ pub const PlatformRequirementRelationTable = struct {
                 }
                 unreachable;
             }
-            const payload = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
+            const payload = try platformRequiredResolvedPayloadForRelation(
+                allocator,
+                module,
+                names,
+                checked_types,
+                declarations,
+                relation_artifacts,
+                active_relation,
+                input,
+                declaration,
+            );
             const payload_key = checked_types.store.roots[@intFromEnum(payload)].key;
 
             rows[i] = .{
@@ -8347,6 +8417,7 @@ pub const PlatformRequirementRelationTable = struct {
                 .declaration = input.declaration,
                 .requires_idx = input.requires_idx,
                 .app_value = input.app_value,
+                .declared_source_ty = input.declared_source_ty,
                 .requested_source_ty = payload_key,
                 .requested_source_ty_payload = payload,
                 .app_value_source_scheme = input.app_value_source_scheme,
@@ -8829,6 +8900,7 @@ pub fn buildPlatformAppRelation(
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
+            .declared_source_ty = requested_source_ty,
             .requested_source_ty = requested_source_ty,
             .app_value_source_scheme = app_value.source_scheme,
             .value_kind = value_kind,
@@ -8912,6 +8984,695 @@ pub fn buildPlatformAppRelation(
         .relations = relations,
         .bindings = bindings,
     };
+}
+
+fn platformRequiredResolvedPayloadForRelation(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    _: *const PlatformRequiredDeclarationTable,
+    relation_artifacts: []const ImportedModuleView,
+    active_relation: PlatformAppRelation,
+    input: PlatformRequirementRelationInput,
+    declaration: PlatformRequiredDeclaration,
+) Allocator.Error!CheckedTypeId {
+    const platform_payload = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
+    const app_view = relationArtifactByKey(relation_artifacts, active_relation.app_artifact) orelse {
+        checkedArtifactInvariant("platform/app relation resolution missing app relation artifact", .{});
+    };
+    const app_scheme = app_view.checked_types.schemeForKey(input.app_value_source_scheme) orelse {
+        checkedArtifactInvariant("platform/app relation resolution could not find app value source scheme", .{});
+    };
+
+    var projector = CheckedTypeStoreImportProjector.init(allocator, &checked_types.store, names, app_view);
+    defer projector.deinit();
+    const projected_app_root = try projector.project(app_scheme.root);
+
+    var resolver = PlatformAppRelationTypeResolver.init(allocator, names, &checked_types.store);
+    defer resolver.deinit();
+    return try resolver.merge(platform_payload, projected_app_root, .value);
+}
+
+const PlatformAppRelationMergeContext = enum {
+    value,
+    record_tail,
+    tag_tail,
+};
+
+const PlatformAppRelationTypeResolver = struct {
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    finalizing: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+
+    fn init(
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        store: *CheckedTypeStore,
+    ) PlatformAppRelationTypeResolver {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .store = store,
+            .finalizing = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *PlatformAppRelationTypeResolver) void {
+        self.finalizing.deinit();
+    }
+
+    fn merge(
+        self: *PlatformAppRelationTypeResolver,
+        platform_root: CheckedTypeId,
+        app_root: CheckedTypeId,
+        context: PlatformAppRelationMergeContext,
+    ) Allocator.Error!CheckedTypeId {
+        const platform_payload = self.payload(platform_root);
+        const app_payload = self.payload(app_root);
+
+        if (checkedTypePayloadIsIdentity(platform_payload)) {
+            return try self.mergeIdentityWith(platform_root, app_root, app_payload, context);
+        }
+        if (checkedTypePayloadIsIdentity(app_payload)) {
+            return try self.mergeIdentityWith(app_root, platform_root, platform_payload, context);
+        }
+
+        return switch (platform_payload) {
+            .pending => checkedArtifactInvariant("platform/app relation merge reached pending platform payload", .{}),
+            .flex, .rigid => unreachable,
+            .empty_record => switch (app_payload) {
+                .empty_record => platform_root,
+                .record, .record_unbound => try self.finalize(app_root, context),
+                else => checkedArtifactInvariant("platform/app relation expected record-compatible app payload", .{}),
+            },
+            .empty_tag_union => switch (app_payload) {
+                .empty_tag_union => platform_root,
+                .tag_union => try self.finalize(app_root, context),
+                else => checkedArtifactInvariant("platform/app relation expected tag-compatible app payload", .{}),
+            },
+            .record, .record_unbound => try self.mergeRecordRoots(platform_root, app_root, context),
+            .tag_union => try self.mergeTagUnionRoots(platform_root, app_root, context),
+            .tuple => |platform_items| blk: {
+                const app_items = switch (app_payload) {
+                    .tuple => |items| items,
+                    else => checkedArtifactInvariant("platform/app relation expected tuple-compatible app payload", .{}),
+                };
+                if (platform_items.len != app_items.len) {
+                    checkedArtifactInvariant("platform/app relation tuple arity mismatch", .{});
+                }
+                const items = try self.mergeRootSlices(platform_items, app_items);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .tuple = items });
+            },
+            .function => |platform_fn| blk: {
+                const app_fn = switch (app_payload) {
+                    .function => |function| function,
+                    else => checkedArtifactInvariant("platform/app relation expected function-compatible app payload", .{}),
+                };
+                if (platform_fn.args.len != app_fn.args.len) {
+                    checkedArtifactInvariant("platform/app relation function arity mismatch", .{});
+                }
+                const args = try self.mergeRootSlices(platform_fn.args, app_fn.args);
+                errdefer self.allocator.free(args);
+                const ret = try self.merge(platform_fn.ret, app_fn.ret, .value);
+                const needs_instantiation = try self.store.checkedTypeSliceContainsIdentityVariables(self.allocator, args) or
+                    try self.store.checkedTypeContainsIdentityVariables(self.allocator, ret);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .function = .{
+                    .kind = finalizedFunctionKind(platform_fn.kind),
+                    .args = args,
+                    .ret = ret,
+                    .needs_instantiation = needs_instantiation,
+                } });
+            },
+            .alias => |platform_alias| try self.mergeAlias(platform_alias, app_root, app_payload),
+            .nominal => |platform_nominal| try self.mergeNominal(platform_root, platform_nominal, app_root, app_payload),
+        };
+    }
+
+    fn mergeIdentityWith(
+        self: *PlatformAppRelationTypeResolver,
+        identity_root: CheckedTypeId,
+        other_root: CheckedTypeId,
+        other_payload: CheckedTypePayload,
+        context: PlatformAppRelationMergeContext,
+    ) Allocator.Error!CheckedTypeId {
+        _ = identity_root;
+        if (checkedTypePayloadIsIdentity(other_payload)) {
+            return switch (context) {
+                .record_tail => try self.emptyRecordRoot(),
+                .tag_tail => try self.emptyTagUnionRoot(),
+                .value => other_root,
+            };
+        }
+        return try self.finalize(other_root, context);
+    }
+
+    fn finalize(
+        self: *PlatformAppRelationTypeResolver,
+        root: CheckedTypeId,
+        context: PlatformAppRelationMergeContext,
+    ) Allocator.Error!CheckedTypeId {
+        const root_payload = self.payload(root);
+        if (checkedTypePayloadIsIdentity(root_payload)) {
+            return switch (context) {
+                .record_tail => try self.emptyRecordRoot(),
+                .tag_tail => try self.emptyTagUnionRoot(),
+                .value => root,
+            };
+        }
+        if (self.finalizing.get(root)) |existing| return existing;
+
+        return switch (root_payload) {
+            .pending => checkedArtifactInvariant("platform/app relation finalization reached pending payload", .{}),
+            .flex, .rigid => unreachable,
+            .empty_record,
+            .empty_tag_union,
+            => root,
+            .tuple => |items| blk: {
+                const finalized = try self.finalizeRootSlice(items);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .tuple = finalized });
+            },
+            .function => |function| blk: {
+                const args = try self.finalizeRootSlice(function.args);
+                errdefer self.allocator.free(args);
+                const ret = try self.finalize(function.ret, .value);
+                const needs_instantiation = try self.store.checkedTypeSliceContainsIdentityVariables(self.allocator, args) or
+                    try self.store.checkedTypeContainsIdentityVariables(self.allocator, ret);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .function = .{
+                    .kind = finalizedFunctionKind(function.kind),
+                    .args = args,
+                    .ret = ret,
+                    .needs_instantiation = needs_instantiation,
+                } });
+            },
+            .alias => |alias| blk: {
+                const backing = try self.finalize(alias.backing, .value);
+                const args = try self.finalizeRootSlice(alias.args);
+                errdefer self.allocator.free(args);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
+                    .name = alias.name,
+                    .origin_module = alias.origin_module,
+                    .backing = backing,
+                    .args = args,
+                } });
+            },
+            .record => |record| blk: {
+                const row = try self.flattenRecordRow(record.fields, record.ext);
+                defer row.deinit(self.allocator);
+                const fields = try self.finalizeRecordFields(row.fields);
+                errdefer self.allocator.free(fields);
+                const ext = if (row.tail) |tail| try self.finalize(tail, .record_tail) else try self.emptyRecordRoot();
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .record = .{
+                    .fields = fields,
+                    .ext = ext,
+                } });
+            },
+            .record_unbound => |fields| blk: {
+                const finalized = try self.finalizeRecordFields(fields);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .record_unbound = finalized });
+            },
+            .tag_union => |tag_union| blk: {
+                const row = try self.flattenTagRow(tag_union.tags, tag_union.ext);
+                defer row.deinit(self.allocator);
+                const tags = try self.finalizeTags(row.tags);
+                errdefer deinitCheckedTags(self.allocator, tags);
+                const ext = if (row.tail) |tail| try self.finalize(tail, .tag_tail) else try self.emptyTagUnionRoot();
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = ext,
+                } });
+            },
+            .nominal => |nominal| blk: {
+                const args = try self.finalizeRootSlice(nominal.args);
+                errdefer self.allocator.free(args);
+                const backing = try self.finalize(nominal.backing, .value);
+                break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
+                    .name = nominal.name,
+                    .origin_module = nominal.origin_module,
+                    .builtin = nominal.builtin,
+                    .is_opaque = nominal.is_opaque,
+                    .backing = backing,
+                    .args = args,
+                } });
+            },
+        };
+    }
+
+    fn mergeAlias(
+        self: *PlatformAppRelationTypeResolver,
+        platform_alias: CheckedAliasType,
+        app_root: CheckedTypeId,
+        app_payload: CheckedTypePayload,
+    ) Allocator.Error!CheckedTypeId {
+        const app_backing = switch (app_payload) {
+            .alias => |alias| alias.backing,
+            else => app_root,
+        };
+        const backing = try self.merge(platform_alias.backing, app_backing, .value);
+        const args = try self.finalizeRootSlice(platform_alias.args);
+        errdefer self.allocator.free(args);
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
+            .name = platform_alias.name,
+            .origin_module = platform_alias.origin_module,
+            .backing = backing,
+            .args = args,
+        } });
+    }
+
+    fn mergeNominal(
+        self: *PlatformAppRelationTypeResolver,
+        platform_root: CheckedTypeId,
+        platform_nominal: CheckedNominalType,
+        app_root: CheckedTypeId,
+        app_payload: CheckedTypePayload,
+    ) Allocator.Error!CheckedTypeId {
+        const app_nominal = switch (app_payload) {
+            .nominal => |nominal| nominal,
+            .alias => |alias| return try self.merge(platform_root, alias.backing, .value),
+            else => {
+                if (platform_nominal.is_opaque or platform_nominal.builtin != null) {
+                    checkedArtifactInvariant("platform/app relation expected nominal-compatible app payload", .{});
+                }
+                return try self.merge(platform_nominal.backing, app_root, .value);
+            },
+        };
+        if (platform_nominal.name != app_nominal.name or
+            platform_nominal.origin_module != app_nominal.origin_module or
+            platform_nominal.is_opaque != app_nominal.is_opaque or
+            platform_nominal.args.len != app_nominal.args.len)
+        {
+            checkedArtifactInvariant("platform/app relation nominal mismatch", .{});
+        }
+        const args = try self.mergeRootSlices(platform_nominal.args, app_nominal.args);
+        errdefer self.allocator.free(args);
+        const backing = try self.merge(platform_nominal.backing, app_nominal.backing, .value);
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
+            .name = platform_nominal.name,
+            .origin_module = platform_nominal.origin_module,
+            .builtin = platform_nominal.builtin,
+            .is_opaque = platform_nominal.is_opaque,
+            .backing = backing,
+            .args = args,
+        } });
+    }
+
+    fn mergeRecordRoots(
+        self: *PlatformAppRelationTypeResolver,
+        platform_root: CheckedTypeId,
+        app_root: CheckedTypeId,
+        context: PlatformAppRelationMergeContext,
+    ) Allocator.Error!CheckedTypeId {
+        _ = context;
+        const platform_payload = self.payload(platform_root);
+        const app_payload = self.payload(app_root);
+        const platform_parts = recordParts(platform_payload) orelse {
+            checkedArtifactInvariant("platform/app relation expected platform record payload", .{});
+        };
+        const app_parts = recordParts(app_payload) orelse switch (app_payload) {
+            .alias => |alias| return try self.mergeRecordRoots(platform_root, alias.backing, .value),
+            else => checkedArtifactInvariant("platform/app relation expected app record payload", .{}),
+        };
+        const platform_row = try self.flattenRecordRow(platform_parts.fields, platform_parts.ext);
+        defer platform_row.deinit(self.allocator);
+        const app_row = try self.flattenRecordRow(app_parts.fields, app_parts.ext);
+        defer app_row.deinit(self.allocator);
+
+        const fields = try self.mergeRecordFields(platform_row.fields, app_row.fields);
+        errdefer self.allocator.free(fields);
+        const ext = try self.mergeOptionalRecordExt(platform_row.tail, app_row.tail);
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .record = .{
+            .fields = fields,
+            .ext = ext,
+        } });
+    }
+
+    fn mergeTagUnionRoots(
+        self: *PlatformAppRelationTypeResolver,
+        platform_root: CheckedTypeId,
+        app_root: CheckedTypeId,
+        context: PlatformAppRelationMergeContext,
+    ) Allocator.Error!CheckedTypeId {
+        _ = context;
+        const platform_payload = self.payload(platform_root);
+        const app_payload = self.payload(app_root);
+        const platform_union = switch (platform_payload) {
+            .tag_union => |tag_union| tag_union,
+            else => checkedArtifactInvariant("platform/app relation expected platform tag union payload", .{}),
+        };
+        const app_union = switch (app_payload) {
+            .tag_union => |tag_union| tag_union,
+            .alias => |alias| return try self.mergeTagUnionRoots(platform_root, alias.backing, .value),
+            .empty_tag_union => CheckedTagUnionType{
+                .tags = &.{},
+                .ext = try self.emptyTagUnionRoot(),
+            },
+            else => checkedArtifactInvariant("platform/app relation expected app tag union payload", .{}),
+        };
+        const platform_row = try self.flattenTagRow(platform_union.tags, platform_union.ext);
+        defer platform_row.deinit(self.allocator);
+        const app_row = try self.flattenTagRow(app_union.tags, app_union.ext);
+        defer app_row.deinit(self.allocator);
+
+        const tags = try self.mergeTags(platform_row.tags, app_row.tags);
+        errdefer deinitCheckedTags(self.allocator, tags);
+        const ext = try self.mergeOptionalTagExt(platform_row.tail, app_row.tail);
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .tag_union = .{
+            .tags = tags,
+            .ext = ext,
+        } });
+    }
+
+    fn mergeOptionalRecordExt(
+        self: *PlatformAppRelationTypeResolver,
+        platform_ext: ?CheckedTypeId,
+        app_ext: ?CheckedTypeId,
+    ) Allocator.Error!CheckedTypeId {
+        if (platform_ext) |left| {
+            if (app_ext) |right| return try self.merge(left, right, .record_tail);
+            return try self.finalize(left, .record_tail);
+        }
+        if (app_ext) |right| return try self.finalize(right, .record_tail);
+        return try self.emptyRecordRoot();
+    }
+
+    fn mergeOptionalTagExt(
+        self: *PlatformAppRelationTypeResolver,
+        platform_ext: ?CheckedTypeId,
+        app_ext: ?CheckedTypeId,
+    ) Allocator.Error!CheckedTypeId {
+        if (platform_ext) |left| {
+            if (app_ext) |right| return try self.merge(left, right, .tag_tail);
+            return try self.finalize(left, .tag_tail);
+        }
+        if (app_ext) |right| return try self.finalize(right, .tag_tail);
+        return try self.emptyTagUnionRoot();
+    }
+
+    const FlattenedRecordRow = struct {
+        fields: []const CheckedRecordField,
+        tail: ?CheckedTypeId,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.fields.len > 0) allocator.free(self.fields);
+        }
+    };
+
+    fn flattenRecordRow(
+        self: *PlatformAppRelationTypeResolver,
+        head: []const CheckedRecordField,
+        ext: ?CheckedTypeId,
+    ) Allocator.Error!FlattenedRecordRow {
+        var fields = std.ArrayList(CheckedRecordField).empty;
+        errdefer fields.deinit(self.allocator);
+
+        try fields.appendSlice(self.allocator, head);
+        var tail = ext;
+        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        while (tail) |tail_id| {
+            if (seen.contains(tail_id)) {
+                checkedArtifactInvariant("platform/app relation record row normalization reached a cyclic row", .{});
+            }
+            try seen.put(tail_id, {});
+
+            switch (self.payload(tail_id)) {
+                .empty_record => {
+                    tail = null;
+                    break;
+                },
+                .record => |record| {
+                    try fields.appendSlice(self.allocator, record.fields);
+                    tail = record.ext;
+                },
+                .record_unbound => |tail_fields| {
+                    try fields.appendSlice(self.allocator, tail_fields);
+                    tail = null;
+                    break;
+                },
+                .alias => |alias| tail = alias.backing,
+                else => break,
+            }
+        }
+
+        return .{
+            .fields = try fields.toOwnedSlice(self.allocator),
+            .tail = tail,
+        };
+    }
+
+    const FlattenedTagRow = struct {
+        tags: []const CheckedTag,
+        tail: ?CheckedTypeId,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.tags.len > 0) allocator.free(self.tags);
+        }
+    };
+
+    fn flattenTagRow(
+        self: *PlatformAppRelationTypeResolver,
+        head: []const CheckedTag,
+        ext: CheckedTypeId,
+    ) Allocator.Error!FlattenedTagRow {
+        var tags = std.ArrayList(CheckedTag).empty;
+        errdefer tags.deinit(self.allocator);
+
+        try tags.appendSlice(self.allocator, head);
+        var tail: ?CheckedTypeId = ext;
+        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        while (tail) |tail_id| {
+            if (seen.contains(tail_id)) {
+                checkedArtifactInvariant("platform/app relation tag row normalization reached a cyclic row", .{});
+            }
+            try seen.put(tail_id, {});
+
+            switch (self.payload(tail_id)) {
+                .empty_tag_union => {
+                    tail = null;
+                    break;
+                },
+                .tag_union => |tag_union| {
+                    try tags.appendSlice(self.allocator, tag_union.tags);
+                    tail = tag_union.ext;
+                },
+                .alias => |alias| tail = alias.backing,
+                else => break,
+            }
+        }
+
+        return .{
+            .tags = try tags.toOwnedSlice(self.allocator),
+            .tail = tail,
+        };
+    }
+
+    fn mergeRootSlices(
+        self: *PlatformAppRelationTypeResolver,
+        platform_items: []const CheckedTypeId,
+        app_items: []const CheckedTypeId,
+    ) Allocator.Error![]const CheckedTypeId {
+        if (platform_items.len != app_items.len) {
+            checkedArtifactInvariant("platform/app relation arity mismatch", .{});
+        }
+        if (platform_items.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedTypeId, platform_items.len);
+        errdefer self.allocator.free(out);
+        for (platform_items, app_items, 0..) |platform_item, app_item, i| {
+            out[i] = try self.merge(platform_item, app_item, .value);
+        }
+        return out;
+    }
+
+    fn finalizeRootSlice(
+        self: *PlatformAppRelationTypeResolver,
+        items: []const CheckedTypeId,
+    ) Allocator.Error![]const CheckedTypeId {
+        if (items.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedTypeId, items.len);
+        errdefer self.allocator.free(out);
+        for (items, 0..) |item, i| {
+            out[i] = try self.finalize(item, .value);
+        }
+        return out;
+    }
+
+    fn mergeRecordFields(
+        self: *PlatformAppRelationTypeResolver,
+        platform_fields: []const CheckedRecordField,
+        app_fields: []const CheckedRecordField,
+    ) Allocator.Error![]const CheckedRecordField {
+        var fields = std.ArrayList(CheckedRecordField).empty;
+        errdefer fields.deinit(self.allocator);
+
+        for (platform_fields) |platform_field| {
+            if (findRecordField(self.names, app_fields, platform_field.name)) |app_field| {
+                try fields.append(self.allocator, .{
+                    .name = platform_field.name,
+                    .ty = try self.merge(platform_field.ty, app_field.ty, .value),
+                });
+            } else {
+                try fields.append(self.allocator, .{
+                    .name = platform_field.name,
+                    .ty = try self.finalize(platform_field.ty, .value),
+                });
+            }
+        }
+        for (app_fields) |app_field| {
+            if (findRecordField(self.names, platform_fields, app_field.name) != null) continue;
+            try fields.append(self.allocator, .{
+                .name = app_field.name,
+                .ty = try self.finalize(app_field.ty, .value),
+            });
+        }
+        std.mem.sort(CheckedRecordField, fields.items, self.names, recordFieldLessThanByName);
+        return try fields.toOwnedSlice(self.allocator);
+    }
+
+    fn finalizeRecordFields(
+        self: *PlatformAppRelationTypeResolver,
+        fields: []const CheckedRecordField,
+    ) Allocator.Error![]const CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = field.name,
+                .ty = try self.finalize(field.ty, .value),
+            };
+        }
+        return out;
+    }
+
+    fn mergeTags(
+        self: *PlatformAppRelationTypeResolver,
+        platform_tags: []const CheckedTag,
+        app_tags: []const CheckedTag,
+    ) Allocator.Error![]const CheckedTag {
+        var tags = std.ArrayList(CheckedTag).empty;
+        errdefer deinitCheckedTags(self.allocator, tags.items);
+
+        for (platform_tags) |platform_tag| {
+            const args = if (findTag(self.names, app_tags, platform_tag.name)) |app_tag| blk: {
+                if (platform_tag.args.len != app_tag.args.len) {
+                    checkedArtifactInvariant("platform/app relation tag payload arity mismatch", .{});
+                }
+                break :blk try self.mergeRootSlices(platform_tag.args, app_tag.args);
+            } else try self.finalizeRootSlice(platform_tag.args);
+            errdefer self.allocator.free(args);
+            try tags.append(self.allocator, .{
+                .name = platform_tag.name,
+                .args = args,
+            });
+        }
+        for (app_tags) |app_tag| {
+            if (findTag(self.names, platform_tags, app_tag.name) != null) continue;
+            const args = try self.finalizeRootSlice(app_tag.args);
+            errdefer self.allocator.free(args);
+            try tags.append(self.allocator, .{
+                .name = app_tag.name,
+                .args = args,
+            });
+        }
+        std.mem.sort(CheckedTag, tags.items, self.names, tagLessThanByName);
+        return try tags.toOwnedSlice(self.allocator);
+    }
+
+    fn finalizeTags(
+        self: *PlatformAppRelationTypeResolver,
+        tags: []const CheckedTag,
+    ) Allocator.Error![]const CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+        errdefer deinitCheckedTags(self.allocator, out);
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = tag.name,
+                .args = try self.finalizeRootSlice(tag.args),
+            };
+        }
+        return out;
+    }
+
+    fn emptyRecordRoot(self: *PlatformAppRelationTypeResolver) Allocator.Error!CheckedTypeId {
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .empty_record);
+    }
+
+    fn emptyTagUnionRoot(self: *PlatformAppRelationTypeResolver) Allocator.Error!CheckedTypeId {
+        return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .empty_tag_union);
+    }
+
+    fn payload(self: *const PlatformAppRelationTypeResolver, root: CheckedTypeId) CheckedTypePayload {
+        const index: usize = @intFromEnum(root);
+        if (index >= self.store.payloads.len) {
+            checkedArtifactInvariant("platform/app relation referenced missing checked type payload", .{});
+        }
+        return self.store.payloads[index];
+    }
+};
+
+fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid => true,
+        else => false,
+    };
+}
+
+const RelationRecordParts = struct {
+    fields: []const CheckedRecordField,
+    ext: ?CheckedTypeId,
+};
+
+fn recordParts(payload: CheckedTypePayload) ?RelationRecordParts {
+    return switch (payload) {
+        .record => |record| .{ .fields = record.fields, .ext = record.ext },
+        .record_unbound => |fields| .{ .fields = fields, .ext = null },
+        .empty_record => .{ .fields = &.{}, .ext = null },
+        else => null,
+    };
+}
+
+fn findRecordField(
+    names: *const canonical.CanonicalNameStore,
+    fields: []const CheckedRecordField,
+    name: canonical.RecordFieldLabelId,
+) ?CheckedRecordField {
+    for (fields) |field| {
+        if (names.recordFieldLabelTextEql(field.name, name)) return field;
+    }
+    return null;
+}
+
+fn findTag(
+    names: *const canonical.CanonicalNameStore,
+    tags: []const CheckedTag,
+    name: canonical.TagLabelId,
+) ?CheckedTag {
+    for (tags) |tag| {
+        if (names.tagLabelTextEql(tag.name, name)) return tag;
+    }
+    return null;
+}
+
+fn recordFieldLessThanByName(
+    names: *const canonical.CanonicalNameStore,
+    lhs: CheckedRecordField,
+    rhs: CheckedRecordField,
+) bool {
+    return names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn tagLessThanByName(
+    names: *const canonical.CanonicalNameStore,
+    lhs: CheckedTag,
+    rhs: CheckedTag,
+) bool {
+    return names.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
 fn appTopLevelValueByName(
@@ -12513,6 +13274,8 @@ pub const ExportedProcedureTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
         const_templates: *const ConstTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
@@ -12544,6 +13307,8 @@ pub const ExportedProcedureTemplateTable = struct {
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 top_level_bindings,
@@ -12584,6 +13349,8 @@ fn buildImportedTemplateClosure(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     const_templates: *const ConstTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
@@ -12597,6 +13364,8 @@ fn buildImportedTemplateClosure(
         artifact_key,
         checked_types,
         checked_templates,
+        callable_eval_templates,
+        entry_wrappers,
         const_templates,
         resolved_value_refs,
         top_level_bindings,
@@ -12640,6 +13409,8 @@ const ImportedTemplateClosureBuilder = struct {
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_template_table: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     const_templates_table: *const ConstTemplateTable,
     resolved_value_refs_table: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
@@ -12674,6 +13445,8 @@ const ImportedTemplateClosureBuilder = struct {
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
         const_templates: *const ConstTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
@@ -12685,6 +13458,8 @@ const ImportedTemplateClosureBuilder = struct {
             .artifact_key = artifact_key,
             .checked_types = checked_types,
             .checked_templates = checked_templates,
+            .callable_eval_template_table = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
             .const_templates_table = const_templates,
             .resolved_value_refs_table = resolved_value_refs,
             .top_level_bindings = top_level_bindings,
@@ -12900,6 +13675,7 @@ const ImportedTemplateClosureBuilder = struct {
             const resolved = self.resolved_value_refs_table.records[raw].ref;
             if (try self.appendImportedTemplateClosureForResolvedRef(resolved)) continue;
             if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) continue;
+            if (try self.appendCallableEvalBindingClosureForResolvedRef(resolved)) continue;
             if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
                 const template = self.checked_templates.get(dependency_ref.template);
                 try self.appendTemplate(dependency_ref, template);
@@ -13060,6 +13836,49 @@ const ImportedTemplateClosureBuilder = struct {
         };
     }
 
+    fn appendCallableEvalBindingClosureForResolvedRef(
+        self: *ImportedTemplateClosureBuilder,
+        ref: ResolvedValueRef,
+    ) Allocator.Error!bool {
+        const use: ProcedureUseTemplate = switch (ref) {
+            .top_level_proc,
+            .promoted_top_level_proc,
+            => |procedure| procedure,
+            else => return false,
+        };
+        const top_level = switch (use.binding) {
+            .top_level => |binding| binding,
+            else => return false,
+        };
+        if (!std.meta.eql(top_level.artifact.bytes, self.artifact_key.bytes)) {
+            checkedArtifactInvariant("top-level callable-eval closure dependency referenced a different artifact", .{});
+        }
+        const binding = self.top_level_bindings.get(top_level.binding);
+        const template_id = switch (binding.body) {
+            .direct_template => return false,
+            .callable_eval_template => |template| template,
+        };
+        try self.appendCallableEvalBindingTemplate(template_id);
+        return true;
+    }
+
+    fn appendCallableEvalBindingTemplate(
+        self: *ImportedTemplateClosureBuilder,
+        template_id: CallableEvalTemplateId,
+    ) Allocator.Error!void {
+        const template = self.callable_eval_template_table.get(template_id);
+        const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
+        const entry_template = self.checked_templates.get(wrapper.template.template);
+
+        try self.appendCheckedTypeRoot(template.checked_fn_root);
+        try self.appendCheckedTypeScheme(template.source_scheme);
+        try self.appendTemplate(wrapper.template, entry_template);
+        try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, .{
+            .artifact = self.artifact_key,
+            .template = template_id,
+        });
+    }
+
     fn constRefForResolvedValueRef(
         _: *ImportedTemplateClosureBuilder,
         ref: ResolvedValueRef,
@@ -13073,9 +13892,12 @@ const ImportedTemplateClosureBuilder = struct {
 
     fn templateForTopLevelBinding(
         self: *ImportedTemplateClosureBuilder,
-        binding_ref: TopLevelProcedureBindingRef,
+        binding_ref: ArtifactTopLevelProcedureBindingRef,
     ) ?canonical.ProcedureTemplateRef {
-        const binding = self.top_level_bindings.get(binding_ref);
+        if (!std.meta.eql(binding_ref.artifact.bytes, self.artifact_key.bytes)) {
+            checkedArtifactInvariant("top-level procedure closure dependency referenced a different artifact", .{});
+        }
+        const binding = self.top_level_bindings.get(binding_ref.binding);
         return switch (binding.body) {
             .direct_template => |direct| checkedTemplateFromCallableTemplateForClosure(direct.template),
             .callable_eval_template => null,
@@ -13098,6 +13920,8 @@ fn buildImportedConstTemplateClosure(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     const_templates: *const ConstTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
@@ -13110,6 +13934,8 @@ fn buildImportedConstTemplateClosure(
         artifact_key,
         checked_types,
         checked_templates,
+        callable_eval_templates,
+        entry_wrappers,
         const_templates,
         resolved_value_refs,
         top_level_bindings,
@@ -13309,13 +14135,13 @@ pub const ExportedProcedureBindingTable = struct {
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 procedure_bindings,
                 platform_required_bindings,
                 imports,
-                callable_eval_templates,
-                entry_wrappers,
                 binding.body,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -13352,13 +14178,13 @@ fn buildProcedureBindingClosure(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
     const_templates: *const ConstTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
     body: ProcedureBindingBody,
 ) Allocator.Error!ImportedTemplateClosureView {
     return switch (body) {
@@ -13368,6 +14194,8 @@ fn buildProcedureBindingClosure(
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 top_level_bindings,
@@ -13381,6 +14209,8 @@ fn buildProcedureBindingClosure(
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 top_level_bindings,
@@ -13406,6 +14236,8 @@ fn buildProcedureBindingClosure(
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 top_level_bindings,
@@ -13645,6 +14477,8 @@ pub const ExportedConstTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
         top_level_values: *const TopLevelValueTable,
         const_templates: *const ConstTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -13670,6 +14504,8 @@ pub const ExportedConstTemplateTable = struct {
                 artifact_key,
                 checked_types,
                 checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
                 const_templates,
                 resolved_value_refs,
                 top_level_bindings,
@@ -14689,6 +15525,11 @@ fn hashImportedProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: Im
     hashEnumValue(hasher, ref.pattern);
 }
 
+fn hashArtifactTopLevelProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ArtifactTopLevelProcedureBindingRef) void {
+    hashCheckedModuleArtifactKey(hasher, ref.artifact);
+    hashEnumValue(hasher, ref.binding);
+}
+
 fn hashRequiredAppProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: RequiredAppProcedureRef) void {
     hashCheckedModuleArtifactKey(hasher, ref.artifact);
     hashTopLevelValueRef(hasher, ref.app_value);
@@ -14723,7 +15564,7 @@ fn hashProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ProcedureB
     switch (ref) {
         .top_level => |binding| {
             hasher.update(&[_]u8{0});
-            hashEnumValue(hasher, binding);
+            hashArtifactTopLevelProcedureBindingRef(hasher, binding);
         },
         .imported => |imported| {
             hasher.update(&[_]u8{1});
@@ -14809,6 +15650,10 @@ fn importedProcedureBindingRefEql(a: ImportedProcedureBindingRef, b: ImportedPro
     return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.def == b.def and
         a.pattern == b.pattern;
+}
+
+fn artifactTopLevelProcedureBindingRefEql(a: ArtifactTopLevelProcedureBindingRef, b: ArtifactTopLevelProcedureBindingRef) bool {
+    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and a.binding == b.binding;
 }
 
 fn topLevelValueRefEql(a: TopLevelValueRef, b: TopLevelValueRef) bool {
@@ -14902,7 +15747,7 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
 pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
-        .top_level => |left| left == b.top_level,
+        .top_level => |left| artifactTopLevelProcedureBindingRefEql(left, b.top_level),
         .imported => |left| importedProcedureBindingRefEql(left, b.imported),
         .hosted => |left| hostedProcRefEql(left, b.hosted),
         .platform_required => |left| requiredAppProcedureRefEql(left, b.platform_required),
@@ -17151,6 +17996,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
+        inputs.relation_artifacts,
         inputs.platform_app_relation,
     );
     errdefer platform_requirement_relations.deinit(allocator);
@@ -17293,6 +18139,8 @@ pub fn publishFromTypedModule(
         artifact_key,
         checked_types,
         &checked_procedure_templates,
+        &callable_eval_templates,
+        &entry_wrappers,
         &const_templates,
         &resolved_value_refs,
         &top_level_procedure_bindings,
@@ -17326,6 +18174,8 @@ pub fn publishFromTypedModule(
         artifact_key,
         checked_types,
         &checked_procedure_templates,
+        &callable_eval_templates,
+        &entry_wrappers,
         &top_level_values,
         &const_templates,
         &resolved_value_refs,
@@ -17484,6 +18334,7 @@ fn expectProvidedExportClassification(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
+        &.{},
         null,
     );
     defer platform_requirement_relations.deinit(allocator);

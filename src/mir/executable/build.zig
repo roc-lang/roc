@@ -790,6 +790,7 @@ fn collectErasedAdapterRequirements(
                 const_instance,
             ),
             .const_ref => executableInvariant("executable adapter collection reached non-runnable compile-time dependency const_ref"),
+            .pending_callable_instance => executableInvariant("executable adapter collection reached summary-only pending callable binding instance"),
             .pending_local_root => executableInvariant("executable adapter collection reached summary-only pending local root"),
             else => {},
         }
@@ -6544,6 +6545,7 @@ const BodyBuilder = struct {
                 );
             },
             .const_ref => executableInvariant("executable lowering reached non-runnable compile-time dependency const_ref"),
+            .pending_callable_instance => executableInvariant("executable lowering reached summary-only pending callable binding instance"),
             .pending_local_root => executableInvariant("executable lowering reached summary-only pending local root"),
             .record => |record| blk: {
                 const ty = try self.lowerExecutableValueType(expr.ty, expr.value_info);

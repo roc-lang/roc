@@ -526,6 +526,7 @@ const BodyFinalizer = struct {
             .str_lit => |literal| .{ .str_lit = literal },
             .const_instance => |const_instance| .{ .const_instance = const_instance },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_callable_instance => |key| .{ .pending_callable_instance = key },
             .pending_local_root => |root| .{ .pending_local_root = root },
             .structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = try self.lowerExpr(eq.lhs),

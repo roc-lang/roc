@@ -625,6 +625,29 @@ pub const Interpreter = struct {
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
         const slot = frame.locals[@intFromEnum(local_id)];
         if (!slot.assigned) {
+            if (comptime builtin.target.os.tag != .freestanding) {
+                const proc = self.store.getProcSpec(frame.proc_id);
+                debugPrint(
+                    "LIR/interpreter unassigned local in proc {d}: name={d} body={any} local={d} layout={d}\n",
+                    .{
+                        @intFromEnum(frame.proc_id),
+                        proc.name.raw(),
+                        proc.body,
+                        @intFromEnum(local_id),
+                        @intFromEnum(self.store.getLocal(local_id).layout_idx),
+                    },
+                );
+                const params = self.store.getLocalSpan(proc.args);
+                debugPrint("  proc params:", .{});
+                for (params) |param| {
+                    debugPrint(" {d}:layout={d}", .{
+                        @intFromEnum(param),
+                        @intFromEnum(self.store.getLocal(param).layout_idx),
+                    });
+                }
+                debugPrint("\n", .{});
+                if (proc.body) |body| self.debugPrintStmtChain(body, 80);
+            }
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
                 .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
@@ -1030,14 +1053,23 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_low_level => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @intFromEnum(current),
-                        stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
+                .assign_low_level => |assign| {
+                    debugPrint(
+                        "  stmt {d}: {any} target_layout={d} args=",
+                        .{
+                            @intFromEnum(current),
+                            stmt,
+                            @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        },
+                    );
+                    for (self.store.getLocalSpan(assign.args)) |arg_local| {
+                        debugPrint("{d}:layout={d} ", .{
+                            @intFromEnum(arg_local),
+                            @intFromEnum(self.store.getLocal(arg_local).layout_idx),
+                        });
+                    }
+                    debugPrint("\n", .{});
+                },
                 .assign_list => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{

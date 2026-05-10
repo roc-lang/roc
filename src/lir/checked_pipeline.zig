@@ -1543,6 +1543,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             => {},
             .const_instance => |const_instance| try self.appendConstKeyDependency(const_instance.key, availability, concrete),
             .const_ref => |key| try self.appendConstKeyDependency(key, availability, concrete),
+            .pending_callable_instance => |key| try concrete.append(self.allocator, .{ .callable_binding_instance = key }),
             .pending_local_root => |root| try availability.append(self.allocator, .{ .local_root = root }),
             .tag => |tag| {
                 for (self.sliceTagPayloadEval(tag.eval_order)) |payload| try self.collectExprImmediate(payload.value, value_store, representation_store, availability, concrete, call_deps);

@@ -675,7 +675,10 @@ fn verifyUnselectedLocalRootDependencyCoveredByConcreteUse(
                 compileTimeFinalizationInvariant("unselected local callable dependency had no top-level value");
             };
             const binding = switch (top_level.value) {
-                .procedure_binding => |binding| checked_artifact.ProcedureBindingRef{ .top_level = binding },
+                .procedure_binding => |binding| checked_artifact.ProcedureBindingRef{ .top_level = .{
+                    .artifact = artifact.key,
+                    .binding = binding,
+                } },
                 .const_ref => compileTimeFinalizationInvariant("unselected local callable dependency resolved to a const ref"),
             };
             for (summary.concrete_values) |value| {
@@ -860,7 +863,10 @@ fn evaluateCallableBindingRoot(
     );
 
     const key = checked_artifact.CallableBindingInstantiationKey{
-        .binding = .{ .top_level = binding_ref },
+        .binding = .{ .top_level = .{
+            .artifact = artifact.key,
+            .binding = binding_ref,
+        } },
         .requested_source_fn_ty = requested_source_fn_ty,
     };
     const instance_ref = try artifact.callable_binding_instances.reserveRequest(allocator, &artifact.checked_types, .{
@@ -1319,9 +1325,7 @@ fn ensureConcreteDependencyValue(
             );
         },
         .callable_binding_instance => |key| {
-            const requested_source_fn_ty_payload = artifact.checked_types.rootForKey(key.requested_source_fn_ty) orelse {
-                compileTimeFinalizationInvariant("concrete dependency callable instance requested function type has no checked payload");
-            };
+            const requested_source_fn_ty_payload = try checkedTypePayloadForCallableBindingDependency(allocator, artifact, dependency_views, key);
             _ = try ensureCallableBindingInstanceRequest(
                 allocator,
                 artifact,
@@ -1369,6 +1373,49 @@ fn checkedTypePayloadForConstInstanceDependency(
     }
 
     compileTimeFinalizationInvariant("concrete dependency const instance requested type has no checked payload");
+}
+
+fn checkedTypePayloadForCallableBindingDependency(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    key: checked_artifact.CallableBindingInstantiationKey,
+) Allocator.Error!checked_artifact.CheckedTypeId {
+    if (artifact.checked_types.rootForKey(key.requested_source_fn_ty)) |root| return root;
+
+    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, dependency_views);
+    defer projector.deinit();
+
+    if (artifactKeyForCallableBinding(key.binding)) |producer| {
+        if (!std.meta.eql(producer.bytes, artifact.key.bytes)) {
+            for (dependency_views) |view| {
+                if (!std.meta.eql(view.key.bytes, producer.bytes)) continue;
+                if (try projector.projectImportedCheckedTypeForKey(view, key.requested_source_fn_ty)) |projected| {
+                    return projected;
+                }
+                break;
+            }
+        }
+    }
+
+    for (dependency_views) |view| {
+        if (try projector.projectImportedCheckedTypeForKey(view, key.requested_source_fn_ty)) |projected| {
+            return projected;
+        }
+    }
+
+    compileTimeFinalizationInvariant("concrete dependency callable instance requested function type has no checked payload");
+}
+
+fn artifactKeyForCallableBinding(binding: checked_artifact.ProcedureBindingRef) ?checked_artifact.CheckedModuleArtifactKey {
+    return switch (binding) {
+        .top_level => |top_level| top_level.artifact,
+        .imported => |imported| imported.artifact,
+        .platform_required => |required| required.artifact,
+        .hosted,
+        .promoted,
+        => null,
+    };
 }
 
 fn dependencySummaryForCompileTimeRequest(
@@ -1575,12 +1622,13 @@ fn sourceBindingForCallableBindingRequest(
 ) ?checked_artifact.CheckedPatternId {
     return switch (binding) {
         .top_level => |binding_ref| blk: {
+            if (!std.meta.eql(binding_ref.artifact.bytes, artifact.key.bytes)) break :blk null;
             for (artifact.top_level_values.entries) |entry| {
                 const candidate = switch (entry.value) {
                     .procedure_binding => |candidate| candidate,
                     .const_ref => continue,
                 };
-                if (candidate == binding_ref) break :blk entry.pattern;
+                if (candidate == binding_ref.binding) break :blk entry.pattern;
             }
             break :blk null;
         },
@@ -1615,9 +1663,14 @@ fn directCallableBindingInfo(
     binding: checked_artifact.ProcedureBindingRef,
 ) ?DirectCallableBindingInfo {
     return switch (binding) {
-        .top_level => |binding_ref| switch (artifact.top_level_procedure_bindings.get(binding_ref).body) {
-            .direct_template => |direct| .{ .direct = direct },
-            .callable_eval_template => null,
+        .top_level => |binding_ref| blk: {
+            const owner_bindings = topLevelProcedureBindingsForArtifact(artifact, import_views, binding_ref.artifact) orelse {
+                compileTimeFinalizationInvariant("top-level direct callable binding owner artifact was not available");
+            };
+            break :blk switch (owner_bindings.get(binding_ref.binding).body) {
+                .direct_template => |direct| .{ .direct = direct },
+                .callable_eval_template => null,
+            };
         },
         .imported => |imported| blk: {
             const view = importedProcedureBindingView(import_views, imported) orelse {

@@ -174,6 +174,7 @@ pub const Expr = struct {
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
         const_ref: check.CheckedArtifact.ConstInstantiationKey,
+        pending_callable_instance: check.CheckedArtifact.CallableBindingInstantiationKey,
         pending_local_root: check.CheckedArtifact.ComptimeRootId,
         tag: struct {
             union_shape: row.TagUnionShapeId,

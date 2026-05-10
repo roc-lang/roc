@@ -84,7 +84,6 @@ pub fn fromExecutable(
         .input = &input,
         .output = &program,
         .value_env = std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var).init(allocator),
-        .expr_map = std.AutoHashMap(Exec.Ast.ExprId, Ast.Var).init(allocator),
         .proc_def_index = std.AutoHashMap(Exec.Ast.ExecutableProcId, usize).init(allocator),
         .layout_cache = std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef).init(allocator),
         .nominal_layout_cache = std.AutoHashMap([32]u8, Ast.LayoutRef).init(allocator),
@@ -106,7 +105,6 @@ const IrBuilder = struct {
     input: *const Exec.Build.Program,
     output: *Program,
     value_env: std.AutoHashMap(Exec.Ast.ExecutableValueRef, Ast.Var),
-    expr_map: std.AutoHashMap(Exec.Ast.ExprId, Ast.Var),
     proc_def_index: std.AutoHashMap(Exec.Ast.ExecutableProcId, usize),
     layout_cache: std.AutoHashMap(Exec.Type.TypeId, Ast.LayoutRef),
     nominal_layout_cache: std.AutoHashMap([32]u8, Ast.LayoutRef),
@@ -116,7 +114,6 @@ const IrBuilder = struct {
         self.nominal_layout_cache.deinit();
         self.layout_cache.deinit();
         self.proc_def_index.deinit();
-        self.expr_map.deinit();
         self.value_env.deinit();
     }
 
@@ -124,7 +121,6 @@ const IrBuilder = struct {
         try self.buildProcDefIndex();
         for (self.input.ast.defs.items) |def| {
             self.value_env.clearRetainingCapacity();
-            self.expr_map.clearRetainingCapacity();
             try self.lowerDef(def);
         }
     }
@@ -229,31 +225,12 @@ const IrBuilder = struct {
         };
     }
 
-    fn exprCanUseExprMap(expr: Exec.Ast.Expr) bool {
-        return switch (expr.data) {
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .unit,
-            => true,
-
-            else => false,
-        };
-    }
-
     fn lowerExpr(
         self: *IrBuilder,
         expr_id: Exec.Ast.ExprId,
         stmts: *std.ArrayList(Ast.StmtId),
     ) LowerResourceError!Ast.Var {
         const expr = self.input.ast.getExpr(expr_id);
-        const can_use_expr_map = exprCanUseExprMap(expr);
-        if (can_use_expr_map) {
-            if (self.expr_map.get(expr_id)) |existing| return existing;
-        }
-
         const lowered: Ast.Var = switch (expr.data) {
             .value_ref => |value| blk: {
                 const existing = self.value_env.get(value) orelse irInvariant("IR lowering reached executable value_ref before value was bound");
@@ -367,9 +344,6 @@ const IrBuilder = struct {
             .const_ref => irInvariant("IR lowering received non-runnable compile-time dependency const_ref"),
         };
 
-        if (can_use_expr_map) {
-            try self.expr_map.put(expr_id, lowered);
-        }
         try self.value_env.put(expr.value, lowered);
         return lowered;
     }

@@ -68,6 +68,7 @@ pub const MonoSpecializationRequest = struct {
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     reason: MonoSpecializationReason,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
+    allow_return_widening: bool = false,
 };
 
 /// Public `ReservedState` declaration.
@@ -84,6 +85,7 @@ pub const ReservedMonoProc = struct {
     local_handle: MonoProcHandle,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView,
+    allow_return_widening: bool,
     state: ReservedState,
 };
 
@@ -365,7 +367,7 @@ pub fn run(
             template_lookup.artifact,
         );
         defer root_type_instantiator.deinit();
-        try root_type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, seed.requested_fn_ty);
+        try root_type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, seed.requested_fn_ty, seed.allow_return_widening);
         const materialized_fn_root = try root_type_instantiator.materializeConcreteRef(seed.requested_fn_ty);
         const materialized_fn_ty = try program.concrete_source_types.registerLocalRoot(materialized_fn_root);
         const request = MonoSpecializationRequest{
@@ -373,6 +375,7 @@ pub fn run(
             .requested_fn_ty = materialized_fn_ty,
             .reason = seed.reason,
             .imported_closure = seed.imported_closure,
+            .allow_return_widening = seed.allow_return_widening,
         };
         const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, mirProcedureRefFromReserved(reserved));
@@ -392,7 +395,7 @@ pub fn run(
         }
         var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types, &name_resolver, template_lookup.artifact);
         defer type_instantiator.deinit();
-        try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty);
+        try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty, reserved.allow_return_widening);
         const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
         var body_lowerer = BodyLowerer.init(allocator, input, &program, template_lookup, &type_instantiator, &name_resolver, &queue);
         defer body_lowerer.deinit();
@@ -642,6 +645,7 @@ const EntrypointSeed = struct {
     metadata: mir_ids.RootMetadata,
     reason: MonoSpecializationReason,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
+    allow_return_widening: bool = false,
 };
 
 const RootTemplateSelection = struct {
@@ -671,6 +675,7 @@ fn specializationSeedForEntrypoint(
                 .metadata = rootMetadataFromChecked(root),
                 .reason = .{ .root = root },
                 .imported_closure = selection.imported_closure,
+                .allow_return_widening = std.meta.activeTag(root.source) == .required_binding,
             };
         },
         .const_instance => |request| const_seed: {
@@ -697,7 +702,7 @@ fn specializationSeedForEntrypoint(
             };
             break :callable_seed .{
                 .template = selection.template,
-                .requested_fn_ty = try compileTimeFunctionTypeForRequest(
+                .requested_fn_ty = try compileTimeEntryFunctionTypeForReturn(
                     allocator,
                     input,
                     program,
@@ -757,37 +762,6 @@ fn compileTimeEntryFunctionTypeForReturn(
     );
     defer key_builder.deinit();
     return try program.concrete_source_types.sealLocalRoot(local_fn, try key_builder.keyForRoot(local_fn));
-}
-
-fn compileTimeFunctionTypeForRequest(
-    allocator: Allocator,
-    input: Input,
-    program: *Program,
-    name_resolver: *ArtifactNames.ArtifactNameResolver,
-    requested_fn_ty: checked_artifact.CheckedTypeId,
-) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-    const concrete = try program.concrete_source_types.registerArtifactRoot(
-        input.root.artifact.key,
-        input.root.artifact.checked_types.view(),
-        requested_fn_ty,
-    );
-    var materializer = TypeInstantiator.init(
-        allocator,
-        input,
-        program,
-        input.root.artifact.checked_types.view(),
-        name_resolver,
-        input.root.artifact.key,
-    );
-    defer materializer.deinit();
-    const local_root = try materializer.materializeConcreteRef(concrete);
-    var key_builder = ConcreteSourceType.PayloadKeyBuilder.init(
-        allocator,
-        &program.canonical_names,
-        program.concrete_source_types.local_payloads.items,
-    );
-    defer key_builder.deinit();
-    return try program.concrete_source_types.sealLocalRoot(local_root, try key_builder.keyForRoot(local_root));
 }
 
 fn constEvalEntryTemplateForRequest(
@@ -876,8 +850,9 @@ fn callableEvalEntryTemplateForRequest(
     };
     const owner_and_binding: OwnerAndBinding = switch (request.key.binding) {
         .top_level => |binding| .{
-            .owner = input.root.artifact.key,
-            .binding = binding,
+            .owner = binding.artifact,
+            .binding = binding.binding,
+            .imported_closure = relationClosureForTopLevelBindingRef(input, binding),
         },
         .platform_required => |required| .{
             .owner = required.artifact,
@@ -934,6 +909,44 @@ fn relationClosureForProcedureBindingRef(
         },
         else => null,
     };
+}
+
+fn relationClosureForTopLevelBindingRef(
+    input: Input,
+    binding_ref: checked_artifact.ArtifactTopLevelProcedureBindingRef,
+) ?checked_artifact.ImportedTemplateClosureView {
+    if (std.mem.eql(u8, &binding_ref.artifact.bytes, &input.root.artifact.key.bytes)) return null;
+    const bindings = topLevelProcedureBindingsForKey(input, binding_ref.artifact) orelse {
+        debug.invariant(false, "mono specialization invariant violated: top-level callable eval binding owner artifact was not available");
+        unreachable;
+    };
+    const binding = bindings.get(binding_ref.binding);
+    const template_id = switch (binding.body) {
+        .direct_template => return null,
+        .callable_eval_template => |template| template,
+    };
+    for (input.root.artifact.platform_required_bindings.bindings) |platform_binding| {
+        const closure = switch (platform_binding.value_use) {
+            .procedure_value => |procedure| procedure.relation_template_closure,
+            .const_value => |const_value| const_value.relation_template_closure,
+        };
+        if (importedClosureContainsCallableEvalTemplate(closure, binding_ref.artifact, template_id)) {
+            return closure;
+        }
+    }
+    debug.invariant(false, "mono specialization invariant violated: non-local top-level callable eval binding had no relation closure");
+    unreachable;
+}
+
+fn importedClosureContainsCallableEvalTemplate(
+    closure: checked_artifact.ImportedTemplateClosureView,
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    template_id: checked_artifact.CallableEvalTemplateId,
+) bool {
+    for (closure.callable_eval_templates) |template| {
+        if (std.mem.eql(u8, &template.artifact.bytes, &artifact.bytes) and template.template == template_id) return true;
+    }
+    return false;
 }
 
 fn requiredAppProcedureRefEql(
@@ -1511,7 +1524,7 @@ fn closureForCallableBindingInstanceRef(
             break :blk view.template_closure;
         },
         .platform_required => relationClosureForProcedureBindingRef(input, ref.key.binding),
-        .top_level,
+        .top_level => |binding| relationClosureForTopLevelBindingRef(input, binding),
         .hosted,
         .promoted,
         => null,
@@ -1880,9 +1893,74 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         template_fn_root: checked_artifact.CheckedTypeId,
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+        allow_return_widening: bool,
     ) Allocator.Error!void {
         _ = try self.materializeConcreteRef(requested_fn_ty);
-        try self.unifyTemplateWithConcrete(template_fn_root, requested_fn_ty);
+        if (allow_return_widening) {
+            try self.unifyFunctionTemplateWithConcreteAllowingReturnWidening(template_fn_root, requested_fn_ty);
+        } else {
+            try self.unifyTemplateWithConcrete(template_fn_root, requested_fn_ty);
+        }
+    }
+
+    fn unifyFunctionTemplateWithConcreteAllowingReturnWidening(
+        self: *TypeInstantiator,
+        template_fn_root: checked_artifact.CheckedTypeId,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const template = self.templatePayload(template_fn_root);
+        const requested = self.concretePayload(requested_fn_ty);
+        switch (template) {
+            .alias => |alias| return try self.unifyFunctionTemplateWithConcreteAllowingReturnWidening(alias.backing, requested_fn_ty),
+            .function => |func| switch (requested) {
+                .alias => |alias| return try self.unifyFunctionTemplateWithConcreteAllowingReturnWidening(
+                    template_fn_root,
+                    try self.concreteAliasBackingRef(requested_fn_ty, alias),
+                ),
+                .function => |requested_func| {
+                    if (func.args.len != requested_func.args.len) {
+                        invariantViolation("mono specialization concrete function shape mismatch");
+                    }
+                    try self.unifyTypeLists(func.args, requested_fn_ty, requested_func.args);
+                    try self.unifyReturnWithConcreteAllowingTagWidening(func.ret, try self.concreteChildRef(requested_fn_ty, requested_func.ret));
+                },
+                else => invariantViolation("mono specialization expected a concrete function"),
+            },
+            else => try self.unifyTemplateWithConcrete(template_fn_root, requested_fn_ty),
+        }
+    }
+
+    fn unifyReturnWithConcreteAllowingTagWidening(
+        self: *TypeInstantiator,
+        template_id: checked_artifact.CheckedTypeId,
+        requested: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const template_payload = self.templatePayload(template_id);
+        switch (template_payload) {
+            .alias => |alias| return try self.unifyReturnWithConcreteAllowingTagWidening(alias.backing, requested),
+            .nominal => |nominal| {
+                if (nominal.builtin != null or nominal.is_opaque) return try self.unifyTemplateWithConcrete(template_id, requested);
+                return try self.unifyReturnWithConcreteAllowingTagWidening(nominal.backing, try self.transparentConcreteNominalBackingOrSelf(requested));
+            },
+            .tag_union,
+            .empty_tag_union,
+            => return try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                try self.concreteRefForTemplateTypePreservingVariables(template_id),
+                requested,
+            ),
+            .tuple => |items| {
+                const requested_payload = self.concretePayload(requested);
+                const requested_items = switch (requested_payload) {
+                    .tuple => |tuple| tuple,
+                    else => return try self.unifyTemplateWithConcrete(template_id, requested),
+                };
+                if (items.len != requested_items.len) invariantViolation("mono specialization concrete tuple shape mismatch");
+                for (items, requested_items) |item, requested_item| {
+                    try self.unifyReturnWithConcreteAllowingTagWidening(item, try self.concreteChildRef(requested, requested_item));
+                }
+            },
+            else => try self.unifyTemplateWithConcrete(template_id, requested),
+        }
     }
 
     fn fork(self: *const TypeInstantiator) Allocator.Error!TypeInstantiator {
@@ -3031,6 +3109,93 @@ const TypeInstantiator = struct {
         try self.unifyConcretePayloads(lhs, lhs_payload, rhs, rhs_payload);
     }
 
+    fn transparentConcreteNominalBackingOrSelf(
+        self: *TypeInstantiator,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const source = self.resolveConcreteRef(source_ref);
+        return switch (self.concretePayload(source)) {
+            .alias => |alias| try self.transparentConcreteNominalBackingOrSelf(try self.concreteAliasBackingRef(source, alias)),
+            .nominal => |nominal| if (nominal.builtin == null and !nominal.is_opaque)
+                try self.concreteNominalBackingRef(source, nominal)
+            else
+                source,
+            else => source,
+        };
+    }
+
+    fn unifyConcreteRefsAllowingRequestedTagSuperset(
+        self: *TypeInstantiator,
+        template_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        requested_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const template = self.resolveConcreteRef(template_ref);
+        if (template == self.resolveConcreteRef(requested_ref)) return;
+
+        switch (self.concretePayload(template)) {
+            .flex,
+            .rigid,
+            => return try self.bindConcreteVariable(template, requested_ref),
+            .alias => |alias| return try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                try self.concreteAliasBackingRef(template, alias),
+                requested_ref,
+            ),
+            .nominal => |nominal| {
+                if (nominal.builtin != null or nominal.is_opaque) return try self.unifyConcreteRefs(template, requested_ref);
+                return try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                    try self.concreteNominalBackingRef(template, nominal),
+                    try self.transparentConcreteNominalBackingOrSelf(requested_ref),
+                );
+            },
+            else => {},
+        }
+
+        const requested = self.resolveConcreteRef(requested_ref);
+        switch (self.concretePayload(requested)) {
+            .flex,
+            .rigid,
+            => return try self.bindConcreteVariable(requested, template),
+            .alias => |alias| return try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                template,
+                try self.concreteAliasBackingRef(requested, alias),
+            ),
+            .nominal => |nominal| {
+                if (nominal.builtin != null or nominal.is_opaque) return try self.unifyConcreteRefs(template, requested);
+                return try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                    template,
+                    try self.concreteNominalBackingRef(requested, nominal),
+                );
+            },
+            else => {},
+        }
+
+        const template_payload = self.concretePayload(template);
+        const requested_payload = self.concretePayload(requested);
+        switch (template_payload) {
+            .tag_union,
+            .empty_tag_union,
+            => switch (requested_payload) {
+                .tag_union,
+                .empty_tag_union,
+                => try self.unifyConcreteTagRowsAllowingRequestedSuperset(template, requested),
+                else => try self.unifyConcreteRefs(template, requested),
+            },
+            .tuple => |items| switch (requested_payload) {
+                .tuple => |requested_items| {
+                    if (items.len != requested_items.len) invariantViolation("mono specialization concrete tuple shape mismatch");
+                    for (items, requested_items) |item, requested_item| {
+                        try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                            try self.concreteChildRef(template, item),
+                            try self.concreteChildRef(requested, requested_item),
+                        );
+                    }
+                },
+                else => try self.unifyConcreteRefs(template, requested),
+            },
+            else => try self.unifyConcreteRefs(template, requested),
+        }
+    }
+
     fn unifyConcretePayloads(
         self: *TypeInstantiator,
         lhs_ref: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -3338,6 +3503,58 @@ const TypeInstantiator = struct {
         try self.reconcileConcreteTagTails(lhs_tail, lhs_only.items, rhs_tail, rhs_only.items);
     }
 
+    fn unifyConcreteTagRowsAllowingRequestedSuperset(
+        self: *TypeInstantiator,
+        template_row: ConcreteSourceType.ConcreteSourceTypeRef,
+        requested_row: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        var template_entries = std.ArrayList(ConcreteTagEntry).empty;
+        defer template_entries.deinit(self.allocator);
+        const template_tail = try self.collectConcreteTagEntries(template_row, &template_entries);
+
+        var requested_entries = std.ArrayList(ConcreteTagEntry).empty;
+        defer requested_entries.deinit(self.allocator);
+        const requested_tail = try self.collectConcreteTagEntries(requested_row, &requested_entries);
+
+        const requested_consumed = try self.allocator.alloc(bool, requested_entries.items.len);
+        defer self.allocator.free(requested_consumed);
+        @memset(requested_consumed, false);
+
+        var template_only = std.ArrayList(ConcreteTagEntry).empty;
+        defer template_only.deinit(self.allocator);
+
+        for (template_entries.items) |template_entry| {
+            if (findUnconsumedConcreteTagEntry(requested_entries.items, requested_consumed, template_entry.name)) |requested_index| {
+                requested_consumed[requested_index] = true;
+                const requested_entry = requested_entries.items[requested_index];
+                if (template_entry.tag.args.len != requested_entry.tag.args.len) {
+                    invariantViolation("mono specialization concrete tag payload arity mismatch");
+                }
+                for (template_entry.tag.args, requested_entry.tag.args) |template_arg, requested_arg| {
+                    try self.unifyConcreteRefsAllowingRequestedTagSuperset(
+                        try self.concreteChildRef(template_entry.owner, template_arg),
+                        try self.concreteChildRef(requested_entry.owner, requested_arg),
+                    );
+                }
+            } else {
+                try template_only.append(self.allocator, template_entry);
+            }
+        }
+
+        var requested_only = std.ArrayList(ConcreteTagEntry).empty;
+        defer requested_only.deinit(self.allocator);
+        for (requested_entries.items, 0..) |requested_entry, index| {
+            if (!requested_consumed[index]) try requested_only.append(self.allocator, requested_entry);
+        }
+
+        try self.reconcileConcreteTagTailsAllowingRequestedSuperset(
+            template_tail,
+            template_only.items,
+            requested_tail,
+            requested_only.items,
+        );
+    }
+
     fn collectConcreteTagEntries(
         self: *TypeInstantiator,
         row: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -3395,6 +3612,36 @@ const TypeInstantiator = struct {
         }
         if (rhs_tail.is_open) {
             try self.bindOpenConcreteTagTail(rhs_tail.ref, lhs_only, lhs_tail.ref);
+        }
+    }
+
+    fn reconcileConcreteTagTailsAllowingRequestedSuperset(
+        self: *TypeInstantiator,
+        template_tail: ConcreteTagTail,
+        template_only: []const ConcreteTagEntry,
+        requested_tail: ConcreteTagTail,
+        requested_only: []const ConcreteTagEntry,
+    ) Allocator.Error!void {
+        if (!requested_tail.is_open and template_only.len != 0) {
+            invariantViolation("mono specialization requested return tag row was missing app-produced tags");
+        }
+
+        if (template_tail.is_open and requested_tail.is_open) {
+            if (template_only.len == 0 and requested_only.len == 0) {
+                try self.unifyConcreteRefs(template_tail.ref, requested_tail.ref);
+                return;
+            }
+            const shared_tail = try self.freshConcreteTagTailRef();
+            try self.bindOpenConcreteTagTail(template_tail.ref, requested_only, shared_tail);
+            try self.bindOpenConcreteTagTail(requested_tail.ref, template_only, shared_tail);
+            return;
+        }
+
+        if (template_tail.is_open) {
+            try self.bindOpenConcreteTagTail(template_tail.ref, requested_only, requested_tail.ref);
+        }
+        if (requested_tail.is_open) {
+            try self.bindOpenConcreteTagTail(requested_tail.ref, template_only, template_tail.ref);
         }
     }
 
@@ -6247,7 +6494,7 @@ const BodyLowerer = struct {
         const expr = self.checkedExpr(expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultTypeInFreshInstantiation(
-                call.source_fn_ty_payload,
+                self.callSourceFnPayload(call.func, call.source_fn_ty_payload),
                 call.args,
                 null,
             ),
@@ -6771,6 +7018,9 @@ const BodyLowerer = struct {
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
                 }
+                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |key| {
+                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = key });
+                }
                 const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
                 break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
                     .proc = try self.reserveCallableProcedure(callable, requested_fn_ty, .{ .proc_value = record.expr }),
@@ -6784,6 +7034,9 @@ const BodyLowerer = struct {
                 const requested_fn_ty = expected.source_ref;
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
+                }
+                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |key| {
+                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = key });
                 }
                 const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
                 break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
@@ -7945,8 +8198,9 @@ const BodyLowerer = struct {
         self.type_instantiator = &call_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
-        try self.bindKnownCallCalleeType(call.source_fn_ty_payload, call.func);
-        const instantiated = try self.instantiateCallType(call.source_fn_ty_payload, call.args, expected);
+        const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
+        try self.bindKnownCallCalleeType(source_fn_ty_payload, call.func);
+        const instantiated = try self.instantiateCallType(source_fn_ty_payload, call.args, expected);
         if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
             invariantViolation("mono body lowering call result type disagreed with concrete expected type");
         }
@@ -7955,6 +8209,9 @@ const BodyLowerer = struct {
             const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
             if (try self.summaryPendingLocalRootForProcedureUse(proc_use, instantiated.concrete_fn)) |root| {
                 return try self.lowerPendingLocalRootCall(expected, root, args);
+            }
+            if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, instantiated.concrete_fn)) |key| {
+                return try self.lowerPendingCallableInstanceCall(expected, key, args);
             }
             const proc = try self.reserveProcedureUseForConcrete(proc_use, instantiated.concrete_fn, .{ .call_proc = call_expr });
             return try self.program.ast.addExpr(expected.ty, .{ .call_proc = .{
@@ -9474,6 +9731,15 @@ const BodyLowerer = struct {
         };
     }
 
+    fn callSourceFnPayload(
+        self: *const BodyLowerer,
+        func_expr: checked_artifact.CheckedExprId,
+        fallback: checked_artifact.CheckedTypeId,
+    ) checked_artifact.CheckedTypeId {
+        const proc_use = self.procedureUseForExpr(func_expr) orelse return fallback;
+        return proc_use.source_fn_ty_payload orelse invariantViolation("mono body lowering reached a procedure call without a published source function payload");
+    }
+
     fn localProcUseForExpr(
         self: *const BodyLowerer,
         expr_id: checked_artifact.CheckedExprId,
@@ -9510,7 +9776,8 @@ const BodyLowerer = struct {
             .top_level => |binding| binding,
             else => return null,
         };
-        const binding = self.input.root.artifact.top_level_procedure_bindings.get(binding_ref);
+        if (!std.mem.eql(u8, &binding_ref.artifact.bytes, &self.input.root.artifact.key.bytes)) return null;
+        const binding = self.input.root.artifact.top_level_procedure_bindings.get(binding_ref.binding);
         switch (binding.body) {
             .direct_template => return null,
             .callable_eval_template => {},
@@ -9525,7 +9792,71 @@ const BodyLowerer = struct {
             return null;
         }
 
-        return self.localCallableRootForBinding(binding_ref);
+        return self.localCallableRootForBinding(binding_ref.binding);
+    }
+
+    fn summaryPendingCallableBindingInstanceForProcedureUse(
+        self: *BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+        requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!?checked_artifact.CallableBindingInstantiationKey {
+        if (self.input.mode != .comptime_dependency_summary) return null;
+
+        const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
+        const key = self.callableBindingInstantiationKeyForProcedureUse(use, requested_key) orelse return null;
+        if (callableBindingInstanceForKey(self.input, self.input.root.artifact.key, key) != null) {
+            return null;
+        }
+        return key;
+    }
+
+    fn callableBindingInstantiationKeyForProcedureUse(
+        self: *BodyLowerer,
+        use: checked_artifact.ProcedureUseTemplate,
+        requested_key: canonical.CanonicalTypeKey,
+    ) ?checked_artifact.CallableBindingInstantiationKey {
+        const binding_key: checked_artifact.ProcedureBindingRef = switch (use.binding) {
+            .top_level => |binding_ref| blk: {
+                const bindings = topLevelProcedureBindingsForKey(self.input, binding_ref.artifact) orelse {
+                    debug.invariant(false, "mono dependency-summary lowering found top-level procedure binding for unavailable artifact");
+                    unreachable;
+                };
+                switch (bindings.get(binding_ref.binding).body) {
+                    .direct_template => return null,
+                    .callable_eval_template => {},
+                }
+                break :blk .{ .top_level = binding_ref };
+            },
+            .imported => |imported| blk: {
+                const binding = importedProcedureBindingViewForRef(self.input, imported) orelse {
+                    debug.invariant(false, "mono dependency-summary lowering found imported procedure binding with no published view");
+                    unreachable;
+                };
+                switch (binding.body) {
+                    .direct_template => return null,
+                    .callable_eval_template => {},
+                }
+                break :blk .{ .imported = imported };
+            },
+            .platform_required => |required| blk: {
+                const bindings = topLevelProcedureBindingsForKey(self.input, required.artifact) orelse {
+                    debug.invariant(false, "mono dependency-summary lowering found platform-required procedure binding for unavailable app artifact");
+                    unreachable;
+                };
+                switch (bindings.get(required.procedure_binding).body) {
+                    .direct_template => return null,
+                    .callable_eval_template => {},
+                }
+                break :blk .{ .platform_required = required };
+            },
+            .hosted,
+            .promoted,
+            => return null,
+        };
+        return .{
+            .binding = binding_key,
+            .requested_source_fn_ty = requested_key,
+        };
     }
 
     fn localCallableRootForBinding(
@@ -9575,6 +9906,27 @@ const BodyLowerer = struct {
         } });
     }
 
+    fn lowerPendingCallableInstanceCall(
+        self: *BodyLowerer,
+        expected: ConcreteTypeInfo,
+        key: checked_artifact.CallableBindingInstantiationKey,
+        args: Ast.Span(Ast.ExprId),
+    ) Allocator.Error!Ast.ExprId {
+        const pending = try self.program.ast.addExprWithSource(expected.ty, expected.source_ty, .{ .pending_callable_instance = key });
+        const arg_exprs = self.program.ast.sliceExprSpan(args);
+        if (arg_exprs.len == 0) return pending;
+
+        const stmts = try self.allocator.alloc(Ast.StmtId, arg_exprs.len);
+        defer self.allocator.free(stmts);
+        for (arg_exprs, 0..) |arg, i| {
+            stmts[i] = try self.program.ast.addStmt(.{ .expr = arg });
+        }
+        return try self.program.ast.addExprWithSource(expected.ty, expected.source_ty, .{ .block = .{
+            .stmts = try self.program.ast.addStmtSpan(stmts),
+            .final_expr = pending,
+        } });
+    }
+
     fn reserveProcedureUseForConcrete(
         self: *BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
@@ -9590,6 +9942,7 @@ const BodyLowerer = struct {
             .requested_fn_ty = requested_fn_ty,
             .reason = reason,
             .imported_closure = imported_closure,
+            .allow_return_widening = std.meta.activeTag(use.binding) == .platform_required,
         });
         return .{
             .proc = reserved.proc.proc,
@@ -9672,12 +10025,12 @@ const BodyLowerer = struct {
         const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
         return switch (use.binding) {
             .top_level => |binding_ref| try self.callableFromTopLevelBinding(
-                self.template_lookup.artifact,
-                topLevelProcedureBindingsForKey(self.input, self.template_lookup.artifact) orelse {
+                binding_ref.artifact,
+                topLevelProcedureBindingsForKey(self.input, binding_ref.artifact) orelse {
                     debug.invariant(false, "mono body lowering invariant violated: callable artifact has no top-level procedure binding table");
                     unreachable;
                 },
-                binding_ref,
+                binding_ref.binding,
                 .{ .top_level = binding_ref },
                 requested_key,
             ),
@@ -9732,13 +10085,14 @@ const BodyLowerer = struct {
         binding_key: checked_artifact.ProcedureBindingRef,
         requested_key: canonical.CanonicalTypeKey,
     ) Allocator.Error!canonical.ProcedureCallableRef {
+        _ = owner;
         const binding = bindings.get(binding_ref);
         return switch (binding.body) {
             .direct_template => |direct| .{
                 .template = direct.template,
                 .source_fn_ty = requested_key,
             },
-            .callable_eval_template => try self.callableFromCallableBindingInstance(owner, binding_key, requested_key),
+            .callable_eval_template => try self.callableFromCallableBindingInstance(self.input.root.artifact.key, binding_key, requested_key),
         };
     }
 
@@ -10288,7 +10642,10 @@ fn templateForRoot(
                         input.root.artifact.key,
                         &artifact.top_level_procedure_bindings,
                         binding_ref,
-                        .{ .top_level = binding_ref },
+                        .{ .top_level = .{
+                            .artifact = input.root.artifact.key,
+                            .binding = binding_ref,
+                        } },
                         requested_key,
                     ) orelse break :blk null;
                     break :blk .{ .template = template };
@@ -10357,9 +10714,12 @@ fn templateForProcedureUse(
     return switch (proc_use.binding) {
         .top_level => |binding_ref| templateFromRootTopLevelBinding(
             input,
-            input.root.artifact.key,
-            &input.root.artifact.top_level_procedure_bindings,
-            binding_ref,
+            binding_ref.artifact,
+            topLevelProcedureBindingsForKey(input, binding_ref.artifact) orelse {
+                debug.invariant(false, "mono specialization invariant violated: top-level procedure binding references unavailable artifact");
+                unreachable;
+            },
+            binding_ref.binding,
             .{ .top_level = binding_ref },
             requested_key,
         ),
@@ -10393,10 +10753,11 @@ fn templateFromRootTopLevelBinding(
     binding_key: checked_artifact.ProcedureBindingRef,
     requested_key: canonical.CanonicalTypeKey,
 ) ?canonical.ProcedureTemplateRef {
+    _ = owner;
     const binding = bindings.get(binding_ref);
     return switch (binding.body) {
         .direct_template => |direct| checkedTemplateFromCallableTemplate(direct.template),
-        .callable_eval_template => templateFromCallableBindingInstanceForRoot(input, owner, binding_key, requested_key),
+        .callable_eval_template => templateFromCallableBindingInstanceForRoot(input, input.root.artifact.key, binding_key, requested_key),
     };
 }
 
@@ -10849,6 +11210,13 @@ pub const Queue = struct {
                 debug.invariant(false, "mono specialization invariant violated: same specialization key registered with a different callable template identity");
                 unreachable;
             }
+            if (request.allow_return_widening and !existing.allow_return_widening) {
+                if (existing.state != .reserved) {
+                    debug.invariant(false, "mono specialization invariant violated: return widening was requested after specialization lowering had started");
+                    unreachable;
+                }
+                existing.allow_return_widening = true;
+            }
             if (existing.imported_closure == null and request.imported_closure != null) {
                 existing.imported_closure = request.imported_closure;
             }
@@ -10864,6 +11232,7 @@ pub const Queue = struct {
             .local_handle = @enumFromInt(@as(u32, @intCast(self.requested.count()))),
             .requested_fn_ty = request.requested_fn_ty,
             .imported_closure = request.imported_closure,
+            .allow_return_widening = request.allow_return_widening,
             .state = .reserved,
         };
         try self.requested.put(key, reserved);

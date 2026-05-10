@@ -4092,6 +4092,7 @@ const SourceMatchReachabilityFinalizer = struct {
             .unit,
             .const_instance,
             .const_ref,
+            .pending_callable_instance,
             .pending_local_root,
             .crash,
             .runtime_error,
@@ -6543,6 +6544,7 @@ const ValueTransformFinalizer = struct {
             .unit,
             .const_instance,
             .const_ref,
+            .pending_callable_instance,
             .pending_local_root,
             .crash,
             .runtime_error,
@@ -10827,6 +10829,7 @@ const BodySolver = struct {
             .str_lit,
             .const_instance,
             .const_ref,
+            .pending_callable_instance,
             .pending_local_root,
             .unit,
             => true,
@@ -11059,6 +11062,10 @@ const BodySolver = struct {
                 break :blk .{ .const_instance = const_instance };
             },
             .const_ref => |key| .{ .const_ref = key },
+            .pending_callable_instance => |key| blk: {
+                self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                break :blk .{ .pending_callable_instance = key };
+            },
             .pending_local_root => |root| blk: {
                 self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
                 break :blk .{ .pending_local_root = root };

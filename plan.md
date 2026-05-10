@@ -3586,24 +3586,33 @@ value environment, and that environment changes at declarations, mutable
 declarations, `set`, loop joins, `match` branches, `if` branches, blocks, and
 pattern scopes.
 
-Therefore an IR-lowering memo table keyed only by executable `ExprId` is legal
-only for closed leaves whose lowering cannot inspect child expressions and
-cannot read or mutate the IR value environment: primitive literals, string
-literals, decimal literals, and unit. It must not cache `value_ref`, `let`,
-`block`, `match`, `if`, `for`, calls, records, tuples, lists, tags, projections,
-procedure values, callable-set expressions, bridge expressions, low-level calls,
-structural equality, returns, crash/runtime-error nodes, or any expression whose
-lowering appends control-flow statements or recursively lowers children.
+Therefore IR lowering must not use an expression-id memo table that returns a
+local variable, even for literals and unit. A local is available only on the path
+where its `let` was emitted. Future literal commoning must use an explicit
+dominating binding, inline literal operand, or immutable constant mechanism;
+never a hidden `ExprId -> local` cache.
 
-For example, the source expression `[1] == [1]` lowers list equality through a
-helper loop whose index is mutable. The loop condition must read the current IR
-variable for that index after each `set`. If IR lowering memoizes the first
-lowering of the executable index lookup, the condition keeps reading the
-initial `0` value instead of the updated loop slot, and the generated helper
-becomes an infinite loop. The correct construction is: executable MIR publishes
-explicit mutable value identity, IR lowering resolves each `value_ref` through
-the current IR environment, and only closed environment-independent leaves may
-use an expression-id memo table.
+For example:
+
+```roc
+match_list_patterns : List(U64) -> U64
+match_list_patterns = |lst|
+    match lst {
+        [] => 0
+        [1, .. as tail] => 77 + tail.len()
+        _ => 100
+    }
+```
+
+A decision tree can reach `[1, .. as tail]` through multiple shared test paths.
+If one path emits `let literal_77 = 77` and another path reuses that local from a
+cache, LIR correctly reports use-before-assignment. Lower the branch body
+freshly for each materialized path, or use an explicit branch-sharing join whose
+parameters include every path-local value the body needs.
+
+The same prohibition covers every executable expression whose result is a local,
+including value refs, control flow, calls, aggregates, projections, bridges,
+low-level calls, equality, returns, and expressions that lower children.
 
 If Roc permits a source reassignment pattern that can fail at runtime, checking
 finalization must have either reported that as a user-facing error or published
@@ -7036,7 +7045,7 @@ const ConstUseTemplate = struct {
 };
 
 const ProcedureBindingRef = union(enum) {
-    top_level: TopLevelProcedureBindingRef,
+    top_level: ArtifactTopLevelProcedureBindingRef,
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
     platform_required: RequiredAppProcedureRef,
@@ -18035,6 +18044,11 @@ const CallableBindingInstanceId = enum(u32) { _ };
 const ComptimeDependencySummaryId = enum(u32) { _ };
 const ComptimeOnlyExecutableRootId = enum(u32) { _ };
 
+const ArtifactTopLevelProcedureBindingRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    binding: TopLevelProcedureBindingRef,
+};
+
 const TopLevelProcedureBinding = struct {
     source_scheme: CanonicalTypeSchemeKey,
     body: ProcedureBindingBody,
@@ -24244,6 +24258,53 @@ checking-finalization interpreter entrypoint keyed by the
 value into sealed checked procedure data owned by the requesting artifact, and
 fills the requesting artifact's `CallableBindingInstantiationStore`.
 
+A `CallableBindingInstantiationKey` must name the producer binding and the
+requesting concrete type separately. The store that owns the row is the
+requesting artifact; the `binding` field names where the callable producer came
+from. Therefore the `ProcedureBindingRef.top_level` variant uses the
+artifact-qualified `ArtifactTopLevelProcedureBindingRef` defined with the
+checked-artifact data structures above.
+
+It is a compiler bug for `ProcedureBindingRef.top_level` to mean "look in the
+current lowering artifact." That was the exact failure mode for a default-app
+platform body like:
+
+```roc
+my_concat = Str.concat
+
+main! = |_args| {
+    echo!("Three"->my_concat(" Four"))
+    Ok({})
+}
+```
+
+The root is the platform artifact, but `my_concat` is a private app relation
+binding. The instance row is owned by the requesting platform
+artifact, while the producer binding is `top_level { artifact =
+app_artifact_key, binding = my_concat_binding }`. An unqualified `top_level =
+my_concat_binding` either searches the wrong producer table or tries to mutate an
+immutable relation artifact after publication.
+
+Summary lowering may encounter a callable-eval producer whose concrete
+instance has not been sealed yet in the requesting artifact. In that mode it
+must emit the `ConcreteValueUse.callable_binding_instance` key owned by
+the requesting artifact and continue with an explicit summary-only callable
+placeholder. It must not demand a sealed instance, run the interpreter, mutate
+the producer artifact, or scan the relation artifact for a private root. Runnable
+lowering, executable MIR, IR, LIR, backends, and the interpreter may consume only
+sealed `CallableBindingInstanceRef` rows. A missing row in any runnable stage is
+a compiler invariant violation: debug builds assert immediately and release
+builds use `unreachable`.
+
+A private callable-eval binding reachable from an imported template closure or
+platform/app relation closure must be listed in that closure. The closure entry
+must include the producer artifact key, the producer `TopLevelProcedureBindingRef`,
+the `CallableEvalTemplate`, the selected entry wrapper, checked type roots and
+schemes, resolved value-reference spans, static-dispatch spans, nested procedure
+sites, method-registry entries, and interface capabilities needed to lower that
+entry wrapper. Later stages must not infer private binding availability from
+`relation_artifacts`.
+
 A callable-eval binding is not fully named by its `CallableEvalTemplateId`.
 The `CallableEvalTemplate` row names the compile-time root and checked function
 type for the binding, but the actual thing mono specializes is the private
@@ -24420,12 +24481,15 @@ fn reserveCallableBindingInstanceRefDependencies(
 `closureForCallableBindingInstanceRef` is pure artifact lookup over already
 published data:
 
+- `binding = .top_level` uses the artifact key in
+  `ArtifactTopLevelProcedureBindingRef`. If that artifact is the current
+  lowering artifact, no imported closure is needed. If that artifact is an
+  imported or relation artifact, the current imported/relation closure must list
+  the private callable-eval binding and its entry wrapper.
 - `binding = .imported` uses
   `ImportedProcedureBindingView.template_closure`
 - `binding = .platform_required` uses
   `PlatformRequiredProcedureUse.relation_template_closure`
-- `binding = .top_level` in the root artifact uses no imported closure because
-  the template is local to the lowering artifact
 - `binding = .hosted` and `binding = .promoted` do not name callable-eval
   templates
 
@@ -24825,8 +24889,15 @@ const PlatformRequirementRelation = struct {
     declaration: PlatformRequiredDeclarationId,
     app_value: TopLevelValueRef,
 
-    // The platform-requested source type, using the canonical key produced from
-    // the platform requirement annotation.
+    // The declaration-time platform boundary type, using the canonical key
+    // produced from the raw platform requirement annotation. This key may
+    // contain boundary variables such as open tag-union tails.
+    declared_source_ty: CanonicalTypeKey,
+
+    // The executable, app-specific platform-requested source type. This is the
+    // result of checking the selected app value against the platform boundary
+    // type and publishing that relation result. It must not contain unresolved
+    // row-tail variables that executable lowering would need to guess about.
     requested_source_ty: CanonicalTypeKey,
 
     // The checked payload graph for `requested_source_ty` in the executable
@@ -24900,6 +24971,232 @@ are checked-artifact data, and checked artifacts are target-independent. They
 also deliberately do not use only a requirement count; changing
 `requires {} { main : Str }` to `requires {} { main : I64 }` with the same app
 artifact must produce a different platform/app relation key.
+
+The relation key is based on the declaration boundary, not on the executable
+resolved payload. This distinction is mandatory because platform requirements
+are allowed to be open interfaces. For example:
+
+```roc
+platform ""
+    requires {} {
+        main! : List(Str) => Try({}, [Exit(I8), ..])
+    }
+    exposes [Echo]
+    packages {}
+    provides { main_for_host!: "main" }
+
+import Echo
+
+main_for_host! : List(Str) => I8
+main_for_host! = |args|
+    match main!(args) {
+        Ok({}) => 0
+        Err(Exit(code)) => code
+        Err(other) => {
+            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+            1
+        }
+    }
+```
+
+The open `..` in the requirement is not an error and the app author must not be
+forced to close it. The boundary means "the app may return `Exit(I8)` and any
+additional app-specific error tags." The platform author is responsible for
+handling the open part, usually with a catch-all branch such as `Err(other)`.
+
+Therefore the platform/app relation must publish two type identities:
+
+- `declared_source_ty`: the raw platform boundary type
+  `List(Str) => Try({}, [Exit(I8), ..])`
+- `requested_source_ty`: the app-specific executable instantiation produced by
+  checking the selected app `main!` against that boundary
+
+If the app is:
+
+```roc
+main! = |_args| {
+    echo!("Hello, World!")
+    Ok({})
+}
+```
+
+then the relation-resolved executable type is equivalent to:
+
+```roc
+List(Str) => Try({}, [Exit(I8)])
+```
+
+If the app is:
+
+```roc
+main! = |_args| Err(SomeCustomError(41))
+```
+
+then the relation-resolved executable type is equivalent to:
+
+```roc
+List(Str) => Try({}, [Exit(I8), SomeCustomError(I64)])
+```
+
+This relation-resolved type is what mono MIR and all later stages consume. The
+raw declaration type may retain boundary variables because it is an interface
+contract; the executable relation payload may not retain unresolved row-tail
+variables that later stages would need to close, default, erase, or repair.
+
+Relation resolution happens during checking finalization, not in mono MIR. The
+resolver consumes only explicit checked data:
+
+1. the platform requirement's checked declaration payload
+2. the selected app top-level value's checked source scheme
+3. the platform/app relation row that names that app value
+4. for-clause substitutions already projected into the executable platform
+   artifact's checked type store
+
+It then merges the platform boundary payload with the app value payload in the
+executable platform artifact's `CheckedTypeStore`. Open record and tag rows are
+merged by label. Labels explicitly named by the platform remain present; labels
+explicitly produced by the app are added; labels present on both sides have their
+payload types merged recursively. Any row tail variable that remains after the
+merge is closed to the empty row in the executable relation payload. This is not
+a user-visible restriction on the `requires` boundary; it is the concrete
+app/platform instantiation for this executable.
+
+Row merging must normalize concrete row tails before constructing the executable
+payload. A platform boundary and an app value may publish equivalent rows with
+different head/tail splits, especially around `for`-clause aliases:
+
+```roc
+platform ""
+    requires {
+        [Model : model] for main : {
+            init : {} -> model,
+            update : model, I64 -> model,
+            render : model -> Simple(model),
+        }
+    }
+```
+
+The app can provide:
+
+```roc
+Model : { value : I64 }
+
+main = {
+    init: |{}| { value: 0 },
+    update: |m, delta| { value: m.value + delta },
+    render: |_m| Simple.leaf("hello"),
+}
+```
+
+The resolver must flatten explicit record and tag row tails on both sides, merge
+each label exactly once, and keep only a residual tail that was not explicit
+after flattening. It must never emit `{ init, update, render, ..same fields }`
+or `[Exit(I8), ..same tags]`. Duplicate labels in the executable relation
+payload are a checked-artifact publication bug; later key builders and MIR
+stages must not deduplicate them as a repair step.
+
+Transparent source-type wrappers at the boundary are preserved only when their
+executable arguments can be explicitly merged and published correctly. If the
+platform boundary used a transparent nominal or alias but the app value's
+checked payload is already structural, relation resolution must merge the
+transparent backing structurally instead of preserving a misleading nominal
+shell. For example, the platform may write:
+
+```roc
+main! : List(Str) => Try({}, [Exit(I8), ..])
+```
+
+while the app value's checked return payload is already the backing tag union
+for `Try`. In that case, relation resolution must merge `Try`'s backing against
+the app's structural tag union and publish that merged structural payload as the
+executable relation type. It must not publish `Try` with stale declaration-time
+args such as `[Exit(I8)]`, because later nominal expansion would lose
+app-specific tags like `SomeCustomError(I64)`.
+
+If both sides are the same transparent nominal, the resolver may preserve the
+nominal only by recursively merging the nominal args and backing so they stay in
+agreement. Opaque nominals and builtin nominals do not use structural
+compatibility; if checking allowed an incompatible value through, that is a
+checked-artifact invariant violation.
+
+For tag unions, this means:
+
+```roc
+# platform boundary
+[Exit(I8), ..]
+
+# app value contributes no extra errors
+[..]
+
+# executable relation payload
+[Exit(I8)]
+```
+
+and:
+
+```roc
+# platform boundary
+[Exit(I8), ..]
+
+# app value contributes `SomeCustomError(I64)`
+[SomeCustomError(I64), ..]
+
+# executable relation payload
+[Exit(I8), SomeCustomError(I64)]
+```
+
+Mono MIR must never receive the declaration-time `[Exit(I8), ..]` payload for a
+platform-required executable root. If it does, and reaches an unresolved rigid or
+flex row tail while materializing a concrete source type, that is a checked
+artifact publication bug. It must be caught by debug-only artifact verification;
+release builds use `unreachable` on the invariant path.
+
+Calls to platform-required values must also use the relation-owned payload. A
+checked call expression may still carry the local function-constraint payload
+from the raw platform declaration because the call was copied before the
+platform/app relation was published. The callee expression's `ResolvedValueRef`
+is the authoritative post-check source for procedure calls. If that callee is a
+platform-required procedure, its `ProcedureUseTemplate.source_fn_ty_payload` must
+be the relation-resolved executable payload, and mono call lowering must use
+that payload instead of the raw `CheckedExprData.call.source_fn_ty_payload`.
+This is not recovery from syntax; it is consuming the explicit resolved value
+metadata published by checked-artifact finalization.
+
+Mono specialization must also respect the direction of the platform/app
+relation. The app procedure body may have a narrower inferred return row than
+the executable relation payload, because the relation can add platform-required
+alternatives that the app did not produce in that body:
+
+```roc
+# platform boundary
+main! : List(Str) => Try({}, [Exit(I8), ..])
+
+# app body
+main! = |_args| Err(SomeCustomError(41))
+
+# executable relation return
+Try({}, [Exit(I8), SomeCustomError(I64)])
+```
+
+The app body does not need to manufacture `Exit(I8)` just because the platform
+requires that branch to exist in the executable boundary type. Therefore mono
+uses strict type unification for ordinary procedure specializations, but for
+platform-required procedure roots and calls it allows the relation-owned
+requested return type to be a tag-row superset of the app template's inferred
+return type. This rule is directional and explicit:
+
+- arguments are still unified strictly
+- opaque and builtin nominals are still unified strictly
+- only transparent return payloads may be structurally compared
+- only tag rows in the return payload may accept relation-added alternatives
+- app-produced alternatives must still be present in the relation payload
+- the permission is carried by the platform-required root/call metadata; it is
+  not inferred from syntax or from a failed ordinary unification attempt
+
+For example, if the app returns `Err(CustomError(Color::Red))`, the relation
+payload must contain `CustomError(Color)` as well as any platform alternatives
+such as `Exit(I8)`. If it does not, checked-artifact publication is wrong and
+mono must fail with a compiler invariant violation.
 
 These tables use canonical published names. `source_name`, `abi_name`, and
 `platform_name` are not raw `Ident.Idx` handles; they have already crossed the
