@@ -1488,8 +1488,8 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
                     lambdaInvariant("lambda-solved value join metadata is attached to a different result value");
                 }
             }
-            if (value.solved_class == null) {
-                lambdaInvariant("lambda-solved sealed program contains a value without a solved representation class");
+            if (value.solved_group == null) {
+                lambdaInvariant("lambda-solved sealed program contains a value without a solved representation group");
             }
             if (!value_store.valueSourceMatchBranchReachable(value)) continue;
             if (value.pending_local_root_origin) continue;
@@ -1510,8 +1510,8 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
         }
     }
     for (program.solve_sessions.items) |session| {
-        if (session.representation_store.root_classes.len != @as(usize, @intCast(session.representation_store.roots_len))) {
-            lambdaInvariant("lambda-solved sealed program contains a solve session without a complete root class table");
+        if (session.representation_store.root_groups.len != @as(usize, @intCast(session.representation_store.roots_len))) {
+            lambdaInvariant("lambda-solved sealed program contains a solve session without a complete root group table");
         }
         for (session.representation_store.box_boundaries) |boundary| {
             verifyConcreteSourcePayload(program, boundary.box_ty, boundary.box_ty_payload, "lambda-solved BoxBoundary box type");
@@ -1660,7 +1660,7 @@ const SessionExecutablePayloadPublisher = struct {
         self: *SessionExecutablePayloadPublisher,
         key: repr.CanonicalCallableSetKey,
     ) bool {
-        for (self.representationStore().callable_class_emissions) |maybe_emission| {
+        for (self.representationStore().callable_group_emissions) |maybe_emission| {
             const emission = maybe_emission orelse continue;
             if (self.callableEmissionReferencesSet(emission, key)) return true;
         }
@@ -3604,7 +3604,7 @@ fn solveRepresentationSessions(
     for (program.solve_sessions.items, 0..) |*session, raw_session| {
         session.state = .solving;
         {
-            var solver = RepresentationClassSolver{
+            var solver = RepresentationGroupSolver{
                 .allocator = program.allocator,
                 .program = program,
                 .records = records,
@@ -3612,7 +3612,7 @@ fn solveRepresentationSessions(
                 .session = session,
                 .parents = &.{},
                 .ranks = &.{},
-                .classes = std.AutoHashMap(u32, repr.RepresentationClassId).init(program.allocator),
+                .groups = std.AutoHashMap(u32, repr.RepresentationGroupId).init(program.allocator),
             };
             defer solver.deinit();
             try solver.solve();
@@ -3620,7 +3620,7 @@ fn solveRepresentationSessions(
     }
 }
 
-const RepresentationClassSolver = struct {
+const RepresentationGroupSolver = struct {
     allocator: Allocator,
     program: *Program,
     records: []const ProcBuildRecord,
@@ -3628,22 +3628,22 @@ const RepresentationClassSolver = struct {
     session: *repr.RepresentationSolveSession,
     parents: []u32,
     ranks: []u8,
-    classes: std.AutoHashMap(u32, repr.RepresentationClassId),
+    groups: std.AutoHashMap(u32, repr.RepresentationGroupId),
 
-    fn deinit(self: *RepresentationClassSolver) void {
-        self.classes.deinit();
+    fn deinit(self: *RepresentationGroupSolver) void {
+        self.groups.deinit();
         if (self.ranks.len > 0) self.allocator.free(self.ranks);
         if (self.parents.len > 0) self.allocator.free(self.parents);
     }
 
-    fn solve(self: *RepresentationClassSolver) Allocator.Error!void {
+    fn solve(self: *RepresentationGroupSolver) Allocator.Error!void {
         try self.initUnionFind();
         self.unionValueFlowEdges();
-        try self.closeStructuralProjectionClasses();
-        try self.assignValueClasses();
+        try self.closeStructuralProjectionGroups();
+        try self.assignValueGroups();
     }
 
-    fn unionValueFlowEdges(self: *RepresentationClassSolver) void {
+    fn unionValueFlowEdges(self: *RepresentationGroupSolver) void {
         for (self.session.representation_store.representation_edges.items) |edge| {
             if (!self.edgeUnionsValueFlow(edge)) continue;
             const from = self.endpointRootInSession(edge.from) orelse continue;
@@ -3670,7 +3670,7 @@ const RepresentationClassSolver = struct {
         kind: StructuralProjectionKind,
     };
 
-    fn closeStructuralProjectionClasses(self: *RepresentationClassSolver) Allocator.Error!void {
+    fn closeStructuralProjectionGroups(self: *RepresentationGroupSolver) Allocator.Error!void {
         var changed = true;
         while (changed) {
             changed = false;
@@ -3699,7 +3699,7 @@ const RepresentationClassSolver = struct {
     }
 
     fn structuralProjectionKind(
-        _: *RepresentationClassSolver,
+        _: *RepresentationGroupSolver,
         kind: repr.RepresentationEdgeKind,
     ) ?StructuralProjectionKind {
         return switch (kind) {
@@ -3734,7 +3734,7 @@ const RepresentationClassSolver = struct {
         };
     }
 
-    fn initUnionFind(self: *RepresentationClassSolver) Allocator.Error!void {
+    fn initUnionFind(self: *RepresentationGroupSolver) Allocator.Error!void {
         const len = self.session.representation_store.roots_len;
         self.parents = if (len == 0) &.{} else try self.allocator.alloc(u32, len);
         errdefer if (self.parents.len > 0) self.allocator.free(self.parents);
@@ -3746,7 +3746,7 @@ const RepresentationClassSolver = struct {
         @memset(self.ranks, 0);
     }
 
-    fn edgeUnionsValueFlow(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
+    fn edgeUnionsValueFlow(self: *RepresentationGroupSolver, edge: repr.RepresentationEdge) bool {
         return switch (edge.kind) {
             .value_alias,
             .value_move,
@@ -3768,12 +3768,12 @@ const RepresentationClassSolver = struct {
         };
     }
 
-    fn edgeTouchesFunctionShapeRoot(self: *RepresentationClassSolver, edge: repr.RepresentationEdge) bool {
+    fn edgeTouchesFunctionShapeRoot(self: *RepresentationGroupSolver, edge: repr.RepresentationEdge) bool {
         if (self.endpointIsFunctionShapeRoot(edge.from)) return true;
         return self.endpointIsFunctionShapeRoot(edge.to);
     }
 
-    fn endpointIsFunctionShapeRoot(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) bool {
+    fn endpointIsFunctionShapeRoot(self: *RepresentationGroupSolver, endpoint: repr.RepresentationEndpoint) bool {
         const root = self.endpointRootInSession(endpoint) orelse return false;
         return switch (self.session.representation_store.rootKind(root)) {
             .call_value_requested_fn,
@@ -3784,7 +3784,7 @@ const RepresentationClassSolver = struct {
         };
     }
 
-    fn endpointRootInSession(self: *RepresentationClassSolver, endpoint: repr.RepresentationEndpoint) ?repr.RepRootId {
+    fn endpointRootInSession(self: *RepresentationGroupSolver, endpoint: repr.RepresentationEndpoint) ?repr.RepRootId {
         return switch (endpoint) {
             .local => |root| root,
             .procedure_public => |public| blk: {
@@ -3801,7 +3801,7 @@ const RepresentationClassSolver = struct {
     }
 
     fn recordForInstance(
-        self: *RepresentationClassSolver,
+        self: *RepresentationGroupSolver,
         instance: repr.ProcRepresentationInstanceId,
     ) *const ProcBuildRecord {
         const index = @intFromEnum(instance);
@@ -3811,7 +3811,7 @@ const RepresentationClassSolver = struct {
         return &self.records[index];
     }
 
-    fn unionRoots(self: *RepresentationClassSolver, a: repr.RepRootId, b: repr.RepRootId) bool {
+    fn unionRoots(self: *RepresentationGroupSolver, a: repr.RepRootId, b: repr.RepRootId) bool {
         const a_index = @intFromEnum(a);
         const b_index = @intFromEnum(b);
         if (a_index >= self.parents.len or b_index >= self.parents.len) {
@@ -3831,7 +3831,7 @@ const RepresentationClassSolver = struct {
         return true;
     }
 
-    fn find(self: *RepresentationClassSolver, index: u32) u32 {
+    fn find(self: *RepresentationGroupSolver, index: u32) u32 {
         var current = index;
         while (self.parents[current] != current) {
             current = self.parents[current];
@@ -3846,40 +3846,40 @@ const RepresentationClassSolver = struct {
         return root;
     }
 
-    fn assignValueClasses(self: *RepresentationClassSolver) Allocator.Error!void {
-        self.session.representation_store.resetSolvedClasses();
+    fn assignValueGroups(self: *RepresentationGroupSolver) Allocator.Error!void {
+        self.session.representation_store.resetSolvedGroups();
         const root_count: usize = @intCast(self.session.representation_store.roots_len);
-        const root_classes = try self.allocator.alloc(repr.RepresentationClassId, root_count);
-        errdefer self.allocator.free(root_classes);
+        const root_groups = try self.allocator.alloc(repr.RepresentationGroupId, root_count);
+        errdefer self.allocator.free(root_groups);
 
-        for (root_classes, 0..) |*class, raw_root| {
+        for (root_groups, 0..) |*group, raw_root| {
             const root: repr.RepRootId = @enumFromInt(@as(u32, @intCast(raw_root)));
-            class.* = try self.classForRoot(root);
+            group.* = try self.groupForRoot(root);
         }
-        try self.session.representation_store.publishRootClasses(root_classes);
+        try self.session.representation_store.publishRootGroups(root_groups);
 
         for (self.session.members) |member| {
             const record = self.recordForInstance(member);
             const value_store = &self.program.value_stores.items[@intFromEnum(record.value_store)];
             for (value_store.values.items) |*value| {
-                value.solved_class = self.session.representation_store.classForRoot(value.root);
+                value.solved_group = self.session.representation_store.groupForRoot(value.root);
             }
         }
     }
 
-    fn classForRoot(
-        self: *RepresentationClassSolver,
+    fn groupForRoot(
+        self: *RepresentationGroupSolver,
         root: repr.RepRootId,
-    ) Allocator.Error!repr.RepresentationClassId {
+    ) Allocator.Error!repr.RepresentationGroupId {
         const root_index = @intFromEnum(root);
         if (root_index >= self.parents.len) {
-            lambdaInvariant("lambda-solved representation solver assigned class for out-of-range root");
+            lambdaInvariant("lambda-solved representation solver assigned group for out-of-range root");
         }
         const representative = self.find(root_index);
-        if (self.classes.get(representative)) |existing| return existing;
-        const class = self.session.representation_store.reserveClass();
-        try self.classes.put(representative, class);
-        return class;
+        if (self.groups.get(representative)) |existing| return existing;
+        const group = self.session.representation_store.reserveGroup();
+        try self.groups.put(representative, group);
+        return group;
     }
 };
 
@@ -3894,8 +3894,8 @@ fn finalizeSourceMatchBranchReachability(
             .records = records,
             .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
             .session = session,
-            .class_states = .empty,
-            .class_state_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .group_states = .empty,
+            .group_state_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
         };
         defer finalizer.deinit();
         try finalizer.finalize();
@@ -3908,24 +3908,24 @@ const SourceMatchReachabilityFinalizer = struct {
     records: []const ProcBuildRecord,
     session_id: repr.RepresentationSolveSessionId,
     session: *repr.RepresentationSolveSession,
-    class_states: std.ArrayList(ClassTagInhabitance),
-    class_state_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+    group_states: std.ArrayList(GroupTagInhabitance),
+    group_state_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
 
     const TagSelection = struct {
         union_shape: MonoRow.TagUnionShapeId,
         tag: MonoRow.TagId,
     };
 
-    const ClassTagInhabitance = struct {
-        class: repr.RepresentationClassId,
+    const GroupTagInhabitance = struct {
+        group: repr.RepresentationGroupId,
         tags: std.ArrayList(TagSelection),
         unknown: bool = false,
     };
 
     fn deinit(self: *SourceMatchReachabilityFinalizer) void {
-        for (self.class_states.items) |*state| state.tags.deinit(self.allocator);
-        self.class_state_index.deinit();
-        self.class_states.deinit(self.allocator);
+        for (self.group_states.items) |*state| state.tags.deinit(self.allocator);
+        self.group_state_index.deinit();
+        self.group_states.deinit(self.allocator);
     }
 
     fn finalize(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
@@ -3955,20 +3955,20 @@ const SourceMatchReachabilityFinalizer = struct {
             const value_store = self.valueStoreFor(record);
             for (value_store.values.items) |value| {
                 if (!self.typeCanContainTagUnion(value.logical_ty)) continue;
-                const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match reachability saw value without solved class");
+                const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match reachability saw value without solved group");
                 if (value.aggregate) |aggregate| {
                     const tag = switch (aggregate) {
                         .tag => |tag| tag,
                         else => continue,
                     };
-                    try self.addSelectedTag(class, .{
+                    try self.addSelectedTag(group, .{
                         .union_shape = tag.union_shape,
                         .tag = tag.tag,
                     });
                     continue;
                 }
                 if (self.valueInheritsSelectedTagSet(value)) continue;
-                try self.markClassUnknown(class);
+                try self.markGroupUnknown(group);
             }
         }
     }
@@ -4015,8 +4015,8 @@ const SourceMatchReachabilityFinalizer = struct {
         for (params) |param| {
             const value = value_store.values.items[@intFromEnum(param)];
             if (!self.typeCanContainTagUnion(value.logical_ty)) continue;
-            const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match reachability saw root param without solved class");
-            try self.markClassUnknown(class);
+            const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match reachability saw root param without solved group");
+            try self.markGroupUnknown(group);
         }
     }
 
@@ -4138,8 +4138,8 @@ const SourceMatchReachabilityFinalizer = struct {
         switch (pat.data) {
             .tag => |tag| {
                 const value = value_store.values.items[@intFromEnum(pat.value_info)];
-                const class = value.solved_class orelse lambdaInvariant("lambda-solved source-match pattern had no solved class");
-                if (!self.classCanContainTag(class, .{
+                const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match pattern had no solved group");
+                if (!self.groupCanContainTag(group, .{
                     .union_shape = tag.union_shape,
                     .tag = tag.tag,
                 })) return false;
@@ -4184,12 +4184,12 @@ const SourceMatchReachabilityFinalizer = struct {
         return true;
     }
 
-    fn classCanContainTag(
+    fn groupCanContainTag(
         self: *SourceMatchReachabilityFinalizer,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
         selection: TagSelection,
     ) bool {
-        const state = self.classState(class) orelse return true;
+        const state = self.groupState(group) orelse return true;
         if (state.unknown or state.tags.items.len == 0) return true;
         for (state.tags.items) |tag| {
             if (tag.union_shape == selection.union_shape and tag.tag == selection.tag) return true;
@@ -4199,44 +4199,44 @@ const SourceMatchReachabilityFinalizer = struct {
 
     fn addSelectedTag(
         self: *SourceMatchReachabilityFinalizer,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
         selection: TagSelection,
     ) Allocator.Error!void {
-        const state = try self.ensureClassState(class);
+        const state = try self.ensureGroupState(group);
         for (state.tags.items) |existing| {
             if (existing.union_shape == selection.union_shape and existing.tag == selection.tag) return;
         }
         try state.tags.append(self.allocator, selection);
     }
 
-    fn markClassUnknown(
+    fn markGroupUnknown(
         self: *SourceMatchReachabilityFinalizer,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
     ) Allocator.Error!void {
-        const state = try self.ensureClassState(class);
+        const state = try self.ensureGroupState(group);
         state.unknown = true;
     }
 
-    fn ensureClassState(
+    fn ensureGroupState(
         self: *SourceMatchReachabilityFinalizer,
-        class: repr.RepresentationClassId,
-    ) Allocator.Error!*ClassTagInhabitance {
-        if (self.class_state_index.get(class)) |index| return &self.class_states.items[index];
-        const index = self.class_states.items.len;
-        try self.class_states.append(self.allocator, .{
-            .class = class,
+        group: repr.RepresentationGroupId,
+    ) Allocator.Error!*GroupTagInhabitance {
+        if (self.group_state_index.get(group)) |index| return &self.group_states.items[index];
+        const index = self.group_states.items.len;
+        try self.group_states.append(self.allocator, .{
+            .group = group,
             .tags = .empty,
         });
-        try self.class_state_index.put(class, index);
-        return &self.class_states.items[index];
+        try self.group_state_index.put(group, index);
+        return &self.group_states.items[index];
     }
 
-    fn classState(
+    fn groupState(
         self: *SourceMatchReachabilityFinalizer,
-        class: repr.RepresentationClassId,
-    ) ?*const ClassTagInhabitance {
-        const index = self.class_state_index.get(class) orelse return null;
-        return &self.class_states.items[index];
+        group: repr.RepresentationGroupId,
+    ) ?*const GroupTagInhabitance {
+        const index = self.group_state_index.get(group) orelse return null;
+        return &self.group_states.items[index];
     }
 
     fn typeCanContainTagUnion(
@@ -4296,14 +4296,14 @@ fn assignCallableEmissionPlans(
             .artifact_views = artifact_views,
             .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
             .session = session,
-            .class_sets = .empty,
-            .class_set_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .group_sets = .empty,
+            .group_set_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
             .pending_proc_members = .empty,
-            .class_publish_states = std.AutoHashMap(repr.RepresentationClassId, CallableClassPublishState).init(program.allocator),
-            .erased_classes = .empty,
-            .erased_class_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .group_publish_states = std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState).init(program.allocator),
+            .erased_groups = .empty,
+            .erased_group_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
             .function_roots = .empty,
-            .function_root_index = std.AutoHashMap(repr.RepresentationClassId, usize).init(program.allocator),
+            .function_root_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
             .mode = mode,
         };
         defer assigner.deinit();
@@ -4311,14 +4311,14 @@ fn assignCallableEmissionPlans(
     }
 }
 
-const CallableClassSet = struct {
-    class: repr.RepresentationClassId,
+const CallableGroupSet = struct {
+    group: repr.RepresentationGroupId,
     members: std.ArrayList(repr.CanonicalCallableSetMember),
     key: ?repr.CanonicalCallableSetKey = null,
 };
 
-const PendingProcValueClassMember = struct {
-    class: repr.RepresentationClassId,
+const PendingProcValueGroupMember = struct {
+    group: repr.RepresentationGroupId,
     source: ProcValueCallableSource,
     resolved: bool = false,
 };
@@ -4332,18 +4332,18 @@ const ProcValueCallableSource = struct {
     source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
 };
 
-const CallableClassPublishState = enum {
+const CallableGroupPublishState = enum {
     resolving,
     published,
 };
 
-const ErasedClassProvenance = struct {
-    class: repr.RepresentationClassId,
+const ErasedGroupProvenance = struct {
+    group: repr.RepresentationGroupId,
     provenance: std.ArrayList(repr.BoxErasureProvenance),
 };
 
-const FunctionRootForClass = struct {
-    class: repr.RepresentationClassId,
+const FunctionRootForGroup = struct {
+    group: repr.RepresentationGroupId,
     root: repr.RepRootId,
 };
 
@@ -4354,40 +4354,40 @@ const CallableEmissionAssigner = struct {
     artifact_views: ArtifactViews,
     session_id: repr.RepresentationSolveSessionId,
     session: *repr.RepresentationSolveSession,
-    class_sets: std.ArrayList(CallableClassSet),
-    class_set_index: std.AutoHashMap(repr.RepresentationClassId, usize),
-    pending_proc_members: std.ArrayList(PendingProcValueClassMember),
-    class_publish_states: std.AutoHashMap(repr.RepresentationClassId, CallableClassPublishState),
-    erased_classes: std.ArrayList(ErasedClassProvenance),
-    erased_class_index: std.AutoHashMap(repr.RepresentationClassId, usize),
-    function_roots: std.ArrayList(FunctionRootForClass),
-    function_root_index: std.AutoHashMap(repr.RepresentationClassId, usize),
+    group_sets: std.ArrayList(CallableGroupSet),
+    group_set_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
+    pending_proc_members: std.ArrayList(PendingProcValueGroupMember),
+    group_publish_states: std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState),
+    erased_groups: std.ArrayList(ErasedGroupProvenance),
+    erased_group_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
+    function_roots: std.ArrayList(FunctionRootForGroup),
+    function_root_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
     mode: CallableEmissionAssignmentMode,
 
     fn deinit(self: *CallableEmissionAssigner) void {
         self.function_root_index.deinit();
         self.function_roots.deinit(self.allocator);
-        for (self.erased_classes.items) |*entry| entry.provenance.deinit(self.allocator);
-        self.erased_class_index.deinit();
-        self.erased_classes.deinit(self.allocator);
-        for (self.class_sets.items) |*entry| {
+        for (self.erased_groups.items) |*entry| entry.provenance.deinit(self.allocator);
+        self.erased_group_index.deinit();
+        self.erased_groups.deinit(self.allocator);
+        for (self.group_sets.items) |*entry| {
             for (entry.members.items) |member| {
                 if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
             }
             entry.members.deinit(self.allocator);
         }
-        self.class_set_index.deinit();
-        self.class_sets.deinit(self.allocator);
+        self.group_set_index.deinit();
+        self.group_sets.deinit(self.allocator);
         self.pending_proc_members.deinit(self.allocator);
-        self.class_publish_states.deinit();
+        self.group_publish_states.deinit();
     }
 
     fn assign(self: *CallableEmissionAssigner) Allocator.Error!void {
         try self.collectFunctionRootMetadata();
         try self.collectFiniteCallableContributions();
         try self.collectBoxErasureRequirements();
-        try self.publishClassErasureProvenance();
-        try self.publishCallableClassSets();
+        try self.publishGroupErasureProvenance();
+        try self.publishCallableGroupSets();
         try self.assignValueEmissionPlans();
     }
 
@@ -4397,8 +4397,8 @@ const CallableEmissionAssigner = struct {
             const root: repr.RepRootId = @enumFromInt(raw_root);
             const info = self.representationStore().rootTypeInfo(root) orelse continue;
             if (!self.valueHasFunctionType(info.logical_ty)) continue;
-            const class = self.representationStore().classForRoot(root);
-            if (self.function_root_index.get(class)) |existing_index| {
+            const group = self.representationStore().groupForRoot(root);
+            if (self.function_root_index.get(group)) |existing_index| {
                 const existing = self.representationStore().rootTypeInfo(self.function_roots.items[existing_index].root) orelse {
                     lambdaInvariant("lambda-solved function root metadata referenced root without type info");
                 };
@@ -4409,10 +4409,10 @@ const CallableEmissionAssigner = struct {
             }
             const index = self.function_roots.items.len;
             try self.function_roots.append(self.allocator, .{
-                .class = class,
+                .group = group,
                 .root = root,
             });
-            try self.function_root_index.put(class, index);
+            try self.function_root_index.put(group, index);
         }
     }
 
@@ -4428,7 +4428,7 @@ const CallableEmissionAssigner = struct {
             for (value_store.values.items) |value_info| {
                 if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
                 const callable = value_info.callable orelse continue;
-                const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
+                const group = value_info.solved_group orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation group");
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
                     .finite => |key| {
                         switch (callable.source) {
@@ -4441,14 +4441,14 @@ const CallableEmissionAssigner = struct {
                                     .fn_ty = source.fn_ty,
                                     .source_fn_ty_payload = source.source_fn_ty_payload,
                                 };
-                                if (!try self.ensureFunctionCaptureClassesPublished(proc_source)) continue;
+                                if (!try self.ensureFunctionCaptureGroupsPublished(proc_source)) continue;
                                 const member = try self.memberForProcValueSource(proc_source);
                                 defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                                try self.addClassCallableMember(class, member);
+                                try self.addGroupCallableMember(group, member);
                             },
                             .finite_set,
                             .erased_adapter,
-                            => try self.addCallableSetDescriptorMembers(class, key),
+                            => try self.addCallableSetDescriptorMembers(group, key),
                             .already_erased => {},
                         }
                     },
@@ -4457,9 +4457,9 @@ const CallableEmissionAssigner = struct {
                             .proc_value => |source| source,
                             else => lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source"),
                         };
-                        _ = try self.classSetFor(class);
+                        _ = try self.groupSetFor(group);
                         try self.pending_proc_members.append(self.allocator, .{
-                            .class = class,
+                            .group = group,
                             .source = .{
                                 .proc = source.proc,
                                 .published_proc = source.published_proc,
@@ -4484,7 +4484,7 @@ const CallableEmissionAssigner = struct {
                             .source_fn_ty_payload = source.source_fn_ty_payload,
                         });
                         defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                        try self.addClassCallableMember(class, member);
+                        try self.addGroupCallableMember(group, member);
                     },
                     .erase_finite_set => |erase| {
                         switch (callable.source) {
@@ -4497,14 +4497,14 @@ const CallableEmissionAssigner = struct {
                                     .fn_ty = source.fn_ty,
                                     .source_fn_ty_payload = source.source_fn_ty_payload,
                                 };
-                                if (!try self.ensureFunctionCaptureClassesPublished(proc_source)) continue;
+                                if (!try self.ensureFunctionCaptureGroupsPublished(proc_source)) continue;
                                 const member = try self.memberForProcValueSource(proc_source);
                                 defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                                try self.addClassCallableMember(class, member);
+                                try self.addGroupCallableMember(group, member);
                             },
                             .finite_set,
                             .erased_adapter,
-                            => try self.addCallableSetDescriptorMembers(class, erase.adapter.callable_set_key),
+                            => try self.addCallableSetDescriptorMembers(group, erase.adapter.callable_set_key),
                             .already_erased => {},
                         }
                     },
@@ -4516,23 +4516,23 @@ const CallableEmissionAssigner = struct {
 
     fn addCallableSetDescriptorMembers(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
         key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!void {
         const descriptor = self.representationStore().callableSetDescriptor(key) orelse {
             lambdaInvariant("lambda-solved callable emission referenced a missing callable-set descriptor");
         };
         for (descriptor.members) |member| {
-            try self.addClassCallableMember(class, member);
+            try self.addGroupCallableMember(group, member);
         }
     }
 
-    fn addClassCallableMember(
+    fn addGroupCallableMember(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
         member: repr.CanonicalCallableSetMember,
     ) Allocator.Error!void {
-        const set = try self.classSetFor(class);
+        const set = try self.groupSetFor(group);
         for (set.members.items) |*existing| {
             if (callableSetMemberEquivalent(existing.*, member)) return;
             if (callableSetMemberSameIdentity(existing.*, member)) {
@@ -4569,86 +4569,86 @@ const CallableEmissionAssigner = struct {
         });
     }
 
-    fn classSetFor(
+    fn groupSetFor(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
-    ) Allocator.Error!*CallableClassSet {
-        if (self.class_set_index.get(class)) |index| return &self.class_sets.items[index];
-        const index = self.class_sets.items.len;
-        try self.class_sets.append(self.allocator, .{
-            .class = class,
+        group: repr.RepresentationGroupId,
+    ) Allocator.Error!*CallableGroupSet {
+        if (self.group_set_index.get(group)) |index| return &self.group_sets.items[index];
+        const index = self.group_sets.items.len;
+        try self.group_sets.append(self.allocator, .{
+            .group = group,
             .members = .empty,
         });
-        try self.class_set_index.put(class, index);
-        return &self.class_sets.items[index];
+        try self.group_set_index.put(group, index);
+        return &self.group_sets.items[index];
     }
 
-    fn publishCallableClassSets(self: *CallableEmissionAssigner) Allocator.Error!void {
-        for (self.class_sets.items) |set| {
-            _ = try self.ensureClassSetPublished(set.class);
+    fn publishCallableGroupSets(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.group_sets.items) |set| {
+            _ = try self.ensureGroupSetPublished(set.group);
         }
     }
 
-    fn ensureClassSetPublished(
+    fn ensureGroupSetPublished(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
     ) Allocator.Error!bool {
-        if (self.class_publish_states.get(class)) |state| {
+        if (self.group_publish_states.get(group)) |state| {
             switch (state) {
                 .published => return true,
-                .resolving => lambdaInvariant("lambda-solved recursive callable-class emission requires recursive callable-set SCC support"),
+                .resolving => lambdaInvariant("lambda-solved recursive callable-group emission requires recursive callable-set SCC support"),
             }
         }
-        try self.class_publish_states.put(class, .resolving);
-        errdefer _ = self.class_publish_states.remove(class);
+        try self.group_publish_states.put(group, .resolving);
+        errdefer _ = self.group_publish_states.remove(group);
 
-        if (!try self.resolvePendingMembersForClass(class)) {
-            _ = self.class_publish_states.remove(class);
+        if (!try self.resolvePendingMembersForGroup(group)) {
+            _ = self.group_publish_states.remove(group);
             return false;
         }
 
-        const set = self.callableClassSet(class) orelse {
+        const set = self.callableGroupSet(group) orelse {
             if (self.mode == .allow_pending_call_values) {
-                _ = self.class_publish_states.remove(class);
+                _ = self.group_publish_states.remove(group);
                 return false;
             }
-            lambdaInvariant("lambda-solved callable class has no callable-set record");
+            lambdaInvariant("lambda-solved callable group has no callable-set record");
         };
         if (set.members.items.len == 0) {
             if (self.mode == .allow_pending_call_values) {
-                _ = self.class_publish_states.remove(class);
+                _ = self.group_publish_states.remove(group);
                 return false;
             }
-            lambdaInvariant("lambda-solved callable class set has no members");
+            lambdaInvariant("lambda-solved callable group set has no members");
         }
         for (set.members.items, 0..) |*member, raw_member| {
             member.member = @enumFromInt(@as(u32, @intCast(raw_member)));
         }
         set.key = try self.representationStore().internCallableSetDescriptor(set.members.items);
-        const class_key = set.key orelse lambdaInvariant("lambda-solved callable class set key was not published");
-        if (self.representationStore().callableClassEmission(class) == null) {
-            _ = try self.ensureCallableClassEmission(set, class_key, self.erasedProvenance(class));
+        const group_key = set.key orelse lambdaInvariant("lambda-solved callable group set key was not published");
+        if (self.representationStore().callableGroupEmission(group) == null) {
+            _ = try self.ensureCallableGroupEmission(set, group_key, self.erasedProvenance(group));
         }
-        try self.class_publish_states.put(class, .published);
+        try self.group_publish_states.put(group, .published);
         return true;
     }
 
-    fn resolvePendingMembersForClass(
+    fn resolvePendingMembersForGroup(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
     ) Allocator.Error!bool {
         for (self.pending_proc_members.items) |*pending| {
-            if (pending.resolved or pending.class != class) continue;
-            if (!try self.ensureFunctionCaptureClassesPublished(pending.source)) return false;
+            if (pending.resolved or pending.group != group) continue;
+            if (!try self.ensureFunctionCaptureGroupsPublished(pending.source)) return false;
             const member = try self.memberForProcValueSource(pending.source);
             defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-            try self.addClassCallableMember(class, member);
+            try self.addGroupCallableMember(group, member);
             pending.resolved = true;
         }
         return true;
     }
 
-    fn ensureFunctionCaptureClassesPublished(
+    fn ensureFunctionCaptureGroupsPublished(
         self: *CallableEmissionAssigner,
         source: ProcValueCallableSource,
     ) Allocator.Error!bool {
@@ -4661,10 +4661,10 @@ const CallableEmissionAssigner = struct {
         for (target_captures) |target_capture| {
             const target_value = target_value_store.values.items[@intFromEnum(target_capture)];
             if (!self.valueHasFunctionType(target_value.logical_ty)) continue;
-            const capture_class = target_value.solved_class orelse {
-                lambdaInvariant("lambda-solved function-typed target capture has no solved representation class");
+            const capture_group = target_value.solved_group orelse {
+                lambdaInvariant("lambda-solved function-typed target capture has no solved representation group");
             };
-            if (!try self.ensureClassSetPublished(capture_class)) return false;
+            if (!try self.ensureGroupSetPublished(capture_group)) return false;
         }
         return true;
     }
@@ -4683,9 +4683,9 @@ const CallableEmissionAssigner = struct {
         }
     }
 
-    fn publishClassErasureProvenance(self: *CallableEmissionAssigner) Allocator.Error!void {
-        for (self.erased_classes.items) |entry| {
-            try self.representationStore().publishClassErasureProvenance(entry.class, entry.provenance.items);
+    fn publishGroupErasureProvenance(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.erased_groups.items) |entry| {
+            try self.representationStore().publishGroupErasureProvenance(entry.group, entry.provenance.items);
         }
     }
 
@@ -4694,24 +4694,24 @@ const CallableEmissionAssigner = struct {
         root: repr.RepRootId,
         provenance: repr.BoxErasureProvenance,
     ) Allocator.Error!void {
-        const start_class = self.classForRoot(root) orelse return;
-        var visited = std.AutoHashMap(repr.RepresentationClassId, void).init(self.allocator);
+        const start_group = self.groupForRoot(root) orelse return;
+        var visited = std.AutoHashMap(repr.RepresentationGroupId, void).init(self.allocator);
         defer visited.deinit();
-        var stack = std.ArrayList(repr.RepresentationClassId).empty;
+        var stack = std.ArrayList(repr.RepresentationGroupId).empty;
         defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, start_class);
+        try stack.append(self.allocator, start_group);
 
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
-            try self.addErasedClassProvenance(current, provenance);
-            try self.ensureTypeOnlyErasedFunctionClassEmission(current);
+            try self.addErasedGroupProvenance(current, provenance);
+            try self.ensureTypeOnlyErasedFunctionGroupEmission(current);
             for (self.representationStore().representation_edges.items) |edge| {
                 if (!edgePropagatesBoxErasure(edge.kind)) continue;
                 const from_root = self.endpointRootInSession(edge.from) orelse continue;
                 const to_root = self.endpointRootInSession(edge.to) orelse continue;
-                const from = self.classForRoot(from_root) orelse continue;
-                const to = self.classForRoot(to_root) orelse continue;
+                const from = self.groupForRoot(from_root) orelse continue;
+                const to = self.groupForRoot(to_root) orelse continue;
                 switch (edge.kind) {
                     .function_arg => {
                         if (to == current) try stack.append(self.allocator, from);
@@ -4728,18 +4728,18 @@ const CallableEmissionAssigner = struct {
         }
     }
 
-    fn ensureTypeOnlyErasedFunctionClassEmission(
+    fn ensureTypeOnlyErasedFunctionGroupEmission(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
     ) Allocator.Error!void {
-        if (self.representationStore().callableClassEmission(class) != null) return;
-        if (self.callableClassSet(class) != null) return;
-        const provenance = self.erasedProvenance(class) orelse return;
+        if (self.representationStore().callableGroupEmission(group) != null) return;
+        if (self.callableGroupSet(group) != null) return;
+        const provenance = self.erasedProvenance(group) orelse return;
         if (provenance.len == 0) return;
-        const root_index = self.function_root_index.get(class) orelse return;
+        const root_index = self.function_root_index.get(group) orelse return;
         const root = self.function_roots.items[root_index].root;
         const info = self.representationStore().rootTypeInfo(root) orelse {
-            lambdaInvariant("lambda-solved erased function class root has no published type info");
+            lambdaInvariant("lambda-solved erased function group root has no published type info");
         };
         const endpoint = try self.publishErasedBoundaryEndpointForRootInfo(info);
         const payload = self.representationStore().session_executable_type_payloads.get(endpoint.ty.payload);
@@ -4755,33 +4755,33 @@ const CallableEmissionAssigner = struct {
             .provenance = provenance,
         };
         const emission = try self.representationStore().appendAlreadyErasedCallableEmissionPlan(plan);
-        try self.representationStore().publishCallableClassEmission(class, emission);
+        try self.representationStore().publishCallableGroupEmission(group, emission);
     }
 
-    fn addErasedClassProvenance(
+    fn addErasedGroupProvenance(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
         provenance: repr.BoxErasureProvenance,
     ) Allocator.Error!void {
-        const entry = try self.erasedClassFor(class);
+        const entry = try self.erasedGroupFor(group);
         for (entry.provenance.items) |existing| {
             if (boxErasureProvenanceEql(existing, provenance)) return;
         }
         try entry.provenance.append(self.allocator, provenance);
     }
 
-    fn erasedClassFor(
+    fn erasedGroupFor(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
-    ) Allocator.Error!*ErasedClassProvenance {
-        if (self.erased_class_index.get(class)) |index| return &self.erased_classes.items[index];
-        const index = self.erased_classes.items.len;
-        try self.erased_classes.append(self.allocator, .{
-            .class = class,
+        group: repr.RepresentationGroupId,
+    ) Allocator.Error!*ErasedGroupProvenance {
+        if (self.erased_group_index.get(group)) |index| return &self.erased_groups.items[index];
+        const index = self.erased_groups.items.len;
+        try self.erased_groups.append(self.allocator, .{
+            .group = group,
             .provenance = .empty,
         });
-        try self.erased_class_index.put(class, index);
-        return &self.erased_classes.items[index];
+        try self.erased_group_index.put(group, index);
+        return &self.erased_groups.items[index];
     }
 
     fn assignValueEmissionPlans(self: *CallableEmissionAssigner) Allocator.Error!void {
@@ -4801,15 +4801,15 @@ const CallableEmissionAssigner = struct {
                         => {},
                     }
                 }
-                const class = value_info.solved_class orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation class");
-                const class_set = self.callableClassSet(class) orelse {
+                const group = value_info.solved_group orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation group");
+                const group_set = self.callableGroupSet(group) orelse {
                     if (value_info.callable == null and self.valueHasFunctionType(value_info.logical_ty)) {
-                        if (self.erasedProvenance(class)) |provenance| {
+                        if (self.erasedProvenance(group)) |provenance| {
                             const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
                             const callable = try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
                             value_info.callable = callable;
-                            if (self.representationStore().callableClassEmission(class) == null) {
-                                try self.representationStore().publishCallableClassEmission(class, callable.emission_plan);
+                            if (self.representationStore().callableGroupEmission(group) == null) {
+                                try self.representationStore().publishCallableGroupEmission(group, callable.emission_plan);
                             }
                             continue;
                         }
@@ -4821,7 +4821,7 @@ const CallableEmissionAssigner = struct {
                         const projection = value_store.projections.items[@intFromEnum(projection_id)];
                         const source_info = value_store.values.items[@intFromEnum(projection.source)];
                         lambdaInvariantFmt(
-                            "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to class {d} with no finite callable members (callable={}, projection={}, alias={}); projection source={d} kind={s} source_callable={} source_aggregate={} source_alias={} source_root={s}",
+                            "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to group {d} with no finite callable members (callable={}, projection={}, alias={}); projection source={d} kind={s} source_callable={} source_aggregate={} source_alias={} source_root={s}",
                             .{
                                 raw_value,
                                 @intFromEnum(instance),
@@ -4829,7 +4829,7 @@ const CallableEmissionAssigner = struct {
                                 record.materialized,
                                 @tagName(self.representationStore().rootKind(value_info.root)),
                                 value_info.source_match_branch != null,
-                                @intFromEnum(class),
+                                @intFromEnum(group),
                                 value_info.callable != null,
                                 value_info.projection_info != null,
                                 value_info.value_alias_source != null,
@@ -4843,7 +4843,7 @@ const CallableEmissionAssigner = struct {
                         );
                     }
                     lambdaInvariantFmt(
-                        "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to class {d} with no finite callable members (callable={}, projection={}, alias={})",
+                        "lambda-solved function-typed value {d} in instance {d} owner {s} materialized={} root={s} branch={} solved to group {d} with no finite callable members (callable={}, projection={}, alias={})",
                         .{
                             raw_value,
                             @intFromEnum(instance),
@@ -4851,21 +4851,21 @@ const CallableEmissionAssigner = struct {
                             record.materialized,
                             @tagName(self.representationStore().rootKind(value_info.root)),
                             value_info.source_match_branch != null,
-                            @intFromEnum(class),
+                            @intFromEnum(group),
                             value_info.callable != null,
                             value_info.projection_info != null,
                             value_info.value_alias_source != null,
                         },
                     );
                 };
-                const class_key = class_set.key orelse {
+                const group_key = group_set.key orelse {
                     if (self.mode == .allow_pending_call_values) continue;
-                    lambdaInvariant("lambda-solved callable class set was not interned before emission assignment");
+                    lambdaInvariant("lambda-solved callable group set was not interned before emission assignment");
                 };
                 const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
-                const provenance = self.erasedProvenance(class);
-                _ = try self.ensureCallableClassEmission(class_set, class_key, provenance);
-                var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, class_key);
+                const provenance = self.erasedProvenance(group);
+                _ = try self.ensureCallableGroupEmission(group_set, group_key, provenance);
+                var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, group_key);
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
                     .pending_proc_value => |construction_id| {
                         const attached = callable.construction_plan orelse {
@@ -4881,15 +4881,15 @@ const CallableEmissionAssigner = struct {
                     => continue,
                     .erase_finite_set => {},
                 }
-                try self.rewriteCallableConstructionPlan(&callable, value_id, class_set, class_key);
-                self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, class_key);
+                try self.rewriteCallableConstructionPlan(&callable, value_id, group_set, group_key);
+                self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
 
                 if (provenance == null) {
                     value_info.callable = callable;
                     continue;
                 }
 
-                callable.emission_plan = try self.erasedEmissionPlanForValue(record, value_id, callable, class_set, class_key, provenance.?);
+                callable.emission_plan = try self.erasedEmissionPlanForValue(record, value_id, callable, group_set, group_key, provenance.?);
                 value_info.callable = callable;
             }
         }
@@ -4898,7 +4898,7 @@ const CallableEmissionAssigner = struct {
     fn synthesizeCallableInfo(
         self: *CallableEmissionAssigner,
         value_info: repr.ValueInfo,
-        class_key: repr.CanonicalCallableSetKey,
+        group_key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!repr.CallableValueInfo {
         if (!self.valueHasFunctionType(value_info.logical_ty)) {
             lambdaInvariant("lambda-solved attempted to synthesize callable metadata for a non-function value");
@@ -4906,8 +4906,8 @@ const CallableEmissionAssigner = struct {
         return .{
             .whole_function_root = value_info.root,
             .callable_root = value_info.root,
-            .source = .{ .finite_set = class_key },
-            .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(class_key),
+            .source = .{ .finite_set = group_key },
+            .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(group_key),
             .construction_plan = null,
         };
     }
@@ -4950,42 +4950,42 @@ const CallableEmissionAssigner = struct {
         };
     }
 
-    fn ensureCallableClassEmission(
+    fn ensureCallableGroupEmission(
         self: *CallableEmissionAssigner,
-        class_set: *const CallableClassSet,
-        class_key: repr.CanonicalCallableSetKey,
+        group_set: *const CallableGroupSet,
+        group_key: repr.CanonicalCallableSetKey,
         provenance: ?[]const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
-        if (self.representationStore().callableClassEmission(class_set.class)) |existing| {
-            if (self.callableClassEmissionMatches(existing, class_key, provenance)) return existing;
+        if (self.representationStore().callableGroupEmission(group_set.group)) |existing| {
+            if (self.callableGroupEmissionMatches(existing, group_key, provenance)) return existing;
             if (provenance) |boundaries| {
-                const erase = try self.finiteSetErasePlan(class_set, class_key, boundaries);
+                const erase = try self.finiteSetErasePlan(group_set, group_key, boundaries);
                 defer deinitExecutableSpecializationKeySlice(self.allocator, erase.member_targets);
                 try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, erase);
             } else {
-                self.representationStore().replaceCallableEmissionPlanWithFinite(existing, class_key);
+                self.representationStore().replaceCallableEmissionPlanWithFinite(existing, group_key);
             }
             return existing;
         }
         const emission = if (provenance) |boundaries|
-            try self.appendFiniteSetErasePlan(class_set, class_key, boundaries)
+            try self.appendFiniteSetErasePlan(group_set, group_key, boundaries)
         else
-            try self.representationStore().appendFiniteCallableEmissionPlan(class_key);
-        try self.representationStore().publishCallableClassEmission(class_set.class, emission);
+            try self.representationStore().appendFiniteCallableEmissionPlan(group_key);
+        try self.representationStore().publishCallableGroupEmission(group_set.group, emission);
         return emission;
     }
 
-    fn callableClassEmissionMatches(
+    fn callableGroupEmissionMatches(
         self: *CallableEmissionAssigner,
         emission: repr.CallableValueEmissionPlanId,
-        class_key: repr.CanonicalCallableSetKey,
+        group_key: repr.CanonicalCallableSetKey,
         provenance: ?[]const repr.BoxErasureProvenance,
     ) bool {
         return switch (self.representationStore().callableEmissionPlan(emission)) {
-            .finite => |key| provenance == null and repr.callableSetKeyEql(key, class_key),
+            .finite => |key| provenance == null and repr.callableSetKeyEql(key, group_key),
             .erase_finite_set => |erase| blk: {
                 const boundaries = provenance orelse break :blk false;
-                if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, class_key)) break :blk false;
+                if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) break :blk false;
                 break :blk boxErasureProvenanceSliceEql(erase.provenance, boundaries);
             },
             .pending_proc_value,
@@ -5013,17 +5013,17 @@ const CallableEmissionAssigner = struct {
         self: *CallableEmissionAssigner,
         callable: *const repr.CallableValueInfo,
         value_id: repr.ValueInfoId,
-        class_set: *const CallableClassSet,
-        class_key: repr.CanonicalCallableSetKey,
+        group_set: *const CallableGroupSet,
+        group_key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!void {
         const construction_id = callable.construction_plan orelse return;
         const construction = self.representationStore().callableConstructionPlanPtr(construction_id);
         if (construction.result != value_id) {
             lambdaInvariant("lambda-solved callable construction plan is attached to a different value during emission assignment");
         }
-        const selected = self.currentSelectedMember(callable.*, construction.*, class_set);
-        const selected_member = self.memberInClassSet(class_set, selected);
-        construction.callable_set_key = class_key;
+        const selected = self.currentSelectedMember(callable.*, construction.*, group_set);
+        const selected_member = self.memberInGroupSet(group_set, selected);
+        construction.callable_set_key = group_key;
         construction.selected_member = selected_member.member;
         construction.target_instance = selected_member.target_instance;
     }
@@ -5032,7 +5032,7 @@ const CallableEmissionAssigner = struct {
         self: *CallableEmissionAssigner,
         callable: repr.CallableValueInfo,
         construction: repr.CallableSetConstructionPlan,
-        class_set: *const CallableClassSet,
+        group_set: *const CallableGroupSet,
     ) repr.CanonicalCallableSetMember {
         const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
         switch (emission) {
@@ -5053,7 +5053,7 @@ const CallableEmissionAssigner = struct {
                 if (!repr.canonicalTypeKeyEql(source.fn_ty, construction.source_fn_ty)) {
                     lambdaInvariant("lambda-solved pending proc-value construction function type differs from source type");
                 }
-                for (class_set.members.items) |member| {
+                for (group_set.members.items) |member| {
                     if (member.target_instance != source.target_instance) continue;
                     if (!mirProcedureBodyIdentityEql(member.source_proc, source.proc)) continue;
                     if (!canonical.procedureCallableRefEql(member.proc_value, source.proc.callable)) continue;
@@ -5079,18 +5079,18 @@ const CallableEmissionAssigner = struct {
         }
     }
 
-    fn memberInClassSet(
+    fn memberInGroupSet(
         _: *CallableEmissionAssigner,
-        class_set: *const CallableClassSet,
+        group_set: *const CallableGroupSet,
         selected: repr.CanonicalCallableSetMember,
     ) repr.CanonicalCallableSetMember {
-        for (class_set.members.items) |member| {
+        for (group_set.members.items) |member| {
             if (callableSetMemberEquivalent(member, selected)) return member;
         }
-        for (class_set.members.items) |member| {
+        for (group_set.members.items) |member| {
             if (callableSetMemberSameIdentity(member, selected)) return member;
         }
-        lambdaInvariant("lambda-solved callable construction selected member missing from solved class callable set");
+        lambdaInvariant("lambda-solved callable construction selected member missing from solved group callable set");
     }
 
     fn erasedEmissionPlanForValue(
@@ -5098,12 +5098,12 @@ const CallableEmissionAssigner = struct {
         _: *const ProcBuildRecord,
         _: repr.ValueInfoId,
         _: repr.CallableValueInfo,
-        class_set: *const CallableClassSet,
-        class_key: repr.CanonicalCallableSetKey,
+        group_set: *const CallableGroupSet,
+        group_key: repr.CanonicalCallableSetKey,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty Box(T) provenance");
-        return try self.appendFiniteSetErasePlan(class_set, class_key, provenance);
+        return try self.appendFiniteSetErasePlan(group_set, group_key, provenance);
     }
 
     fn memberForProcValueSource(
@@ -5169,23 +5169,23 @@ const CallableEmissionAssigner = struct {
 
     fn appendFiniteSetErasePlan(
         self: *CallableEmissionAssigner,
-        class_set: *const CallableClassSet,
-        class_key: repr.CanonicalCallableSetKey,
+        group_set: *const CallableGroupSet,
+        group_key: repr.CanonicalCallableSetKey,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
-        const erase = try self.finiteSetErasePlan(class_set, class_key, provenance);
+        const erase = try self.finiteSetErasePlan(group_set, group_key, provenance);
         defer deinitExecutableSpecializationKeySlice(self.allocator, erase.member_targets);
         return try self.representationStore().appendFiniteSetEraseEmissionPlan(erase);
     }
 
     fn finiteSetErasePlan(
         self: *CallableEmissionAssigner,
-        class_set: *const CallableClassSet,
-        class_key: repr.CanonicalCallableSetKey,
+        group_set: *const CallableGroupSet,
+        group_key: repr.CanonicalCallableSetKey,
         provenance: []const repr.BoxErasureProvenance,
     ) Allocator.Error!repr.FiniteSetErasePlan {
-        const first_member = class_set.members.items[0];
-        const hidden_capture_key = repr.finiteCallableSetExecValueTypeKey(class_key);
+        const first_member = group_set.members.items[0];
+        const hidden_capture_key = repr.finiteCallableSetExecValueTypeKey(group_key);
         const hidden_capture_keys = [_]repr.CanonicalExecValueTypeKey{hidden_capture_key};
         const capture_shape_key = repr.captureShapeKeyForExecKeys(&hidden_capture_keys);
         const sig_key = try self.erasedSignatureForTargetProc(
@@ -5195,14 +5195,14 @@ const CallableEmissionAssigner = struct {
         );
         const adapter = repr.ErasedAdapterKey{
             .source_fn_ty = first_member.proc_value.source_fn_ty,
-            .callable_set_key = class_key,
+            .callable_set_key = group_key,
             .erased_fn_sig_key = sig_key,
             .capture_shape_key = capture_shape_key,
         };
         const abi = self.representationStore().erased_fn_abis.abiFor(sig_key.abi) orelse {
             lambdaInvariant("lambda-solved finite erased adapter signature referenced missing ABI");
         };
-        const member_targets = try finiteErasedAdapterMemberTargetsForAbi(self.allocator, class_set.members.items, abi);
+        const member_targets = try finiteErasedAdapterMemberTargetsForAbi(self.allocator, group_set.members.items, abi);
         return .{
             .adapter = adapter,
             .result_ty = repr.erasedCallableExecValueTypeKey(sig_key),
@@ -5401,25 +5401,25 @@ const CallableEmissionAssigner = struct {
         );
     }
 
-    fn callableClassSet(
+    fn callableGroupSet(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
-    ) ?*CallableClassSet {
-        const index = self.class_set_index.get(class) orelse return null;
-        return &self.class_sets.items[index];
+        group: repr.RepresentationGroupId,
+    ) ?*CallableGroupSet {
+        const index = self.group_set_index.get(group) orelse return null;
+        return &self.group_sets.items[index];
     }
 
     fn erasedProvenance(
         self: *CallableEmissionAssigner,
-        class: repr.RepresentationClassId,
+        group: repr.RepresentationGroupId,
     ) ?[]const repr.BoxErasureProvenance {
-        const index = self.erased_class_index.get(class) orelse return null;
-        return self.erased_classes.items[index].provenance.items;
+        const index = self.erased_group_index.get(group) orelse return null;
+        return self.erased_groups.items[index].provenance.items;
     }
 
-    fn classForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationClassId {
+    fn groupForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationGroupId {
         if (@intFromEnum(root) >= self.representationStore().roots_len) return null;
-        return self.representationStore().classForRoot(root);
+        return self.representationStore().groupForRoot(root);
     }
 
     fn endpointRootInSession(
@@ -8779,7 +8779,7 @@ const ValueTransformFinalizer = struct {
         store: *const repr.RepresentationStore,
         root: repr.RepRootId,
     ) []const repr.BoxErasureProvenance {
-        return store.classErasureProvenance(store.classForRoot(root));
+        return store.groupErasureProvenance(store.groupForRoot(root));
     }
 
     fn planFiniteCallableToErasedTransform(

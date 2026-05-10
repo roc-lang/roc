@@ -542,6 +542,292 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
     },
     .{
+        .name = "low_level - List.concat preserves reused input list after consuming call",
+        .source =
+        \\{
+        \\repeat_helper = |acc, list, n| match n {
+        \\    0 => acc
+        \\    _ => repeat_helper(List.concat(acc, list), list, n - 1)
+        \\}
+        \\
+        \\repeat = |list, n| repeat_helper([], list, n)
+        \\
+        \\result = repeat([1, 2], 3)
+        \\result == [1, 2, 1, 2, 1, 2]
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - parse range with split_on and question",
+        .source =
+        \\{
+        \\parse_range = |range_str| {
+        \\    match range_str.split_on("-") {
+        \\        [a, b] => Ok((I64.from_str(a)?, I64.from_str(b)?))
+        \\        _ => Err(InvalidRangeFormat)
+        \\    }
+        \\}
+        \\
+        \\match parse_range("11-22") {
+        \\    Ok((start, end)) => start + end == 33
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - repeating byte pattern detects duplicated digits",
+        .source =
+        \\{
+        \\repeat_helper = |acc, list, n| match n {
+        \\    0 => acc
+        \\    _ => repeat_helper(acc.concat(list), list, n - 1)
+        \\}
+        \\
+        \\repeat = |list, n| repeat_helper([], list, n)
+        \\
+        \\has_repeating_pattern : I64 -> Bool
+        \\has_repeating_pattern = |x| {
+        \\    s = x.to_str().to_utf8()
+        \\    n = s.len()
+        \\
+        \\    var $d = 1
+        \\    while $d <= n // 2 {
+        \\        if n % $d == 0 {
+        \\            slice = s.sublist({ start: 0, len: $d })
+        \\            repeated = slice->repeat(n // $d)
+        \\            if repeated == s { return True }
+        \\        }
+        \\        $d = $d + 1
+        \\    }
+        \\
+        \\    False
+        \\}
+        \\
+        \\if has_repeating_pattern(12) { False } else { has_repeating_pattern(11) }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - repeat helper concatenates byte lists",
+        .source =
+        \\{
+        \\repeat_helper = |acc, list, n| match n {
+        \\    0 => acc
+        \\    _ => repeat_helper(acc.concat(list), list, n - 1)
+        \\}
+        \\
+        \\repeat = |list, n| repeat_helper([], list, n)
+        \\
+        \\repeat([49], 2) == [49, 49]
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - for loop parses split ranges through question",
+        .source =
+        \\{
+        \\parse_range = |range_str| {
+        \\    match range_str.split_on("-") {
+        \\        [a, b] => Ok((I64.from_str(a)?, I64.from_str(b)?))
+        \\        _ => Err(InvalidRangeFormat)
+        \\    }
+        \\}
+        \\
+        \\part2 = |input| {
+        \\    var $sum = 0
+        \\
+        \\    for range_str in input.trim().split_on(",") {
+        \\        (start, end) = parse_range(range_str)?
+        \\        $sum = $sum + start + end
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match part2("11-22") {
+        \\    Ok(sum) => sum == 33
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - for loop parses literal ranges through question",
+        .source =
+        \\{
+        \\parse_range = |range_str| {
+        \\    match range_str.split_on("-") {
+        \\        [a, b] => Ok((I64.from_str(a)?, I64.from_str(b)?))
+        \\        _ => Err(InvalidRangeFormat)
+        \\    }
+        \\}
+        \\
+        \\part2 = |ranges| {
+        \\    var $sum = 0
+        \\
+        \\    for range_str in ranges {
+        \\        (start, end) = parse_range(range_str)?
+        \\        $sum = $sum + start + end
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match part2(["11-22"]) {
+        \\    Ok(sum) => sum == 33
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - for loop propagates question over ok value",
+        .source =
+        \\{
+        \\sum_oks = |numbers| {
+        \\    var $sum = 0
+        \\
+        \\    for n in numbers {
+        \\        value = Ok(n)?
+        \\        $sum = $sum + value
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match sum_oks([11, 22]) {
+        \\    Ok(sum) => sum == 33
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - for loop destructures tuple from question",
+        .source =
+        \\{
+        \\pair = |n| Ok((n, n))
+        \\
+        \\sum_pairs = |numbers| {
+        \\    var $sum = 0
+        \\
+        \\    for n in numbers {
+        \\        (a, b) = pair(n)?
+        \\        $sum = $sum + a + b
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match sum_pairs([11]) {
+        \\    Ok(sum) => sum == 22
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - for loop question through split tuple parser",
+        .source =
+        \\{
+        \\parse_pair = |range_str| {
+        \\    match range_str.split_on("-") {
+        \\        [a, b] => Ok((a, b))
+        \\        _ => Err(InvalidRangeFormat)
+        \\    }
+        \\}
+        \\
+        \\part2 = |ranges| {
+        \\    var $sum = 0
+        \\
+        \\    for range_str in ranges {
+        \\        (start, end) = parse_pair(range_str)?
+        \\        $sum = $sum + start.len() + end.len()
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match part2(["11-22"]) {
+        \\    Ok(sum) => sum == 4
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - repeating pattern parser returns accumulated sum",
+        .source =
+        \\{
+        \\parse_range = |range_str| {
+        \\    match range_str.split_on("-") {
+        \\        [a, b] => Ok((I64.from_str(a)?, I64.from_str(b)?))
+        \\        _ => Err(InvalidRangeFormat)
+        \\    }
+        \\}
+        \\
+        \\repeat_helper = |acc, list, n| match n {
+        \\    0 => acc
+        \\    _ => repeat_helper(acc.concat(list), list, n - 1)
+        \\}
+        \\
+        \\repeat = |list, n| repeat_helper([], list, n)
+        \\
+        \\has_repeating_pattern : I64 -> Bool
+        \\has_repeating_pattern = |x| {
+        \\    s = x.to_str().to_utf8()
+        \\    n = s.len()
+        \\
+        \\    var $d = 1
+        \\    while $d <= n // 2 {
+        \\        if n % $d == 0 {
+        \\            slice = s.sublist({ start: 0, len: $d })
+        \\            repeated = slice->repeat(n // $d)
+        \\            if repeated == s { return True }
+        \\        }
+        \\        $d = $d + 1
+        \\    }
+        \\
+        \\    False
+        \\}
+        \\
+        \\part2 = |input| {
+        \\    var $sum = 0
+        \\
+        \\    for range_str in input.trim().split_on(",") {
+        \\        (start, end) = parse_range(range_str)?
+        \\
+        \\        var $x = start
+        \\        while $x <= end {
+        \\            if has_repeating_pattern($x) {
+        \\                $sum = $sum + $x
+        \\            }
+        \\            $x = $x + 1
+        \\        }
+        \\    }
+        \\
+        \\    Ok($sum)
+        \\}
+        \\
+        \\match part2("11-22") {
+        \\    Ok(sum) => sum == 33
+        \\    Err(_) => False
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - List.concat with empty string list",
         .source =
         \\{

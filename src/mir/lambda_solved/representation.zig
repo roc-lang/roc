@@ -74,8 +74,8 @@ pub const AggregateBoundaryId = enum(u32) { _ };
 pub const TransformEndpointScopeId = enum(u32) { _ };
 /// Public `TransformEndpointPathId` declaration.
 pub const TransformEndpointPathId = enum(u32) { _ };
-/// Public `RepresentationClassId` declaration.
-pub const RepresentationClassId = enum(u32) { _ };
+/// Public `RepresentationGroupId` declaration.
+pub const RepresentationGroupId = enum(u32) { _ };
 /// Public `ProcRepresentationInstanceId` declaration.
 pub const ProcRepresentationInstanceId = enum(u32) { _ };
 /// Public `RepresentationSolveSessionId` declaration.
@@ -90,7 +90,7 @@ pub const TypeVarId = type_mod.TypeVarId;
 
 /// Public `RepresentationRootKind` declaration.
 pub const RepresentationRootKind = union(enum) {
-    unclassified,
+    unassigned,
     local_value: struct {
         instance: ProcRepresentationInstanceId,
         value: ValueInfoId,
@@ -201,7 +201,7 @@ const StructuralChildKind = struct {
 };
 
 const SolvedStructuralChildKey = struct {
-    parent_class: RepresentationClassId,
+    parent_group: RepresentationGroupId,
     kind: StructuralChildKind,
 };
 
@@ -317,7 +317,7 @@ pub const CanonicalCallableSetDescriptor = struct {
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
 const RootTypeKey = struct {
-    class: RepresentationClassId = undefined,
+    group: RepresentationGroupId = undefined,
     layer: enum {
         primitive,
         nominal,
@@ -1564,7 +1564,7 @@ pub const ValueInfo = struct {
     source_ty: canonical.CanonicalTypeKey,
     source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     root: RepRootId,
-    solved_class: ?RepresentationClassId = null,
+    solved_group: ?RepresentationGroupId = null,
     exec_ty: ?SessionExecutableTypeEndpoint = null,
     value_alias_source: ?ValueInfoId = null,
     value_alias_needs_executable_transform: bool = false,
@@ -1780,10 +1780,10 @@ pub const RepresentationSolveState = enum {
 pub const RepresentationStore = struct {
     allocator: std.mem.Allocator,
     roots_len: u32 = 0,
-    classes_len: u32 = 0,
-    root_classes: []RepresentationClassId = &.{},
-    callable_class_emissions: []?CallableValueEmissionPlanId = &.{},
-    class_erasure_provenance: [][]const BoxErasureProvenance = &.{},
+    groups_len: u32 = 0,
+    root_groups: []RepresentationGroupId = &.{},
+    callable_group_emissions: []?CallableValueEmissionPlanId = &.{},
+    group_erasure_provenance: [][]const BoxErasureProvenance = &.{},
     root_kinds: std.AutoHashMap(RepRootId, RepresentationRootKind),
     root_type_infos: std.AutoHashMap(RepRootId, RepresentationRootTypeInfo),
     solved_structural_child_roots: std.AutoHashMap(SolvedStructuralChildKey, RepRootId),
@@ -1879,12 +1879,12 @@ pub const RepresentationStore = struct {
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
         if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
-        if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
-        if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
-        for (self.class_erasure_provenance) |provenance| {
+        if (self.root_groups.len > 0) self.allocator.free(self.root_groups);
+        if (self.callable_group_emissions.len > 0) self.allocator.free(self.callable_group_emissions);
+        for (self.group_erasure_provenance) |provenance| {
             if (provenance.len > 0) self.allocator.free(provenance);
         }
-        if (self.class_erasure_provenance.len > 0) self.allocator.free(self.class_erasure_provenance);
+        if (self.group_erasure_provenance.len > 0) self.allocator.free(self.group_erasure_provenance);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
         self.solved_structural_child_roots.deinit();
@@ -1940,7 +1940,7 @@ pub const RepresentationStore = struct {
             debug.invariant(false, "lambda-solved invariant violated: representation root lookup referenced an unreserved root");
             unreachable;
         }
-        return self.root_kinds.get(root) orelse .unclassified;
+        return self.root_kinds.get(root) orelse .unassigned;
     }
 
     pub fn publishRootTypeInfo(
@@ -2016,46 +2016,46 @@ pub const RepresentationStore = struct {
         }
     }
 
-    pub fn reserveClass(self: *RepresentationStore) RepresentationClassId {
-        const id: RepresentationClassId = @enumFromInt(self.classes_len);
-        self.classes_len += 1;
+    pub fn reserveGroup(self: *RepresentationStore) RepresentationGroupId {
+        const id: RepresentationGroupId = @enumFromInt(self.groups_len);
+        self.groups_len += 1;
         return id;
     }
 
-    pub fn resetSolvedClasses(self: *RepresentationStore) void {
-        self.classes_len = 0;
-        if (self.root_classes.len > 0) self.allocator.free(self.root_classes);
-        self.root_classes = &.{};
+    pub fn resetSolvedGroups(self: *RepresentationStore) void {
+        self.groups_len = 0;
+        if (self.root_groups.len > 0) self.allocator.free(self.root_groups);
+        self.root_groups = &.{};
         self.solved_structural_child_roots.clearRetainingCapacity();
         self.solved_structural_child_roots_published = false;
-        if (self.callable_class_emissions.len > 0) self.allocator.free(self.callable_class_emissions);
-        self.callable_class_emissions = &.{};
-        for (self.class_erasure_provenance) |provenance| {
+        if (self.callable_group_emissions.len > 0) self.allocator.free(self.callable_group_emissions);
+        self.callable_group_emissions = &.{};
+        for (self.group_erasure_provenance) |provenance| {
             if (provenance.len > 0) self.allocator.free(provenance);
         }
-        if (self.class_erasure_provenance.len > 0) self.allocator.free(self.class_erasure_provenance);
-        self.class_erasure_provenance = &.{};
+        if (self.group_erasure_provenance.len > 0) self.allocator.free(self.group_erasure_provenance);
+        self.group_erasure_provenance = &.{};
     }
 
-    pub fn publishRootClasses(
+    pub fn publishRootGroups(
         self: *RepresentationStore,
-        root_classes: []RepresentationClassId,
+        root_groups: []RepresentationGroupId,
     ) std.mem.Allocator.Error!void {
-        if (root_classes.len != @as(usize, @intCast(self.roots_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: solved root class table length differs from root count");
+        if (root_groups.len != @as(usize, @intCast(self.roots_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root group table length differs from root count");
             unreachable;
         }
-        if (self.root_classes.len > 0) {
-            debug.invariant(false, "lambda-solved invariant violated: solved root classes were published twice");
+        if (self.root_groups.len > 0) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root groups were published twice");
             unreachable;
         }
         if (self.solved_structural_child_roots_published) {
             debug.invariant(false, "lambda-solved invariant violated: solved structural child roots were published twice");
             unreachable;
         }
-        self.root_classes = root_classes;
+        self.root_groups = root_groups;
         errdefer {
-            self.root_classes = &.{};
+            self.root_groups = &.{};
             self.solved_structural_child_roots.clearRetainingCapacity();
             self.solved_structural_child_roots_published = false;
         }
@@ -2063,17 +2063,17 @@ pub const RepresentationStore = struct {
         self.solved_structural_child_roots_published = true;
     }
 
-    pub fn classForRoot(self: *const RepresentationStore, root: RepRootId) RepresentationClassId {
+    pub fn groupForRoot(self: *const RepresentationStore, root: RepRootId) RepresentationGroupId {
         const root_index = @intFromEnum(root);
         if (root_index >= self.roots_len) {
-            debug.invariant(false, "lambda-solved invariant violated: solved class lookup referenced an unreserved root");
+            debug.invariant(false, "lambda-solved invariant violated: solved group lookup referenced an unreserved root");
             unreachable;
         }
-        if (self.root_classes.len != @as(usize, @intCast(self.roots_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: solved root classes are not published");
+        if (self.root_groups.len != @as(usize, @intCast(self.roots_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: solved root groups are not published");
             unreachable;
         }
-        return self.root_classes[root_index];
+        return self.root_groups[root_index];
     }
 
     pub fn solvedStructuralChildRoot(
@@ -2089,9 +2089,9 @@ pub const RepresentationStore = struct {
             debug.invariant(false, "lambda-solved invariant violated: solved structural child root lookup used a non-structural edge kind");
             unreachable;
         };
-        const parent_class = self.classForRoot(parent);
+        const parent_group = self.groupForRoot(parent);
         return self.solved_structural_child_roots.get(.{
-            .parent_class = parent_class,
+            .parent_group = parent_group,
             .kind = child_kind,
         });
     }
@@ -2116,16 +2116,16 @@ pub const RepresentationStore = struct {
                 },
             };
             const key: SolvedStructuralChildKey = .{
-                .parent_class = self.classForRoot(from),
+                .parent_group = self.groupForRoot(from),
                 .kind = kind,
             };
-            const child_class = self.classForRoot(child);
+            const child_group = self.groupForRoot(child);
             const entry = try self.solved_structural_child_roots.getOrPut(key);
             if (entry.found_existing) {
                 const existing = entry.value_ptr.*;
-                const existing_class = self.classForRoot(existing);
-                if (existing_class != child_class) {
-                    debug.invariant(false, "lambda-solved invariant violated: solved structural projection class is ambiguous");
+                const existing_group = self.groupForRoot(existing);
+                if (existing_group != child_group) {
+                    debug.invariant(false, "lambda-solved invariant violated: solved structural projection group is ambiguous");
                     unreachable;
                 }
                 if (@intFromEnum(child) < @intFromEnum(existing)) {
@@ -2137,100 +2137,100 @@ pub const RepresentationStore = struct {
         }
     }
 
-    pub fn publishCallableClassEmission(
+    pub fn publishCallableGroupEmission(
         self: *RepresentationStore,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
         emission_plan: CallableValueEmissionPlanId,
     ) std.mem.Allocator.Error!void {
-        const class_index: usize = @intFromEnum(class);
-        if (class_index >= @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: callable class emission referenced an unreserved class");
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable group emission referenced an unreserved group");
             unreachable;
         }
-        if (self.callable_class_emissions.len == 0) {
-            self.callable_class_emissions = try self.allocator.alloc(?CallableValueEmissionPlanId, @intCast(self.classes_len));
-            @memset(self.callable_class_emissions, null);
+        if (self.callable_group_emissions.len == 0) {
+            self.callable_group_emissions = try self.allocator.alloc(?CallableValueEmissionPlanId, @intCast(self.groups_len));
+            @memset(self.callable_group_emissions, null);
         }
-        if (self.callable_class_emissions.len != @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: callable class emission table length differs from class count");
+        if (self.callable_group_emissions.len != @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable group emission table length differs from group count");
             unreachable;
         }
-        if (self.callable_class_emissions[class_index]) |existing| {
+        if (self.callable_group_emissions[group_index]) |existing| {
             if (existing != emission_plan) {
-                debug.invariant(false, "lambda-solved invariant violated: callable class emission was published twice with different plans");
+                debug.invariant(false, "lambda-solved invariant violated: callable group emission was published twice with different plans");
                 unreachable;
             }
             return;
         }
-        self.callable_class_emissions[class_index] = emission_plan;
+        self.callable_group_emissions[group_index] = emission_plan;
     }
 
-    pub fn callableClassEmission(
+    pub fn callableGroupEmission(
         self: *const RepresentationStore,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
     ) ?CallableValueEmissionPlanId {
-        const class_index: usize = @intFromEnum(class);
-        if (class_index >= @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: callable class emission lookup referenced an unreserved class");
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable group emission lookup referenced an unreserved group");
             unreachable;
         }
-        if (self.callable_class_emissions.len == 0) return null;
-        if (self.callable_class_emissions.len != @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: callable class emission table length differs from class count");
+        if (self.callable_group_emissions.len == 0) return null;
+        if (self.callable_group_emissions.len != @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: callable group emission table length differs from group count");
             unreachable;
         }
-        return self.callable_class_emissions[class_index];
+        return self.callable_group_emissions[group_index];
     }
 
-    /// Public `publishClassErasureProvenance` function.
-    pub fn publishClassErasureProvenance(
+    /// Public `publishGroupErasureProvenance` function.
+    pub fn publishGroupErasureProvenance(
         self: *RepresentationStore,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
         provenance: []const BoxErasureProvenance,
     ) std.mem.Allocator.Error!void {
         if (provenance.len == 0) {
-            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance publication was empty");
+            debug.invariant(false, "lambda-solved invariant violated: group erasure provenance publication was empty");
             unreachable;
         }
-        const class_index: usize = @intFromEnum(class);
-        if (class_index >= @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance referenced an unreserved class");
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: group erasure provenance referenced an unreserved group");
             unreachable;
         }
-        if (self.class_erasure_provenance.len == 0) {
-            self.class_erasure_provenance = try self.allocator.alloc([]const BoxErasureProvenance, @intCast(self.classes_len));
-            @memset(self.class_erasure_provenance, &.{});
+        if (self.group_erasure_provenance.len == 0) {
+            self.group_erasure_provenance = try self.allocator.alloc([]const BoxErasureProvenance, @intCast(self.groups_len));
+            @memset(self.group_erasure_provenance, &.{});
         }
-        if (self.class_erasure_provenance.len != @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance table length differs from class count");
+        if (self.group_erasure_provenance.len != @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: group erasure provenance table length differs from group count");
             unreachable;
         }
-        if (self.class_erasure_provenance[class_index].len > 0) {
-            if (!boxErasureProvenanceSliceEql(self.class_erasure_provenance[class_index], provenance)) {
-                debug.invariant(false, "lambda-solved invariant violated: class erasure provenance was published twice with different values");
+        if (self.group_erasure_provenance[group_index].len > 0) {
+            if (!boxErasureProvenanceSliceEql(self.group_erasure_provenance[group_index], provenance)) {
+                debug.invariant(false, "lambda-solved invariant violated: group erasure provenance was published twice with different values");
                 unreachable;
             }
             return;
         }
-        self.class_erasure_provenance[class_index] = try self.allocator.dupe(BoxErasureProvenance, provenance);
+        self.group_erasure_provenance[group_index] = try self.allocator.dupe(BoxErasureProvenance, provenance);
     }
 
-    /// Public `classErasureProvenance` function.
-    pub fn classErasureProvenance(
+    /// Public `groupErasureProvenance` function.
+    pub fn groupErasureProvenance(
         self: *const RepresentationStore,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
     ) []const BoxErasureProvenance {
-        const class_index: usize = @intFromEnum(class);
-        if (class_index >= @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance lookup referenced an unreserved class");
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: group erasure provenance lookup referenced an unreserved group");
             unreachable;
         }
-        if (self.class_erasure_provenance.len == 0) return &.{};
-        if (self.class_erasure_provenance.len != @as(usize, @intCast(self.classes_len))) {
-            debug.invariant(false, "lambda-solved invariant violated: class erasure provenance table length differs from class count");
+        if (self.group_erasure_provenance.len == 0) return &.{};
+        if (self.group_erasure_provenance.len != @as(usize, @intCast(self.groups_len))) {
+            debug.invariant(false, "lambda-solved invariant violated: group erasure provenance table length differs from group count");
             unreachable;
         }
-        return self.class_erasure_provenance[class_index];
+        return self.group_erasure_provenance[group_index];
     }
 
     pub fn appendBoxBoundary(
@@ -4619,7 +4619,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         }
 
         if (info.callable == null and info.boxed == null and info.aggregate == null and self.valueHasFunctionType(info.logical_ty)) {
-            return try self.endpointForCallableClass(info.solved_class orelse representationInvariant("session executable function value has no solved class"));
+            return try self.endpointForCallableGroup(info.solved_group orelse representationInvariant("session executable function value has no solved group"));
         }
 
         const id = try self.payload_store.reserve(self.allocator, key);
@@ -4736,8 +4736,8 @@ const SessionExecutableTypePayloadBuilder = struct {
             ty,
         );
         if (self.valueHasFunctionType(ty)) {
-            const class = self.representation_store.classForRoot(root);
-            if (self.representation_store.callableClassEmission(class)) |emission_plan| {
+            const group = self.representation_store.groupForRoot(root);
+            if (self.representation_store.callableGroupEmission(group)) |emission_plan| {
                 return try self.endpointForCallableEmissionPlan(emission_plan);
             }
             return try self.endpointForVacantCallableSlot(key);
@@ -5128,12 +5128,12 @@ const SessionExecutableTypePayloadBuilder = struct {
         return try self.callablePayloadForEmissionPlan(callable.emission_plan);
     }
 
-    fn endpointForCallableClass(
+    fn endpointForCallableGroup(
         self: *SessionExecutableTypePayloadBuilder,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        const emission_plan = self.representation_store.callableClassEmission(class) orelse {
-            representationInvariant("session executable function value class has no callable emission plan");
+        const emission_plan = self.representation_store.callableGroupEmission(group) orelse {
+            representationInvariant("session executable function value group has no callable emission plan");
         };
         return try self.endpointForCallableEmissionPlan(emission_plan);
     }
@@ -6078,8 +6078,8 @@ const ExecValueTypeKeyBuilder = struct {
         const root = self.types.unlinkConst(id);
         if (self.valueHasFunctionType(root)) {
             const representations = self.representationStore();
-            const class = representations.classForRoot(rep_root);
-            if (representations.callableClassEmission(class)) |emission| {
+            const group = representations.groupForRoot(rep_root);
+            if (representations.callableGroupEmission(group)) |emission| {
                 try self.writeCallableEmissionPlan(emission, representations);
             } else {
                 try self.writeVacantCallableSlotType(root);
@@ -6424,7 +6424,7 @@ const ExecValueTypeKeyBuilder = struct {
     ) std.mem.Allocator.Error!RootTypeKey {
         const root = self.types.unlinkConst(root_ty);
         const representations = self.representationStore();
-        const class = representations.classForRoot(rep_root);
+        const group = representations.groupForRoot(rep_root);
         return switch (self.types.getNode(root)) {
             .link => unreachable,
             .unbd,
@@ -6432,47 +6432,47 @@ const ExecValueTypeKeyBuilder = struct {
             .flex_for_a,
             => representationInvariant("executable value type key active root reached unresolved lambda-solved type"),
             .nominal => |nominal| .{
-                .class = class,
+                .group = group,
                 .layer = .nominal,
                 .nominal_module_name = @intFromEnum(nominal.nominal.module_name),
                 .nominal_type_name = @intFromEnum(nominal.nominal.type_name),
                 .is_opaque = nominal.is_opaque,
             },
-            .content => |content| try self.activeRootContentKey(class, content),
+            .content => |content| try self.activeRootContentKey(group, content),
         };
     }
 
     fn activeRootContentKey(
         self: *ExecValueTypeKeyBuilder,
-        class: RepresentationClassId,
+        group: RepresentationGroupId,
         content: type_mod.Content,
     ) std.mem.Allocator.Error!RootTypeKey {
         return switch (content) {
             .primitive => |prim| .{
-                .class = class,
+                .group = group,
                 .layer = .primitive,
                 .primitive = @intFromEnum(executablePrimitive(prim)),
             },
             .list => .{
-                .class = class,
+                .group = group,
                 .layer = .list,
             },
             .box => .{
-                .class = class,
+                .group = group,
                 .layer = .box,
             },
             .tuple => |span| .{
-                .class = class,
+                .group = group,
                 .layer = .tuple,
                 .arity = @intCast(self.types.sliceTypeVarSpan(span).len),
             },
             .record => |record| .{
-                .class = class,
+                .group = group,
                 .layer = .record,
                 .shape = @intFromEnum(try self.recordShapeForTypeFields(self.types.sliceFields(record.fields))),
             },
             .tag_union => |tag_union| .{
-                .class = class,
+                .group = group,
                 .layer = .tag_union,
                 .shape = @intFromEnum(try self.tagUnionShapeForTypeTags(self.types.sliceTags(tag_union.tags))),
             },

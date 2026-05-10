@@ -6499,24 +6499,18 @@ const BodyLowerer = struct {
                 null,
             ),
             .dispatch_call => |plan| blk: {
-                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
                 break :blk try self.staticDispatchResultTypeInFreshInstantiation(
                     plan orelse invariantViolation("checked dispatch call reached mono without a StaticDispatchCallPlan"),
-                    expected_ret,
                 );
             },
             .method_eq => |plan| blk: {
-                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
                 break :blk try self.staticDispatchResultTypeInFreshInstantiation(
                     plan orelse invariantViolation("checked method equality reached mono without a StaticDispatchCallPlan"),
-                    expected_ret,
                 );
             },
             .type_dispatch_call => |plan| blk: {
-                const expected_ret = try self.concreteTypeInfoForChecked(fallback_checked_ty);
                 break :blk try self.staticDispatchResultTypeInFreshInstantiation(
                     plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan"),
-                    expected_ret,
                 );
             },
             .list => |items| try self.listResultTypeFromKnownItems(fallback_checked_ty, items),
@@ -8530,7 +8524,6 @@ const BodyLowerer = struct {
     fn staticDispatchResultTypeInFreshInstantiation(
         self: *BodyLowerer,
         plan_id: checked_artifact.StaticDispatchPlanId,
-        expected_ret: ConcreteTypeInfo,
     ) Allocator.Error!ConcreteTypeInfo {
         var dispatch_instantiator = try self.type_instantiator.fork();
         defer dispatch_instantiator.deinit();
@@ -8539,16 +8532,14 @@ const BodyLowerer = struct {
         self.type_instantiator = &dispatch_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
-        return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id, expected_ret);
+        return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id);
     }
 
     fn staticDispatchResultTypeInCurrentInstantiation(
         self: *BodyLowerer,
         plan_id: checked_artifact.StaticDispatchPlanId,
-        expected_ret: ConcreteTypeInfo,
     ) Allocator.Error!ConcreteTypeInfo {
         const plan = self.staticDispatchPlan(plan_id);
-        try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected_ret.source_ref);
 
         try self.bindStaticDispatchKnownArgumentTypes(plan);
         const dispatcher_info = try self.staticDispatchDispatcherType(plan);
@@ -8667,21 +8658,17 @@ const BodyLowerer = struct {
         if (param_templates.len != plan.args.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
 
         const expr = self.checkedExpr(plan.expr);
-        switch (expr.data) {
-            .dispatch_call,
-            .method_eq,
-            => {
-                if (param_templates.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument slot");
-                const dispatcher_ref = try self.type_instantiator.concreteRefForTemplateType(plan.dispatcher_ty);
-                try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_ref);
-            },
-            .type_dispatch_call => {},
-            else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
-        }
-
+        var dispatcher_bound_from_argument = false;
         for (plan.args, param_templates, 0..) |arg, param_template, index| {
-            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse {
-                continue;
+            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse switch (expr.data) {
+                .dispatch_call,
+                .method_eq,
+                => if (index == 0)
+                    try self.concreteResultTypeForExpr(arg, self.checkedExpr(arg).ty)
+                else
+                    continue,
+                .type_dispatch_call => continue,
+                else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
             };
             try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
             switch (expr.data) {
@@ -8689,10 +8676,25 @@ const BodyLowerer = struct {
                 .method_eq,
                 => if (index == 0) {
                     try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_ty.source_ref);
+                    dispatcher_bound_from_argument = true;
                 },
                 .type_dispatch_call => {},
-                else => unreachable,
+                else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
             }
+        }
+
+        switch (expr.data) {
+            .dispatch_call,
+            .method_eq,
+            => {
+                if (param_templates.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument slot");
+                if (!dispatcher_bound_from_argument) {
+                    const dispatcher_ref = try self.type_instantiator.concreteRefForTemplateType(plan.dispatcher_ty);
+                    try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_ref);
+                }
+            },
+            .type_dispatch_call => {},
+            else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
         }
     }
 

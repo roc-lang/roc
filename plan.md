@@ -1811,7 +1811,7 @@ const MonoSpecializationKey = struct {
 // 2. Require that root's payload to be nominal. If it is not nominal, checking
 //    finalization has violated an invariant.
 // 3. Copy the declaration identity from that nominal payload:
-//    `(origin_module, type_name, builtin classification, opacity)`.
+//    `(origin_module, type_name, builtin categorization, opacity)`.
 // 4. Read formal parameters from the statement header.
 // 5. Read the representation template from the declaration annotation.
 // 6. Publish one `CheckedNominalDeclaration` keyed by the copied nominal
@@ -2782,7 +2782,7 @@ const MonoSpecializationReason = union(enum) {
 ```
 
 `ProcedureTemplateRef` is the identity of a checked procedure-template table
-entry. `CallableProcedureTemplateRef` classifies the origin of a callable
+entry. `CallableProcedureTemplateRef` categorizes the origin of a callable
 procedure template: `checked` for ordinary source-defined or imported checked
 procedures, `lifted` for local functions/closures lifted out of an owning mono
 specialization, and `synthetic` for compiler-created procedure identities such
@@ -3889,12 +3889,12 @@ const CallableSetMemberIdentity = struct {
 ```
 
 `capture_slots`, `capture_shape_key`, and the derived executable payload key are
-not part of identity. They are solved schema for that identity. If a class set
+not part of identity. They are solved schema for that identity. If a group set
 already contains a member with the same identity, lambda-solved must replace the
 stored capture schema in place:
 
 ```zig
-fn add_or_update_member(set: *CallableClassSet, member: CanonicalCallableSetMember) void {
+fn add_or_update_member(set: *CallableGroupSet, member: CanonicalCallableSetMember) void {
     if (find_member_with_same_identity(set, member)) |existing| {
         existing.capture_slots = clone(member.capture_slots);
         existing.capture_shape_key = member.capture_shape_key;
@@ -4596,35 +4596,35 @@ members = &.{
 };
 ```
 
-Callable class emission plans are also replaceable before sealing. If a class
-emission was published for descriptor key `A` and the class set later receives
+Callable group emission plans are also replaceable before sealing. If a group
+emission was published for descriptor key `A` and the group set later receives
 an updated member schema that interns as descriptor key `B`, the owning emission
 slot must be replaced in place. Any callable value that points at that emission
 slot then automatically observes the final descriptor. Lambda-solved must not
 leave the stale emission slot alive and add a second one:
 
 ```zig
-fn ensure_class_emission(class: RepresentationClassId, final_key: CallableSetKey) EmissionPlanId {
-    if (class_emission[class]) |existing| {
+fn ensure_group_emission(group: RepresentationGroupId, final_key: CallableSetKey) EmissionPlanId {
+    if (group_emission[group]) |existing| {
         if (emission_matches(existing, final_key)) return existing;
         replace_emission_plan_in_place(existing, .finite(final_key));
         return existing;
     }
 
     const created = append_emission_plan(.finite(final_key));
-    class_emission[class] = created;
+    group_emission[group] = created;
     return created;
 }
 ```
 
-The same replacement rule applies to finite-erased emissions. If the final class
+The same replacement rule applies to finite-erased emissions. If the final group
 key or Box-erasure provenance changes before sealing, the existing emission slot
 is replaced with the final `erase_finite_set` plan. Replacement after sealing is
 forbidden.
 
 Executable payload publication must use only live final descriptor references:
 
-- current `callable_class_emissions`
+- current `callable_group_emissions`
 - current callable values' `CallableValueInfo.emission_plan`
 - current callable construction plans
 - current finite-erased adapter demands
@@ -4741,7 +4741,7 @@ from direct-call layouts.
 
 A finite callable-set value crossing an erased `Box(T)` boundary lowers through
 an erased adapter whose body is also a `callable_match`. That adapter has a
-third procedure-boundary transform class: branch capture-slot transforms. The
+third procedure-boundary transform group: branch capture-slot transforms. The
 adapter first matches the hidden finite callable-set payload to select a member.
 For the selected branch, it extracts the stored member capture payload in
 `CaptureSlot.index` order. Each extracted capture slot must then transform from:
@@ -4767,7 +4767,7 @@ The branch then assembles the direct-call hidden capture tuple from the
 transformed target-slot values. It must not pass the raw callable-set member
 payload directly as the target procedure's hidden capture argument.
 
-This is a separate transform class from ordinary finite `callable_match`
+This is a separate transform group from ordinary finite `callable_match`
 argument transforms because source call arguments and stored member captures
 come from different runtime values. The ordinary arguments are the erased
 adapter's explicit call arguments. The captures are the payload extracted from
@@ -4850,7 +4850,7 @@ This is the same rule as ordinary procedure params and pattern binders: once a
 stage introduces a value that downstream expressions may reference, that stage
 must publish the value's executable type at the point of introduction.
 
-Recursive existing-value transforms require one more endpoint owner class:
+Recursive existing-value transforms require one more endpoint owner group:
 `transform_child`. A child endpoint is not a source expression, not a binder,
 not a procedure parameter, and not a real local value in the current body. It is
 the projected source or target child reached while executing an already-owned
@@ -5500,7 +5500,7 @@ values, but using one as a substitute for return-root construction lowering is a
 compiler bug.
 
 The compiler must not decide this by inspecting syntax in executable MIR. The
-classification belongs to lambda-solved MIR, where value-flow, constructor
+categorization belongs to lambda-solved MIR, where value-flow, constructor
 identity, joins, existing values, and representation endpoints are still all
 available. Executable MIR may assert that the expression shape agrees with the
 published `ConsumerUseLowering`, but it must not recover a missing plan by
@@ -5744,9 +5744,9 @@ If the selected child contains a function value, a boxed erased boundary, a
 finite callable set, a join, or any other representation-specific value, that
 specificity still flows into the slot through the representation graph:
 lambda-solved has already published the slot root and the child value root into
-the same solved representation class. `childForRootType(slot_root,
+the same solved representation group. `childForRootType(slot_root,
 logical_payload_ty)` therefore sees the selected callable representation through
-the slot root's solved class. The payload builder must not bypass that graph by
+the slot root's solved group. The payload builder must not bypass that graph by
 asking the selected child value for a producer-global endpoint.
 
 Selected child values are still required, but only for consumer-use publication
@@ -5995,9 +5995,9 @@ point, the previous stage failed to publish required data; debug builds assert
 and release builds use `unreachable`.
 
 Lambda-solved representation solving must publish a solved structural-child
-index at the same boundary where it publishes the solved root-class table.
+index at the same boundary where it publishes the solved root-group table.
 `representation_edges` are the input graph to solving; they are not a release
-lookup structure after solving has completed. Once `RepRootId -> RepresentationClassId`
+lookup structure after solving has completed. Once `RepRootId -> RepresentationGroupId`
 has been published, the `RepresentationStore` must also publish:
 
 ```zig
@@ -6015,41 +6015,41 @@ const StructuralChildKind = struct {
 };
 
 const SolvedStructuralChildKey = struct {
-    parent_class: RepresentationClassId,
+    parent_group: RepresentationGroupId,
     kind: StructuralChildKind,
 };
 
 solved_structural_child_roots: HashMap(SolvedStructuralChildKey, RepRootId)
 ```
 
-The key uses the solved parent representation class, not a source `TypeId`, not
+The key uses the solved parent representation group, not a source `TypeId`, not
 a row/name lookup, and not a physical layout id. `record_field`, `tag_payload`,
 and `nominal_backing` use finalized ids from earlier stages; `tuple_elem` uses
 the tuple index; `list_elem` and `box_payload` have no payload fields. This
-table is built in the same solver publication step that commits root classes:
+table is built in the same solver publication step that commits root groups:
 
 1. Iterate the already-published local structural representation edges.
 2. Convert each edge kind to `StructuralChildKind`; ignore non-structural
    value-flow edges such as aliases, branch joins, loop phis, mutable versions,
    function arguments, function returns, and function-callable edges.
-3. Compute `parent_class = classForRoot(edge.from)`.
-4. Compute `child_class = classForRoot(edge.to)`.
-5. Insert `(parent_class, child_kind) -> child_root`.
-6. If the same key is seen again with a child root in the same child class, keep
+3. Compute `parent_group = groupForRoot(edge.from)`.
+4. Compute `child_group = groupForRoot(edge.to)`.
+5. Insert `(parent_group, child_kind) -> child_root`.
+6. If the same key is seen again with a child root in the same child group, keep
    one deterministic canonical root, such as the smallest `RepRootId`.
-7. If the same key is seen with a different child class, that is a compiler bug:
+7. If the same key is seen with a different child group, that is a compiler bug:
    debug builds assert and release builds use `unreachable`.
 
 This is required release-path compiler data, not a debug verifier and not a
 memoizing cache. It is the compact published result of representation solving:
-one entry per distinct structural child relation after solved-class merging.
+one entry per distinct structural child relation after solved-group merging.
 Executable key generation, capture-slot computation, session executable payload
 construction, value-transform finalization, boxed payload planning, and any
 other post-solve consumer must query this table directly. They must not scan
 `representation_edges`, re-run structural grouping, inspect row names, compare
 layout shapes, or recover child roots from source syntax.
 
-For example, this Roc value has one solved representation class for the outer
+For example, this Roc value has one solved representation group for the outer
 record and one solved child relation for the finalized `f` field:
 
 ```roc
@@ -6070,8 +6070,8 @@ make = |n|
 boxed = Box.box(make(1))
 ```
 
-Post-solve lowering asks for `(class({ f: ... }), record_field(f))` and receives
-the canonical child root whose class contains the actual field value. It does
+Post-solve lowering asks for `(group({ f: ... }), record_field(f))` and receives
+the canonical child root whose group contains the actual field value. It does
 not scan the record's edges again and does not compare the field name `f` to
 recover the relationship.
 
@@ -6462,37 +6462,37 @@ The projection result endpoint is the value consumed by `Box.unbox(record.inner)
 Those endpoints can differ: the projection result's boxed payload is solved with
 the explicit `Box.unbox` boundary provenance. The projection transform is
 therefore a `box_to_box` transform whose child callable transform must inherit
-the provenance already attached to the solved representation class. It must not
+the provenance already attached to the solved representation group. It must not
 invent a fresh `BoxBoundaryId`, and it must not treat the projection itself as an
 erasure boundary.
 
-Lambda-solved MIR must publish this solved-class provenance explicitly:
+Lambda-solved MIR must publish this solved-group provenance explicitly:
 
 ```zig
 const RepresentationStore = struct {
-    /// Indexed by RepresentationClassId after root classes are solved.
-    /// Empty means this class has no Box-erasure authorization.
-    class_erasure_provenance: []const []const BoxErasureProvenance,
+    /// Indexed by RepresentationGroupId after root groups are solved.
+    /// Empty means this group has no Box-erasure authorization.
+    group_erasure_provenance: []const []const BoxErasureProvenance,
 };
 ```
 
 `CallableEmissionAssigner` already walks explicit `require_box_erased`
 requirements and propagates provenance through the solved representation graph.
 After that propagation, before value-transform finalization, it must publish the
-non-empty provenance set for each reached `RepresentationClassId` into
-`RepresentationStore.class_erasure_provenance`. This is not a cache and not
+non-empty provenance set for each reached `RepresentationGroupId` into
+`RepresentationStore.group_erasure_provenance`. This is not a cache and not
 recovery from type shape; it is the solved result of explicit requirements:
 
 - real `Box.box` and `Box.unbox` operations publish
   `BoxErasureProvenance.local_box_boundary`
 - bodyless promoted wrappers publish
   `BoxErasureProvenance.promoted_wrapper`
-- representation edges decide which solved classes those requirements reach
+- representation edges decide which solved groups those requirements reach
 
 When `ValueTransformFinalizer` plans a non-identity structural transform and no
 local `BoxBoundaryId` or inherited provenance is already in scope, it may read
-the source and target endpoint solved classes and inherit their published
-`class_erasure_provenance`. If both endpoints have provenance, they must agree
+the source and target endpoint solved groups and inherit their published
+`group_erasure_provenance`. If both endpoints have provenance, they must agree
 as sets after de-duplication; a mismatch is a compiler invariant violation. If
 neither endpoint has provenance, the transform proceeds with empty provenance and
 will remain valid only if no callable-erasing child transform is needed.
@@ -7027,9 +7027,9 @@ optimization. These plans are executable inputs, not verifier hints.
 
 #### Resolved Value References Before Mono MIR
 
-Checking finalization must classify every value-like reference that can reach
+Checking finalization must categorize every value-like reference that can reach
 mono MIR before the checked artifact is published. Mono MIR must consume that
-classification. It must not decide whether a reference is local, top-level,
+categorization. It must not decide whether a reference is local, top-level,
    imported, hosted, platform-required, promoted, or callable by scanning names,
 source syntax, export tables, declaration order, or the later capture graph.
 
@@ -7119,7 +7119,7 @@ const ResolvedValueRefTable = struct {
 
 The exact Zig names may differ, but the partition must not. The published table
 is sealed. It must not contain pending top-level bindings, unresolved import
-lookups, source names, or expression shapes that later stages have to classify.
+lookups, source names, or expression shapes that later stages have to categorize.
 
 Checking finalization may build the table in two internal phases:
 
@@ -7159,7 +7159,7 @@ infer mutable-parameter behavior from a name like `$current`.
 The table is part of the checked artifact because it is checked semantic data.
 It is not a mono-MIR analysis cache, not a capture-discovery result, and not a
 debug-only helper. Importing modules receive only the exported/importable pieces
-of this classification through `ImportedModuleView`; they must not inspect
+of this categorization through `ImportedModuleView`; they must not inspect
 private checked CIR to recreate it.
 
 Mono MIR lowering consumes `ResolvedValueRef` as follows:
@@ -7401,7 +7401,7 @@ promise that a body will be produced later.
 Mono MIR must not lower a top-level, imported, hosted, platform-required, or
 promoted procedure as `call_value(var_(proc), args)`. It must not lower a
 top-level or imported constant as an ordinary local `var_`. It must not leave a
-raw source symbol for lifted MIR to classify later.
+raw source symbol for lifted MIR to categorize later.
 
 This is the production replacement for Cor/LSS's prototype-level
 `ctx.toplevels` subtraction during capture discovery. Cor uses that set
@@ -7473,7 +7473,7 @@ Mono MIR must not have a `lowerAllTopLevelFunctions`, "emit every function",
 "lower every export", or equivalent eager path. Direct top-level functions are
 checked procedure templates and may also be published as top-level
 `procedure_binding` entries, but their mono bodies are still produced only when a
-concrete root request, direct call, static-dispatch target, first-class
+concrete root request, direct call, static-dispatch target, value-level
 `proc_value`, or compile-time dependency summary requests an exact
 `MonoSpecializationKey`.
 
@@ -7987,9 +7987,9 @@ lookup, body scanning, source function types, or the local shape of a callee
 expression.
 
 `call_proc` participates in lambda-set inference as a direct procedure call. It
-is not a first-class procedure value and it carries no captures.
+is not a value-level procedure value and it carries no captures.
 
-`proc_value` participates in lambda-set inference as a first-class procedure
+`proc_value` participates in lambda-set inference as a value-level procedure
 value. Its `proc` and `captures` fields are the only source of truth for the
 callable member and capture payload.
 
@@ -9211,7 +9211,7 @@ const ValueInfoBuildState = enum {
 
 These states are builder-only. Exported lambda-solved MIR contains only sealed
 procedure representation instances, sealed solve sessions, sealed value stores,
-and solved representation classes. If executable MIR sees any unsealed state,
+and solved representation groups. If executable MIR sees any unsealed state,
 debug verification must assert immediately; release builds use `unreachable`.
 
 #### Dynamic Solve-Session Membership During Lambda-Solved Building
@@ -9272,7 +9272,7 @@ construction. It copies the exact mutable member list into the temporary
 `RepresentationSolveSession` view used by the in-progress solver. It must not
 drop previously reserved members, consume the mutable list, or construct a new
 member list by scanning bodies. A stale member view is a compiler bug because it
-lets a late-reserved procedure keep `ValueInfo.solved_class = null` and reach
+lets a late-reserved procedure keep `ValueInfo.solved_group = null` and reach
 value-transform finalization without solved callable metadata.
 
 For example, this Roc code requires a late finite erased-adapter member:
@@ -9310,7 +9310,7 @@ ExecutableSpecializationKey{
 
 That late adapter member must be in the solve session before representation
 solving runs again. Otherwise the `Apply(f)` branch's pattern binder is built
-but never assigned a representation class, and the later `f(1)` call reaches
+but never assigned a representation group, and the later `f(1)` call reaches
 finalization with no `CallableValueInfo`. The correct fix is to publish session
 membership from the reservation table before every solve/finalize step. The
 incorrect fixes are all forbidden:
@@ -9389,7 +9389,7 @@ member has been solved is a compiler bug. It can force a descriptor-only
 proc-value instance to become executable even though the executable call path
 should use the adapter-boundary member with `f` already marked as erased.
 
-Value-transform finite-erased adapter demands are a first-class lambda-solved
+Value-transform finite-erased adapter demands are a value-level lambda-solved
 input to the same fixed-point loop. They are the production equivalent of Cor
 LSS's always-open specialization queue. Cor can call
 `specialize_fn_erased(...)` while lambdamono is lowering `PackedFn` because its
@@ -9885,7 +9885,7 @@ The lambda-solved construction algorithm is:
    through `erase_proc_value` or `erase_finite_set`, lambda-solved must publish
    `require_box_erased` requirements for that target procedure's public
    params/return whose executable keys contain erased callable payloads, then
-   solve representation classes again before strict callable-emission
+   solve representation groups again before strict callable-emission
    assignment succeeds.
 
    This is required because the erased ABI choice is discovered after the
@@ -9920,7 +9920,7 @@ The lambda-solved construction algorithm is:
    `markErasedPayloadRoot` then follows existing explicit representation edges
    such as `.tag_payload`, `.record_field`, `.tuple_elem`, `.list_elem`,
    `.nominal_backing`, `.function_arg`, and `.function_return` to mark the
-   nested callable class as erased. The solver must then re-run, so the pattern
+   nested callable group as erased. The solver must then re-run, so the pattern
    binder `f` is assigned an already-erased callable emission instead of looking
    for finite callable members that do not exist at the boundary.
 
@@ -10042,7 +10042,7 @@ The lambda-solved construction algorithm is:
    recursive group member is requested while another member is building,
    `reserve_instance` returns the existing public roots for the same
    owner-scoped recursive group member instead of recursing indefinitely.
-8. Solve representation and callable classes for the session.
+8. Solve representation and callable groups for the session.
 9. If solving a `call_value` yields a finite callable set, reserve every selected
    member procedure template in the same session with owner
    `callable_match_member`, add one branch argument edge for each source call
@@ -10056,10 +10056,10 @@ The lambda-solved construction algorithm is:
     representation edges, and return to step 7 before sealing.
 11. If solving introduces new explicit `Box(T)` erased requirements, apply them
     only through `BoxBoundaryId` payload roots, update the affected callable
-    classes, and return to step 8 until no new instances, edges, or requirements
+    groups, and return to step 8 until no new instances, edges, or requirements
     appear.
 12. Fill every member `ValueInfoStore` from the solved session: each exported
-   `ValueInfo.solved_class`, `CallableValueInfo.emission_plan`,
+   `ValueInfo.solved_group`, `CallableValueInfo.emission_plan`,
    `CallSiteInfo.dispatch`, boxed-boundary plan, projection result, capture-slot
    root, parameter root, and return root must be solved.
 13. Finalize session value-transform boundaries for every real existing-value
@@ -10301,7 +10301,7 @@ const RepRootId = union(enum) {
 
 const RepVarId = enum(u32) { _ };
 const RepEdgeId = enum(u32) { _ };
-const RepClassId = enum(u32) { _ };
+const RepGroupId = enum(u32) { _ };
 const RepRequirementId = enum(u32) { _ };
 
 const RepresentationStore = struct {
@@ -10309,7 +10309,7 @@ const RepresentationStore = struct {
     vars: Store(RepresentationVar),
     edges: Store(RepresentationEdge),
     requirements: Store(RepresentationRequirement),
-    classes: Store(SolvedRepresentationClass),
+    groups: Store(SolvedRepresentationGroup),
 };
 
 const RepresentationEdge = struct {
@@ -10413,11 +10413,11 @@ Representation solving is a deterministic union-find plus worklist:
 2. Append all `RepresentationEdge` values.
 3. Append all `RepresentationRequirement` values.
 4. Union variables connected by value-flow edges.
-5. Merge structural shapes inside each class.
-6. Re-enqueue affected neighboring classes until no class changes.
+5. Merge structural shapes inside each group.
+6. Re-enqueue affected neighboring groups until no group changes.
 7. Apply `require_box_erased` only by following the explicit representation graph
    reachable from the named `payload_root`.
-8. Export one `SolvedRepresentationClass` for every class.
+8. Export one `SolvedRepresentationGroup` for every group.
 
 The solver may use path compression and dense indexes for compiler performance.
 It must not use logical `TypeId` equality as a shortcut for unioning two roots.
@@ -10519,7 +10519,7 @@ const ValueInfoBuildRecord = struct {
 const ValueInfo = struct {
     logical_ty: TypeId,
     rep_root: RepRootId,
-    solved_class: RepClassId,
+    solved_group: RepGroupId,
     origin: ValueOrigin,
     callable: ?CallableValueInfo,
     boxed: ?BoxedValueInfo,
@@ -10663,7 +10663,7 @@ aggregate children, projections, branch joins, and bridge inputs use the same
 
 `ValueInfo.logical_ty` is the fully resolved lambda-solved logical type for the
 value occurrence. `ValueInfo.rep_root` is that occurrence's representation root.
-`ValueInfo.solved_class` is the solved representation class after representation
+`ValueInfo.solved_group` is the solved representation group after representation
 solving. Logical type equality never substitutes for `rep_root` identity.
 
 `ValueInfo.callable` exists when the value's solved representation contains a
@@ -10808,7 +10808,7 @@ or `callable_target`. A variable occurrence resolves its `BindingInfoId`, emits
 a representation edge from the binding's current value root to the occurrence's
 own value root, and assigns the occurrence a `ValueInfoId`. The occurrence then
 gets all callable, boxed, aggregate, projection, and emission information from
-the value-metadata store and solved representation class.
+the value-metadata store and solved representation group.
 
 When lambda-solved MIR seals executable value transforms, every variable
 occurrence that can reach executable MIR as a runtime `var_` value must also
@@ -11361,7 +11361,7 @@ fn finalizeValueAliases(value: ValueInfo) void {
 
 This is not a fallback and not a late body scan. The source-match branch
 reachability bit is explicit lambda-solved metadata published while lowering the
-`match`, and finalized from solved representation classes before executable
+`match`, and finalized from solved representation groups before executable
 value-transform finalization runs. Executable MIR then consumes only reachable
 branches and only finalized transforms for reachable runtime variable
 occurrences.
@@ -11468,7 +11468,7 @@ const CallValueFiniteDispatchPlan = struct {
 ```
 
 For `call_proc`, `callee` is null because the callee is a procedure target in
-the MIR node, not a first-class value. For `call_value`, `callee` names the
+the MIR node, not a value-level value. For `call_value`, `callee` names the
 function value occurrence. `requested_source_fn_ty` is the exact canonical
 fixed-arity Roc function type requested by this call expression. `dispatch` is
 computed from the solved whole-function representation root and the solved
@@ -11478,7 +11478,7 @@ direct-call case is `call_proc`.
 
 `arg_consumer_uses` is the authority for `call_proc` and `call_value_erased`
 arguments. The call expression already owns the explicit lowered argument
-expression ids, so the call-argument consumer-use finalizer must classify each
+expression ids, so the call-argument consumer-use finalizer must categorize each
 argument from that explicit call expression and publish one
 `ConsumerUsePlan` per source argument. If the argument is a constructor or
 contextual control-flow expression, no existing-value transform is created for
@@ -11786,7 +11786,7 @@ compute the join result executable type key and endpoint from:
 
 - the result value's logical type
 - the result value's `RepRootId`
-- the solved representation class reachable from that result root
+- the solved representation group reachable from that result root
 
 It must not compute the join result key by choosing the first incoming branch
 value, and it must not require incoming branch executable representations to be
@@ -11896,7 +11896,7 @@ the current concrete procedure-return source type separately from the local
 expression expected type, and every `return` expression or statement consumes
 that current return source type.
 
-Non-returning control-flow classification must also be recursive. A block whose
+Non-returning control-flow categorization must also be recursive. A block whose
 first statement is `return False` does not produce the block's final `{}` value;
 that final expression is unreachable. Lambda-solved join publication and
 executable join verification must decide whether a branch can complete normally
@@ -11927,7 +11927,7 @@ Intrinsic and low-level value-flow behavior is also represented through this
 same value-metadata path. A call to `Box.box` or `Box.unbox` may appear as:
 
 - direct `call_proc` to an intrinsic wrapper procedure
-- first-class `proc_value` for the intrinsic wrapper, followed by `call_value`
+- value-level `proc_value` for the intrinsic wrapper, followed by `call_value`
 - a finite callable-set branch inside `callable_match`
 
 All three cases must create `BoxBoundaryId` records from checked procedure
@@ -12123,13 +12123,13 @@ specialization. This is important for correctness and performance:
 6. Each call allocates `CallSiteInfoId`, argument/result value metadata, whole
    requested-function representation edges, and dispatch metadata at the same
    time.
-7. Representation solving fills each exported `ValueInfo.solved_class` and
+7. Representation solving fills each exported `ValueInfo.solved_group` and
    occurrence-specific callable emission plan.
 
 For recursive specialization SCCs, "one traversal per specialization" means one
 body traversal per reserved member instance before the shared SCC solve. Public
 roots are allocated before body traversal; ordinary body-local metadata is
-allocated during traversal; solved classes and emission plans are filled only
+allocated during traversal; solved groups and emission plans are filled only
 after the SCC solve. A member body may reference another member's public roots
 before that other body is structurally filled, but it may not read the other
 member's private body-local metadata.
@@ -12227,7 +12227,7 @@ Transform modes include at least natural representation, boxed-erased-payload
 representation, and executable representation.
 
 Canonical key serialization for recursive types and solved representation
-classes must emit stable recursion binders and backrefs derived from first
+groups must emit stable recursion binders and backrefs derived from first
 encounter order in the explicit type/representation graph being serialized. It
 must not serialize raw `TypeId`, pointer identity, allocation order, or hash-map
 iteration order. Debug-only assertions must fire if any exported key contains a
@@ -12247,7 +12247,7 @@ All exported semantic keys use one shared `CanonicalGraphKeyBuilder`:
 const CanonicalGraphKeyBuilder = struct {
     arena: *BumpAllocator,
     seen_types: Map(CanonicalNodeRef, RecBinderId),
-    seen_reps: Map(RepClassId, RecBinderId),
+    seen_reps: Map(RepGroupId, RecBinderId),
     out: ArrayList(u8),
     next_binder: u32,
 };
@@ -12255,7 +12255,7 @@ const CanonicalGraphKeyBuilder = struct {
 const CanonicalNodeRef = union(enum) {
     lambda_solved_type: TypeId,
     executable_type: ExecTypeId,
-    representation_class: RepClassId,
+    representation_group: RepGroupId,
     proc_base: ProcBaseKeyRef,
     capture_shape: CaptureShapeKeyRef,
 };
@@ -12342,7 +12342,7 @@ const BoxBoundary = struct {
 };
 ```
 
-Every solved representation class that contains an erased callable slot must
+Every solved representation group that contains an erased callable slot must
 record exactly which boxed boundaries introduced that erasure:
 
 ```zig
@@ -12402,7 +12402,7 @@ callable slot. It is a requirement in the `RepresentationStore`, not an
 executable conversion. Solving that requirement walks the given `payload_root`
 representation graph, marks every reachable function representation slot as
 erased, and attaches that provenance to the erased callable provenance set for
-the solved representation class. The walk follows only explicit representation
+the solved representation group. The walk follows only explicit representation
 edges already present in the store.
 
 There must be no helper that accepts an arbitrary type, expression, or
@@ -12698,7 +12698,7 @@ branch/pattern result to satisfy a boxed payload requirement.
 
 `Box.box(payload)` creates a `BoxBoundary` record and a
 `require_box_erased(boundary)` requirement. The produced box root's payload child
-is linked to the solved boxed payload representation class. `Box.unbox(boxed)`
+is linked to the solved boxed payload representation group. `Box.unbox(boxed)`
 creates a `BoxBoundary` record whose box root is the boxed input and whose
 payload root is the unboxed expression result. It links the unboxed payload root
 to the explicit boxed payload representation. It does not recover or request the
@@ -12710,11 +12710,11 @@ the function value's callable slot, every fixed-arity argument slot, and the
 return slot must all receive Box-erased representation, but the graph directions
 are not all the same:
 
-- Propagation is over solved representation classes, not raw root identity. A
-  value alias deliberately merges multiple roots into one class, and structural
-  edges may be attached to any root in that class. When a class is reached by an
+- Propagation is over solved representation groups, not raw root identity. A
+  value alias deliberately merges multiple roots into one group, and structural
+  edges may be attached to any root in that group. When a group is reached by an
   explicit `BoxBoundaryId`, the propagation walk must consider every explicit
-  representation edge whose endpoint's solved class is that reached class.
+  representation edge whose endpoint's solved group is that reached group.
 - `function_return` is covariant. The propagation walk moves from the function
   root to the return root in the edge's stored direction.
 - `function_arg(index)` is contravariant. The value-flow edge points from the
@@ -12722,9 +12722,9 @@ are not all the same:
   function. Box-erasure propagation must therefore traverse that edge in reverse:
   from the erased function root to the argument slot root.
 - `function_callable` is not a structural child propagation edge. The function
-  root's solved representation class is marked erased directly when the boundary
+  root's solved representation group is marked erased directly when the boundary
   reaches that root; callable emission then publishes the erased slot or
-  materialized erased value from that class.
+  materialized erased value from that group.
 
 For a `proc_value`, these variance edges are published while lambda-solved
 connects the proc-value occurrence to its target procedure instance. The
@@ -12754,14 +12754,14 @@ erased callable + erased callable = erased callable slot with exactly matching E
 ```
 
 The finite-callable plus erased-callable case can occur only in a representation
-class reached by `require_box_erased(payload_root, provenance)` for an explicit
+group reached by `require_box_erased(payload_root, provenance)` for an explicit
 `Box(T)` boundary or a sealed promoted wrapper whose artifact provenance came
-from an explicit `Box(T)` boundary. If that merge appears in a class that is not
+from an explicit `Box(T)` boundary. If that merge appears in a group that is not
 reached from such provenance, lambda-solved MIR has introduced non-`Box(T)`
 erasure and must hit the compiler-invariant path.
 
-This merge is representation solving, not executable repair. Once the class is
-solved, every function-typed value occurrence assigned to that class receives an
+This merge is representation solving, not executable repair. Once the group is
+solved, every function-typed value occurrence assigned to that group receives an
 explicit callable emission plan:
 
 ```zig
@@ -12776,7 +12776,7 @@ const CallableValueEmissionPlan = union(enum) {
 The exact Zig shape may differ, but the contract must not. Function-typed
 procedure returns, branch results, capture values, record fields, tuple elements,
 tag payloads, list elements, mutable versions, and ordinary expression results
-all consume a `CallableValueEmissionPlan` when their solved representation class
+all consume a `CallableValueEmissionPlan` when their solved representation group
 contains a callable child. An erased plan is valid only when it carries non-empty
 `BoxErasureProvenance`. Executable MIR must consume this plan directly; it
 must not ask whether the current syntax is inside `Box.box(...)`, compare source
@@ -12788,7 +12788,7 @@ representation solving and value-transform finalization:
 
 ```text
 build representation graph
--> solve representation classes and Box-only erasure requirements
+-> solve representation groups and Box-only erasure requirements
 -> assign CallableValueEmissionPlan to every callable value occurrence
 -> build executable endpoint payloads from the assigned plans
 -> finalize value transforms, capture transforms, call boundaries, joins, and returns
@@ -12797,7 +12797,7 @@ build representation graph
 This phase boundary is especially important for `proc_value` construction.
 During body building, a `proc_value` occurrence may capture arbitrary values,
 including other function values. Body building has not published solved
-representation classes yet, so it is forbidden to compute any executable
+representation groups yet, so it is forbidden to compute any executable
 capture endpoint, capture shape key, callable-set key, descriptor member, erased
 signature, or adapter key for that occurrence at that time.
 
@@ -12823,7 +12823,7 @@ lambda-solved builder state. It exists only to keep the selected procedure
 instance and source capture values attached to the exact value occurrence until
 representation solving has enough information to derive executable endpoints.
 
-After root classes have been solved and published, emission-plan assignment
+After root groups have been solved and published, emission-plan assignment
 must consume every pending `proc_value` construction and replace it with a final
 plan:
 
@@ -12831,9 +12831,9 @@ plan:
 2. Read target capture public roots from the selected procedure representation
    instance.
 3. If any target capture root is itself function-typed, first publish the
-   callable emission for that captured value's solved representation class.
-   This is a dependency between callable classes, not a source lookup. The
-   dependency key is the captured value's solved representation class. The
+   callable emission for that captured value's solved representation group.
+   This is a dependency between callable groups, not a source lookup. The
+   dependency key is the captured value's solved representation group. The
    implementation must resolve these dependencies before deriving the enclosing
    capture slot, because the enclosing slot's executable type key must contain
    the captured callable's final finite or Box-provenance erased representation,
@@ -12864,18 +12864,18 @@ The dependency order is visible in ordinary Roc code:
 The `double_add5` closure captures the already-constructed callable value
 `add5`. The descriptor member for `double_add5` must therefore use a capture
 slot whose executable type is the final callable-set representation of `add5`.
-It is a compiler bug to compute that slot while `add5`'s callable class still
+It is a compiler bug to compute that slot while `add5`'s callable group still
 has no assigned emission. It is also a compiler bug to substitute a vacant
 callable slot, raw source function type, procedure symbol, checked-CIR node, or
 any other placeholder.
 
 Emission assignment may run in an iterative discovery mode before all pending
-`call_value` edges have been connected. In that mode, a callable class whose
-function-valued capture depends on a class with no current callable-set
+`call_value` edges have been connected. In that mode, a callable group whose
+function-valued capture depends on a group with no current callable-set
 membership is simply delayed. Delaying means leaving the builder-only pending
 record in place for this iteration and assigning no executable emission to that
 value yet. The next representation-edge iteration may add the missing callable
-members, after which the class is retried. Delayed classes must not publish
+members, after which the group is retried. Delayed groups must not publish
 partial descriptors, vacant callable slots, empty callable sets, raw source-type
 keys, or temporary procedure-symbol keys.
 
@@ -12886,10 +12886,10 @@ particular:
 
 - a value whose current emission plan is `finite_callable_set(key)` contributes
   every member of the descriptor named by `key` to its solved representation
-  class
+  group
 - a value whose current emission plan is
   `finite_set_to_erased_adapter(adapter)` contributes every member of
-  `adapter.callable_set_key` to its solved representation class
+  `adapter.callable_set_key` to its solved representation group
 - a value whose current emission plan is `proc_value_to_erased(plan)`
   contributes the exact procedure-value member named by the occurrence's
   explicit `proc_value` source and selected `target_instance`; the pass must
@@ -12912,7 +12912,7 @@ This rule is required because the first emission pass may observe a
 The first pass may assign the lambda's procedure value a
 `proc_value_to_erased` emission because it flows through the explicit
 `Box(I64 -> I64)` boundary. The strict pass still has to know that the solved
-class contains that lambda as its finite callable member so the unboxed value
+group contains that lambda as its finite callable member so the unboxed value
 can be represented as the same Box-provenance erased callable. Requiring the
 strict pass to rediscover the lambda from the `Box.box(...)` syntax, from the
 erased ABI, or from physical layout would reintroduce competing semantic
@@ -12924,9 +12924,9 @@ procedure-value source attached to an existing erased emission plan. It never
 comes from scanning source expressions, comparing source and executable shapes,
 or interpreting erased capture layout.
 
-A solved callable representation class has one canonical executable
-representation. Lambda-solved MIR must not assign one occurrence in the class a
-direct erased procedure ABI and another occurrence in the same class a
+A solved callable representation group has one canonical executable
+representation. Lambda-solved MIR must not assign one occurrence in the group a
+direct erased procedure ABI and another occurrence in the same group a
 finite-set-adapter ABI. Those are different executable values: the direct erased
 ABI carries the procedure's ordinary erased capture materialization, while the
 finite-set-adapter ABI carries a materialized finite-callable-set value. There is no
@@ -12956,16 +12956,16 @@ bug, not an optimization opportunity.
 
 The final strict emission-assignment pass is different. By then all
 cross-procedure call edges and `proc_value` edges for the use-context component
-must have been connected. If a function-valued capture still depends on a class
+must have been connected. If a function-valued capture still depends on a group
 with no callable-set membership, that is a compiler invariant violation. Debug
 builds assert immediately; release builds use `unreachable`.
 
 For mutually-recursive callable captures, emission assignment must treat
-callable classes as an SCC. All callable classes in the SCC reserve their final
-class records before member payloads are completed, then complete member capture
+callable groups as an SCC. All callable groups in the SCC reserve their final
+group records before member payloads are completed, then complete member capture
 slots through recursive executable payload references. A recursive dependency is
 not a reason to fall back to a raw source type or a guessed layout. If the
-implementation cannot build a recursive callable-class SCC, that is a missing
+implementation cannot build a recursive callable-group SCC, that is a missing
 implementation of the plan, not a recoverable post-check error.
 
 The session executable type payload store is a keyed interning table with
@@ -13383,22 +13383,22 @@ not erase the semantic adapter/member publication obligation.
 
 Value endpoint lowering must decide all forwarding cases before reserving a
 payload-store entry. Alias values, join values, and plain function-typed values
-that forward to their solved callable class do not own a structural payload at
+that forward to their solved callable group do not own a structural payload at
 that value occurrence. They must return the forwarded endpoint without first
 reserving a payload key. Reserving first and then returning a forwarded endpoint
 leaves an orphan `pending` payload, which is a compiler bug.
 
-Executable key and payload publication is class-based after representation
-solving, but `RepresentationClassId` is not sufficient by itself to identify an
+Executable key and payload publication is group-based after representation
+solving, but `RepresentationGroupId` is not sufficient by itself to identify an
 active recursive payload. A `RepRootId` is construction bookkeeping; a solved
-`RepresentationClassId` is the value-flow identity and the structural projection
+`RepresentationGroupId` is the value-flow identity and the structural projection
 anchor. The canonical executable endpoint identity is
 `CanonicalExecValueTypeKey`. The active recursive structural payload identity is
 `RootPayloadCycleKey`:
 
 ```zig
 const RootPayloadCycleKey = struct {
-    class: RepresentationClassId,
+    group: RepresentationGroupId,
     layer: RootPayloadLayerKey,
 };
 
@@ -13416,24 +13416,24 @@ const RootPayloadLayerKey = union(enum) {
 };
 ```
 
-The `class` field answers "which solved value-flow endpoint is this?" The
+The `group` field answers "which solved value-flow endpoint is this?" The
 `layer` field answers "which executable payload layer is currently being
 published?" Both are required. A nominal wrapper, its backing tag union, and a
 `List(T)` layer may participate in one recursive value graph, but they are not
 the same active executable payload.
 
-Once root classes have been solved, any API that publishes a
+Once root groups have been solved, any API that publishes a
 `CanonicalExecValueTypeKey` or `SessionExecutableTypePayloadRef` from a root
-must resolve structural children through the solved class projection relation:
+must resolve structural children through the solved group projection relation:
 
 ```text
-(parent RepresentationClassId, RepresentationEdgeKind) -> child RepresentationClassId
+(parent RepresentationGroupId, RepresentationEdgeKind) -> child RepresentationGroupId
 ```
 
 It must not look only for an edge attached to the exact root id it was handed.
 Pattern binders, aliases, joins, recursive payload projections, and
 cross-procedure public roots can all create several roots in the same solved
-class. Those roots are semantically the same executable endpoint, but their raw
+group. Those roots are semantically the same executable endpoint, but their raw
 root-local structural edge trees may have different recursive cycle numbering.
 Using the raw root-local tree to hash executable keys can therefore make two
 equivalent recursive endpoints look different and force a bogus recursive value
@@ -13454,27 +13454,27 @@ inspect_arith = |value|
 The `left` binder root is connected to the `Mul` payload root by explicit
 pattern representation edges. The recursive `Str.inspect(left)` call argument
 and the inspector parameter must therefore publish the same executable key
-because their roots are in the same solved representation class. It is
+because their roots are in the same solved representation group. It is
 incorrect for executable key construction to start from `left`'s raw root-local
 nominal tree and independently number a new recursive `Arith` cycle.
 
-The solved class projection relation is produced while solving representation
-classes, from the same explicit structural edges used by the solver. If two
+The solved group projection relation is produced while solving representation
+groups, from the same explicit structural edges used by the solver. If two
 equivalent parent roots expose the same structural edge kind, the corresponding
-children must be in the same solved class; otherwise the representation solver
+children must be in the same solved group; otherwise the representation solver
 has failed to close structural projections. Debug builds assert this immediately.
 Release builds use `unreachable`. Later stages must not repair a key mismatch
 by comparing recursive shapes, walking source patterns, or expanding a full
 nominal/tag-union transform through inactive variants.
 
 Source type keys are not executable representation identity for structural
-payloads. A solved representation class may legitimately contain multiple
+payloads. A solved representation group may legitimately contain multiple
 non-empty source type identities when those source types have the same runtime
 representation and value flow has proven the conversion. For example, a
 `List.first(children)` result can flow through `Ok(child)` and then into a
 source `match` on `child`; the intermediate tag-union backing endpoints may
 carry different source type keys while still sharing one executable
-representation class. Treating that as an invariant violation is a compiler
+representation group. Treating that as an invariant violation is a compiler
 bug.
 
 Executable key builders must not hash clone-local nominal source keys or
@@ -13488,7 +13488,7 @@ debug verification, adapter provenance, or tooling, but it is metadata on the
 payload; it is not part of `CanonicalExecValueTypeKey` equality.
 
 The active recursive key used while constructing a `CanonicalExecValueTypeKey`
-must therefore be `RootPayloadCycleKey`, not `RepresentationClassId` alone and
+must therefore be `RootPayloadCycleKey`, not `RepresentationGroupId` alone and
 not raw `TypeVarId`. The layer key must be derived from already-published
 semantic data: primitive kind, canonical nominal identity plus opacity,
 finalized record shape, finalized tag-union shape, tuple arity, `List`, or
@@ -13514,15 +13514,15 @@ main = Node.Element("p", [Node.Text("hello")])
 This recursive executable graph contains distinct active layers:
 
 ```text
-(class Node, nominal Node)
-(class Node.backing, tag_union [Text, Element])
-(class List(Node), list)
-then back to (class Node, nominal Node)
+(group Node, nominal Node)
+(group Node.backing, tag_union [Text, Element])
+(group List(Node), list)
+then back to (group Node, nominal Node)
 ```
 
 The last edge is the real recursive cycle. It is incorrect to collapse
 `List(Node)` with `Node`, or to collapse the nominal `Node` wrapper with its
-backing tag union, just because solved representation classes participate in the
+backing tag union, just because solved representation groups participate in the
 same recursive value graph. Cor's LSS prototype gets this right by caching
 recursive layout lowering on the exact monomorphic type variable currently being
 lowered. Roc must preserve the same semantics without using clone-local
@@ -13621,7 +13621,7 @@ choose = |flag|
 
 No IR, LIR, backend, or interpreter path may introduce a Bool-specific
 tag-to-primitive bridge, truthiness byte, or special Bool layout. A runtime
-predicate used internally to select a control-flow branch is not a first-class
+predicate used internally to select a control-flow branch is not a value-level
 Roc `Bool` value; whenever a Roc value of type `Bool` is materialized, it is the
 ordinary row-finalized Bool tag union.
 
@@ -13731,7 +13731,7 @@ recover a capture type by inspecting source syntax, layouts, callable shapes, or
 the erased-call ABI key.
 
 The required structural representation algebra is separate and equally
-mandatory. Each solved representation class has exactly one `RepresentationShape`
+mandatory. Each solved representation group has exactly one `RepresentationShape`
 after solving:
 
 ```zig
@@ -13783,7 +13783,7 @@ payload edges into the finalized `Err` slot of that full union.
 
 Recursive shapes are solved with placeholders and stable recursion binders. A
 representation solver must allocate the placeholder before merging children and
-must serialize the solved class with stable backrefs. Infinite recursive copies,
+must serialize the solved group with stable backrefs. Infinite recursive copies,
 raw pointer identity, allocation order, and hash-map iteration order are
 compiler invariant violations handled only by debug-only assertion in debug
 builds and `unreachable` in release builds.
@@ -14203,7 +14203,7 @@ For boxing, executable MIR lowers the payload expression under
   use the boxed erased representation.
 
 The same three callable cases apply at any solved value occurrence whose
-representation class is erased with `BoxErasureProvenance`: branch joins,
+representation group is erased with `BoxErasureProvenance`: branch joins,
 mutable join versions, returns from functions that unbox and re-expose a boxed
 callable, aggregate construction, and captures. These are not additional erasure
 sources. They are uses of the solved erased representation that was introduced
@@ -14233,7 +14233,7 @@ lambda-solved MIR to the producers and uses of that boxed payload.
 
 Executable MIR must not infer erasure from usage.
 
-Erased adapters are first-class synthetic procedures.
+Erased adapters are value-level synthetic procedures.
 
 ```zig
 ErasedAdapterKey {
@@ -15083,10 +15083,10 @@ When executable MIR lowers `call_value`, it consumes the lambda-solved
   callee expression.
 
 When an intrinsic wrapper such as `Box.box` or `Box.unbox` is used as a
-first-class function, executable MIR still receives the intrinsic role through
+value-level function, executable MIR still receives the intrinsic role through
 the selected callable member's `ProcTarget` metadata and the call site's
 dispatch plan. Member-specific `BoxBoundaryId` records are explicit
-lambda-solved data. Executable MIR must not decide that a first-class call is a
+lambda-solved data. Executable MIR must not decide that a value-level call is a
 box boundary from the callee's name, from a result type of `Box(T)`, or from the
 source expression shape.
 
@@ -15116,7 +15116,7 @@ plan before it emits `call_direct`:
 ```zig
 const CallProcExecutablePlan = struct {
     source: ProcedureCallableRef,
-    representation_root: RepClassId,
+    representation_root: RepGroupId,
     executable_specialization_key: ExecutableSpecializationKey,
     executable_proc: ExecutableProcId,
     arg_transforms: Span(ExecutableValueTransformRef),
@@ -15128,7 +15128,7 @@ const CallProcExecutablePlan = struct {
 The exact Zig names may differ, but the plan must record the same decisions.
 `source` is the source/MIR procedure target from lambda-solved MIR plus the exact
 canonical fixed-arity function type requested by this call.
-`representation_root` is the solved whole-function representation class, not
+`representation_root` is the solved whole-function representation group, not
 only the callable child. `executable_specialization_key` is the canonical key
 used to reserve `executable_proc`. `executable_proc` is an executable-MIR
 procedure id allocated by that reservation, not a generated symbol used as a
@@ -16132,8 +16132,8 @@ values while it is still a lambda-solved expression must publish a checked
   provenance from that boundary
 
 Call-only intrinsics may lower directly to `LambdaSolvedLowLevelCall` only when
-they never flow as first-class values and when they have complete ABI,
-RC-effect, and lambda-solved value-flow signatures. First-class intrinsics still
+they never flow as value-level values and when they have complete ABI,
+RC-effect, and lambda-solved value-flow signatures. Value-level intrinsics still
 lower through wrapper procedures and `proc_value`. Missing value-flow
 signatures for non-primitive lambda-solved low-level operations are compiler
 invariant violations handled only by debug-only assertion in debug builds and
@@ -16445,7 +16445,7 @@ metadata.
 Zero-sized payloads do not make their runtime containers zero-cost for ARC.
 `List({})` and `Box({})` are ordinary refcounted Roc container values whose
 element or boxed payload has zero runtime bytes. The committed layouts commonly
-named `.list_of_zst` and `.box_of_zst` must therefore be classified as
+named `.list_of_zst` and `.box_of_zst` must therefore be categorized as
 refcounted layouts for ARC ownership, helper planning, aggregate child walking,
 call argument token accounting, and final cleanup. Their child helper plan has
 no element/payload child to visit, but the outer list or box allocation still
@@ -17238,7 +17238,7 @@ first.
 
 The dependency graph must be built from sealed callable-aware lowering records,
 not from monomorphic MIR alone. Root expression scanning is not enough, and
-mono MIR after static dispatch is still too early for first-class calls. A
+mono MIR after static dispatch is still too early for value-level calls. A
 compile-time root can call a function value whose finite callable members are
 known only after lambda-solved representation solving. It can also call an
 erased callable whose code, ABI, and capture dependencies are known only through
@@ -19330,10 +19330,10 @@ primitive scalar representation.
 
 This is not only a logical source-language rule; it is a runtime representation
 rule. The final MIR-family, IR, LIR, ARC, interpreter, and backend pipeline must
-not contain a first-class primitive Bool representation. In particular:
+not contain a value-level primitive Bool representation. In particular:
 
 - IR and LIR must not have a `bool_literal`, `canonical bool`, `primitive Bool`,
-  `truthiness byte`, or equivalent first-class value form for Roc `Bool`.
+  `truthiness byte`, or equivalent value-level value form for Roc `Bool`.
 - `Bool.True` and `Bool.False` materialize as ordinary zero-payload tag-union
   constructions using the resolved Bool endpoint's row-finalized `TagId`s.
 - A Bool pattern test is an ordinary tag-discriminant test on the resolved Bool
@@ -19343,7 +19343,7 @@ not contain a first-class primitive Bool representation. In particular:
 - Numeric, string, byte, structural-equality, and static-dispatch operations
   that logically return `Bool` produce an ordinary Bool tag-union value. They
   may use a machine predicate or integer comparison internally while lowering a
-  branch, but if the result is a first-class Roc value, the result is the Bool
+  branch, but if the result is a value-level Roc value, the result is the Bool
   tag union.
 - A low-level predicate result is not a Roc `Bool`. IR/LIR may use an internal
   scalar predicate local only as a control-flow condition. When a numeric
@@ -19398,7 +19398,7 @@ pub const BoolCondition = struct {
 `BoolDiscriminants` means "this operation returns the ordinary Roc `Bool` tag
 union whose `False` and `True` constructors have these row-finalized
 discriminants." It is attached to predicate-producing expression nodes that
-produce first-class Roc values, for example:
+produce value-level Roc values, for example:
 
 ```zig
 structural_eq: struct {
@@ -19450,7 +19450,7 @@ IR consumes `BoolCondition` by reading the ordinary tag-union discriminant from
 `expr` and comparing it with `true_discriminant`. It may then use the comparison
 result as an internal branch predicate. That internal predicate is not a Roc
 value, must not be stored in user-visible value slots, and must not survive as a
-first-class Bool representation in LIR or any backend.
+value-level Bool representation in LIR or any backend.
 
 An executable `if_` keeps its condition expression and the same explicit
 `true_discriminant`:
@@ -19654,7 +19654,7 @@ statement that the row chunk has no remaining tail in that position. The
 materializer is only making that terminal fact visible in the representation
 shape required by `mono/lower_type.zig`. Nested record extensions remain
 extension chains and are normalized by the lowerer; only an endpoint being
-lowered as a first-class concrete type must be sealed this way.
+lowered as a value-level concrete type must be sealed this way.
 
 For example:
 
@@ -20261,7 +20261,7 @@ post-check input for imported and local compile-time constants, including
 constant graphs with callable leaves, and it owns the artifact-private capture
 graphs needed by promoted procedures.
 
-Checking finalization classifies each top-level binding that can be referenced
+Checking finalization categorizes each top-level binding that can be referenced
 after checking as one of:
 
 ```zig
@@ -20423,7 +20423,7 @@ consumed as a concrete procedure value.
 
 `TopLevelValueTable` is the only post-check lookup table for top-level values.
 Mono MIR, executable MIR, eval, REPL, tests, glue, and CLI helpers must consume
-this table. They must not classify top-level values by scanning source
+this table. They must not categorize top-level values by scanning source
 declarations, checking whether an expression is syntactically a lambda, looking
 for generated symbol-name patterns, or re-running constant evaluation.
 
@@ -20694,7 +20694,7 @@ internal backing structure, but a producer type like `List(MyTag)` is concrete
 when its source-visible argument `MyTag` is concrete. The check must inspect
 record fields, tuple elements, tag payloads, function arguments and returns,
 alias arguments/backings, user-defined nominal arguments/backings, and builtin
-nominal arguments. It must not classify a concrete `List(MyTag)` producer as
+nominal arguments. It must not categorize a concrete `List(MyTag)` producer as
 generic merely because the builtin `List` implementation has internal backing
 metadata. Doing so would force the compiler back to the consumer endpoint and
 can reproduce the bug where `[MyTag.Foo({ x: 42, y: 7 })]` is stored as though
@@ -21120,7 +21120,7 @@ request for later stages to recover a function value from syntax, runtime
 closure memory, or interpreter state. `promoted_capture` owners are
 artifact-private leaves used only by promoted procedures. They are stored in the
 same `CompileTimeValueStore` as other constants, but they are not exported,
-imported by name, or classified through `TopLevelValueTable`.
+imported by name, or categorized through `TopLevelValueTable`.
 
 The compile-time value store must have an explicit node kind for callable
 leaves. Conceptually:
@@ -21730,7 +21730,7 @@ not transparent aliases.
 
 No executable materialization function may compare, index, print, or debug-name a
 `ComptimeSchema` canonical-name id against the executable program's
-`CanonicalNameStore` before remapping. Such code is the same class of compiler
+`CanonicalNameStore` before remapping. Such code is the same category of compiler
 bug as comparing two imported artifacts' dense row-label ids directly. Debug
 builds must assert immediately if a schema id is outside the owning artifact's
 published name table; release builds use `unreachable`. Release builds still
@@ -23430,7 +23430,7 @@ Any helper with a name or behavior like `collectWrapperBackingParams`,
 `collectTemplateWrapperBackingParams`, or "zip backing variables with wrapper
 arguments" is obsolete and must not exist in mono, row-finalized mono, lifted,
 lambda-solved, executable MIR, IR, or LIR. Reintroducing that helper family is
-the same class of bug as reintroducing source-type reconstruction.
+the same category of bug as reintroducing source-type reconstruction.
 
 After graph finalization, every source-type payload consumed by mono MIR output
 is sealed. Before graph finalization, payload handles are graph nodes, not
@@ -24892,7 +24892,7 @@ template is either public/exported or listed in that template's
 Every imported closure must also verify that each `CanonicalTypeKey` and
 `CanonicalTypeSchemeKey` reachable from the closure has a corresponding checked
 type root or scheme in the closure or in the public checked type view of the
-imported artifact. Missing type payload is the same class of invariant violation
+imported artifact. Missing type payload is the same category of invariant violation
 as a missing body or missing resolved value-reference table.
 
 The executable pipeline consumes `LoweringModuleView` values plus explicit
@@ -24904,7 +24904,7 @@ instance must never be disguised as a `RootRequest`, because it may not have a
 source root row in the requesting artifact and because one generic source
 binding can produce many concrete instances.
 
-The shared post-check lowering API therefore has two explicit request classes:
+The shared post-check lowering API therefore has two explicit request categories:
 
 ```zig
 const LoweringRequestSet = struct {
@@ -24968,7 +24968,7 @@ Provided exports split into two cases:
 - A concrete required export whose ABI, source type, and exposure require a
   runtime entrypoint becomes a root request with one concrete requested function
   type.
-- A generic package export, generic module export, or first-class function export
+- A generic package export, generic module export, or value-level function export
   with no concrete runtime entrypoint remains a checked procedure template
   reachable through the export table. Importers specialize it later by adding
   concrete `MonoSpecializationRequest` values. The exporting module must not
@@ -25888,7 +25888,7 @@ main_for_host : Str
 main_for_host = main
 ```
 
-Here `main` is a required constant. The platform root artifact must classify the
+Here `main` is a required constant. The platform root artifact must categorize the
 `main` lookup as `platform_required_const`, not synthesize a procedure wrapper.
 
 Mono MIR consumes the binding table when producing roots and when lowering
@@ -26502,7 +26502,7 @@ to `main_type`, `1` to `functions`, `2` to `hosted_functions`, and `3` to
 not the source annotation position. A glue writer that uses checked declaration
 position `0` for `functions` will write a `RocList` into the bytes for a `Str`.
 The LIR interpreter will then read the record with the correct runtime layout
-and eventually decode garbage as a string. This is the exact class of bug this
+and eventually decode garbage as a string. This is the exact group of bug this
 boundary is meant to make impossible.
 
 The checked-artifact-to-LIR pipeline therefore publishes a
@@ -26988,7 +26988,7 @@ The exact Zig field names may differ, but the separation must not.
 
 `ProcedureTemplateRef` names a checked procedure-template table entry.
 `CallableProcedureTemplateRef` is the procedure-template identity used by
-first-class callable values and callable leaves, because not every callable
+value-level callable values and callable leaves, because not every callable
 procedure template is an ordinary checked top-level source procedure. The
 `checked` case names source-defined or imported checked procedures, the `lifted`
 case names local functions/closures by owner mono specialization plus nested
@@ -27465,55 +27465,133 @@ a dummy finite callable set, an erased callable, a runtime thunk, a runtime
 closure object, or a `vacant_callable_slot` call target. The `B` branch is
 published as unreachable executable control flow.
 
-Reachability is class-level, but "unknown tag inhabitance" is not the same as
-"this particular value has no aggregate metadata." A value may have no local
-aggregate metadata because it is a procedure capture, procedure parameter,
-procedure return, alias, projection, join result, or other boundary value whose
-representation is linked to another value. Only explicit unknown producers may
-mark a representation class as unknown.
+Reachability is value/path-specific, not representation-group-specific. A
+representation group is a value-flow equivalence result; it is not a selected-tag
+identity. Return edges, branch joins, loop phis, mutable versions, and other
+value-flow edges can deliberately place several runtime alternatives into the
+same group. Therefore it is unsound to store "this group contains only tag `A`"
+and then use that fact to prune source `match` branches. Selected-tag knowledge
+must be stored on the value occurrence, and on explicit structural paths below
+that value occurrence.
 
-The required rule is:
+The bug this rule prevents is:
 
-```zig
-fn collect_tag_inhabitance(value: ValueInfo, root_kind: RepresentationRootKind) void {
-    if (value.aggregate == .tag) {
-        add_selected_tag(value.solved_class, value.aggregate.tag);
-        return;
+```roc
+parse_range = |range_str| {
+    match range_str.split_on("-") {
+        [a, b] => Ok((I64.from_str(a)?, I64.from_str(b)?))
+        _ => Err(InvalidRangeFormat)
+    }
+}
+
+part2 = |ranges| {
+    var $sum = 0
+
+    for range_str in ranges {
+        (start, end) = parse_range(range_str)?
+        $sum = $sum + start + end
     }
 
-    if (value.source_match_branch != null) {
-        return; // branch-owned values are gated by source-match reachability
-    }
-
-    if (value.value_alias_source != null or
-        value.projection_info != null or
-        value.join_info != null)
-    {
-        return; // inherits from the source class through explicit edges
-    }
-
-    switch (root_kind) {
-        .procedure_capture => return, // inherits from proc_value capture edge
-        .procedure_param => return,   // root/external params are marked separately
-        .procedure_return => |instance| {
-            if (!proc_instance(instance).materialized) mark_unknown(value.solved_class);
-            return;
-        },
-        .local_value => {
-            if (is_explicit_runtime_unknown_producer(value)) {
-                mark_unknown(value.solved_class);
-            }
-            return;
-        },
-        else => return,
-    }
+    Ok($sum)
 }
 ```
 
-The exact Zig names may differ, but the invariant must not. A procedure capture
-is not a fresh runtime input. It is created by a `proc_value` construction, and
-lambda-solved has already published a value-flow edge from the source capture
-value to the target procedure's capture root:
+`parse_range` contains branch-local `Err` constructors and an `Ok` constructor.
+Those values can participate in the same solved representation group through
+return and join edges, but the call result in `part2` is not thereby "known
+Err." The `?` desugaring in `part2` must treat the call result as unknown unless
+the call-result value itself has an explicit selected-tag summary. If a
+group-level selected-tag table records only the branch-local `Err` constructors,
+then `part2` incorrectly lowers the `Ok` arm of `?` to `unreachable` even though
+runtime produces `Ok`. That is a compiler bug.
+
+Lambda-solved MIR must publish a selected-tag summary table whose key is an
+explicit value path:
+
+```zig
+const SelectedTagPathKey = struct {
+    value: ValueInfoId,
+    path: PatternPathId, // empty path means the value itself
+};
+
+const SelectedTagSummary = union(enum) {
+    unknown,
+    exact: Span(TagSelection),
+};
+
+const TagSelection = struct {
+    union_shape: TagUnionShapeId,
+    tag: TagId,
+};
+```
+
+The exact Zig names may differ, but the ownership must not:
+
+- `ValueInfoId` identifies the value occurrence whose tag inhabitance is being
+  summarized.
+- `PatternPathId` is the already-published finalized structural path used by
+  pattern lowering: nominal backing, record field, tuple element, tag payload,
+  list element, box payload, and equivalent path steps.
+- `unknown` means no branch may be pruned from this summary.
+- `exact` means the set is complete for that value path in this solve session.
+- Multiple possible tags are represented as multiple `TagSelection` entries.
+- Zero-payload tags still publish selected-tag summaries. Payload vacancy alone
+  is not reachability.
+
+The selected-tag summary rules are:
+
+```zig
+fn selected_tag_summary(value: ValueInfoId, path: PatternPathId) SelectedTagSummary {
+    if (aggregate_tag_at_exact_path(value, path)) {
+        return .{ .exact = selected_tag(value, path) };
+    }
+
+    if (value_alias_source(value)) |source| {
+        return selected_tag_summary(source, path);
+    }
+
+    if (projection_source(value)) |projection| {
+        return selected_tag_summary(projection.parent, prepend(projection.step, path));
+    }
+
+    if (procedure_capture_source(value)) |source_capture| {
+        return selected_tag_summary(source_capture, path);
+    }
+
+    if (join_inputs(value)) |inputs| {
+        return union_selected_tag_summaries(inputs, path);
+    }
+
+    if (procedure_return_source(value)) |return_sources| {
+        return union_selected_tag_summaries(return_sources, path);
+    }
+
+    if (loop_phi_sources(value)) |sources| {
+        return union_selected_tag_summaries(sources, path);
+    }
+
+    if (mutable_version_sources(value)) |sources| {
+        return union_selected_tag_summaries(sources, path);
+    }
+
+    if (explicit_runtime_unknown_producer(value)) {
+        return .unknown;
+    }
+
+    return .unknown;
+}
+```
+
+`union_selected_tag_summaries` is conservative:
+
+- if any input is `unknown`, the result is `unknown`
+- otherwise the result is the deduplicated union of all exact selected tags
+- an empty exact set is allowed only for an explicitly uninhabited structural
+  path; otherwise missing data is a compiler bug
+
+A procedure capture is not a fresh runtime input. It is created by a `proc_value`
+construction, and lambda-solved has already published a value-flow edge from the
+source capture value to the target procedure's capture root:
 
 ```zig
 RepresentationEdge{
@@ -27525,31 +27603,32 @@ RepresentationEdge{
 
 For the `make_tagged(A(1))` example, the target closure capture `tagged` has no
 local aggregate metadata inside the lifted target procedure. That absence must
-not make the class unknown. The class inherits the selected tag `A` from the
-source captured value through the proc-value capture edge. Therefore the
-`B(f)` branch is unreachable for this specialization, and its function-typed
-payload slot is a `vacant_callable_slot(I64 -> I64)` schema, not a callable
-value and not an erased callable.
+not make the capture path unknown. The target capture value inherits the exact
+selected tag `A` from the source captured value through the proc-value capture
+edge. Therefore the `B(f)` branch is unreachable for this specialization, and
+its function-typed payload slot is a `vacant_callable_slot(I64 -> I64)` schema,
+not a callable value and not an erased callable.
 
 The same rule applies to values created while lowering the branch itself.
 Pattern values, binders, guards, and branch-body locals carry
 `SourceMatchBranchRef`. Before reachability is finalized, those values must not
-mark the scrutinee class unknown merely because they lack aggregate metadata.
-Their branch ownership gates whether they participate in callable emission,
-dependency publication, and executable lowering. If a reachable branch later
-creates an explicit runtime-unknown value and matches on that value in a nested
-`match`, the nested value's own published unknown-producer metadata makes the
-nested scrutinee conservative; the outer branch marker is not a heuristic
-fallback.
+contribute selected-tag summaries to parent or sibling alternatives merely
+because their representation groups merge through a join or return. Their branch
+ownership gates whether they participate in callable emission, dependency
+publication, and executable lowering. If a reachable branch later creates an
+explicit runtime-unknown value and matches on that value in a nested `match`, the
+nested value's own published unknown-producer metadata makes the nested
+scrutinee conservative; the outer branch marker is not a heuristic fallback.
 
 Root procedure parameters, hosted/imported opaque returns, and other explicit
-runtime unknown producers remain conservative: they mark their classes unknown
-from their own published root/provenance metadata. Later stages must not
-approximate unknownness by scanning values that lack aggregate metadata.
+runtime unknown producers remain conservative: their selected-tag summaries are
+`unknown` unless checked-artifact metadata explicitly publishes a more precise
+summary. Later stages must not approximate unknownness by scanning values that
+lack aggregate metadata.
 
 This requires public procedure roots to carry their exact root kind before
 source-match reachability runs. A parameter, return, or capture root must not
-remain classified only as a generic local value:
+remain categorized only as a generic local value:
 
 ```zig
 proc_root_kind(param_root) = .procedure_param{ .instance = instance, .index = i }
@@ -27591,29 +27670,33 @@ relation in the source-match reachability table. Later stages must not infer the
 branch from source syntax, expression indexes, branch-array position, pattern
 text, row labels, or body shape.
 
-Reachability is finalized after representation classes are solved and before
+Reachability is finalized after representation groups are solved and before
 strict callable-emission assignment. The reachability algorithm consumes only
 explicit solved representation data:
 
-- The match scrutinee path is connected to the pattern path by the already
-  published pattern representation edges.
+- The match scrutinee path is connected to each pattern path by the already
+  published pattern representation edges and finalized path records.
 - Tag aggregate metadata publishes the exact selected tag for constructed tag
-  values such as `A(1)`.
+  values such as `A(1)`, keyed by value path.
+- Aliases, projections, proc-value captures, returns, joins, loop phis, and
+  mutable versions consume explicit value-flow metadata to derive value/path
+  summaries.
 - Runtime roots, imported opaque values without explicit representation data,
-  hosted/platform values, and any value whose selected tags are not known in the
-  current solve session make tag inhabitance unknown.
-- Multiple possible selected tags are represented as an explicit selected-tag
-  set, not as a boolean.
-- Zero-payload tags still publish selected-tag inhabitance. Payload vacancy
-  alone is not enough to prove reachability.
+  hosted/platform values, call results without an explicit call-result summary,
+  and any value/path whose selected tags are not known in the current solve
+  session produce `unknown`.
+- Multiple possible selected tags are represented as an explicit selected-tag set
+  on the value/path summary, not as a boolean.
+- Zero-payload tags still publish selected-tag summaries. Payload vacancy alone
+  is not enough to prove reachability.
 
 For each source `match` alternative, lambda-solved MIR walks the lowered
 pattern structure and asks whether any tag test is impossible for the solved
-selected-tag set at that pattern path. If the path has an exact selected-tag set
-and the tested tag is absent, that alternative is unreachable. If the path is
-unknown or the selected-tag set includes the tested tag, that test does not prove
-the alternative unreachable. This is not user-facing reachability checking and
-not exhaustiveness checking; type checking has already completed. It is
+selected-tag summary at the scrutinee value/path. If the summary is exact and
+the tested tag is absent, that alternative is unreachable. If the summary is
+unknown or the exact set includes the tested tag, that test does not prove the
+alternative unreachable. This is not user-facing reachability checking and not
+exhaustiveness checking; type checking has already completed. It is
 specialization-local executable reachability used to avoid materializing values
 and calls that provably cannot execute for the current promoted or specialized
 value.
@@ -27867,7 +27950,7 @@ When mono MIR lowers a direct source procedure call, it must request or reserve
 the target mono specialization at the exact requested mono source function type
 and store the returned mono-specialized procedure value in `call_proc.proc`.
 
-When mono MIR lowers a top-level procedure value used as a first-class value,
+When mono MIR lowers a top-level procedure value used as a value-level value,
 it must request or reserve the target mono specialization at the exact requested
 mono source function type and store the returned mono-specialized procedure
 value in `proc_value.proc` with empty captures.
@@ -27969,7 +28052,7 @@ syntax introduces a receiver-bound method value, mono MIR must lower it to an
 explicit closure that captures the receiver. It must not encode receiver-bound
 method values as empty-capture `proc_value` nodes.
 
-Calling a first-class function value remains `call_value` until callable solving
+Calling a value-level function value remains `call_value` until callable solving
 and executable lowering can decide whether it becomes direct, erased,
 callable-set `callable_match`, packed-erased, or bridged.
 
@@ -28090,7 +28173,7 @@ Checker validation and mono MIR lowering must agree through this registry.
 
 The checker may keep `StaticDispatchConstraint` as the legality mechanism, but
 checked CIR must export a normalized `StaticDispatchCallPlan` for every
-expression classified as static dispatch. The plan stores the dispatcher type
+expression categorized as static dispatch. The plan stores the dispatcher type
 variable, callable type variable, canonical method name, ordered value arguments,
 and equality behavior. It does not store a final target procedure.
 
@@ -28120,7 +28203,7 @@ normalized to a procedure value with `ProcTarget` metadata:
 
 - ordinary source methods become `ProcTarget.user_proc`
 - hosted/platform methods become `ProcTarget.hosted_proc`
-- first-class intrinsic method references synthesize a wrapper procedure and
+- value-level intrinsic method references synthesize a wrapper procedure and
   become `ProcTarget.intrinsic_wrapper`
 
 The `ProcTarget` metadata must include representation ABI records and
@@ -28129,7 +28212,7 @@ procedures before mono MIR is exported. Static dispatch lowering must not leave
 behind a method name or owner key for later ABI discovery.
 
 An intrinsic may lower directly to executable `low_level` only when it is
-strictly call-only and never appears as a first-class value. If an intrinsic can
+strictly call-only and never appears as a value-level value. If an intrinsic can
 flow as a value, mono MIR must synthesize an intrinsic wrapper procedure, emit
 `proc_value` for the value, and let lambda-solved/executable MIR handle it like
 any other procedure value.
@@ -28845,7 +28928,7 @@ Fmt.decode_str(format, source)
 It might refer to a module function, or it might be a static-dispatch call whose
 dispatcher type variable is constrained by the checked `where` clause. Parser
 and canonicalization must not decide that from the spelling. Name resolution and
-type checking classify it.
+type checking categorize it.
 
 Checked CIR may contain these source-level forms while type checking:
 
@@ -28970,7 +29053,7 @@ result_mode = equality { negated = true,  structural_allowed = ... } // for !=
 only by `negated = true`, and mono emits the same equality operation followed by
 `bool_not`.
 
-Checked artifact publication must classify equality semantics before mono MIR
+Checked artifact publication must categorize equality semantics before mono MIR
 sees the site. It must not rely only on the checked expression tag. In
 particular, equality can appear as a checked `e_dispatch_call` when the source
 method call is inside an equality implementation or comes from an equality
@@ -29030,7 +29113,7 @@ true`. Mono emits `structural_eq` for that ownerless structural instantiation.
 Mono must not infer this from the method name; it consumes the already-published
 `result_mode`.
 
-The checked-artifact classifier must use explicit checked semantic data:
+The checked-artifact categorizer must use explicit checked semantic data:
 
 - if the original static-dispatch constraint origin is `desugared_binop`, the
   plan is equality and `binop_negated` becomes `result_mode.equality.negated`
@@ -29356,7 +29439,7 @@ Lambda-solved MIR:
 - exposes fully resolved callable representations for `call_value.requested_fn_ty`,
   `call_proc.requested_fn_ty`, and `proc_value.fn_ty`
 - treats `call_proc` as direct procedure calls for inference and SCCs
-- treats `proc_value` as first-class procedure values with explicit captures
+- treats `proc_value` as value-level procedure values with explicit captures
 - exports canonical callable-set algebra and ordering
 - exports cycle-safe canonical callable-set, capture-shape, erased signature, and
   erased adapter keys
@@ -29754,12 +29837,12 @@ The exact Zig names may differ, but the lifecycle must not:
    has sealed their executable-owned erased wrapper plans. The two cases share
    stable procedure identity and source function type metadata, but they do not
    share a body-lowering stage.
-2. Root binding, direct calls, static-dispatch targets, and first-class
+2. Root binding, direct calls, static-dispatch targets, and value-level
    `proc_value` uses create concrete `MonoSpecializationRequest` values whose
    `template` field is a checked `ProcedureTemplateRef` and whose
    `requested_fn_ty` field is a `ConcreteSourceTypeRef`. The corresponding
    `MonoSpecializationKey.requested_mono_fn_ty` is derived from that payload's
-   canonical key; it is not accepted as a substitute for the payload. First-class
+   canonical key; it is not accepted as a substitute for the payload. Value-level
    callable values may also carry `CallableProcedureTemplateRef.lifted` or
    `CallableProcedureTemplateRef.synthetic`, but those are not ordinary
    checked-template mono requests; they follow the lifted or synthetic procedure
@@ -30220,12 +30303,12 @@ Preserve and clean up the real responsibilities:
   loop phis, and loop-exit joins
 - treat those mutable versions, joins, and loop phis as SSA records rather than
   physical mutable storage cells
-- solve structural representation classes with explicit merge rules for
+- solve structural representation groups with explicit merge rules for
   primitives, records, tuples, tag unions, `List(T)`, `Box(T)`, nominals,
   functions, and callable slots
 - publish the solved structural-child index keyed by
-  `(RepresentationClassId, StructuralChildKind)` immediately after publishing
-  solved root classes; post-solve consumers must use that index and must not
+  `(RepresentationGroupId, StructuralChildKind)` immediately after publishing
+  solved root groups; post-solve consumers must use that index and must not
   scan `representation_edges` to rediscover child roots
 - solve boxed payload representation requirements only after
   specialization-local clone-instantiation and full type-link resolution
@@ -30269,7 +30352,7 @@ Commit when lambda-solved MIR verification proves:
 - every procedure instance connected by value flow in that use context points to
   that use-context solve session and no other solve session
 - no exported value metadata record is still reserved, building, structurally
-  filled without solved class, or otherwise unsealed
+  filled without solved group, or otherwise unsealed
 - every cross-procedure value-flow edge inside a use-context component targets a
   `ProcPublicValueRoots` entry, not a source symbol, expression id, body-local
   value id, or environment lookup result
@@ -30320,7 +30403,7 @@ Commit when lambda-solved MIR verification proves:
   reachable through explicit `ValueInfoId` metadata
 - every `call_value` has `CallSiteInfo` that names callee value, argument values,
   result value, requested whole-function root, and finite/erased dispatch plan
-- `Box.box` and `Box.unbox` called through first-class procedure values create
+- `Box.box` and `Box.unbox` called through value-level procedure values create
   `BoxBoundaryId` records from checked procedure metadata and `CallSiteInfo`,
   never from callee syntax
 - every aggregate access and pattern projection has `ProjectionInfo` with a
@@ -30331,8 +30414,8 @@ Commit when lambda-solved MIR verification proves:
   phi root
 - mutable versions, branch joins, and loop phis are SSA representation records, not
   physical storage slots
-- every exported representation root has a solved representation class
-- every solved representation class has one structural `RepresentationShape`
+- every exported representation root has a solved representation group
+- every solved representation group has one structural `RepresentationShape`
 - every record and tag-union representation slot refers to finalized row IDs, not
   display-name sorting or physical layout order
 - tag construction edges target the full checked tag-union type, never a
@@ -30613,7 +30696,7 @@ That forbidden form can accidentally allocate a payload record outside the
 recursive layout SCC. In the `Logic` example above, the real `And` payload fields
 may be `Box(Logic)` slots after layout commitment, while the source-shaped
 temporary record's fields are ordinary logical `Logic` values. Cor/LSS avoids
-this class of bug by making the lowered IR payload record type name the boxed
+this group of bug by making the lowered IR payload record type name the boxed
 recursive slot directly before `@make_union`, for example conceptually:
 
 ```text
@@ -31315,7 +31398,7 @@ records the local-root availability dependency and emits no executable call
 dependency for `pending_local_root_call`. The dispatch intentionally carries no
 root id because the exact root dependencies are owned by the
 `pending_local_root` expression occurrences; the dispatch is only the explicit
-non-executable call-site classification. After root ordering, runnable lowering
+non-executable call-site categorization. After root ordering, runnable lowering
 of the same source must consume the sealed callable-binding instance or promoted
 procedure instead of this placeholder.
 
@@ -32075,7 +32158,7 @@ Lambda-solved MIR:
 - `CallSiteInfo` exists for every `call_value` and names the callee value,
   argument values, result value, requested whole-function root, and dispatch
   plan
-- first-class `Box.box` and `Box.unbox` calls create `BoxBoundaryId` records
+- value-level `Box.box` and `Box.unbox` calls create `BoxBoundaryId` records
   through checked procedure metadata and call-site metadata
 - every aggregate projection has `ProjectionInfo`; record and tag projections
   use row-finalized IDs
@@ -32097,8 +32180,8 @@ Lambda-solved MIR:
   records, not physical mutable storage slots
 - every `require_box_erased(boundary)` requirement is attached to an explicit
   `BoxBoundaryId`
-- every exported representation root has a solved representation class
-- every solved representation class has one structural `RepresentationShape`
+- every exported representation root has a solved representation group
+- every solved representation group has one structural `RepresentationShape`
 - row finalization IDs are present before representation solving
 - structural representation merge uses finalized row IDs and the full checked
   tag-union type
@@ -32314,7 +32397,7 @@ Executable MIR:
   syntax, source aliases, environment fields, or procedure-name lookup
 - executable MIR variable lowering uses the occurrence's exported value metadata;
   the variable name is only a lexical handle
-- executable MIR lowers first-class intrinsic calls from call-site dispatch
+- executable MIR lowers value-level intrinsic calls from call-site dispatch
   metadata and `ProcTarget` intrinsic role, not from callee expression shape
 - checking reports erased-boundary roots other than `Box(T)` before executable
   MIR; executable MIR only debug-verifies that none reached it
@@ -32338,7 +32421,7 @@ Executable MIR:
   `erased_fn_abi(call_sig.abi).ret_exec_key`
 - every runtime mutation site has an explicit runtime uniqueness check
 - executable MIR contains no semantic parameter-mode solver output
-- first-class intrinsic references use explicit wrapper procedures
+- value-level intrinsic references use explicit wrapper procedures
 - every non-primitive `LambdaSolvedLowLevelCall` has a complete
   `LowLevelValueFlowSignatureId`
 - every executable-only materialization low-level call is justified by a sealed
@@ -32493,11 +32576,11 @@ Static dispatch:
 - hosted/effect/platform methods use explicit method targets or explicit
   intrinsics
 - call-only intrinsics lower directly only when they never flow as values
-- first-class intrinsic method references synthesize wrapper procedures
+- value-level intrinsic method references synthesize wrapper procedures
 - dotted expressions without arguments are checked as field access, not static
   method references
 - tag construction never creates singleton source tag-union types
-- any future unbound source method symbol used as a first-class value resolves to
+- any future unbound source method symbol used as a value-level value resolves to
   explicit `proc_value` with empty captures, not executable direct calls
 - any future receiver-bound method value lowers to an explicit closure capturing
   the receiver, not an empty-capture `proc_value`
@@ -32512,7 +32595,7 @@ Callable/capture behavior:
 - checking reports extra-argument calls to fixed-arity functions unless the
   source explicitly calls a returned function value
 - generic top-level function specialization
-- generic top-level function used as a first-class value specializes through
+- generic top-level function used as a value-level value specializes through
   `proc_value` before lambda-solved MIR
 - local closure with no captures
 - local closure with captures
@@ -32579,7 +32662,7 @@ Callable/capture behavior:
 - two unrelated values with the same logical type do not share erased
   representation when only one flows into `Box(T)`
 - a shared value used both normally and inside `Box(T)` has one representation
-  class, and ordinary uses consume the solved erased representation
+  group, and ordinary uses consume the solved erased representation
 - representation propagation follows explicit `let`, parameter, return, capture,
   branch, pattern, projection, and loop edges without using equal `TypeId`s as a
   substitute for value flow
@@ -32605,8 +32688,8 @@ Callable/capture behavior:
   }
   ```
 - non-boxed polymorphic closure does not erase
-- hosted function flowing as first-class value
-- first-class intrinsic function flowing as a wrapper `proc_value`
+- hosted function flowing as value-level value
+- value-level intrinsic function flowing as a wrapper `proc_value`
 - generalized procedure template instantiated at two concrete callable shapes
   without raw type ids leaking into executable keys
 - logical capture field indexes survive physical layout reordering
@@ -32792,7 +32875,7 @@ objects.
 - add branch-join erased callable tests where one branch returns
   `Box.unbox(boxed)` and another branch returns a finite closure. The expected
   lambda-solved output must put both branch results in one erased representation
-  class with `BoxErasureProvenance`, and executable MIR must pack the finite
+  group with `BoxErasureProvenance`, and executable MIR must pack the finite
   closure from its `CallableValueEmissionPlan` even though that branch is not
   syntactically inside `Box.box(...)`.
   Include this exact Roc-shape test:
@@ -33743,12 +33826,12 @@ The cutover is complete only when all of these are true:
   not physical mutable storage cells
 - any later `set` or `set_local`-style assignment is layout-identical backend
   storage reuse after representation solving, verified in debug
-- lambda-solved MIR solves structural representation classes with explicit merge
+- lambda-solved MIR solves structural representation groups with explicit merge
   rules for primitives, records, tuples, tag unions, `List(T)`, `Box(T)`,
   nominals, functions, and callable slots
 - lambda-solved MIR publishes a solved structural-child index keyed by
-  `(RepresentationClassId, StructuralChildKind)` in the same operation that
-  publishes root classes, and every post-solve structural child lookup consumes
+  `(RepresentationGroupId, StructuralChildKind)` in the same operation that
+  publishes root groups, and every post-solve structural child lookup consumes
   that index instead of scanning `representation_edges`
 - row finalization emits explicit `RecordShapeId`, `RecordFieldId`,
   `TagUnionShapeId`, `TagId`, and `TagPayloadId` records before representation

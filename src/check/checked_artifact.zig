@@ -3435,7 +3435,7 @@ fn copyCheckedFlatType(
         .nominal_type => |nominal| .{ .nominal = .{
             .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
-            .builtin = classifyBuiltinNominal(module, nominal),
+            .builtin = categorizeBuiltinNominal(module, nominal),
             .is_opaque = nominal.is_opaque,
             .backing = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
             .args = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
@@ -3566,7 +3566,7 @@ fn copyCheckedStaticDispatchConstraints(
     return out;
 }
 
-fn classifyBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
+fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
     const common = module.moduleEnvConst().idents;
     const is_builtin_origin = nominal.origin_module.eql(common.builtin_module) or
         module.identStoreConst().idxTextEql(nominal.origin_module, common.builtin_module);
@@ -6412,7 +6412,7 @@ pub const ResolvedValueRefTable = struct {
                 }
                 unreachable;
             };
-            var resolved_ref = try classifyValueRef(
+            var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
                 artifact_key,
@@ -6485,7 +6485,7 @@ pub const ResolvedValueRefTable = struct {
     }
 };
 
-fn classifyValueRef(
+fn categorizeValueRef(
     _: Allocator,
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
@@ -6500,7 +6500,7 @@ fn classifyValueRef(
 ) Allocator.Error!ResolvedValueRef {
     const expr = module.expr(expr_idx);
     return switch (expr.data) {
-        .e_lookup_local => |local| classifyLocalValueRef(
+        .e_lookup_local => |local| categorizeLocalValueRef(
             module,
             artifact_key,
             local.pattern_idx,
@@ -6508,13 +6508,13 @@ fn classifyValueRef(
             top_level_values,
             checked_bodies,
         ),
-        .e_lookup_external => |external| classifyImportedValueRef(
+        .e_lookup_external => |external| categorizeImportedValueRef(
             module,
             external.module_idx,
             external.target_node_idx,
             imports,
         ),
-        .e_lookup_required => |required| classifyRequiredValueRef(
+        .e_lookup_required => |required| categorizeRequiredValueRef(
             required.requires_idx.toU32(),
             platform_required_declarations,
             platform_required_bindings,
@@ -6700,7 +6700,7 @@ fn checkedTagsAreConcreteConstProducerScheme(
     return true;
 }
 
-fn classifyLocalValueRef(
+fn categorizeLocalValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
     pattern: CIR.Pattern.Idx,
@@ -6790,14 +6790,14 @@ fn classifyLocalValueRef(
 
     if (builtin.mode == .Debug) {
         std.debug.panic(
-            "checked artifact invariant violated: local lookup pattern {d} has no classified binding",
+            "checked artifact invariant violated: local lookup pattern {d} has no categorized binding",
             .{@intFromEnum(pattern)},
         );
     }
     unreachable;
 }
 
-fn classifyImportedValueRef(
+fn categorizeImportedValueRef(
     module: TypedCIR.Module,
     import_idx: CIR.Import.Idx,
     target_node_idx: u16,
@@ -6928,7 +6928,7 @@ fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u3
     return null;
 }
 
-fn classifyRequiredValueRef(
+fn categorizeRequiredValueRef(
     requires_idx: u32,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -18810,15 +18810,15 @@ pub fn publishFromTypedModule(
     return artifact;
 }
 
-const ProvidedExportClassificationExpectation = struct {
+const ProvidedExportKindExpectation = struct {
     procedure_roots: usize,
     data_exports: usize,
     procedure_exports: usize,
 };
 
-fn expectProvidedExportClassification(
+fn expectProvidedExportKind(
     source: []const u8,
-    expected: ProvidedExportClassificationExpectation,
+    expected: ProvidedExportKindExpectation,
 ) !void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
@@ -19024,7 +19024,7 @@ test "provided primitive constant is a data export, not a runtime root" {
         \\answer_for_host = 42
     ;
 
-    try expectProvidedExportClassification(source, .{
+    try expectProvidedExportKind(source, .{
         .procedure_roots = 0,
         .data_exports = 1,
         .procedure_exports = 0,
@@ -19049,7 +19049,7 @@ test "provided nested record constant is a data export, not a runtime root" {
         \\}
     ;
 
-    try expectProvidedExportClassification(source, .{
+    try expectProvidedExportKind(source, .{
         .procedure_roots = 0,
         .data_exports = 1,
         .procedure_exports = 0,
@@ -19072,7 +19072,7 @@ test "provided nested heap constant is a data export, not a runtime root" {
         \\]
     ;
 
-    try expectProvidedExportClassification(source, .{
+    try expectProvidedExportKind(source, .{
         .procedure_roots = 0,
         .data_exports = 1,
         .procedure_exports = 0,
@@ -19091,7 +19091,7 @@ test "provided procedure remains a runtime root" {
         \\add_one_for_host = |value| value + 1
     ;
 
-    try expectProvidedExportClassification(source, .{
+    try expectProvidedExportKind(source, .{
         .procedure_roots = 1,
         .data_exports = 0,
         .procedure_exports = 1,
