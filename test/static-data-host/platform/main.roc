@@ -1,5 +1,6 @@
 platform ""
-    requires { main! : () => {} } {
+    requires {} {
+        main! : () => {},
         answer : I64,
         table : {
             counts: (I64, I64),

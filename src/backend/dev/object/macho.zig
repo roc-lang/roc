@@ -557,13 +557,19 @@ pub const MachOWriter = struct {
                 MachO.N_SECT | MachO.N_EXT
             else
                 MachO.N_SECT;
+            const section_addr: u64 = switch (sym.section) {
+                0 => 0,
+                1 => 0,
+                2 => text_size,
+                else => unreachable,
+            };
 
             const nlist = Nlist64{
                 .n_strx = str_offset,
                 .n_type = n_type,
                 .n_sect = sym.section,
                 .n_desc = 0,
-                .n_value = sym.offset,
+                .n_value = section_addr + sym.offset,
             };
             try output.appendSlice(self.allocator, std.mem.asBytes(&nlist));
 

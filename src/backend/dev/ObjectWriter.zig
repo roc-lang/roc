@@ -109,7 +109,7 @@ pub fn generateObjectFile(
 
                 for (rodata_relocations) |rel| {
                     if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
-                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, sym.is_external, rel.addend);
+                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, true, rel.addend);
                     }
                 }
             }
