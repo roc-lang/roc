@@ -2113,7 +2113,10 @@ pub const BuildEnv = struct {
     pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
-                if (artifact.platform_required_bindings.bindings.len > 0 or artifact.root_requests.requests.len > 0) {
+                if (artifact.platform_required_bindings.bindings.len > 0 or
+                    artifact.root_requests.requests.len > 0 or
+                    artifact.provided_exports.exports.len > 0)
+                {
                     return platform;
                 }
             }

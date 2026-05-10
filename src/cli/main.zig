@@ -3321,6 +3321,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
+    const target_usize: base.target.TargetUsize = switch (target.ptrBitWidth()) {
+        32 => .u32,
+        64 => .u64,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("native build invariant violated: unsupported target pointer width {d}", .{target.ptrBitWidth()});
+            }
+            unreachable;
+        },
+    };
+
     var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         ctx.gpa,
         .{
@@ -3329,16 +3340,19 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
         .{ .requests = root_artifact.root_requests.requests },
         .{
-            .target_usize = base.target.TargetUsize.native,
+            .target_usize = target_usize,
         },
     );
     defer lowered.deinit();
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
-    if (entrypoints.len == 0) {
+    const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(ctx.gpa, root_artifact, target);
+    defer compile.static_data_exports.deinitProvidedDataExports(ctx.gpa, static_data_exports);
+
+    if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("native build invariant violated: no exported platform entrypoints", .{});
+            std.debug.panic("native build invariant violated: no exported platform entrypoints or data symbols", .{});
         }
         unreachable;
     }
@@ -3350,6 +3364,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
+        static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
         target,
         obj_path,

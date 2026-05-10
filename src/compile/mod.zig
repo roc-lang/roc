@@ -11,6 +11,7 @@ pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const threading = @import("threading.zig");
+pub const static_data_exports = @import("static_data_exports.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
@@ -84,6 +85,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
+    std.testing.refAllDecls(@import("static_data_exports.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));

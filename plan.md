@@ -21820,6 +21820,277 @@ their `CompileTimeValueStore`. A downstream module never re-evaluates an
 imported module's compile-time roots after that imported artifact has been
 published.
 
+### Target Static Data Graphs for Provided Constants
+
+This section is the long-term design for
+https://github.com/roc-lang/roc/issues/9401.
+
+Non-function `provides` entries are not runtime roots. They are immutable data
+exports. A provided procedure still becomes a procedure entrypoint; a provided
+constant becomes a host-linkable symbol in the target's readonly data section.
+For example:
+
+```roc
+module []
+
+provides [table]
+
+table = {
+    names: [["Alice", "Bob"], ["Eve"]],
+    count: 3,
+}
+```
+
+The exported symbol `roc__table` is ordinary target-layout Roc data in the
+object file's readonly section, plus relocations to any nested readonly heap
+allocations required by the value. It is not a runtime thunk, not a runtime
+initializer procedure, not a runtime top-level closure object, and not a global
+callable object.
+
+The path is:
+
+```text
+ProvidedDataExport.const_ref
+  -> concrete ConstInstantiationKey
+  -> sealed ConstInstance
+  -> explicit ConstMaterializationPlan
+  -> TargetStaticDataGraph
+  -> object-file readonly section symbols + readonly relocations
+```
+
+`TargetStaticDataGraph` is target-specific. It is outside the checked artifact
+cache because it depends on pointer width, object format, data-layout decisions,
+and relocation encoding. A checked artifact cache hit restores
+`ConstRef`/`ConstInstanceRef`/`ConstMaterializationPlan` data only. It never
+restores target-layout bytes.
+
+The graph owns a list of readonly symbols:
+
+```zig
+const TargetStaticDataGraph = struct {
+    nodes: []const TargetStaticDataNode,
+};
+
+const TargetStaticDataNode = struct {
+    symbol_name: []const u8,
+    bytes: []const u8,
+    alignment: u32,
+    visibility: enum { local, exported },
+    relocations: []const TargetStaticDataRelocation,
+};
+
+const TargetStaticDataRelocation = struct {
+    offset: u64,
+    target_symbol_name: []const u8,
+    addend: i64,
+    kind: enum { absolute_pointer },
+};
+```
+
+The exported constant is one exported node. Nested heap-shaped values become
+local readonly nodes. All pointers between nodes are represented as relocations;
+the byte payload at the relocation site is zero before link-time fixup. Backends
+must not infer pointer targets from bytes, source syntax, value shape, or names.
+They consume the graph exactly as published.
+
+Object writers must emit readonly relocations for static data sections:
+
+- ELF emits `.rodata` plus `.rela.rodata`.
+- Mach-O emits `__DATA,__const` plus relocations on that section.
+- COFF emits `.rdata` plus `.rdata` relocations.
+
+For a target whose object format stores function/data pointers differently, the
+object writer still consumes the same logical relocation graph and performs only
+format encoding. It must not perform reference-counting analysis or recover
+semantic data from the constant bytes.
+
+#### Static Roc Heap Allocations
+
+Nested heap-shaped values in provided constants use normal Roc runtime layouts
+and normal Roc pointer values. The only difference from dynamically allocated
+heap data is the refcount value:
+
+```zig
+pub const REFCOUNT_STATIC_DATA: isize = 0;
+```
+
+`REFCOUNT_STATIC_DATA` means whole-program lifetime. Runtime `incref`,
+`decref`, `free`, and uniqueness checks must treat it as non-mutable static
+data:
+
+- `incref` on static data is a no-op.
+- `decref` on static data is a no-op.
+- static data is never unique.
+- static data is never freed.
+- runtime helpers must not write bookkeeping fields in a static allocation.
+
+This is the same design family as the old Rust compiler's
+`ROC_REFCOUNT_CONSTANT` / readonly-storage behavior. In this compiler, any
+runtime helper that writes allocation metadata must first prove the allocation
+is dynamically unique. For example, `RocList.incref` may write the allocation
+element count needed by seamless-slice teardown only when the list is unique.
+Writing that header before the uniqueness check would mutate readonly static
+data and is a compiler/runtime bug.
+
+Static allocations use the exact prefix shape of `allocateWithRefcount`:
+
+```zig
+fn static_data_ptr_offset(
+    word_size: u32,
+    element_alignment: u32,
+    contains_refcounted_children: bool,
+) u32 {
+    const required_space =
+        if (contains_refcounted_children) 2 * word_size else word_size;
+    return align_forward(required_space, element_alignment);
+}
+```
+
+The refcount word is at `data_ptr - word_size` and is always
+`REFCOUNT_STATIC_DATA`. If the allocation is a list whose elements contain
+refcounted data, the allocation element count word is at
+`data_ptr - 2 * word_size`. Other refcounted allocations may still reserve the
+same two-word prefix when `contains_refcounted_children` is true because the
+runtime allocation/free convention uses that prefix for address arithmetic; the
+extra word is zero unless that runtime type defines a meaning for it.
+
+For example, a static `List(List(Str))` export is a graph:
+
+```text
+roc__table
+  record bytes:
+    names field = RocList { bytes -> roc__table.__static_0 + data_offset, len = 2, cap = 2 }
+    count field = I64(3)
+
+roc__table.__static_0
+  [allocation_element_count = 2][refcount = 0][two RocList elements]
+    element 0 bytes -> roc__table.__static_1 + data_offset
+    element 1 bytes -> roc__table.__static_2 + data_offset
+
+roc__table.__static_1
+  [refcount = 0]["Alice"/"Bob" list payload...]
+
+...
+```
+
+Every pointer shown above is a readonly relocation, not a runtime initializer.
+Dropping a runtime copy that still points at any of those static nodes is safe
+because the refcount is `REFCOUNT_STATIC_DATA`; nested static children are not
+recursively decrefed because static allocations are never final-dropped.
+
+#### Strings, Lists, Boxes, Records, Tuples, and Tags
+
+Static materialization writes the same runtime value representation as ordinary
+LIR lowering:
+
+- small `Str` values are inline RocStr values with no heap node.
+- non-small `Str` values are RocStr values whose bytes pointer relocates to a
+  static byte allocation with refcount `REFCOUNT_STATIC_DATA`.
+- `List(T)` values are RocList values whose element pointer relocates to a
+  static element allocation; the allocation prefix records
+  `REFCOUNT_STATIC_DATA` and, for refcounted-element lists, the allocation
+  element count.
+- `Box(T)` values are one pointer to a static allocation containing `T`.
+- records and tuples use the target's finalized field order and padding.
+- tag unions use the target's ordinary tag-union layout; `Bool` is not special.
+  A static `Bool` value is whatever the ordinary nominal tag-union layout says
+  it is.
+
+For recursive values, recursion must be broken by an explicit heap boundary
+such as `Box(T)` or `List(T)`. The static graph may therefore contain cycles
+through relocations only when the language/runtime layout has an explicit
+pointer boundary. The materializer must never create a cycle in inline bytes.
+
+#### Boxed Erased Callable Constants
+
+A provided constant may contain `Box(function)`. That boxed erased callable uses
+the same runtime ABI as host-provided and Roc-created boxed erased callables:
+
+```zig
+pub const ErasedCallableFn =
+    *const fn (
+        ops: *RocOps,
+        ret: ?[*]u8,
+        args: ?[*]const u8,
+        capture: ?[*]u8,
+    ) callconv(.c) void;
+
+pub const OnDropFn =
+    *const fn (capture: ?[*]u8, ops: *RocOps) callconv(.c) void;
+
+pub const ErasedCallablePayload = extern struct {
+    callable_fn_ptr: ErasedCallableFn,
+    on_drop: ?OnDropFn,
+};
+```
+
+The payload header is followed by inline capture bytes aligned to 16 bytes. A
+static boxed erased callable allocation has outer refcount
+`REFCOUNT_STATIC_DATA`, so its `on_drop` callback will never run for the static
+allocation itself. If the compiler ever needs a dynamic copy, ordinary LIR ARC
+statements decide whether a dynamic allocation is made and whether nested
+captures are retained. Backends do not infer that policy from the payload.
+
+The logical `CompileTimeValueStore` is not enough to emit a boxed erased
+callable constant. The static data graph builder must consume the explicit
+callable materialization data selected by executable MIR:
+
+- `ErasedCallSigKey`
+- concrete `ErasedCallableCodeRef`
+- executable erased-call wrapper symbol
+- exact capture materialization plan
+- exact `on_drop` helper symbol, or `null` when there is no captured
+  refcounted data
+
+If any of those fields are missing, that is a compiler invariant violation. The
+materializer must not reconstruct a callable function pointer from source syntax,
+from a procedure name, from a function type, from a callable-set member order, or
+from a runtime interpreter value.
+
+For example:
+
+```roc
+make_boxed_adder : I64 -> Box(I64 -> I64)
+make_boxed_adder = |n| Box.box(|x| x + n)
+
+provided : Box(I64 -> I64)
+provided = make_boxed_adder(1)
+```
+
+`provided` exports one static `Box(I64 -> I64)` value. Its static boxed payload
+contains a relocation to the erased callable wrapper selected for
+`I64 -> I64`, an `on_drop` helper pointer if the capture requires final-drop
+work, and inline capture bytes for `n = 1`. It does not export a runtime thunk
+or a global closure object.
+
+#### Compile-Time Evaluation and Export Decisions Stay Decoupled
+
+Compile-time evaluation may lower MIR/LIR and cache work for a concrete
+constant specialization. That does not mean the specialization is emitted into
+the final binary. A constant becomes a final binary data symbol only when the
+final root/export path requests the provided data export. The export path first
+checks whether the exact `ConstInstantiationKey` already has sealed
+materialization data. If it does, it reuses that data. If not, checking
+finalization must have produced it before post-check lowering starts.
+
+There is no dedicated graph walk whose purpose is "find all constants that might
+be exported." Provided exports are already explicit checked-artifact data. The
+static data graph builder runs only for the explicit provided data exports the
+binary is actually emitting.
+
+Issue 9401 is complete only when:
+
+- provided non-function values emit host-linkable immutable symbols
+- nested records, tuples, tags, strings, lists, boxes, and nested heap values
+  such as `List(List(Str))` materialize correctly
+- readonly relocations connect outer constants to nested static allocations
+- static refcount semantics prevent all mutation/freeing of static data
+- compile-time evaluation and final binary export decisions remain decoupled
+- the LIR interpreter and compiled backends use the same explicit ABI/RC model
+  for host-boundary values
+- boxed erased callable host-boundary tests are unskipped and pass for every
+  supported runner
+
 ### Checked Module Artifact Cache
 
 The checked module cache stores one complete, target-independent checked module

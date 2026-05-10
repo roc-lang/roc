@@ -21,6 +21,7 @@ pub fn generateObjectFile(
     rodata: []const u8,
     symbols: []const Symbol,
     relocations: []const Relocation,
+    rodata_relocations: []const DataRelocation,
     output: *std.ArrayList(u8),
 ) !void {
     const cpu_arch = target.toCpuArch();
@@ -63,6 +64,12 @@ pub fn generateObjectFile(
                         try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
                     }
                 }
+
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try elf.addRodataRelocation(rel.offset, sym_idx, rel.addend);
+                    }
+                }
             }
 
             try elf.write(output);
@@ -97,6 +104,12 @@ pub fn generateObjectFile(
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
+                    }
+                }
+
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, sym.is_external, rel.addend);
                     }
                 }
             }
@@ -137,6 +150,12 @@ pub fn generateObjectFile(
                     }
                 }
 
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try coff_writer.addRdataRelocation(@intCast(rel.offset), sym_idx, rel.addend);
+                    }
+                }
+
                 // Add function info for Windows x64 unwind tables
                 if (coff_arch == .x86_64 and sym.is_function and !sym.is_external) {
                     try coff_writer.addFunctionInfo(.{
@@ -169,6 +188,13 @@ pub const Symbol = struct {
     prologue_size: u8 = 0,
     stack_alloc: u32 = 0,
     uses_frame_pointer: bool = true,
+};
+
+/// One absolute pointer relocation inside the readonly data section.
+pub const DataRelocation = struct {
+    offset: u64,
+    target_symbol_name: []const u8,
+    addend: i64 = 0,
 };
 
 /// Logical object section used by the dev object writer facade.
@@ -231,6 +257,7 @@ test "generate x86_64 linux object" {
         &.{},
         symbols,
         &.{},
+        &.{},
         &output,
     );
 
@@ -265,6 +292,7 @@ test "generate x86_64 macos object" {
         code,
         &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -301,6 +329,7 @@ test "generate aarch64 linux object" {
         &.{},
         symbols,
         &.{},
+        &.{},
         &output,
     );
 
@@ -334,6 +363,7 @@ test "generate x86_64 windows object" {
         code,
         &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -369,6 +399,7 @@ test "generate aarch64 windows object" {
         code,
         &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );

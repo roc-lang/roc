@@ -22,10 +22,11 @@ pub const TestSpec = struct {
     skip_on_windows: bool = false,
 };
 
-/// TODO(#9401): Re-enable when arbitrary provided/static constants and boxed erased
-/// callable host-boundary static data are implemented as target-layout static
-/// object symbols. Kept outside `io_spec_tests` so the explicit Zig tests can
-/// use `error.SkipZigTest` instead of silently omitting this case.
+/// Regression coverage for #9401: boxed erased callables must use the same
+/// payload ABI and RC/drop semantics when they are created by Roc, created by
+/// the host, passed to the host, stored by the host, and returned to Roc.
+/// Kept outside `io_spec_tests` so the explicit Zig tests can run this narrow
+/// host-boundary fixture independently for interpreter and dev backends.
 pub const host_boxed_fn_boundary_test = TestSpec{
     .roc_file = "test/fx/host_boxed_fn_boundary.roc",
     .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4",

@@ -23,6 +23,7 @@ const RocTarget = @import("roc_target").RocTarget;
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
+const static_data_export = @import("StaticDataExport.zig");
 
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
@@ -36,15 +37,8 @@ pub const Entrypoint = struct {
     ret_layout: layout.Idx,
 };
 
-/// Immutable data symbol to emit into the target's readonly data section.
-pub const StaticDataExport = struct {
-    /// The exported symbol name (e.g. "roc__answer").
-    symbol_name: []const u8,
-    /// Fully materialized Roc ABI bytes for the constant.
-    bytes: []const u8,
-    /// Required alignment of the symbol inside the readonly section.
-    alignment: u32,
-};
+pub const StaticDataExport = static_data_export.StaticDataExport;
+pub const StaticDataRelocation = static_data_export.StaticDataRelocation;
 
 /// Result of compilation
 pub const CompilationResult = struct {
@@ -101,6 +95,7 @@ pub const ObjectFileCompiler = struct {
         lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
+        static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
@@ -109,7 +104,7 @@ pub const ObjectFileCompiler = struct {
             lir_store,
             layout_store,
             entrypoints,
-            &.{},
+            static_data_exports,
             proc_specs,
             target,
         );
@@ -173,6 +168,12 @@ fn compileWithCodeGen(
     var rodata = std.ArrayList(u8).empty;
     defer rodata.deinit(allocator);
 
+    var rodata_relocations = std.ArrayList(ObjectWriter.DataRelocation).empty;
+    defer rodata_relocations.deinit(allocator);
+
+    var static_data_symbols = std.ArrayList(ObjectWriter.Symbol).empty;
+    defer static_data_symbols.deinit(allocator);
+
     for (static_data_exports) |data_export| {
         const alignment = @as(usize, @intCast(data_export.alignment));
         const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
@@ -183,17 +184,39 @@ fn compileWithCodeGen(
             return CompilationError.OutOfMemory;
         };
 
-        symbols.append(allocator, .{
+        static_data_symbols.append(allocator, .{
             .name = data_export.symbol_name,
             .offset = aligned_offset,
             .size = data_export.bytes.len,
-            .is_global = true,
+            .is_global = data_export.is_global,
             .is_function = false,
             .is_external = false,
             .section = .rodata,
         }) catch {
             return CompilationError.OutOfMemory;
         };
+
+        for (data_export.relocations) |relocation| {
+            rodata_relocations.append(allocator, .{
+                .offset = @as(u64, @intCast(aligned_offset)) + relocation.offset,
+                .target_symbol_name = relocation.target_symbol_name,
+                .addend = relocation.addend,
+            }) catch {
+                return CompilationError.OutOfMemory;
+            };
+        }
+    }
+
+    // ELF requires all local symbols to appear before global symbols. Keep that
+    // invariant in the shared symbol list while preserving each symbol's section
+    // offset and name-based relocation target.
+    for (static_data_symbols.items) |sym| {
+        if (sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
+    for (static_data_symbols.items) |sym| {
+        if (!sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
     }
 
     // Generate entrypoint wrappers
@@ -278,6 +301,29 @@ fn compileWithCodeGen(
         }
     }
 
+    for (rodata_relocations.items) |reloc| {
+        var found = false;
+        for (symbols.items) |sym| {
+            if (std.mem.eql(u8, sym.name, reloc.target_symbol_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            symbols.append(allocator, .{
+                .name = reloc.target_symbol_name,
+                .offset = 0,
+                .size = 0,
+                .is_global = false,
+                .is_function = false,
+                .is_external = true,
+                .section = .undef,
+            }) catch {
+                return CompilationError.OutOfMemory;
+            };
+        }
+    }
+
     // Generate object file
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(allocator);
@@ -289,6 +335,7 @@ fn compileWithCodeGen(
         rodata.items,
         symbols.items,
         relocations,
+        rodata_relocations.items,
         &output,
     ) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,

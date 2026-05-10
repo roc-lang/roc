@@ -35,11 +35,13 @@ const COFF = struct {
     const IMAGE_SYM_UNDEFINED = 0;
 
     // x86_64 relocation types
+    const IMAGE_REL_AMD64_ADDR64 = 0x0001;
     const IMAGE_REL_AMD64_REL32 = 0x0004;
     const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
 
     // ARM64 relocation types
     const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+    const IMAGE_REL_ARM64_ADDR64 = 0x000E;
 
     // x64 Unwind operation codes
     const UWOP_PUSH_NONVOL = 0; // Push a nonvolatile register
@@ -135,6 +137,13 @@ pub const Architecture = enum {
             .aarch64 => COFF.IMAGE_REL_ARM64_BRANCH26,
         };
     }
+
+    fn absolutePointerRelocType(self: Architecture) u16 {
+        return switch (self) {
+            .x86_64 => COFF.IMAGE_REL_AMD64_ADDR64,
+            .aarch64 => COFF.IMAGE_REL_ARM64_ADDR64,
+        };
+    }
 };
 
 /// Symbol definition for the object file
@@ -183,6 +192,7 @@ pub const CoffWriter = struct {
 
     // Relocations for .text section
     text_relocs: std.ArrayList(TextReloc),
+    rdata_relocs: std.ArrayList(TextReloc),
 
     // String table (for long symbol names)
     strtab: std.ArrayList(u8),
@@ -205,6 +215,7 @@ pub const CoffWriter = struct {
             .rdata = .{},
             .symbols = .{},
             .text_relocs = .{},
+            .rdata_relocs = .{},
             .strtab = .{},
             .functions = .{},
         };
@@ -222,6 +233,7 @@ pub const CoffWriter = struct {
         self.rdata.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
+        self.rdata_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
         self.functions.deinit(self.allocator);
     }
@@ -262,6 +274,17 @@ pub const CoffWriter = struct {
             .offset = offset,
             .symbol_idx = symbol_idx,
             .reloc_type = self.arch.branchRelocType(),
+        });
+    }
+
+    /// Add an absolute pointer relocation to the read-only data section.
+    pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) !void {
+        if (offset + 8 > self.rdata.items.len) unreachable;
+        std.mem.writeInt(i64, self.rdata.items[offset..][0..8], addend, .little);
+        try self.rdata_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = self.arch.absolutePointerRelocType(),
         });
     }
 
@@ -355,8 +378,11 @@ pub const CoffWriter = struct {
         const text_reloc_offset: u32 = xdata_offset + xdata_size;
         const text_reloc_size: u32 = @as(u32, @intCast(self.text_relocs.items.len)) * reloc_entry_size;
 
+        const rdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const rdata_reloc_size: u32 = @as(u32, @intCast(self.rdata_relocs.items.len)) * reloc_entry_size;
+
         // .pdata relocations (3 per RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData)
-        const pdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const pdata_reloc_offset: u32 = rdata_reloc_offset + rdata_reloc_size;
         const pdata_reloc_count: u32 = if (need_unwind) @intCast(self.functions.items.len * 3) else 0;
         const pdata_reloc_size: u32 = pdata_reloc_count * reloc_entry_size;
 
@@ -480,9 +506,9 @@ pub const CoffWriter = struct {
                 .virtual_address = 0,
                 .size_of_raw_data = rdata_size,
                 .pointer_to_raw_data = rdata_offset,
-                .pointer_to_relocations = 0,
+                .pointer_to_relocations = if (self.rdata_relocs.items.len > 0) rdata_reloc_offset else 0,
                 .pointer_to_line_numbers = 0,
-                .number_of_relocations = 0,
+                .number_of_relocations = @intCast(self.rdata_relocs.items.len),
                 .number_of_line_numbers = 0,
                 .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
                     COFF.IMAGE_SCN_MEM_READ |
@@ -644,6 +670,10 @@ pub const CoffWriter = struct {
 
         // Write .text relocations (10 bytes each: u32 offset, u32 symbol_idx, u16 type)
         for (self.text_relocs.items) |rel| {
+            try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
+        }
+
+        for (self.rdata_relocs.items) |rel| {
             try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
         }
 

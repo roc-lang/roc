@@ -50,9 +50,11 @@ const ELF = struct {
     const SHN_UNDEF = 0;
 
     // x86_64 relocation types
+    const R_X86_64_64 = 1;
     const R_X86_64_PLT32 = 4;
 
     // aarch64 relocation types
+    const R_AARCH64_ABS64 = 257;
     const R_AARCH64_CALL26 = 283;
 };
 
@@ -154,6 +156,7 @@ pub const ElfWriter = struct {
 
     // Relocations for .text section
     text_relocs: std.ArrayList(TextReloc),
+    rodata_relocs: std.ArrayList(TextReloc),
 
     // String tables
     strtab: std.ArrayList(u8),
@@ -175,6 +178,7 @@ pub const ElfWriter = struct {
             .rodata = .{},
             .symbols = .{},
             .text_relocs = .{},
+            .rodata_relocs = .{},
             .strtab = .{},
             .shstrtab = .{},
         };
@@ -192,6 +196,7 @@ pub const ElfWriter = struct {
         self.rodata.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
+        self.rodata_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
         self.shstrtab.deinit(self.allocator);
     }
@@ -244,6 +249,21 @@ pub const ElfWriter = struct {
         });
     }
 
+    /// Add an absolute pointer relocation to the rodata section.
+    pub fn addRodataRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) !void {
+        const reloc_type: u32 = switch (self.arch) {
+            .x86_64 => ELF.R_X86_64_64,
+            .aarch64 => ELF.R_AARCH64_ABS64,
+        };
+
+        try self.rodata_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = reloc_type,
+            .addend = addend,
+        });
+    }
+
     /// Add a relocation to the text section
     pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) !void {
         const reloc_type: u32 = switch (self.arch) {
@@ -272,15 +292,18 @@ pub const ElfWriter = struct {
         // Section indices
         const SHIDX_TEXT = 1;
         const SHIDX_RODATA = 2;
-        const SHIDX_SYMTAB = 4;
-        const SHIDX_STRTAB = 5;
-        const SHIDX_SHSTRTAB = 6;
-        const NUM_SECTIONS = 7;
+        const SHIDX_RELA_TEXT = 3;
+        const SHIDX_RELA_RODATA = 4;
+        const SHIDX_SYMTAB = 5;
+        const SHIDX_STRTAB = 6;
+        const SHIDX_SHSTRTAB = 7;
+        const NUM_SECTIONS = 8;
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
         const shname_rodata = try self.addString(&self.shstrtab, ".rodata");
         const shname_rela_text = try self.addString(&self.shstrtab, ".rela.text");
+        const shname_rela_rodata = try self.addString(&self.shstrtab, ".rela.rodata");
         const shname_symtab = try self.addString(&self.shstrtab, ".symtab");
         const shname_strtab = try self.addString(&self.shstrtab, ".strtab");
         const shname_shstrtab = try self.addString(&self.shstrtab, ".shstrtab");
@@ -329,9 +352,9 @@ pub const ElfWriter = struct {
             }
         }
 
-        // Build relocation table
-        var rela: std.ArrayList(u8) = .{};
-        defer rela.deinit(self.allocator);
+        // Build relocation tables
+        var rela_text: std.ArrayList(u8) = .{};
+        defer rela_text.deinit(self.allocator);
 
         for (self.text_relocs.items) |rel| {
             // Symbol index is +1 because of null symbol at index 0
@@ -343,7 +366,23 @@ pub const ElfWriter = struct {
                 .r_addend = rel.addend,
             };
 
-            try rela.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
+            try rela_text.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
+        }
+
+        var rela_rodata: std.ArrayList(u8) = .{};
+        defer rela_rodata.deinit(self.allocator);
+
+        for (self.rodata_relocs.items) |rel| {
+            // Symbol index is +1 because of null symbol at index 0
+            const r_info: u64 = (@as(u64, rel.symbol_idx + 1) << 32) | rel.reloc_type;
+
+            const elf_rela = Elf64_Rela{
+                .r_offset = rel.offset,
+                .r_info = r_info,
+                .r_addend = rel.addend,
+            };
+
+            try rela_rodata.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
         }
 
         // Calculate offsets
@@ -359,8 +398,11 @@ pub const ElfWriter = struct {
         const rodata_offset = alignUp(offset, 16);
         offset = rodata_offset + self.rodata.items.len;
 
-        const rela_offset = alignUp(offset, 8);
-        offset = rela_offset + rela.items.len;
+        const rela_text_offset = alignUp(offset, 8);
+        offset = rela_text_offset + rela_text.items.len;
+
+        const rela_rodata_offset = alignUp(offset, 8);
+        offset = rela_rodata_offset + rela_rodata.items.len;
 
         const symtab_offset = alignUp(offset, 8);
         offset = symtab_offset + symtab.items.len;
@@ -408,9 +450,12 @@ pub const ElfWriter = struct {
         try self.padTo(output, rodata_offset);
         try output.appendSlice(self.allocator, self.rodata.items);
 
-        // Pad to rela section
-        try self.padTo(output, rela_offset);
-        try output.appendSlice(self.allocator, rela.items);
+        // Pad to rela sections
+        try self.padTo(output, rela_text_offset);
+        try output.appendSlice(self.allocator, rela_text.items);
+
+        try self.padTo(output, rela_rodata_offset);
+        try output.appendSlice(self.allocator, rela_rodata.items);
 
         // Pad to symtab
         try self.padTo(output, symtab_offset);
@@ -465,8 +510,8 @@ pub const ElfWriter = struct {
             .sh_type = ELF.SHT_RELA,
             .sh_flags = ELF.SHF_INFO_LINK,
             .sh_addr = 0,
-            .sh_offset = rela_offset,
-            .sh_size = rela.items.len,
+            .sh_offset = rela_text_offset,
+            .sh_size = rela_text.items.len,
             .sh_link = SHIDX_SYMTAB, // Associated symbol table
             .sh_info = SHIDX_TEXT, // Section to which relocs apply
             .sh_addralign = 8,
@@ -474,7 +519,25 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela));
 
-        // 4: .symtab
+        // 4: .rela.rodata
+        const shdr_rela_rodata = Elf64_Shdr{
+            .sh_name = shname_rela_rodata,
+            .sh_type = ELF.SHT_RELA,
+            .sh_flags = ELF.SHF_INFO_LINK,
+            .sh_addr = 0,
+            .sh_offset = rela_rodata_offset,
+            .sh_size = rela_rodata.items.len,
+            .sh_link = SHIDX_SYMTAB, // Associated symbol table
+            .sh_info = SHIDX_RODATA, // Section to which relocs apply
+            .sh_addralign = 8,
+            .sh_entsize = @sizeOf(Elf64_Rela),
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela_rodata));
+
+        _ = SHIDX_RELA_TEXT;
+        _ = SHIDX_RELA_RODATA;
+
+        // 5: .symtab
         const shdr_symtab = Elf64_Shdr{
             .sh_name = shname_symtab,
             .sh_type = ELF.SHT_SYMTAB,
@@ -489,7 +552,7 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_symtab));
 
-        // 5: .strtab
+        // 6: .strtab
         const shdr_strtab = Elf64_Shdr{
             .sh_name = shname_strtab,
             .sh_type = ELF.SHT_STRTAB,
@@ -504,7 +567,7 @@ pub const ElfWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_strtab));
 
-        // 6: .shstrtab
+        // 7: .shstrtab
         const shdr_shstrtab = Elf64_Shdr{
             .sh_name = shname_shstrtab,
             .sh_type = ELF.SHT_STRTAB,

@@ -47,7 +47,8 @@ pub const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
-pub const StaticDataExport = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").StaticDataExport;
+pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
+pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 
 /// Generic development backend parameterized by architecture-specific types.

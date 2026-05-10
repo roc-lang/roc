@@ -46,9 +46,11 @@ const MachO = struct {
     const N_SECT = 0xe;
 
     // Relocation types (x86_64)
+    const X86_64_RELOC_UNSIGNED = 0;
     const X86_64_RELOC_BRANCH = 2;
 
     // Relocation types (arm64)
+    const ARM64_RELOC_UNSIGNED = 0;
     const ARM64_RELOC_BRANCH26 = 2;
 };
 
@@ -217,11 +219,18 @@ pub const MachOWriter = struct {
     // Symbols and relocations
     symbols: std.ArrayList(Symbol),
     text_relocs: std.ArrayList(TextReloc),
+    rodata_relocs: std.ArrayList(DataReloc),
 
     // String table
     strtab: std.ArrayList(u8),
 
     const TextReloc = struct {
+        offset: u32,
+        symbol_idx: u32,
+        is_extern: bool,
+    };
+
+    const DataReloc = struct {
         offset: u32,
         symbol_idx: u32,
         is_extern: bool,
@@ -235,6 +244,7 @@ pub const MachOWriter = struct {
             .rodata = .{},
             .symbols = .{},
             .text_relocs = .{},
+            .rodata_relocs = .{},
             .strtab = .{},
         };
 
@@ -250,6 +260,7 @@ pub const MachOWriter = struct {
         self.rodata.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
+        self.rodata_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
     }
 
@@ -308,6 +319,17 @@ pub const MachOWriter = struct {
         });
     }
 
+    /// Add an absolute pointer relocation in the read-only data section.
+    pub fn addRodataRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, addend: i64) !void {
+        if (offset + 8 > self.rodata.items.len) unreachable;
+        std.mem.writeInt(i64, self.rodata.items[offset..][0..8], addend, .little);
+        try self.rodata_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .is_extern = is_extern,
+        });
+    }
+
     /// Add string to string table
     fn addString(self: *Self, str: []const u8) !u32 {
         const offset: u32 = @intCast(self.strtab.items.len);
@@ -334,10 +356,12 @@ pub const MachOWriter = struct {
         const rodata_offset: u32 = text_offset + text_size;
         const rodata_size: u32 = @intCast(self.rodata.items.len);
 
-        const reloc_offset: u32 = rodata_offset + rodata_size;
-        const reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
+        const text_reloc_offset: u32 = rodata_offset + rodata_size;
+        const text_reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
+        const rodata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const rodata_reloc_size: u32 = @intCast(self.rodata_relocs.items.len * @sizeOf(RelocationInfo));
 
-        const symtab_offset: u32 = reloc_offset + reloc_size;
+        const symtab_offset: u32 = rodata_reloc_offset + rodata_reloc_size;
 
         // Count symbol types for dysymtab
         var num_local: u32 = 0;
@@ -411,7 +435,7 @@ pub const MachOWriter = struct {
             .size = text_size,
             .offset = text_offset,
             .@"align" = 4, // 2^4 = 16 byte alignment
-            .reloff = if (self.text_relocs.items.len > 0) reloc_offset else 0,
+            .reloff = if (self.text_relocs.items.len > 0) text_reloc_offset else 0,
             .nreloc = @intCast(self.text_relocs.items.len),
             .flags = MachO.S_ATTR_PURE_INSTRUCTIONS | MachO.S_ATTR_SOME_INSTRUCTIONS,
             .reserved1 = 0,
@@ -432,8 +456,8 @@ pub const MachOWriter = struct {
             .size = rodata_size,
             .offset = rodata_offset,
             .@"align" = 4,
-            .reloff = 0,
-            .nreloc = 0,
+            .reloff = if (self.rodata_relocs.items.len > 0) rodata_reloc_offset else 0,
+            .nreloc = @intCast(self.rodata_relocs.items.len),
             .flags = 0,
             .reserved1 = 0,
             .reserved2 = 0,
@@ -504,6 +528,22 @@ pub const MachOWriter = struct {
                 2, // 32-bit (2^2 = 4 bytes)
                 rel.is_extern,
                 self.arch.branchRelocType(),
+            );
+            try output.appendSlice(self.allocator, std.mem.asBytes(&reloc));
+        }
+
+        for (self.rodata_relocs.items) |rel| {
+            const reloc_type: u4 = switch (self.arch) {
+                .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
+                .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
+            };
+            const reloc = RelocationInfo.init(
+                rel.offset,
+                @intCast(rel.symbol_idx),
+                false, // absolute pointer
+                3, // 64-bit (2^3 = 8 bytes)
+                rel.is_extern,
+                reloc_type,
             );
             try output.appendSlice(self.allocator, std.mem.asBytes(&reloc));
         }

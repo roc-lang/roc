@@ -151,7 +151,7 @@ pub const RocList = extern struct {
         // count recorded in the heap header. Once a non-slice list becomes shared,
         // that count must already be present because later slice teardown will read it
         // from the shared allocation.
-        if (elements_refcounted and !self.isSeamlessSlice()) {
+        if (elements_refcounted and self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
             if (self.getAllocationDataPtr(roc_ops)) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.

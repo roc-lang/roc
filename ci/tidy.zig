@@ -17,12 +17,13 @@ const mem = std.mem;
 const Ast = std.zig.Ast;
 
 const MiB = 1024 * 1024;
+const max_text_file_size = 4 * MiB;
 
 /// Binary file extensions that should be skipped entirely (not read into the buffer).
 /// These are compiled artifacts, images, and other non-text files.
 const binary_extensions: []const []const u8 = &.{
-    ".ico", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".bin",
-    ".o", ".a", ".lib", ".dll", ".so", ".dylib", ".wasm",
+    ".ico",  ".png",   ".webp", ".jpg", ".jpeg", ".gif",   ".bin",
+    ".o",    ".a",     ".lib",  ".dll", ".so",   ".dylib", ".wasm",
     ".rlib", ".rmeta",
 };
 
@@ -47,7 +48,7 @@ pub fn main() !void {
 
     // NB: all checks are intentionally implemented in a streaming fashion,
     // such that we only need to read the files once.
-    const file_buffer = try gpa.alloc(u8, MiB + MiB / 2); // 1.5 MiB
+    const file_buffer = try gpa.alloc(u8, max_text_file_size);
     defer gpa.free(file_buffer);
 
     const paths = try listFilePaths(gpa);
@@ -65,11 +66,11 @@ pub fn main() !void {
         }).len;
         if (bytes_read >= file_buffer.len - 1) {
             std.debug.panic(
-                \\File exceeds 1.5 MiB buffer limit: {s}
+                \\File exceeds {d} MiB buffer limit: {s}
                 \\
                 \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
                 \\to exclude it from tidy checks.
-            , .{file_path});
+            , .{ max_text_file_size / MiB, file_path });
         }
         file_buffer[bytes_read] = 0;
 
@@ -256,7 +257,6 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
         }
     }
 }
-
 
 const IdentifierCounter = struct {
     const file_identifier_count_max = 100_000;
@@ -480,9 +480,9 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
     // Skip directories with different conventions
     const skip_paths: []const []const u8 = &.{
         "test/snapshots/", // Snapshot files are generated
-        "crates/",         // Old Rust crate code
-        "design/",         // Design docs may have different structure
-        "www/",            // Website content
+        "crates/", // Old Rust crate code
+        "design/", // Design docs may have different structure
+        "www/", // Website content
     };
     for (skip_paths) |skip_path| {
         if (std.mem.indexOf(u8, file.path, skip_path) != null) return;

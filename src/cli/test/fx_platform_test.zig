@@ -275,18 +275,12 @@ test "fx platform IO spec tests (dev backend)" {
     try runIoSpecTests("--opt=dev");
 }
 
-test "TODO: fx platform boxed erased callable host boundary (interpreter)" {
-    // TODO(#9401): Re-enable after arbitrary provided/static constants can be emitted
-    // as target-layout static object symbols, including host-visible boxed
-    // erased callable data and nested heap constants.
-    return error.SkipZigTest;
+test "fx platform boxed erased callable host boundary (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
-test "TODO: fx platform boxed erased callable host boundary (dev backend)" {
-    // TODO(#9401): Re-enable after arbitrary provided/static constants can be emitted
-    // as target-layout static object symbols, including host-visible boxed
-    // erased callable data and nested heap constants.
-    return error.SkipZigTest;
+test "fx platform boxed erased callable host boundary (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.

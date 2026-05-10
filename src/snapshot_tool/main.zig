@@ -17,7 +17,6 @@ const compile = @import("compile");
 const lir = @import("lir");
 const layout = @import("layout");
 const backend = @import("backend");
-const builtins = @import("builtins");
 const fmt = @import("fmt");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
@@ -3827,181 +3826,6 @@ fn snapshotNativeEntrypoints(
     return try entrypoints.toOwnedSlice(allocator);
 }
 
-fn snapshotNativeStaticDataExports(
-    allocator: Allocator,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]backend.StaticDataExport {
-    var exports = std.ArrayList(backend.StaticDataExport).empty;
-    errdefer {
-        for (exports.items) |static_export| {
-            allocator.free(static_export.symbol_name);
-            allocator.free(static_export.bytes);
-        }
-        exports.deinit(allocator);
-    }
-
-    for (root_artifact.provided_exports.exports) |provided| {
-        const data = switch (provided) {
-            .data => |data| data,
-            .procedure => continue,
-        };
-
-        const binding = root_artifact.comptime_values.lookupBinding(data.pattern) orelse {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
-                    "snapshot invariant violated: provided data export has no published compile-time value",
-                    .{},
-                );
-            }
-            unreachable;
-        };
-
-        const entrypoint_name = root_artifact.canonical_names.externalSymbolNameText(data.ffi_symbol);
-        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
-        var symbol_name_owned = true;
-        errdefer if (symbol_name_owned) allocator.free(symbol_name);
-
-        const materialized = try snapshotMaterializeStaticDataExport(
-            allocator,
-            &root_artifact.comptime_values,
-            binding.schema,
-            binding.value,
-        );
-        var bytes_owned = true;
-        errdefer if (bytes_owned) allocator.free(materialized.bytes);
-
-        try exports.append(allocator, .{
-            .symbol_name = symbol_name,
-            .bytes = materialized.bytes,
-            .alignment = materialized.alignment,
-        });
-        symbol_name_owned = false;
-        bytes_owned = false;
-    }
-
-    return try exports.toOwnedSlice(allocator);
-}
-
-fn deinitSnapshotNativeStaticDataExports(
-    allocator: Allocator,
-    exports: []backend.StaticDataExport,
-) void {
-    for (exports) |static_export| {
-        allocator.free(static_export.symbol_name);
-        allocator.free(static_export.bytes);
-    }
-    allocator.free(exports);
-}
-
-const SnapshotMaterializedStaticData = struct {
-    bytes: []u8,
-    alignment: u32,
-};
-
-fn snapshotMaterializeStaticDataExport(
-    allocator: Allocator,
-    values: *const check.CheckedArtifact.CompileTimeValueStore,
-    schema_id: check.CheckedArtifact.ComptimeSchemaId,
-    value_id: check.CheckedArtifact.ComptimeValueId,
-) !SnapshotMaterializedStaticData {
-    const schema = values.schemas.items[@intFromEnum(schema_id)];
-    const value = values.values.items[@intFromEnum(value_id)];
-
-    switch (schema) {
-        .pending => snapshotStaticDataInvariant("provided data export has pending compile-time schema"),
-        .zst => return .{
-            .bytes = try allocator.alloc(u8, 0),
-            .alignment = 1,
-        },
-        .int => |precision| {
-            const int_bytes = switch (value) {
-                .int_bytes => |bytes| bytes,
-                else => snapshotStaticDataInvariant("provided integer data export has non-integer compile-time value"),
-            };
-            const size = @as(usize, @intCast(precision.size()));
-            const out = try allocator.alloc(u8, size);
-            @memcpy(out, int_bytes[0..size]);
-            return .{
-                .bytes = out,
-                .alignment = @as(u32, @intCast(precision.alignment().toByteUnits())),
-            };
-        },
-        .frac => |precision| switch (precision) {
-            .f32 => {
-                const bits = switch (value) {
-                    .f32 => |n| n,
-                    else => snapshotStaticDataInvariant("provided F32 data export has non-F32 compile-time value"),
-                };
-                const out = try allocator.alloc(u8, @sizeOf(f32));
-                @memcpy(out, std.mem.asBytes(&bits));
-                return .{ .bytes = out, .alignment = @alignOf(f32) };
-            },
-            .f64 => {
-                const bits = switch (value) {
-                    .f64 => |n| n,
-                    else => snapshotStaticDataInvariant("provided F64 data export has non-F64 compile-time value"),
-                };
-                const out = try allocator.alloc(u8, @sizeOf(f64));
-                @memcpy(out, std.mem.asBytes(&bits));
-                return .{ .bytes = out, .alignment = @alignOf(f64) };
-            },
-            .dec => {
-                const dec_bytes = switch (value) {
-                    .dec => |bytes| bytes,
-                    else => snapshotStaticDataInvariant("provided Dec data export has non-Dec compile-time value"),
-                };
-                const out = try allocator.alloc(u8, dec_bytes.len);
-                @memcpy(out, dec_bytes[0..]);
-                return .{ .bytes = out, .alignment = 16 };
-            },
-        },
-        .str => {
-            const str_bytes = switch (value) {
-                .str => |bytes| bytes,
-                else => snapshotStaticDataInvariant("provided Str data export has non-Str compile-time value"),
-            };
-            if (!builtins.str.RocStr.fitsInSmallStr(str_bytes.len)) {
-                snapshotStaticDataInvariant("provided non-small Str export requires static heap relocation materialization");
-            }
-            const roc_str = builtins.str.RocStr.fromSliceSmall(str_bytes);
-            const out = try allocator.alloc(u8, @sizeOf(builtins.str.RocStr));
-            @memcpy(out, std.mem.asBytes(&roc_str));
-            return .{
-                .bytes = out,
-                .alignment = builtins.str.RocStr.alignment,
-            };
-        },
-        .alias => |wrapped| {
-            const inner = switch (value) {
-                .alias => |inner| inner,
-                else => snapshotStaticDataInvariant("provided alias data export has non-alias compile-time value"),
-            };
-            return snapshotMaterializeStaticDataExport(allocator, values, wrapped.backing, inner);
-        },
-        .nominal => |wrapped| {
-            const inner = switch (value) {
-                .nominal => |inner| inner,
-                else => snapshotStaticDataInvariant("provided nominal data export has non-nominal compile-time value"),
-            };
-            return snapshotMaterializeStaticDataExport(allocator, values, wrapped.backing, inner);
-        },
-        .list,
-        .box,
-        .tuple,
-        .record,
-        .tag_union,
-        .callable,
-        => snapshotStaticDataInvariant("provided data export requires full target static-data materialization"),
-    }
-}
-
-fn snapshotStaticDataInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic("snapshot invariant violated: " ++ message, .{});
-    }
-    unreachable;
-}
-
 fn snapshotHasProvidedProcedureExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) bool {
@@ -4009,6 +3833,18 @@ fn snapshotHasProvidedProcedureExports(
         switch (provided) {
             .procedure => return true,
             .data => {},
+        }
+    }
+    return false;
+}
+
+fn snapshotHasProvidedDataExports(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) bool {
+    for (root_artifact.provided_exports.exports) |provided| {
+        switch (provided) {
+            .data => return true,
+            .procedure => {},
         }
     }
     return false;
@@ -4094,9 +3930,6 @@ fn processDevObjectSnapshot(
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
-    const static_data_exports = try snapshotNativeStaticDataExports(allocator, root_artifact);
-    defer deinitSnapshotNativeStaticDataExports(allocator, static_data_exports);
-
     var lowered: ?lir.CheckedPipeline.LoweredProgram = null;
     defer if (lowered) |*lowered_program| lowered_program.deinit();
 
@@ -4129,7 +3962,7 @@ fn processDevObjectSnapshot(
         entrypoints_owned = true;
     }
 
-    if (entrypoints.len == 0 and static_data_exports.len == 0) {
+    if (entrypoints.len == 0 and !snapshotHasProvidedDataExports(root_artifact)) {
         std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;
     }
@@ -4150,11 +3983,28 @@ fn processDevObjectSnapshot(
         const target: RocTarget = @enumFromInt(field.value);
         hash_results[i].target_name = field.name;
 
-        const arch = target.toCpuArch();
-        if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
+        target_snapshot: {
+            const arch = target.toCpuArch();
+            if (arch != .x86_64 and arch != .aarch64 and arch != .aarch64_be) {
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+                break :target_snapshot;
+            }
+
             const lir_store = if (lowered) |*lowered_program| &lowered_program.lir_result.store else &empty_lir_store;
             const layout_store = if (lowered) |*lowered_program| &lowered_program.lir_result.layouts else &empty_layout_store;
             const proc_specs = if (lowered) |*lowered_program| lowered_program.lir_result.store.getProcSpecs() else &.{};
+            const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
+                allocator,
+                root_artifact,
+                target,
+            ) catch |err| {
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+                break :target_snapshot;
+            };
+            defer compile.static_data_exports.deinitProvidedDataExports(allocator, static_data_exports);
 
             if (object_compiler.compileToObjectFile(
                 lir_store,
@@ -4175,9 +4025,6 @@ fn processDevObjectSnapshot(
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
             }
-        } else {
-            hash_results[i].hash_hex = undefined;
-            hash_results[i].supported = false;
         }
     }
 

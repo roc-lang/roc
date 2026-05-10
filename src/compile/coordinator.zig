@@ -896,7 +896,10 @@ pub const Coordinator = struct {
     pub fn executableRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
         if (self.findRootModule(.platform)) |platform_root| {
             if (platform_root.mod.checkedArtifact()) |artifact| {
-                if (artifact.platform_required_bindings.bindings.len > 0 or artifact.root_requests.requests.len > 0) {
+                if (artifact.platform_required_bindings.bindings.len > 0 or
+                    artifact.root_requests.requests.len > 0 or
+                    artifact.provided_exports.exports.len > 0)
+                {
                     return artifact;
                 }
             }
