@@ -5022,8 +5022,10 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved callable construction plan is attached to a different value during emission assignment");
         }
         const selected = self.currentSelectedMember(callable.*, construction.*, class_set);
+        const selected_member = self.memberInClassSet(class_set, selected);
         construction.callable_set_key = class_key;
-        construction.selected_member = self.memberIdInClassSet(class_set, selected);
+        construction.selected_member = selected_member.member;
+        construction.target_instance = selected_member.target_instance;
     }
 
     fn currentSelectedMember(
@@ -5077,16 +5079,16 @@ const CallableEmissionAssigner = struct {
         }
     }
 
-    fn memberIdInClassSet(
+    fn memberInClassSet(
         _: *CallableEmissionAssigner,
         class_set: *const CallableClassSet,
         selected: repr.CanonicalCallableSetMember,
-    ) repr.CallableSetMemberId {
+    ) repr.CanonicalCallableSetMember {
         for (class_set.members.items) |member| {
-            if (callableSetMemberEquivalent(member, selected)) return member.member;
+            if (callableSetMemberEquivalent(member, selected)) return member;
         }
         for (class_set.members.items) |member| {
-            if (callableSetMemberSameIdentity(member, selected)) return member.member;
+            if (callableSetMemberSameIdentity(member, selected)) return member;
         }
         lambdaInvariant("lambda-solved callable construction selected member missing from solved class callable set");
     }
@@ -7803,7 +7805,22 @@ const ValueTransformFinalizer = struct {
         const target_id = construction_snapshot.target_instance;
         const target_instance = self.procInstance(target_id);
         if (target_id != member.target_instance) {
-            lambdaInvariant("lambda-solved callable construction target instance differs from selected member instance");
+            const member_instance = self.procInstance(member.target_instance);
+            lambdaInvariantFmt(
+                "lambda-solved callable construction target instance differs from selected member instance: construction={d} value={d} target={d} target_materialized={} member_target={d} member_materialized={} selected_member={d} same_proc={} same_callable={} same_exec_key={}",
+                .{
+                    @intFromEnum(construction_id),
+                    @intFromEnum(value_id),
+                    @intFromEnum(target_id),
+                    target_instance.materialized,
+                    @intFromEnum(member.target_instance),
+                    member_instance.materialized,
+                    @intFromEnum(construction_snapshot.selected_member),
+                    canonical.mirProcedureRefEql(target_instance.proc, member_instance.proc),
+                    canonical.procedureCallableRefEql(target_instance.proc.callable, member_instance.proc.callable),
+                    repr.executableSpecializationKeyEql(target_instance.executable_specialization_key, member_instance.executable_specialization_key),
+                },
+            );
         }
         if (!canonical.mirProcedureRefEql(target_instance.proc, member.source_proc)) {
             lambdaInvariant("lambda-solved callable construction target instance differs from selected member source");
