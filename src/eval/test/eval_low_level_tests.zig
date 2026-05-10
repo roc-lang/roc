@@ -751,7 +751,7 @@ pub const tests = [_]TestCase{
         \\
         \\    for range_str in ranges {
         \\        (start, end) = parse_pair(range_str)?
-        \\        $sum = $sum + start.len() + end.len()
+        \\        $sum = $sum + start.to_utf8().len() + end.to_utf8().len()
         \\    }
         \\
         \\    Ok($sum)

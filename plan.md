@@ -11361,10 +11361,10 @@ fn finalizeValueAliases(value: ValueInfo) void {
 
 This is not a fallback and not a late body scan. The source-match branch
 reachability bit is explicit lambda-solved metadata published while lowering the
-`match`, and finalized from solved representation groups before executable
-value-transform finalization runs. Executable MIR then consumes only reachable
-branches and only finalized transforms for reachable runtime variable
-occurrences.
+`match`, and finalized from explicit value/path selected-tag summaries after
+representation solving and before executable value-transform finalization runs.
+Executable MIR then consumes only reachable branches and only finalized
+transforms for reachable runtime variable occurrences.
 
 This distinction is required for correctness. For example, a `match` over a tag
 payload that contains a boxed erased callable can create internal aliases whose
@@ -22928,6 +22928,101 @@ handle. A finalized payload is one whose reachable graph contains no constrained
 flex, unresolved rigid, generalized variable, pending payload, unclosed row
 tail, unclosed tag-union tail, or `mono_specialization` numeric variable.
 
+Extension-position row tails are different from ordinary runtime type
+variables. A record or tag-union extension tail may be represented by either a
+flex variable or a rigid variable in the checked graph. If graph finalization has
+connected every demand on that row and the extension-position variable has no
+remaining constraints, mono closes that extension tail to the explicit empty row:
+`{}` for records and `[]` for tag unions. This closure is legal only at a record
+or tag-union extension edge. The same variable payload would still be illegal if
+it were required as an ordinary runtime value type, list element type, tuple
+element type, function argument type, function return type, `Box(T)` payload, or
+nominal argument. This is what makes values like `List.first([8.U8])` lower to a
+closed result shape after all match-pattern demands have been connected:
+
+```roc
+main = {
+    list : List(U8)
+    list = [8.U8, 7.U8]
+
+    match list.first() {
+        Err(_) => 0.U8
+        Ok(first) => first
+    }
+}
+```
+
+The checked `List.first` target type is:
+
+```roc
+List(item) -> Try(item, [ListWasEmpty, ..])
+```
+
+After the receiver binds `item = U8`, no later demand observes additional error
+tags. The extension-position tail closes to empty, so mono finalizes the
+scrutinee as `Try(U8, [ListWasEmpty])`. This is not tag-shape repair and not
+pattern syntax recovery. It is row finalization of an explicit checked
+extension edge after all graph demands have been connected.
+
+Constrained runtime variables must also be finalized before value emission. If
+a required runtime type is still a constrained flex or rigid variable after all
+direct concrete edges have been connected, mono may resolve it only from the
+checked static-dispatch constraints already published on that variable. The
+algorithm is:
+
+1. Read the variable's published `CheckedStaticDispatchConstraint` rows.
+2. Use the checked method registry to compute the intersection of method owners
+   that publish every required method.
+3. Require the intersection to contain exactly one owner.
+4. For each constraint, look up that owner's checked method target and unify the
+   constraint function type with the target callable type in the same
+   specialization-local graph.
+5. Materialize the variable only after those unifications bind it to a concrete
+   source type.
+
+This is explicit graph solving, not a heuristic over source syntax or method
+spelling. Mono must not assume that `value.to_utf8()` means `value : Str`
+because of the identifier text. It may conclude `value : Str` only when the
+checked artifact says the variable has a `to_utf8` static-dispatch constraint
+and the checked method registry says exactly one method owner satisfies the full
+constraint set. If zero owners or multiple owners satisfy the constraints, the
+program was ambiguous or invalid before artifact publication; after checking,
+that is a compiler bug handled by debug assertion and release `unreachable`.
+
+For example:
+
+```roc
+main = {
+    parse_pair = |range_str| {
+        match range_str.split_on("-") {
+            [start, end] => Ok((start, end))
+            _ => Err(InvalidRangeFormat)
+        }
+    }
+
+    part2 = |ranges| {
+        var $sum = 0
+
+        for range_str in ranges {
+            (start, end) = parse_pair(range_str)?
+            $sum = $sum + start.to_utf8().len() + end.to_utf8().len()
+        }
+
+        Ok($sum)
+    }
+
+    part2(["11-22"])
+}
+```
+
+The tuple binders `start` and `end` carry explicit checked `to_utf8`
+constraints before mono emits values. Graph finalization resolves those
+variables through the checked method registry, unifies the `Str.to_utf8`
+callable type with each constraint function type, and only then materializes the
+tuple payload as `(Str, Str)`. Mono must not materialize those constrained
+variables as `{}`, and it must not postpone the decision until a backend or
+interpreter sees the value.
+
 The finalized mono specialization graph owns concrete source-type slots for at
 least:
 
@@ -23199,6 +23294,8 @@ operations:
 - consuming checked-artifact-published instantiated alias and nominal backings
   without trying to rediscover wrapper formal parameters
 - resolving mono static dispatch targets and unifying target function types
+- resolving required constrained runtime variables by intersecting their
+  checked static-dispatch constraints against the checked method registry
 - resolving numeric defaults for `mono_specialization` numeric variables
 - closing truly-unobserved row and tag-union tails to explicit zero-field
   payloads
@@ -27505,7 +27602,7 @@ group-level selected-tag table records only the branch-local `Err` constructors,
 then `part2` incorrectly lowers the `Ok` arm of `?` to `unreachable` even though
 runtime produces `Ok`. That is a compiler bug.
 
-Lambda-solved MIR must publish a selected-tag summary table whose key is an
+Lambda-solved MIR must answer selected-tag summary queries whose key is an
 explicit value path:
 
 ```zig
@@ -27537,6 +27634,16 @@ The exact Zig names may differ, but the ownership must not:
 - Multiple possible tags are represented as multiple `TagSelection` entries.
 - Zero-payload tags still publish selected-tag summaries. Payload vacancy alone
   is not reachability.
+
+The implementation does not need to allocate a permanent selected-tag summary
+table for every reachable value/path pair. The long-term ideal is to compute
+these summaries from already-published value metadata at the moment
+source-match reachability asks for them, optionally memoizing individual
+`SelectedTagPathKey` queries when that is measurably useful. The required
+semantic boundary is the query key and its explicit data sources, not a
+particular storage strategy. A permanent eager table is allowed only if it is
+populated from the same explicit metadata and does not reintroduce
+representation-group selected-tag state.
 
 The selected-tag summary rules are:
 

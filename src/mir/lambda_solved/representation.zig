@@ -1569,6 +1569,7 @@ pub const ValueInfo = struct {
     value_alias_source: ?ValueInfoId = null,
     value_alias_needs_executable_transform: bool = false,
     value_alias_transform: ?ValueTransformBoundaryId = null,
+    nominal_backing_value: ?ValueInfoId = null,
     projection_info: ?ProjectionInfoId = null,
     join_info: ?JoinInfoId = null,
     callable: ?CallableValueInfo = null,

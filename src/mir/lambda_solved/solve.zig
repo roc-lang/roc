@@ -59,6 +59,13 @@ pub const ExecutableSyntheticProcInstance = struct {
     representation_instance: repr.ProcRepresentationInstanceId,
 };
 
+const ProcedureCaptureSource = struct {
+    target_instance: repr.ProcRepresentationInstanceId,
+    slot: u32,
+    source_store: repr.ValueInfoStoreId,
+    source_value: repr.ValueInfoId,
+};
+
 /// Public `Program` declaration.
 pub const Program = struct {
     allocator: Allocator,
@@ -78,6 +85,7 @@ pub const Program = struct {
     solve_sessions: std.ArrayList(repr.RepresentationSolveSession),
     proc_instances: std.ArrayList(repr.ProcRepresentationInstance),
     value_stores: std.ArrayList(repr.ValueInfoStore),
+    procedure_capture_sources: std.ArrayList(ProcedureCaptureSource),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -98,10 +106,12 @@ pub const Program = struct {
             .solve_sessions = .empty,
             .proc_instances = .empty,
             .value_stores = .empty,
+            .procedure_capture_sources = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.procedure_capture_sources.deinit(self.allocator);
         for (self.value_stores.items) |*store| {
             store.deinit();
         }
@@ -3540,7 +3550,8 @@ const CrossProcedureRepresentationLinker = struct {
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
                 .kind = .function_return,
             });
-            for (source_captures, target_captures) |source_capture, target_capture| {
+            for (source_captures, target_captures, 0..) |source_capture, target_capture, raw_slot| {
+                try self.publishProcedureCaptureSource(target_id, @intCast(raw_slot), source_capture);
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(source_capture) },
                     .to = .{ .procedure_public = self.publicRootRef(target_id, target, target_capture) },
@@ -3548,6 +3559,30 @@ const CrossProcedureRepresentationLinker = struct {
                 });
             }
         }
+    }
+
+    fn publishProcedureCaptureSource(
+        self: *CrossProcedureRepresentationLinker,
+        target_instance: repr.ProcRepresentationInstanceId,
+        slot: u32,
+        source_value: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        const source: ProcedureCaptureSource = .{
+            .target_instance = target_instance,
+            .slot = slot,
+            .source_store = self.record.value_store,
+            .source_value = source_value,
+        };
+        for (self.program.procedure_capture_sources.items) |existing| {
+            if (existing.target_instance == source.target_instance and
+                existing.slot == source.slot and
+                existing.source_store == source.source_store and
+                existing.source_value == source.source_value)
+            {
+                return;
+            }
+        }
+        try self.program.procedure_capture_sources.append(self.program.allocator, source);
     }
 
     fn publicRootRef(
@@ -3894,8 +3929,6 @@ fn finalizeSourceMatchBranchReachability(
             .records = records,
             .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
             .session = session,
-            .group_states = .empty,
-            .group_state_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
         };
         defer finalizer.deinit();
         try finalizer.finalize();
@@ -3908,29 +3941,62 @@ const SourceMatchReachabilityFinalizer = struct {
     records: []const ProcBuildRecord,
     session_id: repr.RepresentationSolveSessionId,
     session: *repr.RepresentationSolveSession,
-    group_states: std.ArrayList(GroupTagInhabitance),
-    group_state_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
 
     const TagSelection = struct {
         union_shape: MonoRow.TagUnionShapeId,
         tag: MonoRow.TagId,
     };
 
-    const GroupTagInhabitance = struct {
-        group: repr.RepresentationGroupId,
+    const SelectedTagSummary = struct {
         tags: std.ArrayList(TagSelection),
         unknown: bool = false,
+
+        fn init() SelectedTagSummary {
+            return .{ .tags = .empty };
+        }
+
+        fn unknownSummary() SelectedTagSummary {
+            return .{ .tags = .empty, .unknown = true };
+        }
+
+        fn deinit(self: *SelectedTagSummary, allocator: Allocator) void {
+            self.tags.deinit(allocator);
+        }
+
+        fn add(self: *SelectedTagSummary, allocator: Allocator, selection: TagSelection) Allocator.Error!void {
+            if (self.unknown) return;
+            for (self.tags.items) |existing| {
+                if (sameTagSelection(existing, selection)) return;
+            }
+            try self.tags.append(allocator, selection);
+        }
+
+        fn mergeExact(self: *SelectedTagSummary, allocator: Allocator, other: SelectedTagSummary) Allocator.Error!void {
+            if (self.unknown) return;
+            if (other.unknown or other.tags.items.len == 0) {
+                self.unknown = true;
+                self.tags.clearRetainingCapacity();
+                return;
+            }
+            for (other.tags.items) |selection| {
+                try self.add(allocator, selection);
+            }
+        }
+    };
+
+    const SelectedTagPathStep = union(enum) {
+        record_field: MonoRow.RecordFieldId,
+        tuple_elem: u32,
+        tag_payload: MonoRow.TagPayloadId,
+        list_elem,
+        nominal_backing,
     };
 
     fn deinit(self: *SourceMatchReachabilityFinalizer) void {
-        for (self.group_states.items) |*state| state.tags.deinit(self.allocator);
-        self.group_state_index.deinit();
-        self.group_states.deinit(self.allocator);
+        _ = self;
     }
 
     fn finalize(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
-        try self.collectSelectedTagInhabitance();
-        try self.markRootParameterUnknowns();
         for (self.session.members) |instance| {
             const record = self.recordForInstance(instance);
             if (!record.materialized) continue;
@@ -3949,77 +4015,6 @@ const SourceMatchReachabilityFinalizer = struct {
         }
     }
 
-    fn collectSelectedTagInhabitance(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
-        for (self.session.members) |instance| {
-            const record = self.recordForInstance(instance);
-            const value_store = self.valueStoreFor(record);
-            for (value_store.values.items) |value| {
-                if (!self.typeCanContainTagUnion(value.logical_ty)) continue;
-                const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match reachability saw value without solved group");
-                if (value.aggregate) |aggregate| {
-                    const tag = switch (aggregate) {
-                        .tag => |tag| tag,
-                        else => continue,
-                    };
-                    try self.addSelectedTag(group, .{
-                        .union_shape = tag.union_shape,
-                        .tag = tag.tag,
-                    });
-                    continue;
-                }
-                if (self.valueInheritsSelectedTagSet(value)) continue;
-                try self.markGroupUnknown(group);
-            }
-        }
-    }
-
-    fn valueInheritsSelectedTagSet(
-        self: *const SourceMatchReachabilityFinalizer,
-        value: repr.ValueInfo,
-    ) bool {
-        if (value.source_match_branch != null) {
-            return true;
-        }
-        if (value.value_alias_source != null or
-            value.projection_info != null or
-            value.join_info != null)
-        {
-            return true;
-        }
-        return switch (self.session.representation_store.rootKind(value.root)) {
-            .procedure_capture => true,
-            else => false,
-        };
-    }
-
-    fn markRootParameterUnknowns(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
-        if (self.program.root_instances.items.len == 0) {
-            for (self.session.members) |instance| {
-                try self.markInstanceParamsUnknown(instance);
-            }
-            return;
-        }
-        for (self.program.root_instances.items) |root_instance| {
-            try self.markInstanceParamsUnknown(root_instance);
-        }
-    }
-
-    fn markInstanceParamsUnknown(
-        self: *SourceMatchReachabilityFinalizer,
-        instance_id: repr.ProcRepresentationInstanceId,
-    ) Allocator.Error!void {
-        const record = self.recordForInstance(instance_id);
-        if (record.solve_session != self.session_id) return;
-        const value_store = self.valueStoreFor(record);
-        const params = value_store.sliceValueSpan(record.public_roots.params);
-        for (params) |param| {
-            const value = value_store.values.items[@intFromEnum(param)];
-            if (!self.typeCanContainTagUnion(value.logical_ty)) continue;
-            const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match reachability saw root param without solved group");
-            try self.markGroupUnknown(group);
-        }
-    }
-
     fn finalizeExpr(
         self: *SourceMatchReachabilityFinalizer,
         expr_id: Ast.ExprId,
@@ -4035,7 +4030,10 @@ const SourceMatchReachabilityFinalizer = struct {
                     const branch_ref = branch.source_match_branch orelse {
                         lambdaInvariant("lambda-solved source-match branch had no published branch identity");
                     };
-                    const reachable = self.patternReachable(branch.pat, value_store);
+                    const scrutinee = self.program.ast.exprs.items[@intFromEnum(match_.cond)].value_info;
+                    var path = std.ArrayList(SelectedTagPathStep).empty;
+                    defer path.deinit(self.allocator);
+                    const reachable = try self.patternReachableAtPath(branch.pat, scrutinee, &path, value_store);
                     value_store.setSourceMatchBranchReachable(branch_ref, reachable);
                     if (!reachable) continue;
                     if (branch.guard) |guard| try self.finalizeExpr(guard, value_store);
@@ -4129,48 +4127,52 @@ const SourceMatchReachabilityFinalizer = struct {
         }
     }
 
-    fn patternReachable(
+    fn patternReachableAtPath(
         self: *SourceMatchReachabilityFinalizer,
         pat_id: Ast.PatId,
+        source_value: repr.ValueInfoId,
+        path: *std.ArrayList(SelectedTagPathStep),
         value_store: *const repr.ValueInfoStore,
-    ) bool {
+    ) Allocator.Error!bool {
         const pat = self.program.ast.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
             .tag => |tag| {
-                const value = value_store.values.items[@intFromEnum(pat.value_info)];
-                const group = value.solved_group orelse lambdaInvariant("lambda-solved source-match pattern had no solved group");
-                if (!self.groupCanContainTag(group, .{
+                if (!try self.valuePathCanContainTag(source_value, path.items, value_store, .{
                     .union_shape = tag.union_shape,
                     .tag = tag.tag,
                 })) return false;
                 const payloads = self.program.ast.sliceTagPayloadPatternSpan(tag.payloads);
                 for (payloads) |payload| {
-                    if (!self.patternReachable(payload.pattern, value_store)) return false;
+                    try path.append(self.allocator, .{ .tag_payload = payload.payload });
+                    defer _ = path.pop();
+                    if (!try self.patternReachableAtPath(payload.pattern, source_value, path, value_store)) return false;
                 }
             },
-            .nominal => |child| return self.patternReachable(child, value_store),
-            .tuple => |items| for (self.program.ast.slicePatSpan(items)) |item| {
-                if (!self.patternReachable(item, value_store)) return false;
+            .nominal => |child| {
+                try path.append(self.allocator, .nominal_backing);
+                defer _ = path.pop();
+                return try self.patternReachableAtPath(child, source_value, path, value_store);
+            },
+            .tuple => |items| for (self.program.ast.slicePatSpan(items), 0..) |item, i| {
+                try path.append(self.allocator, .{ .tuple_elem = @intCast(i) });
+                defer _ = path.pop();
+                if (!try self.patternReachableAtPath(item, source_value, path, value_store)) return false;
             },
             .record => |record| {
                 for (self.program.ast.sliceRecordFieldPatternSpan(record.fields)) |field| {
-                    if (!self.patternReachable(field.pattern, value_store)) return false;
-                }
-                if (record.rest) |rest| {
-                    if (!self.patternReachable(rest, value_store)) return false;
+                    try path.append(self.allocator, .{ .record_field = field.field });
+                    defer _ = path.pop();
+                    if (!try self.patternReachableAtPath(field.pattern, source_value, path, value_store)) return false;
                 }
             },
             .list => |list| {
                 for (self.program.ast.slicePatSpan(list.items)) |item| {
-                    if (!self.patternReachable(item, value_store)) return false;
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pat| {
-                        if (!self.patternReachable(rest_pat, value_store)) return false;
-                    }
+                    try path.append(self.allocator, .list_elem);
+                    defer _ = path.pop();
+                    if (!try self.patternReachableAtPath(item, source_value, path, value_store)) return false;
                 }
             },
-            .as => |as| return self.patternReachable(as.pattern, value_store),
+            .as => |as| return try self.patternReachableAtPath(as.pattern, source_value, path, value_store),
             .bool_lit,
             .int_lit,
             .frac_f32_lit,
@@ -4184,74 +4186,203 @@ const SourceMatchReachabilityFinalizer = struct {
         return true;
     }
 
-    fn groupCanContainTag(
+    fn valuePathCanContainTag(
         self: *SourceMatchReachabilityFinalizer,
-        group: repr.RepresentationGroupId,
+        value: repr.ValueInfoId,
+        path: []const SelectedTagPathStep,
+        value_store: *const repr.ValueInfoStore,
         selection: TagSelection,
-    ) bool {
-        const state = self.groupState(group) orelse return true;
-        if (state.unknown or state.tags.items.len == 0) return true;
-        for (state.tags.items) |tag| {
-            if (tag.union_shape == selection.union_shape and tag.tag == selection.tag) return true;
+    ) Allocator.Error!bool {
+        var summary = try self.selectedTagSummary(value, path, value_store, value_store.values.items.len + path.len + 1);
+        defer summary.deinit(self.allocator);
+        if (summary.unknown or summary.tags.items.len == 0) return true;
+        for (summary.tags.items) |tag| {
+            if (sameTagSelection(tag, selection)) return true;
         }
         return false;
     }
 
-    fn addSelectedTag(
+    fn selectedTagSummary(
         self: *SourceMatchReachabilityFinalizer,
-        group: repr.RepresentationGroupId,
-        selection: TagSelection,
-    ) Allocator.Error!void {
-        const state = try self.ensureGroupState(group);
-        for (state.tags.items) |existing| {
-            if (existing.union_shape == selection.union_shape and existing.tag == selection.tag) return;
+        value: repr.ValueInfoId,
+        path: []const SelectedTagPathStep,
+        value_store: *const repr.ValueInfoStore,
+        remaining: usize,
+    ) Allocator.Error!SelectedTagSummary {
+        if (remaining == 0) return SelectedTagSummary.unknownSummary();
+        const info = value_store.values.items[@intFromEnum(value)];
+        if (info.value_alias_source) |source| {
+            return try self.selectedTagSummary(source, path, value_store, remaining - 1);
         }
-        try state.tags.append(self.allocator, selection);
-    }
-
-    fn markGroupUnknown(
-        self: *SourceMatchReachabilityFinalizer,
-        group: repr.RepresentationGroupId,
-    ) Allocator.Error!void {
-        const state = try self.ensureGroupState(group);
-        state.unknown = true;
-    }
-
-    fn ensureGroupState(
-        self: *SourceMatchReachabilityFinalizer,
-        group: repr.RepresentationGroupId,
-    ) Allocator.Error!*GroupTagInhabitance {
-        if (self.group_state_index.get(group)) |index| return &self.group_states.items[index];
-        const index = self.group_states.items.len;
-        try self.group_states.append(self.allocator, .{
-            .group = group,
-            .tags = .empty,
-        });
-        try self.group_state_index.put(group, index);
-        return &self.group_states.items[index];
-    }
-
-    fn groupState(
-        self: *SourceMatchReachabilityFinalizer,
-        group: repr.RepresentationGroupId,
-    ) ?*const GroupTagInhabitance {
-        const index = self.group_state_index.get(group) orelse return null;
-        return &self.group_states.items[index];
-    }
-
-    fn typeCanContainTagUnion(
-        self: *SourceMatchReachabilityFinalizer,
-        ty: Type.TypeVarId,
-    ) bool {
-        const root = self.program.types.unlinkConst(ty);
-        return switch (self.program.types.getNode(root)) {
-            .nominal => |nominal| self.typeCanContainTagUnion(nominal.backing),
-            .content => |content| switch (content) {
-                .tag_union => true,
-                else => false,
+        if (info.projection_info) |projection_id| {
+            const projection = value_store.projections.items[@intFromEnum(projection_id)];
+            return try self.selectedTagSummaryWithPrependedStep(
+                projection.source,
+                projectionStep(projection.kind),
+                path,
+                value_store,
+                remaining - 1,
+            );
+        }
+        if (info.nominal_backing_value) |backing| {
+            if (path.len == 0) return SelectedTagSummary.unknownSummary();
+            switch (path[0]) {
+                .nominal_backing => return try self.selectedTagSummary(backing, path[1..], value_store, remaining - 1),
+                else => {},
+            }
+        }
+        if (info.join_info) |join_id| {
+            return try self.joinSelectedTagSummary(join_id, path, value_store, remaining - 1);
+        }
+        switch (self.session.representation_store.rootKind(info.root)) {
+            .procedure_capture => |capture| {
+                return try self.procedureCaptureSelectedTagSummary(capture.instance, capture.slot, path, remaining - 1);
             },
-            else => false,
+            else => {},
+        }
+        if (info.aggregate) |aggregate| {
+            return try self.aggregateSelectedTagSummary(aggregate, path, value_store, remaining - 1);
+        }
+        return SelectedTagSummary.unknownSummary();
+    }
+
+    fn selectedTagSummaryWithPrependedStep(
+        self: *SourceMatchReachabilityFinalizer,
+        value: repr.ValueInfoId,
+        step: SelectedTagPathStep,
+        suffix: []const SelectedTagPathStep,
+        value_store: *const repr.ValueInfoStore,
+        remaining: usize,
+    ) Allocator.Error!SelectedTagSummary {
+        var path = std.ArrayList(SelectedTagPathStep).empty;
+        defer path.deinit(self.allocator);
+        try path.append(self.allocator, step);
+        try path.appendSlice(self.allocator, suffix);
+        return try self.selectedTagSummary(value, path.items, value_store, remaining);
+    }
+
+    fn joinSelectedTagSummary(
+        self: *SourceMatchReachabilityFinalizer,
+        join_id: repr.JoinInfoId,
+        path: []const SelectedTagPathStep,
+        value_store: *const repr.ValueInfoStore,
+        remaining: usize,
+    ) Allocator.Error!SelectedTagSummary {
+        const join = value_store.joins.items[@intFromEnum(join_id)];
+        var result = SelectedTagSummary.init();
+        var saw_input = false;
+        for (value_store.sliceJoinInputSpan(join.inputs)) |input| {
+            if (!joinInputReachable(input, value_store)) continue;
+            var input_summary = try self.selectedTagSummary(input.value, path, value_store, remaining);
+            defer input_summary.deinit(self.allocator);
+            try result.mergeExact(self.allocator, input_summary);
+            if (result.unknown) return result;
+            saw_input = true;
+        }
+        if (!saw_input) result.unknown = true;
+        return result;
+    }
+
+    fn procedureCaptureSelectedTagSummary(
+        self: *SourceMatchReachabilityFinalizer,
+        target_instance: repr.ProcRepresentationInstanceId,
+        slot: u32,
+        path: []const SelectedTagPathStep,
+        remaining: usize,
+    ) Allocator.Error!SelectedTagSummary {
+        var result = SelectedTagSummary.init();
+        var saw_source = false;
+        for (self.program.procedure_capture_sources.items) |source| {
+            if (source.target_instance != target_instance or source.slot != slot) continue;
+            const source_store = self.valueStoreById(source.source_store);
+            const source_info = source_store.values.items[@intFromEnum(source.source_value)];
+            if (!source_store.valueSourceMatchBranchReachable(source_info)) continue;
+            var source_summary = try self.selectedTagSummary(source.source_value, path, source_store, remaining);
+            defer source_summary.deinit(self.allocator);
+            try result.mergeExact(self.allocator, source_summary);
+            if (result.unknown) return result;
+            saw_source = true;
+        }
+        if (!saw_source) result.unknown = true;
+        return result;
+    }
+
+    fn aggregateSelectedTagSummary(
+        self: *SourceMatchReachabilityFinalizer,
+        aggregate: repr.AggregateValueInfo,
+        path: []const SelectedTagPathStep,
+        value_store: *const repr.ValueInfoStore,
+        remaining: usize,
+    ) Allocator.Error!SelectedTagSummary {
+        if (path.len == 0) {
+            var summary = SelectedTagSummary.init();
+            switch (aggregate) {
+                .tag => |tag| try summary.add(self.allocator, .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                }),
+                else => summary.unknown = true,
+            }
+            return summary;
+        }
+        const child = aggregateChildValue(aggregate, path[0]) orelse return SelectedTagSummary.unknownSummary();
+        return try self.selectedTagSummary(child, path[1..], value_store, remaining);
+    }
+
+    fn aggregateChildValue(
+        aggregate: repr.AggregateValueInfo,
+        step: SelectedTagPathStep,
+    ) ?repr.ValueInfoId {
+        return switch (step) {
+            .record_field => |field| switch (aggregate) {
+                .record => |record| for (record.fields) |field_info| {
+                    if (field_info.field == field) break field_info.value;
+                } else null,
+                else => null,
+            },
+            .tuple_elem => |index| switch (aggregate) {
+                .tuple => |tuple| for (tuple) |elem| {
+                    if (elem.index == index) break elem.value;
+                } else null,
+                else => null,
+            },
+            .tag_payload => |payload| switch (aggregate) {
+                .tag => |tag| for (tag.payloads) |payload_info| {
+                    if (payload_info.payload == payload) break payload_info.value;
+                } else null,
+                else => null,
+            },
+            .list_elem => switch (aggregate) {
+                .list => |list| if (list.elems.len == 1) list.elems[0].value else null,
+                else => null,
+            },
+            .nominal_backing => null,
         };
+    }
+
+    fn joinInputReachable(input: repr.JoinInputInfo, value_store: *const repr.ValueInfoStore) bool {
+        return switch (input.source) {
+            .source_match_branch => |branch| value_store.sourceMatchBranchReachable(.{
+                .match = branch.match,
+                .branch = branch.branch,
+                .alternative = branch.alternative,
+            }),
+            .if_branch,
+            .loop_phi,
+            => true,
+        };
+    }
+
+    fn projectionStep(kind: repr.ProjectionKind) SelectedTagPathStep {
+        return switch (kind) {
+            .record_field => |field| .{ .record_field = field },
+            .tuple_elem => |index| .{ .tuple_elem = index },
+            .tag_payload => |payload| .{ .tag_payload = payload },
+        };
+    }
+
+    fn sameTagSelection(a: TagSelection, b: TagSelection) bool {
+        return a.union_shape == b.union_shape and a.tag == b.tag;
     }
 
     fn recordForInstance(
@@ -4265,15 +4396,22 @@ const SourceMatchReachabilityFinalizer = struct {
         return &self.records[index];
     }
 
-    fn valueStoreFor(
+    fn valueStoreById(
         self: *SourceMatchReachabilityFinalizer,
-        record: *const ProcBuildRecord,
+        store_id: repr.ValueInfoStoreId,
     ) *repr.ValueInfoStore {
-        const index = @intFromEnum(record.value_store);
+        const index = @intFromEnum(store_id);
         if (index >= self.program.value_stores.items.len) {
             lambdaInvariant("lambda-solved source-match reachability referenced missing value store");
         }
         return &self.program.value_stores.items[index];
+    }
+
+    fn valueStoreFor(
+        self: *SourceMatchReachabilityFinalizer,
+        record: *const ProcBuildRecord,
+    ) *repr.ValueInfoStore {
+        return self.valueStoreById(record.value_store);
     }
 };
 
@@ -13482,6 +13620,12 @@ const BodySolver = struct {
             },
             else => lambdaInvariant("lambda-solved nominal reinterpret result had unresolved non-nominal type"),
         };
+        const nominal_info = &self.value_store.values.items[@intFromEnum(nominal_value)];
+        if (nominal_info.nominal_backing_value) |existing| {
+            if (existing != backing_value) lambdaInvariant("lambda-solved nominal value already points at a different backing value");
+        } else {
+            nominal_info.nominal_backing_value = backing_value;
+        }
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(nominal_value) },
             .to = .{ .local = self.valueRoot(backing_value) },

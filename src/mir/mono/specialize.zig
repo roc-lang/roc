@@ -2387,6 +2387,9 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         if (self.substitutions.get(id)) |concrete| return try self.materializeConcreteRef(concrete);
         if (self.materialized_template_roots.get(id)) |existing| return existing;
+        if (try self.resolveConstrainedTemplateVariableFromRegistry(id)) |concrete| {
+            return try self.materializeConcreteRef(concrete);
+        }
 
         const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
         try self.materialized_template_roots.put(id, local_root);
@@ -2447,6 +2450,7 @@ const TypeInstantiator = struct {
         if (self.substitutions.get(ext)) |concrete| return try self.materializeConcreteRecordExt(concrete);
         return switch (self.templatePayload(ext)) {
             .flex => |flex| try self.materializeEmptyRecordRowTail(flex),
+            .rigid => |rigid| try self.materializeEmptyRecordRowTail(rigid),
             else => try self.materializeTemplateType(ext),
         };
     }
@@ -2458,6 +2462,7 @@ const TypeInstantiator = struct {
         if (self.substitutions.get(ext)) |concrete| return try self.materializeConcreteTagUnionExt(concrete);
         return switch (self.templatePayload(ext)) {
             .flex => |flex| try self.materializeEmptyTagUnionRowTail(flex),
+            .rigid => |rigid| try self.materializeEmptyTagUnionRowTail(rigid),
             else => try self.materializeTemplateType(ext),
         };
     }
@@ -4281,17 +4286,17 @@ const TypeInstantiator = struct {
 
     fn materializeEmptyRecordRowTail(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
-        try self.verifyClosableRowTail(flex);
+        try self.verifyClosableRowTail(variable);
         return try self.materializeSyntheticPayload(.empty_record);
     }
 
     fn materializeEmptyTagUnionRowTail(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
-        try self.verifyClosableRowTail(flex);
+        try self.verifyClosableRowTail(variable);
         return try self.materializeSyntheticPayload(.empty_tag_union);
     }
 
@@ -4347,9 +4352,9 @@ const TypeInstantiator = struct {
 
     fn verifyClosableRowTail(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!void {
-        try self.verifyUnconstrainedFlex(flex);
+        try self.verifyUnconstrainedFlex(variable);
     }
 
     fn verifyUnconstrainedFlex(
@@ -4360,6 +4365,144 @@ const TypeInstantiator = struct {
         if (self.isMonoSpecializationNumericFlex(flex)) return;
         if (try self.isEqualityOnlyFlex(flex)) return;
         invariantViolation("mono specialization reached a constrained flex variable where a concrete runtime type was required");
+    }
+
+    fn resolveConstrainedTemplateVariableFromRegistry(
+        self: *TypeInstantiator,
+        id: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        const variable = switch (self.templatePayload(id)) {
+            .flex => |flex| flex,
+            .rigid => |rigid| rigid,
+            else => return null,
+        };
+        if (variable.constraints.len == 0) return null;
+        if (self.isMonoSpecializationNumericFlex(variable)) return null;
+        if (try self.isEqualityOnlyFlex(variable)) return null;
+
+        const owner = (try self.uniqueStaticDispatchOwnerForConstraints(variable.constraints)) orelse {
+            invariantViolation("mono specialization could not resolve constrained variable to one checked method owner");
+        };
+
+        for (variable.constraints) |constraint| {
+            const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            const target = (try lookupStaticDispatchMethodTarget(
+                self.input,
+                self.name_resolver,
+                owner,
+                method,
+            )) orelse invariantViolation("mono specialization checked method owner did not publish required method target");
+            const target_callable = try self.concreteRefForMethodTargetCallable(target);
+            try self.unifyTemplateWithConcrete(constraint.fn_ty, target_callable);
+        }
+
+        const concrete = self.substitutions.get(id) orelse {
+            invariantViolation("mono specialization resolved constrained variable owner but did not bind the variable");
+        };
+        return self.resolveConcreteRef(concrete);
+    }
+
+    fn uniqueStaticDispatchOwnerForConstraints(
+        self: *TypeInstantiator,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error!?static_dispatch.MethodOwner {
+        if (constraints.len == 0) return null;
+        const first_method = try self.name_resolver.methodName(self.template_artifact, constraints[0].fn_name);
+
+        var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
+        defer candidates.deinit(self.allocator);
+
+        try self.appendStaticDispatchOwnerCandidates(
+            self.input.root.artifact.key,
+            &self.input.root.artifact.method_registry,
+            first_method,
+            &candidates,
+        );
+        for (self.input.imports) |imported| {
+            try self.appendStaticDispatchOwnerCandidates(
+                imported.key,
+                imported.method_registry,
+                first_method,
+                &candidates,
+            );
+        }
+        for (self.input.root.relation_artifacts) |related| {
+            try self.appendStaticDispatchOwnerCandidates(
+                related.key,
+                related.method_registry,
+                first_method,
+                &candidates,
+            );
+        }
+
+        var selected: ?static_dispatch.MethodOwner = null;
+        for (candidates.items) |candidate| {
+            if (!try self.ownerSatisfiesAllStaticDispatchConstraints(candidate, constraints)) continue;
+            if (selected) |existing| {
+                if (!methodOwnerEql(existing, candidate)) {
+                    invariantViolation("mono specialization constrained variable matched multiple checked method owners");
+                }
+                continue;
+            }
+            selected = candidate;
+        }
+        return selected;
+    }
+
+    fn appendStaticDispatchOwnerCandidates(
+        self: *TypeInstantiator,
+        registry_artifact: checked_artifact.CheckedModuleArtifactKey,
+        registry: *const static_dispatch.MethodRegistry,
+        method: canonical.MethodNameId,
+        candidates: *std.ArrayList(static_dispatch.MethodOwner),
+    ) Allocator.Error!void {
+        for (registry.entries) |entry| {
+            const entry_method = try self.name_resolver.methodName(registry_artifact, entry.key.method);
+            if (entry_method != method) continue;
+            const owner = try self.name_resolver.methodOwner(registry_artifact, entry.key.owner);
+            for (candidates.items) |existing| {
+                if (methodOwnerEql(existing, owner)) break;
+            } else {
+                try candidates.append(self.allocator, owner);
+            }
+        }
+    }
+
+    fn ownerSatisfiesAllStaticDispatchConstraints(
+        self: *TypeInstantiator,
+        owner: static_dispatch.MethodOwner,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error!bool {
+        for (constraints) |constraint| {
+            const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            if ((try lookupStaticDispatchMethodTarget(
+                self.input,
+                self.name_resolver,
+                owner,
+                method,
+            )) == null) return false;
+        }
+        return true;
+    }
+
+    fn concreteRefForMethodTargetCallable(
+        self: *TypeInstantiator,
+        method_target: static_dispatch.MethodTarget,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const template = method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template");
+        const target_artifact = artifactKeyForRef(self.input, template.artifact) orelse {
+            debug.invariant(false, "mono static dispatch method target artifact was not available");
+            unreachable;
+        };
+        const checked_types = checkedTypesForKey(self.input, target_artifact) orelse {
+            debug.invariant(false, "mono static dispatch method target checked types were not available");
+            unreachable;
+        };
+        return try self.program.concrete_source_types.registerArtifactRoot(
+            target_artifact,
+            checked_types,
+            method_target.callable_ty,
+        );
     }
 
     fn isEqualityOnlyFlex(
@@ -4439,6 +4582,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         return switch (self.concretePayload(ext)) {
             .flex => |flex| try self.materializeEmptyRecordRowTail(flex),
+            .rigid => |rigid| try self.materializeEmptyRecordRowTail(rigid),
             else => try self.materializeConcreteRef(ext),
         };
     }
@@ -4449,6 +4593,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         return switch (self.concretePayload(ext)) {
             .flex => |flex| try self.materializeEmptyTagUnionRowTail(flex),
+            .rigid => |rigid| try self.materializeEmptyTagUnionRowTail(rigid),
             else => try self.materializeConcreteRef(ext),
         };
     }
@@ -6513,9 +6658,27 @@ const BodyLowerer = struct {
                     plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan"),
                 );
             },
+            .match_ => |match| if (match.is_try_suffix)
+                try self.trySuffixResultType(match.cond)
+            else
+                try self.concreteTypeInfoForChecked(fallback_checked_ty),
             .list => |items| try self.listResultTypeFromKnownItems(fallback_checked_ty, items),
             else => try self.concreteTypeInfoForChecked(fallback_checked_ty),
         };
+    }
+
+    fn trySuffixResultType(
+        self: *BodyLowerer,
+        cond: checked_artifact.CheckedExprId,
+    ) Allocator.Error!ConcreteTypeInfo {
+        const cond_info = try self.concreteResultTypeForExpr(cond, self.checkedExpr(cond).ty);
+        const ok_label = try self.program.canonical_names.internTagLabel("Ok");
+        const payload_infos = try self.concreteTagPayloadInfosForUnionType(cond_info.source_ref, ok_label);
+        defer if (payload_infos.len != 0) self.allocator.free(payload_infos);
+        if (payload_infos.len != 1) {
+            invariantViolation("mono body lowering expected try suffix Ok branch to have exactly one payload");
+        }
+        return payload_infos[0];
     }
 
     fn lowerParamPattern(
@@ -8511,7 +8674,7 @@ const BodyLowerer = struct {
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!Ast.ExprId {
-        var dispatch_instantiator = try self.type_instantiator.fork();
+        var dispatch_instantiator = self.freshDispatchInstantiator();
         defer dispatch_instantiator.deinit();
 
         const previous_instantiator = self.type_instantiator;
@@ -8525,7 +8688,7 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!ConcreteTypeInfo {
-        var dispatch_instantiator = try self.type_instantiator.fork();
+        var dispatch_instantiator = self.freshDispatchInstantiator();
         defer dispatch_instantiator.deinit();
 
         const previous_instantiator = self.type_instantiator;
@@ -8533,6 +8696,17 @@ const BodyLowerer = struct {
         defer self.type_instantiator = previous_instantiator;
 
         return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id);
+    }
+
+    fn freshDispatchInstantiator(self: *BodyLowerer) TypeInstantiator {
+        return TypeInstantiator.init(
+            self.allocator,
+            self.input,
+            self.program,
+            self.type_instantiator.template_types,
+            self.name_resolver,
+            self.type_instantiator.template_artifact,
+        );
     }
 
     fn staticDispatchResultTypeInCurrentInstantiation(
