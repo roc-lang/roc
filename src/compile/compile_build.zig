@@ -51,6 +51,14 @@ const is_freestanding = threading.is_freestanding;
 const Mutex = threading.Mutex;
 const ThreadCondition = threading.Condition;
 
+/// Which checked-artifact publication work a build should do after ordinary
+/// checking has produced typed modules.
+pub const PostCheckPublicationMode = enum {
+    none,
+    platform_relations,
+    executable_artifacts,
+};
+
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
@@ -145,11 +153,15 @@ pub const BuildEnv = struct {
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
-    /// Source tooling type-checks modules and reports diagnostics, but it must
-    /// not force executable platform/app relation publication. That relation is
-    /// post-check lowering input for valid executable builds; invalid in-editor
-    /// programs should produce diagnostics, not compiler invariant panics.
-    finalize_executable_artifacts: bool = true,
+    /// Controls which checked-artifact publication work runs after ordinary
+    /// checking has completed.
+    ///
+    /// Executable builds need the full platform/app executable relation because
+    /// later MIR/LIR stages consume it as lowering input. `roc check` needs the
+    /// type-level platform/app validation, but must not republish executable
+    /// platform roots; diagnostic-only checking must not force MIR/LIR lowering
+    /// of declarations that are not part of a valid executable program.
+    post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -347,7 +359,11 @@ pub const BuildEnv = struct {
     }
 
     pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
-        self.finalize_executable_artifacts = enabled;
+        self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
+    }
+
+    pub fn setPostCheckPublicationMode(self: *BuildEnv, mode: PostCheckPublicationMode) void {
+        self.post_check_publication_mode = mode;
     }
 
     /// Build an app file specifically (validates it's an app)
@@ -568,8 +584,12 @@ pub const BuildEnv = struct {
 
         // Run coordinator loop
         try coord.coordinatorLoop();
-        if (self.finalize_executable_artifacts and !coord.hasUserErrors()) {
-            try coord.finalizeExecutableArtifacts();
+        if (!coord.hasUserErrors()) {
+            switch (self.post_check_publication_mode) {
+                .none => {},
+                .platform_relations => try coord.validatePlatformAppRelationsForCheck(),
+                .executable_artifacts => try coord.finalizeExecutableArtifacts(),
+            }
         }
 
         if (comptime trace_build) {

@@ -8300,6 +8300,28 @@ pub const PlatformAppRelation = struct {
     }
 };
 
+/// Public `PlatformRequirementTypeMismatch` declaration.
+pub const PlatformRequirementTypeMismatch = struct {
+    declaration: PlatformRequiredDeclaration,
+    app_value: TopLevelValueRef,
+    expected: CheckedTypeId,
+    actual: CheckedTypeId,
+};
+
+/// Public `PlatformAppRelationBuildResult` declaration.
+pub const PlatformAppRelationBuildResult = union(enum) {
+    relation: PlatformAppRelation,
+    type_mismatch: PlatformRequirementTypeMismatch,
+
+    pub fn deinit(self: *PlatformAppRelationBuildResult, allocator: Allocator) void {
+        switch (self.*) {
+            .relation => |*relation| relation.deinit(allocator),
+            .type_mismatch => {},
+        }
+        self.* = undefined;
+    }
+};
+
 /// Public `PlatformRequirementRelation` declaration.
 pub const PlatformRequirementRelation = struct {
     id: PlatformRequirementRelationId,
@@ -8856,7 +8878,7 @@ pub fn buildPlatformAppRelation(
     platform_declaration_artifact: *const CheckedModuleArtifact,
     platform_module_env: *const ModuleEnv,
     app_artifact: *const CheckedModuleArtifact,
-) Allocator.Error!PlatformAppRelation {
+) Allocator.Error!PlatformAppRelationBuildResult {
     const declarations = platform_declaration_artifact.platform_required_declarations.declarations;
     const relations = try allocator.alloc(PlatformRequirementRelationInput, declarations.len);
     errdefer allocator.free(relations);
@@ -8892,6 +8914,26 @@ pub fn buildPlatformAppRelation(
             .artifact = app_artifact.key,
             .pattern = app_value.pattern,
         };
+        const expected_root = platformRequiredDeclarationRoot(platform_declaration_artifact, declaration);
+        const actual_root = checkedTypeRootForScheme(app_artifact, app_value.source_scheme);
+        if (!try platformRequirementTypesCompatible(
+            allocator,
+            platform_declaration_artifact,
+            expected_root,
+            app_artifact,
+            actual_root,
+        )) {
+            allocator.free(relations);
+            for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+            allocator.free(bindings);
+            initialized_bindings = 0;
+            return .{ .type_mismatch = .{
+                .declaration = declaration,
+                .app_value = app_value_ref,
+                .expected = expected_root,
+                .actual = actual_root,
+            } };
+        }
         const required_ty_is_function = sourceVarIsFunction(&platform_module_env.types, ModuleEnv.varFrom(declaration.type_anno));
         const value_kind: PlatformRequiredValueKind = if (required_ty_is_function) .procedure_value else .const_value;
 
@@ -8976,13 +9018,384 @@ pub fn buildPlatformAppRelation(
         initialized_bindings += 1;
     }
 
-    return .{
+    return .{ .relation = .{
         .key = relation_key,
         .requirement_context = requirement_context,
         .platform_module_idx = platform_declaration_artifact.module_identity.module_idx,
         .app_artifact = app_artifact.key,
         .relations = relations,
         .bindings = bindings,
+    } };
+}
+
+fn platformRequiredDeclarationRoot(
+    artifact: *const CheckedModuleArtifact,
+    declaration: PlatformRequiredDeclaration,
+) CheckedTypeId {
+    const module_env = artifact.moduleEnvConst();
+    if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
+        checkedArtifactInvariant("platform requirement declaration references an out-of-range required type", .{});
+    }
+    return (artifact.checked_types.schemeForKey(declaration.declared_source_ty) orelse
+        checkedArtifactInvariant("platform requirement declaration has no published checked type scheme", .{})).root;
+}
+
+fn checkedTypeRootForScheme(
+    artifact: *const CheckedModuleArtifact,
+    scheme_key: canonical.CanonicalTypeSchemeKey,
+) CheckedTypeId {
+    return (artifact.checked_types.schemeForKey(scheme_key) orelse
+        checkedArtifactInvariant("checked type scheme missing from artifact", .{})).root;
+}
+
+fn platformRequirementTypesCompatible(
+    allocator: Allocator,
+    platform_artifact: *const CheckedModuleArtifact,
+    expected: CheckedTypeId,
+    app_artifact: *const CheckedModuleArtifact,
+    actual: CheckedTypeId,
+) Allocator.Error!bool {
+    var scratch_names = canonical.CanonicalNameStore.init(allocator);
+    defer scratch_names.deinit();
+
+    var scratch_store = CheckedTypeStore{};
+    defer scratch_store.deinit(allocator);
+
+    var platform_projector = CheckedTypeStoreImportProjector.init(
+        allocator,
+        &scratch_store,
+        &scratch_names,
+        importedView(platform_artifact),
+    );
+    defer platform_projector.deinit();
+    const scratch_expected = try platform_projector.project(expected);
+
+    var app_projector = CheckedTypeStoreImportProjector.init(
+        allocator,
+        &scratch_store,
+        &scratch_names,
+        importedView(app_artifact),
+    );
+    defer app_projector.deinit();
+    const scratch_actual = try app_projector.project(actual);
+
+    var checker = PlatformRequirementTypeCompatibilityChecker.init(allocator, &scratch_store);
+    defer checker.deinit();
+    return try checker.compatible(scratch_expected, scratch_actual);
+}
+
+const PlatformRequirementTypePair = struct {
+    expected: u32,
+    actual: u32,
+};
+
+const PlatformRequirementTypeCompatibilityChecker = struct {
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    active: std.AutoHashMap(PlatformRequirementTypePair, void),
+
+    fn init(
+        allocator: Allocator,
+        store: *const CheckedTypeStore,
+    ) PlatformRequirementTypeCompatibilityChecker {
+        return .{
+            .allocator = allocator,
+            .store = store,
+            .active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *PlatformRequirementTypeCompatibilityChecker) void {
+        self.active.deinit();
+    }
+
+    fn compatible(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        expected: CheckedTypeId,
+        actual: CheckedTypeId,
+    ) Allocator.Error!bool {
+        const pair = PlatformRequirementTypePair{
+            .expected = @intFromEnum(expected),
+            .actual = @intFromEnum(actual),
+        };
+        if (self.active.contains(pair)) return true;
+        try self.active.put(pair, {});
+        defer _ = self.active.remove(pair);
+
+        const expected_payload = self.payload(expected);
+        const actual_payload = self.payload(actual);
+        if (checkedTypePayloadIsIdentity(expected_payload) or checkedTypePayloadIsIdentity(actual_payload)) {
+            return true;
+        }
+
+        switch (expected_payload) {
+            .alias => |alias| return try self.compatible(alias.backing, actual),
+            else => {},
+        }
+        switch (actual_payload) {
+            .alias => |alias| return try self.compatible(expected, alias.backing),
+            else => {},
+        }
+
+        return switch (expected_payload) {
+            .pending => checkedArtifactInvariant("platform requirement type compatibility reached pending expected payload", .{}),
+            .flex, .rigid, .alias => unreachable,
+            .empty_record => self.compatibleRecord(expected_payload, actual_payload),
+            .record, .record_unbound => self.compatibleRecord(expected_payload, actual_payload),
+            .empty_tag_union => self.compatibleTagUnion(expected_payload, actual_payload),
+            .tag_union => self.compatibleTagUnion(expected_payload, actual_payload),
+            .tuple => |expected_items| blk: {
+                const actual_items = switch (actual_payload) {
+                    .tuple => |items| items,
+                    else => break :blk false,
+                };
+                if (expected_items.len != actual_items.len) break :blk false;
+                for (expected_items, actual_items) |expected_item, actual_item| {
+                    if (!try self.compatible(expected_item, actual_item)) break :blk false;
+                }
+                break :blk true;
+            },
+            .function => |expected_fn| blk: {
+                const actual_fn = switch (actual_payload) {
+                    .function => |function| function,
+                    else => break :blk false,
+                };
+                if (expected_fn.args.len != actual_fn.args.len) break :blk false;
+                if (!functionKindsCompatible(expected_fn.kind, actual_fn.kind)) break :blk false;
+                for (expected_fn.args, actual_fn.args) |expected_arg, actual_arg| {
+                    if (!try self.compatible(expected_arg, actual_arg)) break :blk false;
+                }
+                break :blk try self.compatible(expected_fn.ret, actual_fn.ret);
+            },
+            .nominal => |expected_nominal| self.compatibleNominal(expected, expected_nominal, actual, actual_payload),
+        };
+    }
+
+    fn compatibleNominal(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        expected: CheckedTypeId,
+        expected_nominal: CheckedNominalType,
+        actual: CheckedTypeId,
+        actual_payload: CheckedTypePayload,
+    ) Allocator.Error!bool {
+        const actual_nominal = switch (actual_payload) {
+            .nominal => |nominal| nominal,
+            else => {
+                if (expected_nominal.is_opaque or expected_nominal.builtin != null) return false;
+                return try self.compatible(expected_nominal.backing, actual);
+            },
+        };
+        if (expected_nominal.name != actual_nominal.name) return false;
+        if (expected_nominal.origin_module != actual_nominal.origin_module) return false;
+        if (expected_nominal.builtin != actual_nominal.builtin) return false;
+        if (expected_nominal.is_opaque != actual_nominal.is_opaque) return false;
+        if (expected_nominal.args.len != actual_nominal.args.len) return false;
+        for (expected_nominal.args, actual_nominal.args) |expected_arg, actual_arg| {
+            if (!try self.compatible(expected_arg, actual_arg)) return false;
+        }
+        if (expected_nominal.is_opaque) return true;
+        if (try self.compatible(expected_nominal.backing, actual_nominal.backing)) return true;
+        return canonicalTypeKeyEql(
+            self.store.roots[@intFromEnum(expected)].key,
+            self.store.roots[@intFromEnum(actual)].key,
+        );
+    }
+
+    fn compatibleRecord(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        expected_payload: CheckedTypePayload,
+        actual_payload: CheckedTypePayload,
+    ) Allocator.Error!bool {
+        const expected_parts = recordParts(expected_payload) orelse return false;
+        const actual_parts = recordParts(actual_payload) orelse return false;
+        const expected_row = try self.flattenRecordRow(expected_parts.fields, expected_parts.ext);
+        defer expected_row.deinit(self.allocator);
+        const actual_row = try self.flattenRecordRow(actual_parts.fields, actual_parts.ext);
+        defer actual_row.deinit(self.allocator);
+
+        for (expected_row.fields) |expected_field| {
+            const actual_field = findRecordFieldById(actual_row.fields, expected_field.name) orelse {
+                if (actual_row.tail) |tail| {
+                    if (checkedTypePayloadIsIdentity(self.payload(tail))) continue;
+                }
+                return false;
+            };
+            if (!try self.compatible(expected_field.ty, actual_field.ty)) return false;
+        }
+
+        if (expected_row.tail) |tail| {
+            if (checkedTypePayloadIsIdentity(self.payload(tail))) return true;
+        }
+        for (actual_row.fields) |actual_field| {
+            if (findRecordFieldById(expected_row.fields, actual_field.name) != null) continue;
+            return false;
+        }
+        return actual_row.tail == null;
+    }
+
+    fn compatibleTagUnion(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        expected_payload: CheckedTypePayload,
+        actual_payload: CheckedTypePayload,
+    ) Allocator.Error!bool {
+        const expected_union = tagUnionParts(expected_payload) orelse return false;
+        const actual_union = tagUnionParts(actual_payload) orelse return false;
+        const expected_row = try self.flattenTagRow(expected_union.tags, expected_union.ext);
+        defer expected_row.deinit(self.allocator);
+        const actual_row = try self.flattenTagRow(actual_union.tags, actual_union.ext);
+        defer actual_row.deinit(self.allocator);
+
+        for (expected_row.tags) |expected_tag| {
+            const actual_tag = findTagById(actual_row.tags, expected_tag.name) orelse {
+                if (actual_row.tail) |tail| {
+                    if (checkedTypePayloadIsIdentity(self.payload(tail))) continue;
+                }
+                return false;
+            };
+            if (expected_tag.args.len != actual_tag.args.len) return false;
+            for (expected_tag.args, actual_tag.args) |expected_arg, actual_arg| {
+                if (!try self.compatible(expected_arg, actual_arg)) return false;
+            }
+        }
+
+        if (expected_row.tail) |tail| {
+            if (checkedTypePayloadIsIdentity(self.payload(tail))) return true;
+        }
+        for (actual_row.tags) |actual_tag| {
+            if (findTagById(expected_row.tags, actual_tag.name) != null) continue;
+            return false;
+        }
+        return actual_row.tail == null;
+    }
+
+    const FlattenedRecordRow = struct {
+        fields: []const CheckedRecordField,
+        tail: ?CheckedTypeId,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.fields.len > 0) allocator.free(self.fields);
+        }
+    };
+
+    fn flattenRecordRow(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        head: []const CheckedRecordField,
+        ext: ?CheckedTypeId,
+    ) Allocator.Error!FlattenedRecordRow {
+        var fields = std.ArrayList(CheckedRecordField).empty;
+        errdefer fields.deinit(self.allocator);
+        try fields.appendSlice(self.allocator, head);
+        var tail = ext;
+        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (seen.contains(tail_id)) checkedArtifactInvariant("platform requirement record row compatibility reached a cyclic row", .{});
+            try seen.put(tail_id, {});
+            switch (self.payload(tail_id)) {
+                .empty_record => {
+                    tail = null;
+                    break;
+                },
+                .record => |record| {
+                    try fields.appendSlice(self.allocator, record.fields);
+                    tail = record.ext;
+                },
+                .record_unbound => |tail_fields| {
+                    try fields.appendSlice(self.allocator, tail_fields);
+                    tail = null;
+                    break;
+                },
+                .alias => |alias| tail = alias.backing,
+                else => break,
+            }
+        }
+        return .{ .fields = try fields.toOwnedSlice(self.allocator), .tail = tail };
+    }
+
+    const FlattenedTagRow = struct {
+        tags: []const CheckedTag,
+        tail: ?CheckedTypeId,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.tags.len > 0) allocator.free(self.tags);
+        }
+    };
+
+    fn flattenTagRow(
+        self: *PlatformRequirementTypeCompatibilityChecker,
+        head: []const CheckedTag,
+        ext: ?CheckedTypeId,
+    ) Allocator.Error!FlattenedTagRow {
+        var tags = std.ArrayList(CheckedTag).empty;
+        errdefer tags.deinit(self.allocator);
+        try tags.appendSlice(self.allocator, head);
+        var tail = ext;
+        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (seen.contains(tail_id)) checkedArtifactInvariant("platform requirement tag row compatibility reached a cyclic row", .{});
+            try seen.put(tail_id, {});
+            switch (self.payload(tail_id)) {
+                .empty_tag_union => {
+                    tail = null;
+                    break;
+                },
+                .tag_union => |tag_union| {
+                    try tags.appendSlice(self.allocator, tag_union.tags);
+                    tail = tag_union.ext;
+                },
+                .alias => |alias| tail = alias.backing,
+                else => break,
+            }
+        }
+        return .{ .tags = try tags.toOwnedSlice(self.allocator), .tail = tail };
+    }
+
+    fn payload(self: *const PlatformRequirementTypeCompatibilityChecker, root: CheckedTypeId) CheckedTypePayload {
+        const index: usize = @intFromEnum(root);
+        if (index >= self.store.payloads.len) {
+            checkedArtifactInvariant("platform requirement type compatibility referenced missing checked type payload", .{});
+        }
+        return self.store.payloads[index];
+    }
+};
+
+fn findRecordFieldById(
+    fields: []const CheckedRecordField,
+    name: canonical.RecordFieldLabelId,
+) ?CheckedRecordField {
+    for (fields) |field| {
+        if (field.name == name) return field;
+    }
+    return null;
+}
+
+fn findTagById(
+    tags: []const CheckedTag,
+    name: canonical.TagLabelId,
+) ?CheckedTag {
+    for (tags) |tag| {
+        if (tag.name == name) return tag;
+    }
+    return null;
+}
+
+fn functionKindsCompatible(expected: CheckedFunctionKind, actual: CheckedFunctionKind) bool {
+    const finalized_expected = finalizedFunctionKind(expected);
+    const finalized_actual = finalizedFunctionKind(actual);
+    return finalized_expected == finalized_actual or finalized_expected == .effectful and finalized_actual == .pure;
+}
+
+const RelationTagUnionParts = struct {
+    tags: []const CheckedTag,
+    ext: ?CheckedTypeId,
+};
+
+fn tagUnionParts(payload: CheckedTypePayload) ?RelationTagUnionParts {
+    return switch (payload) {
+        .tag_union => |tag_union| .{ .tags = tag_union.tags, .ext = tag_union.ext },
+        .empty_tag_union => .{ .tags = &.{}, .ext = null },
+        else => null,
     };
 }
 
@@ -9616,6 +10029,155 @@ fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
         .flex, .rigid => true,
         else => false,
     };
+}
+
+/// Public `formatCheckedTypeAlloc` function.
+pub fn formatCheckedTypeAlloc(
+    allocator: Allocator,
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+) Allocator.Error![]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(allocator);
+    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    try writeCheckedType(allocator, artifact, root, &buf, &active);
+    return try buf.toOwnedSlice(allocator);
+}
+
+fn writeCheckedType(
+    allocator: Allocator,
+    artifact: *const CheckedModuleArtifact,
+    root: CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!void {
+    if (active.contains(root)) {
+        try buf.appendSlice(allocator, "<recursive>");
+        return;
+    }
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    const index: usize = @intFromEnum(root);
+    if (index >= artifact.checked_types.payloads.len) {
+        checkedArtifactInvariant("checked type formatter referenced a missing payload", .{});
+    }
+    switch (artifact.checked_types.payloads[index]) {
+        .pending => checkedArtifactInvariant("checked type formatter reached pending payload", .{}),
+        .flex => |flex| try writeCheckedTypeVar(allocator, flex, buf),
+        .rigid => |rigid| try writeCheckedTypeVar(allocator, rigid, buf),
+        .alias => |alias| try writeCheckedType(allocator, artifact, alias.backing, buf, active),
+        .empty_record => try buf.appendSlice(allocator, "{}"),
+        .record => |record| try writeCheckedRecordType(allocator, artifact, record.fields, record.ext, buf, active),
+        .record_unbound => |fields| try writeCheckedRecordType(allocator, artifact, fields, null, buf, active),
+        .tuple => |items| {
+            try buf.append(allocator, '(');
+            for (items, 0..) |item, i| {
+                if (i > 0) try buf.appendSlice(allocator, ", ");
+                try writeCheckedType(allocator, artifact, item, buf, active);
+            }
+            try buf.append(allocator, ')');
+        },
+        .nominal => |nominal| {
+            try buf.appendSlice(allocator, artifact.canonical_names.typeNameText(nominal.name));
+            if (nominal.args.len > 0) {
+                try buf.append(allocator, '(');
+                for (nominal.args, 0..) |arg, i| {
+                    if (i > 0) try buf.appendSlice(allocator, ", ");
+                    try writeCheckedType(allocator, artifact, arg, buf, active);
+                }
+                try buf.append(allocator, ')');
+            }
+        },
+        .function => |function| {
+            if (function.args.len == 0) {
+                try buf.appendSlice(allocator, "{}");
+            } else {
+                for (function.args, 0..) |arg, i| {
+                    if (i > 0) try buf.appendSlice(allocator, ", ");
+                    try writeCheckedType(allocator, artifact, arg, buf, active);
+                }
+            }
+            try buf.appendSlice(allocator, if (finalizedFunctionKind(function.kind) == .effectful) " => " else " -> ");
+            try writeCheckedType(allocator, artifact, function.ret, buf, active);
+        },
+        .empty_tag_union => try buf.appendSlice(allocator, "[]"),
+        .tag_union => |tag_union| try writeCheckedTagUnionType(allocator, artifact, tag_union.tags, tag_union.ext, buf, active),
+    }
+}
+
+fn writeCheckedTypeVar(
+    allocator: Allocator,
+    variable: CheckedTypeVariable,
+    buf: *std.ArrayList(u8),
+) Allocator.Error!void {
+    if (variable.name) |name| {
+        try buf.appendSlice(allocator, name);
+    } else {
+        try buf.appendSlice(allocator, "_");
+    }
+}
+
+fn writeCheckedRecordType(
+    allocator: Allocator,
+    artifact: *const CheckedModuleArtifact,
+    fields: []const CheckedRecordField,
+    ext: ?CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!void {
+    try buf.appendSlice(allocator, "{");
+    var first = true;
+    for (fields) |field| {
+        if (!first) try buf.appendSlice(allocator, ",");
+        first = false;
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, artifact.canonical_names.recordFieldLabelText(field.name));
+        try buf.appendSlice(allocator, " : ");
+        try writeCheckedType(allocator, artifact, field.ty, buf, active);
+    }
+    if (ext) |ext_id| {
+        if (!first) try buf.appendSlice(allocator, ",");
+        try buf.appendSlice(allocator, " .. ");
+        try writeCheckedType(allocator, artifact, ext_id, buf, active);
+    } else if (!first) {
+        try buf.append(allocator, ' ');
+    }
+    try buf.append(allocator, '}');
+}
+
+fn writeCheckedTagUnionType(
+    allocator: Allocator,
+    artifact: *const CheckedModuleArtifact,
+    tags: []const CheckedTag,
+    ext: CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedTypeId, void),
+) Allocator.Error!void {
+    try buf.append(allocator, '[');
+    for (tags, 0..) |tag, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
+        try buf.appendSlice(allocator, artifact.canonical_names.tagLabelText(tag.name));
+        if (tag.args.len > 0) {
+            try buf.append(allocator, '(');
+            for (tag.args, 0..) |arg, arg_i| {
+                if (arg_i > 0) try buf.appendSlice(allocator, ", ");
+                try writeCheckedType(allocator, artifact, arg, buf, active);
+            }
+            try buf.append(allocator, ')');
+        }
+    }
+    const has_ext = switch (artifact.checked_types.payloads[@intFromEnum(ext)]) {
+        .empty_tag_union => false,
+        else => true,
+    };
+    if (has_ext) {
+        if (tags.len > 0) try buf.appendSlice(allocator, ", ");
+        try buf.appendSlice(allocator, ".. ");
+        try writeCheckedType(allocator, artifact, ext, buf, active);
+    }
+    try buf.append(allocator, ']');
 }
 
 const RelationRecordParts = struct {

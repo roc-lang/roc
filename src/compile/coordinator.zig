@@ -860,13 +860,26 @@ pub const Coordinator = struct {
             unreachable;
         };
 
-        var relation = try check.CheckedArtifact.buildPlatformAppRelation(
+        var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
             platform_declaration_artifact,
             platform_root.mod.moduleEnv().?,
             app_artifact,
         );
-        defer relation.deinit(self.gpa);
+        defer relation_result.deinit(self.gpa);
+
+        const relation = switch (relation_result) {
+            .relation => |relation| relation,
+            .type_mismatch => |mismatch| {
+                try self.appendPlatformRequirementTypeMismatchReport(
+                    app_root.mod,
+                    platform_declaration_artifact,
+                    app_artifact,
+                    mismatch,
+                );
+                return;
+            },
+        };
 
         const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
             check.CheckedArtifact.importedView(app_artifact),
@@ -875,6 +888,93 @@ pub const Coordinator = struct {
             .relation_artifacts = &relation_artifacts,
             .platform_app_relation = relation,
         });
+    }
+
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) !void {
+        if (self.hasUserErrors()) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
+            }
+            unreachable;
+        }
+
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
+        const platform_root = self.findRootModule(.platform) orelse return;
+
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing platform declaration artifact", .{});
+            }
+            unreachable;
+        };
+        const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
+
+        try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
+            .platform_requirement_context = requirement_context,
+        });
+
+        const app_artifact = app_root.mod.checkedArtifact() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck missing app artifact after co-finalization", .{});
+            }
+            unreachable;
+        };
+
+        var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
+            self.gpa,
+            platform_declaration_artifact,
+            platform_root.mod.moduleEnv().?,
+            app_artifact,
+        );
+        defer relation_result.deinit(self.gpa);
+
+        switch (relation_result) {
+            .relation => {},
+            .type_mismatch => |mismatch| try self.appendPlatformRequirementTypeMismatchReport(
+                app_root.mod,
+                platform_declaration_artifact,
+                app_artifact,
+                mismatch,
+            ),
+        }
+    }
+
+    fn appendPlatformRequirementTypeMismatchReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
+    ) !void {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const required_name = platform_artifact.canonical_names.exportNameText(mismatch.declaration.platform_name);
+        try report.document.addText("The app provides ");
+        try report.document.addAnnotated(required_name, .inline_code);
+        try report.document.addText(" with a type that does not match the platform's ");
+        try report.document.addAnnotated("requires", .inline_code);
+        try report.document.addText(" entry.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const actual = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, app_artifact, mismatch.actual);
+        defer self.gpa.free(actual);
+        try report.document.addText("The app provides:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const expected = try check.CheckedArtifact.formatCheckedTypeAlloc(self.gpa, platform_artifact, mismatch.expected);
+        defer self.gpa.free(expected);
+        try report.document.addText("But the platform requires:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected);
+
+        try app_mod.reports.append(self.gpa, report);
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {

@@ -2039,6 +2039,11 @@ pub fn buildLirRuntimeImageWithCoordinator(
     }
 
     try coord.finalizeExecutableArtifacts();
+    const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
+    if (finalized_counts.errors > 0) {
+        shm.updateHeader();
+        return sharedMemoryResult(&shm, finalized_counts, &.{});
+    }
 
     const root_artifact = coord.executableRootCheckedArtifact();
     const imported_artifacts = try coord.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -5045,7 +5050,6 @@ fn checkFileWithBuildEnv(
     };
 
     build_env.compiler_version = build_options.compiler_version;
-    build_env.setFinalizeExecutableArtifacts(false);
     defer build_env.deinit();
 
     // Set up cache manager if caching is enabled
@@ -5055,6 +5059,7 @@ fn checkFileWithBuildEnv(
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager
     }
+    build_env.setPostCheckPublicationMode(.platform_relations);
 
     if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
