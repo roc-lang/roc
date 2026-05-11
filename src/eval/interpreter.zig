@@ -8941,6 +8941,15 @@ pub const Interpreter = struct {
                     }
                     try collectRigidsFromType(allocator, module, f.ret, rigids, visited);
                 },
+                .nominal_type => |nom| {
+                    // Recurse into the nominal's instantiation args at this site.
+                    // We deliberately do NOT recurse into the nominal's backing — the backing
+                    // uses the declaration's own rigid vars, which are a different scope from the
+                    // rigids we want to collect (those used at the call site, exposed via args).
+                    for (module.types.sliceNominalArgs(nom)) |arg| {
+                        try collectRigidsFromType(allocator, module, arg, rigids, visited);
+                    }
+                },
                 else => {},
             },
             .alias => |alias| {
@@ -9002,6 +9011,14 @@ pub const Interpreter = struct {
                     }
                     try self.collectRigidsFromRuntimeType(allocator, f.ret, rigids, visited);
                 },
+                .nominal_type => |nom| {
+                    // Recurse into the nominal's instantiation args at this site, mirroring
+                    // collectRigidsFromType — we don't traverse the backing because it uses the
+                    // declaration's own rigid vars.
+                    for (self.runtime_types.sliceNominalArgs(nom)) |arg| {
+                        try self.collectRigidsFromRuntimeType(allocator, arg, rigids, visited);
+                    }
+                },
                 else => {},
             },
             .alias => |alias| {
@@ -9052,15 +9069,17 @@ pub const Interpreter = struct {
     }
 
     /// Put a value into flex_type_context, incrementing the generation counter if
-    /// the value for this key is changing. This ensures that translate_cache entries
-    /// from a different polymorphic context are properly invalidated.
+    /// the value for this key is new or changing. This ensures that translate_cache
+    /// entries from a different polymorphic context are properly invalidated — adding
+    /// a fresh mapping changes how downstream lookups resolve, so cached translations
+    /// that pre-date the mapping must not be reused.
     fn putFlexTypeContext(self: *Interpreter, key: ModuleVarKey, rt_var: types.Var) Error!void {
-        // Check if there's an existing value that differs
-        if (self.flex_type_context.get(key)) |existing| {
-            if (@intFromEnum(existing) != @intFromEnum(rt_var)) {
-                // Value is changing - increment generation to invalidate stale cache entries
-                self.poly_context_generation +%= 1;
-            }
+        const should_bump = if (self.flex_type_context.get(key)) |existing|
+            @intFromEnum(existing) != @intFromEnum(rt_var)
+        else
+            true; // New entry — bump so stale cache hits don't bypass the new mapping
+        if (should_bump) {
+            self.poly_context_generation +%= 1;
         }
         try self.flex_type_context.put(key, rt_var);
     }
@@ -9527,6 +9546,12 @@ pub const Interpreter = struct {
                             const ct_backing = module.types.getNominalBackingVar(nom);
                             const ct_args = module.types.sliceNominalArgs(nom);
 
+                            // Snapshot the substitution map so a nested nominal translation
+                            // (e.g. List inside Dict's backing) doesn't clobber our caller's
+                            // mappings when it clears the map after translating its own backing.
+                            var saved_translate_rigid_subst = try self.translate_rigid_subst.clone();
+                            defer saved_translate_rigid_subst.deinit();
+
                             // Build rigid → type arg substitution map before translating backing
                             if (ct_args.len > 0) {
                                 // Collect rigids from backing type
@@ -9577,8 +9602,14 @@ pub const Interpreter = struct {
                             const rt_backing = try self.translateTypeVar(module, ct_backing);
                             self.recursive_nominal_placeholder = saved_recursive_nominal;
 
-                            // Clear substitution map for next nominal type
+                            // Restore the caller's substitution map: args use the call-site's
+                            // scope (e.g. a parent nominal's rigids), not this nominal's
+                            // declaration scope which only applied to the backing translation.
                             self.translate_rigid_subst.clearRetainingCapacity();
+                            var saved_subst_iter = saved_translate_rigid_subst.iterator();
+                            while (saved_subst_iter.next()) |saved_entry| {
+                                try self.translate_rigid_subst.put(saved_entry.key_ptr.*, saved_entry.value_ptr.*);
+                            }
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
                             for (ct_args, 0..) |ct_arg, i| {

@@ -33,7 +33,6 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
-const runExpectEmptyListI64 = helpers.runExpectEmptyListI64;
 const runExpectDec = helpers.runExpectDec;
 const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 const runExpectProblem = helpers.runExpectProblem;
@@ -1947,8 +1946,8 @@ test "List.repeat - basic case" {
 }
 
 test "List.repeat - empty case" {
-    // Repeat a value zero times returns empty list
-    try helpers.runExpectEmptyListI64("List.repeat(7.I64, 0)", .no_trace);
+    // Repeat a value zero times returns empty list with the concrete element layout.
+    try helpers.runExpectListI64("List.repeat(7.I64, 0)", &.{}, .no_trace);
 }
 
 test "List.with_capacity - unknown case" {
