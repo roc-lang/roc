@@ -514,6 +514,32 @@ test "splitInputIntoStatements - blank lines between statements are dropped" {
     try expectSplit("a = 1\n\nb = 2", &.{ "a = 1", "b = 2" });
 }
 
+test "splitInputIntoStatements - annotation and decl stay separate" {
+    // The parser sees these as two distinct statements (type_anno + decl),
+    // so they split apart. `step` accepts a bare annotation silently rather
+    // than crashing — see the `paste of annotation + decl` test below.
+    try expectSplit("z : U64\nz = 5", &.{ "z : U64", "z = 5" });
+}
+
+test "Repl - paste of annotation + decl produces single assigned message" {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
+    defer repl.deinit();
+
+    const slices = try repl.splitInputIntoStatements("z : U64\nz = 5");
+    defer repl.freeStatementSlices(slices);
+    try testing.expectEqual(@as(usize, 2), slices.len);
+
+    const r0 = try repl.step(slices[0]);
+    defer alloc.free(r0);
+    try testing.expectEqualStrings("", r0);
+
+    const r1 = try repl.step(slices[1]);
+    defer alloc.free(r1);
+    try testing.expectEqualStrings("assigned `z`", r1);
+}
+
 test "Repl - paste of two assignments processes both" {
     // The end-to-end behavior: when a multi-statement input is fed in as
     // one string (as happens with a bracketed paste), the CLI driver iterates

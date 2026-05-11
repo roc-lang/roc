@@ -463,6 +463,16 @@ pub const Repl = struct {
                 // Return descriptive output for assignments
                 return .{ .definition = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name}) };
             },
+            .annotation => {
+                // A bare type annotation isn't a complete REPL input on its
+                // own. We accept it silently so a paste of `z : U64\nz = 5`
+                // doesn't crash; the body `z = 5` is still picked up as the
+                // assignment. The annotation isn't currently propagated into
+                // the synthesized block — applying it surfaces a separate
+                // dev-backend invariant in MirToLir on opaque-type method
+                // bodies (see `Repl - issue 9258`), so it's dropped here.
+                return .empty;
+            },
             .import => {
                 // Imports are not supported in this implementation
                 return .{ .parse_error = try self.allocator.dupe(u8, "Imports not yet supported") };
@@ -487,6 +497,10 @@ pub const Repl = struct {
 
     const ParseResult = union(enum) {
         assignment: struct {
+            source: []const u8, // Borrowed from input
+            var_name: []const u8, // Borrowed from input
+        },
+        annotation: struct {
             source: []const u8, // Borrowed from input
             var_name: []const u8, // Borrowed from input
         },
@@ -595,6 +609,14 @@ pub const Repl = struct {
                         } };
                     }
                     return ParseResult.expression;
+                },
+                .type_anno => |anno| {
+                    const name_region = stmt_ast.tokens.resolve(anno.name);
+                    const ident_name = module_env.common.source[name_region.start.offset..name_region.end.offset];
+                    return ParseResult{ .annotation = .{
+                        .source = input,
+                        .var_name = ident_name,
+                    } };
                 },
                 .import => return ParseResult.import,
                 .type_decl => return ParseResult.type_decl,
