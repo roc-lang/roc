@@ -4913,7 +4913,17 @@ const BodyLowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         if (try self.lowerCustomStrInspectCallIfAvailable(ret_ty, arg_expr, arg_info)) |custom| return custom;
 
-        return switch (self.program.types.getType(arg_info.ty)) {
+        return try self.lowerDefaultStrInspectIntrinsic(ret_ty, arg_expr, arg_info, self.program.types.getTypePreservingNominal(arg_info.ty));
+    }
+
+    fn lowerDefaultStrInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
+        content: Type.Content,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (content) {
             .primitive => |prim| switch (prim) {
                 .str => try self.lowerUnaryIntrinsicLowLevel(ret_ty, .str_inspect, arg_expr),
                 .bool => try self.lowerBoolInspectIntrinsic(ret_ty, arg_expr),
@@ -4938,8 +4948,11 @@ const BodyLowerer = struct {
             .box => |payload_ty| try self.lowerBoxInspectIntrinsic(ret_ty, arg_expr, arg_info, payload_ty),
             .record => |record| try self.lowerRecordInspectIntrinsic(ret_ty, arg_expr, arg_info, record.fields),
             .tag_union => |tag_union| try self.lowerTagUnionInspectIntrinsic(ret_ty, arg_expr, arg_info, tag_union.tags),
+            .nominal => |nominal| try self.lowerNominalInspectIntrinsic(ret_ty, arg_expr, arg_info, nominal),
             .func => try self.lowerStringLiteralExpr(ret_ty, "<fn>"),
-            else => invariantViolation("Str.inspect intrinsic reached unsupported mono argument type"),
+            .link => invariantViolation("Str.inspect intrinsic reached an unresolved mono type link"),
+            .placeholder => invariantViolation("Str.inspect intrinsic reached an unresolved mono type placeholder"),
+            .unbd => invariantViolation("Str.inspect intrinsic reached an unresolved mono type variable"),
         };
     }
 
@@ -5361,6 +5374,23 @@ const BodyLowerer = struct {
         const inspected = try self.lowerStrInspectCall(ret_ty, unboxed, payload_info);
         const with_open = try self.lowerStrConcatExpr(ret_ty, try self.lowerStringLiteralExpr(ret_ty, "Box("), inspected);
         return try self.lowerStrConcatBytes(ret_ty, with_open, ")");
+    }
+
+    fn lowerNominalInspectIntrinsic(
+        self: *BodyLowerer,
+        ret_ty: Type.TypeId,
+        arg_expr: Ast.ExprId,
+        arg_info: ConcreteTypeInfo,
+        nominal: Type.Nominal,
+    ) Allocator.Error!Ast.ExprId {
+        if (nominal.is_opaque) return try self.lowerStringLiteralExpr(ret_ty, "<opaque>");
+
+        return try self.lowerDefaultStrInspectIntrinsic(
+            ret_ty,
+            arg_expr,
+            arg_info,
+            self.program.types.getType(nominal.backing),
+        );
     }
 
     fn lowerTagUnionInspectIntrinsic(
@@ -10245,7 +10275,7 @@ const BodyLowerer = struct {
 
     fn callableFromTopLevelBinding(
         self: *BodyLowerer,
-        owner: checked_artifact.CheckedModuleArtifactKey,
+        _: checked_artifact.CheckedModuleArtifactKey,
         bindings: *const checked_artifact.TopLevelProcedureBindingTable,
         binding_ref: checked_artifact.TopLevelProcedureBindingRef,
         binding_key: checked_artifact.ProcedureBindingRef,
@@ -10257,7 +10287,7 @@ const BodyLowerer = struct {
                 .template = direct.template,
                 .source_fn_ty = requested_key,
             },
-            .callable_eval_template => try self.callableFromCallableBindingInstance(owner, binding_key, requested_key),
+            .callable_eval_template => try self.callableFromCallableBindingInstance(self.input.root.artifact.key, binding_key, requested_key),
         };
     }
 
@@ -10278,7 +10308,7 @@ const BodyLowerer = struct {
                             .source_fn_ty = requested_key,
                         },
                         .callable_eval_template => try self.callableFromCallableBindingInstance(
-                            view.key,
+                            self.input.root.artifact.key,
                             .{ .imported = imported },
                             requested_key,
                         ),
@@ -10298,7 +10328,7 @@ const BodyLowerer = struct {
                             .source_fn_ty = requested_key,
                         },
                         .callable_eval_template => try self.callableFromCallableBindingInstance(
-                            view.key,
+                            self.input.root.artifact.key,
                             .{ .imported = imported },
                             requested_key,
                         ),
@@ -10879,7 +10909,7 @@ fn templateForProcedureUse(
     return switch (proc_use.binding) {
         .top_level => |binding_ref| templateFromRootTopLevelBinding(
             input,
-            binding_ref.artifact,
+            input.root.artifact.key,
             topLevelProcedureBindingsForKey(input, binding_ref.artifact) orelse {
                 debug.invariant(false, "mono specialization invariant violated: top-level procedure binding references unavailable artifact");
                 unreachable;
@@ -10895,7 +10925,7 @@ fn templateForProcedureUse(
             };
             return templateFromRootTopLevelBinding(
                 input,
-                required.artifact,
+                input.root.artifact.key,
                 bindings,
                 required.procedure_binding,
                 .{ .platform_required = required },

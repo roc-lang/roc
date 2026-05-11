@@ -144,6 +144,8 @@ const CompilerStageData = struct {
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
     builtin_module: ?BuiltinModule = null,
+    imported_modules: ?[]const *const ModuleEnv = null,
+    auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -166,6 +168,58 @@ const CompilerStageData = struct {
             self.gpa.free(self.buffer);
             self.gpa.destroy(self.env);
         }
+
+        fn loadCompiled(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
+            const CompactWriter = collections.CompactWriter;
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+            @memcpy(buffer, bin_data);
+
+            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
+
+            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
+                serialized_ptr.all_statements.span.start,
+                serialized_ptr.all_statements.span.len,
+            });
+
+            const module_env_ptr = try gpa.create(ModuleEnv);
+            errdefer gpa.destroy(module_env_ptr);
+
+            const base_ptr = @intFromPtr(buffer.ptr);
+
+            logDebug("loadCompiledModule: About to deserialize common\n", .{});
+            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
+
+            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
+            module_env_ptr.* = ModuleEnv{
+                .gpa = gpa,
+                .common = common,
+                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
+                .module_kind = serialized_ptr.module_kind.decode(),
+                .all_defs = serialized_ptr.all_defs,
+                .all_statements = serialized_ptr.all_statements,
+                .exports = serialized_ptr.exports,
+                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
+                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
+                .builtin_statements = serialized_ptr.builtin_statements,
+                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
+                .module_name = module_name_param,
+                .display_module_name_idx = base.Ident.Idx.NONE,
+                .qualified_module_ident = base.Ident.Idx.NONE,
+                .diagnostics = serialized_ptr.diagnostics,
+                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
+                .evaluation_order = null,
+                .idents = ModuleEnv.CommonIdents.find(&common),
+                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+            };
+            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
+            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
+        }
     };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
@@ -182,6 +236,15 @@ const CompilerStageData = struct {
         // Deinit solver first, as it may hold references to other data
         if (self.solver) |*s| {
             s.deinit();
+        }
+
+        if (self.auto_imported_types) |map| {
+            map.deinit();
+            allocator.destroy(map);
+        }
+
+        if (self.imported_modules) |modules| {
+            allocator.free(modules);
         }
 
         // Free pre-generated HTML
@@ -229,6 +292,7 @@ const CompilerStageData = struct {
 /// Global state machine
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
+var cached_builtin_module: ?CompilerStageData.BuiltinModule = null;
 
 /// REPL state management
 const ReplDefinitionKind = enum {
@@ -439,6 +503,23 @@ export fn clearDebugLog() void {
     @memset(debug_log_buffer[0..debug_log_pos], 0); // Optional: clear old data
     debug_log_pos = 0;
     debug_log_oom = false;
+}
+
+fn getCachedBuiltinModule() !*CompilerStageData.BuiltinModule {
+    if (cached_builtin_module == null) {
+        logDebug("compileSource: Loading Builtin module\n", .{});
+        cached_builtin_module = try CompilerStageData.BuiltinModule.loadCompiled(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            compiled_builtins.builtin_source,
+        );
+        logDebug("compileSource: Builtin module loaded\n", .{});
+    } else {
+        logDebug("compileSource: Reusing cached Builtin module\n", .{});
+    }
+
+    return &cached_builtin_module.?;
 }
 
 /// Error codes returned to host
@@ -793,7 +874,7 @@ const ReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn classifyReplInput(line: []const u8) !?ReplInputKind {
+fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -915,17 +996,46 @@ fn buildReplModuleSource(
     return source_writer.toOwnedSlice();
 }
 
-fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledProgram {
-    return eval.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
+fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledTargetProgram {
+    return eval.test_helpers.compileProgramForTarget(allocator, .module, source, &.{}, .u32);
 }
 
-fn replaceCompilerDataFromReplSource(source: []const u8) !void {
-    if (compiler_data) |*data| {
-        data.deinit();
+fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
+    for (reports.items) |report| {
+        switch (report.severity) {
+            .runtime_error, .fatal => return true,
+            .info, .warning => {},
+        }
+    }
+    return false;
+}
+
+fn compileCheckedReplModuleSource(source: []const u8) !CompilerStageData {
+    var data = try compileSource(source, "main");
+    errdefer data.deinit();
+
+    if (hasBlockingReports(data.tokenize_reports) or
+        hasBlockingReports(data.parse_reports) or
+        hasBlockingReports(data.can_reports) or
+        hasBlockingReports(data.type_reports))
+    {
+        return error.TypeCheckError;
+    }
+
+    return data;
+}
+
+fn replaceCompilerData(new_data: CompilerStageData) void {
+    if (compiler_data) |*existing| {
+        existing.deinit();
         compiler_data = null;
     }
 
-    compiler_data = try compileSource(source, "main");
+    compiler_data = new_data;
+}
+
+fn replaceCompilerDataFromReplSource(source: []const u8) !void {
+    replaceCompilerData(try compileSource(source, "main"));
 }
 
 fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
@@ -958,26 +1068,16 @@ fn runReplDefinition(
     };
     defer allocator.free(validation_source);
 
-    var compiled = compileReplInspectedModule(validation_source) catch |err| {
+    var checked_module = compileCheckedReplModuleSource(validation_source) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
         return;
     };
-    compiled.deinit(allocator);
+    var module_committed = false;
+    defer if (!module_committed) checked_module.deinit();
 
     session.upsertDefinition(allocator, identity.kind, identity.name, input) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .runtime);
         return;
-    };
-
-    const display_source = buildReplModuleSource(session, null, null, null) catch |err| {
-        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
-        return;
-    };
-    defer allocator.free(display_source);
-
-    const compiler_available = if (replaceCompilerDataFromReplSource(display_source)) true else |err| blk: {
-        logDebug("REPL definition display compile failed: {}\n", .{err});
-        break :blk false;
     };
 
     const output = std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name}) catch |err| {
@@ -986,10 +1086,13 @@ fn runReplDefinition(
     };
     defer allocator.free(output);
 
+    replaceCompilerData(checked_module);
+    module_committed = true;
+
     try writeReplStepResultJson(response_buffer, .{
         .output = output,
         .try_type = .definition,
-        .compiler_available = compiler_available,
+        .compiler_available = true,
     });
 }
 
@@ -998,7 +1101,7 @@ fn runReplExpression(
     input: []const u8,
     response_buffer: []u8,
 ) ResponseWriteError!void {
-    const main_source = std.fmt.allocPrint(allocator, "main = {s}", .{input}) catch |err| {
+    const main_source = std.fmt.allocPrint(allocator, "main = || Str.inspect(({s}))", .{input}) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .runtime);
         return;
     };
@@ -1021,7 +1124,7 @@ fn runReplExpression(
     };
     defer compiled.deinit(allocator);
 
-    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.wasm_lowered) catch |err| {
+    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
         return;
     };
@@ -1046,7 +1149,7 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
         return;
     }
 
-    const input_kind = classifyReplInput(trimmed) catch |err| {
+    const input_kind = resolveReplInputKind(trimmed) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .runtime);
         return;
     } orelse {
@@ -1192,73 +1295,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     const env = result.module_env;
     try env.initCIRFields(module_name);
 
-    // Load builtin modules and inject Bool and Result type declarations
-    // (following the pattern from eval.zig and TestEnv.zig)
-    const LoadedModule = struct {
-        env: *ModuleEnv,
-        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-        gpa: Allocator,
-
-        fn deinit(self: *@This()) void {
-            self.env.imports.map.deinit(self.gpa);
-            self.gpa.free(self.buffer);
-            self.gpa.destroy(self.env);
-        }
-
-        fn loadCompiledModule(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
-            const CompactWriter = collections.CompactWriter;
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-            @memcpy(buffer, bin_data);
-
-            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
-
-            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-
-            // Log the raw all_statements value to see what we're reading
-            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
-                serialized_ptr.all_statements.span.start,
-                serialized_ptr.all_statements.span.len,
-            });
-
-            const module_env_ptr = try gpa.create(ModuleEnv);
-            errdefer gpa.destroy(module_env_ptr);
-
-            const base_ptr = @intFromPtr(buffer.ptr);
-
-            logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
-
-            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
-            module_env_ptr.* = ModuleEnv{
-                .gpa = gpa,
-                .common = common,
-                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-                .module_kind = serialized_ptr.module_kind.decode(),
-                .all_defs = serialized_ptr.all_defs,
-                .all_statements = serialized_ptr.all_statements,
-                .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-                .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-                .module_name = module_name_param,
-                .display_module_name_idx = base.Ident.Idx.NONE, // Not used for deserialized modules
-                .qualified_module_ident = base.Ident.Idx.NONE, // Not used for deserialized modules
-                .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-                .evaluation_order = null,
-                .idents = ModuleEnv.CommonIdents.find(&common),
-                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-            };
-            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
-            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
-        }
-    };
+    // Builtin is immutable for the lifetime of the WASM instance, so every
+    // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = blk: {
@@ -1270,16 +1308,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
-    logDebug("compileSource: Loading Builtin module\n", .{});
-    const builtin_source = compiled_builtins.builtin_source;
-    const builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    // Store in result instead of deferring deinit - we need it for test evaluation
-    result.builtin_module = .{
-        .env = builtin_module.env,
-        .buffer = builtin_module.buffer,
-        .gpa = builtin_module.gpa,
-    };
-    logDebug("compileSource: Builtin module loaded\n", .{});
+    const builtin_module = try getCachedBuiltinModule();
 
     // Get builtin statement indices from the builtin module
     // Use builtin_indices directly - these are the correct statement indices
@@ -1349,14 +1378,36 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
-        const imported_envs: []const *ModuleEnv = &.{};
+        var imported_envs_builder = std.array_list.Managed(*const ModuleEnv).init(allocator);
+        errdefer imported_envs_builder.deinit();
+
+        const import_count = type_can_ir.imports.imports.items.items.len;
+        for (type_can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
+            const import_name = type_can_ir.getString(str_idx);
+            if (std.mem.eql(u8, import_name, "Builtin")) {
+                try imported_envs_builder.append(builtin_module.env);
+            }
+        }
+
+        const imported_envs = try imported_envs_builder.toOwnedSlice();
+        errdefer allocator.free(imported_envs);
+        result.imported_modules = imported_envs;
+
+        const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
+        errdefer allocator.destroy(auto_imported_types);
+        auto_imported_types.* = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+        errdefer auto_imported_types.deinit();
+
+        try Can.populateModuleEnvs(auto_imported_types, type_can_ir, builtin_module.env, builtin_indices);
+        result.auto_imported_types = auto_imported_types;
 
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
         type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
+        type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {
@@ -1377,7 +1428,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             &solver.snapshots,
             &solver.problems,
             "main.roc",
-            &.{}, // other_modules - empty for playground
+            imported_envs,
             &solver.import_mapping,
             &solver.regions,
         ) catch |err| {

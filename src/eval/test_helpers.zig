@@ -31,24 +31,42 @@ const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const RuntimeImage = lir.RuntimeImage;
 const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct {
-    base_ptr: [*]align(1) u8 = undefined,
+    base_ptr: [*]align(1) u8,
+    buffer: []align(collections.max_roc_alignment.toByteUnits()) u8,
+    fixed_buffer: std.heap.FixedBufferAllocator,
+    page_size: usize,
 
     fn getSystemPageSize() !usize {
-        return error.UnsupportedPlatform;
+        return 64 * 1024;
     }
 
-    fn create(_: usize, _: usize) !@This() {
-        return error.UnsupportedPlatform;
+    fn create(size: usize, page_size: usize) !@This() {
+        const aligned_size = std.mem.alignForward(usize, size, page_size);
+        const buffer = try std.heap.wasm_allocator.alignedAlloc(
+            u8,
+            collections.max_roc_alignment,
+            aligned_size,
+        );
+        errdefer std.heap.wasm_allocator.free(buffer);
+
+        return .{
+            .base_ptr = @ptrCast(buffer.ptr),
+            .buffer = buffer,
+            .fixed_buffer = std.heap.FixedBufferAllocator.init(buffer),
+            .page_size = page_size,
+        };
     }
 
-    fn deinit(_: *@This(), _: Allocator) void {}
-
-    fn allocator(_: *@This()) Allocator {
-        return std.heap.wasm_allocator;
+    fn deinit(self: *@This(), _: Allocator) void {
+        std.heap.wasm_allocator.free(self.buffer);
     }
 
-    fn getUsedSize(_: *const @This()) usize {
-        return 0;
+    fn allocator(self: *@This()) Allocator {
+        return self.fixed_buffer.allocator();
+    }
+
+    fn getUsedSize(self: *const @This()) usize {
+        return self.fixed_buffer.end_index;
     }
 
     fn updateHeader(_: *@This()) void {}
@@ -141,7 +159,9 @@ pub const ParsedResources = struct {
     }
 };
 
-const EVAL_SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
+    8 * 1024 * 1024
+else if (@sizeOf(usize) < 8)
     256 * 1024 * 1024
 else if (builtin.os.tag == .macos)
     8 * 1024 * 1024 * 1024
@@ -182,6 +202,17 @@ pub const CompiledProgram = struct {
 
     pub fn deinit(self: *CompiledProgram, allocator: Allocator) void {
         self.wasm_lowered.deinit(allocator);
+        self.lowered.deinit(allocator);
+        cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
+/// Public `CompiledTargetProgram` declaration.
+pub const CompiledTargetProgram = struct {
+    resources: ParsedResources,
+    lowered: LoweredProgram,
+
+    pub fn deinit(self: *CompiledTargetProgram, allocator: Allocator) void {
         self.lowered.deinit(allocator);
         cleanupParseAndCanonical(allocator, self.resources);
     }
@@ -322,6 +353,29 @@ pub fn compileProgram(
     };
 }
 
+/// Public `compileProgramForTarget` function.
+pub fn compileProgramForTarget(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+) !CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    errdefer {
+        var owned = lowered;
+        owned.deinit(allocator);
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
+    };
+}
+
 /// Public `compileInspectedProgram` function.
 pub fn compileInspectedProgram(
     allocator: Allocator,
@@ -348,6 +402,29 @@ pub fn compileInspectedProgram(
         .resources = resources,
         .lowered = lowered,
         .wasm_lowered = wasm_lowered,
+    };
+}
+
+/// Public `compileInspectedProgramForTarget` function.
+pub fn compileInspectedProgramForTarget(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+) !CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    errdefer {
+        var owned = lowered;
+        owned.deinit(allocator);
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
     };
 }
 

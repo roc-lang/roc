@@ -3972,11 +3972,17 @@ const CopiedFile = struct {
 
 const CliTestResult = enum { passed, failed };
 
+const CliTestFailureDetailVisibility = enum(u8) {
+    always = 0,
+    verbose_only = 1,
+};
+
 const CliTestResultItem = struct {
     result: CliTestResult,
     order: u32,
     region: base.Region,
-    error_msg: ?[]const u8,
+    failure_detail: ?[]const u8,
+    failure_detail_visibility: CliTestFailureDetailVisibility = .always,
 };
 
 const CliModuleTestResult = struct {
@@ -3993,7 +3999,7 @@ const CliTestRunSummary = struct {
     cached_modules: u32 = 0,
 };
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V2";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V3";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
     var buf: [4]u8 = undefined;
@@ -4053,8 +4059,9 @@ fn storeCliTestResultsInCache(
             .passed => 0,
             .failed => 1,
         });
-        if (result.error_msg) |message| {
+        if (result.failure_detail) |message| {
             try bytes.append(ctx.gpa, 1);
+            try bytes.append(ctx.gpa, @intFromEnum(result.failure_detail_visibility));
             try appendU32(&bytes, ctx.gpa, @intCast(message.len));
             try bytes.appendSlice(ctx.gpa, message);
         } else {
@@ -4096,7 +4103,7 @@ fn appendCachedCliTestResults(
     defer {
         if (!results_owned_by_module) {
             for (results.items) |result| {
-                if (result.error_msg) |message| ctx.gpa.free(message);
+                if (result.failure_detail) |message| ctx.gpa.free(message);
             }
             results.deinit(ctx.gpa);
         }
@@ -4118,7 +4125,15 @@ fn appendCachedCliTestResults(
         const root = testRootByOrder(test_roots, order);
         const region = testRootRegion(module.semantic.env, root);
 
+        var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
+            if (offset >= data.len) return null;
+            visibility = switch (data[offset]) {
+                0 => .always,
+                1 => .verbose_only,
+                else => return null,
+            };
+            offset += 1;
             const message_len = readU32(data, &offset) orelse return null;
             const message_len_usize: usize = @intCast(message_len);
             if (offset + message_len_usize > data.len) return null;
@@ -4131,7 +4146,8 @@ fn appendCachedCliTestResults(
             .result = result,
             .order = order,
             .region = region,
-            .error_msg = message,
+            .failure_detail = message,
+            .failure_detail_visibility = visibility,
         });
     }
     if (offset != data.len) return null;
@@ -4141,7 +4157,7 @@ fn appendCachedCliTestResults(
     const owned_results = try results.toOwnedSlice(ctx.gpa);
     errdefer {
         for (owned_results) |result| {
-            if (result.error_msg) |message| ctx.gpa.free(message);
+            if (result.failure_detail) |message| ctx.gpa.free(message);
         }
         ctx.gpa.free(owned_results);
     }
@@ -4268,7 +4284,7 @@ fn runCheckedArtifactTests(
     var results = std.ArrayList(CliTestResultItem).empty;
     errdefer {
         for (results.items) |result| {
-            if (result.error_msg) |message| ctx.gpa.free(message);
+            if (result.failure_detail) |message| ctx.gpa.free(message);
         }
         results.deinit(ctx.gpa);
     }
@@ -4294,7 +4310,8 @@ fn runCheckedArtifactTests(
                 .result = .failed,
                 .order = root.order,
                 .region = region,
-                .error_msg = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
+                .failure_detail = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
+                .failure_detail_visibility = .always,
             });
             continue;
         };
@@ -4309,10 +4326,16 @@ fn runCheckedArtifactTests(
 
         if (passed) {
             summary.passed += 1;
-            try results.append(ctx.gpa, .{ .result = .passed, .order = root.order, .region = region, .error_msg = null });
+            try results.append(ctx.gpa, .{ .result = .passed, .order = root.order, .region = region, .failure_detail = null });
         } else {
             summary.failed += 1;
-            try results.append(ctx.gpa, .{ .result = .failed, .order = root.order, .region = region, .error_msg = null });
+            try results.append(ctx.gpa, .{
+                .result = .failed,
+                .order = root.order,
+                .region = region,
+                .failure_detail = try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
+                .failure_detail_visibility = .verbose_only,
+            });
         }
     }
     summary.modules_with_tests = 1;
@@ -4379,7 +4402,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     defer {
         for (module_results.items) |module_result| {
             for (module_result.results) |result| {
-                if (result.error_msg) |message| ctx.gpa.free(message);
+                if (result.failure_detail) |message| ctx.gpa.free(message);
             }
             ctx.gpa.free(module_result.results);
         }
@@ -4436,7 +4459,16 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
                 }
             } else {
-                try printTestFailure(stderr, module_result.path, module_result.env, result.region, region_info, result.error_msg);
+                try printTestFailure(
+                    stderr,
+                    module_result.path,
+                    module_result.env,
+                    result.region,
+                    region_info,
+                    result.failure_detail,
+                    result.failure_detail_visibility,
+                    args.verbose,
+                );
             }
         }
     }
@@ -4452,7 +4484,9 @@ fn printTestFailure(
     env: *const ModuleEnv,
     region: base.Region,
     region_info: base.RegionInfo,
-    error_msg: ?[]const u8,
+    failure_detail: ?[]const u8,
+    failure_detail_visibility: CliTestFailureDetailVisibility,
+    verbose: bool,
 ) !void {
     const src = env.getSourceAll();
     const error_src = src[region.start.offset..region.end.offset];
@@ -4499,8 +4533,14 @@ fn printTestFailure(
         line_num += 1;
     }
 
-    if (error_msg) |msg| {
-        try stderr.print("\x1b[31m - {s}", .{msg});
+    const should_print_detail = switch (failure_detail_visibility) {
+        .always => true,
+        .verbose_only => verbose,
+    };
+    if (should_print_detail) {
+        if (failure_detail) |msg| {
+            try stderr.print("\x1b[31m - {s}", .{msg});
+        }
     }
 
     try stderr.print("\x1b[0m\n", .{});

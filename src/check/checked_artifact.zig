@@ -9181,7 +9181,7 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         const actual_nominal = switch (actual_payload) {
             .nominal => |nominal| nominal,
             else => {
-                if (expected_nominal.is_opaque or expected_nominal.builtin != null) return false;
+                if (expected_nominal.is_opaque) return false;
                 return try self.compatible(expected_nominal.backing, actual);
             },
         };
@@ -9230,7 +9230,7 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
             if (findRecordFieldById(expected_row.fields, actual_field.name) != null) continue;
             return false;
         }
-        return actual_row.tail == null;
+        return self.rowTailCanClose(actual_row.tail);
     }
 
     fn compatibleTagUnion(
@@ -9265,7 +9265,12 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
             if (findTagById(expected_row.tags, actual_tag.name) != null) continue;
             return false;
         }
-        return actual_row.tail == null;
+        return self.rowTailCanClose(actual_row.tail);
+    }
+
+    fn rowTailCanClose(self: *const PlatformRequirementTypeCompatibilityChecker, tail: ?CheckedTypeId) bool {
+        const tail_id = tail orelse return true;
+        return checkedTypePayloadIsIdentity(self.payload(tail_id));
     }
 
     const FlattenedRecordRow = struct {
@@ -9663,7 +9668,7 @@ const PlatformAppRelationTypeResolver = struct {
             .nominal => |nominal| nominal,
             .alias => |alias| return try self.merge(platform_root, alias.backing, .value),
             else => {
-                if (platform_nominal.is_opaque or platform_nominal.builtin != null) {
+                if (platform_nominal.is_opaque) {
                     checkedArtifactInvariant("platform/app relation expected nominal-compatible app payload", .{});
                 }
                 return try self.merge(platform_nominal.backing, app_root, .value);

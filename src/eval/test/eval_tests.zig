@@ -87,6 +87,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "inspect: opaque nominal without to_inspect hides backing",
+        .source_kind = .module,
+        .source =
+        \\Secret :: { key : Str }.{
+        \\    new : Str -> Secret
+        \\    new = |key| { key: key }
+        \\}
+        \\
+        \\main = {
+        \\    secret : Secret
+        \\    secret = Secret.new("my_secret_key")
+        \\    Str.inspect(secret)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"<opaque>\"" },
+    },
+    .{
         .name = "inspect: nested Str.inspect uses payload to_inspect",
         .source_kind = .module,
         .source =

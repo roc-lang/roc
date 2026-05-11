@@ -1502,9 +1502,13 @@ const MiniCiStep = struct {
         ns: u64,
     };
 
-    fn recordTiming(timings: []StepTiming, count: *usize, name: []const u8, timer: *Timer) void {
-        timings[count.*] = .{ .name = name, .ns = timer.read() };
-        count.* += 1;
+    fn recordTiming(
+        allocator: std.mem.Allocator,
+        timings: *std.ArrayList(StepTiming),
+        name: []const u8,
+        timer: *Timer,
+    ) !void {
+        try timings.append(allocator, .{ .name = name, .ns = timer.read() });
         timer.* = Timer.start() catch @panic("no clock");
     }
 
@@ -1523,62 +1527,67 @@ const MiniCiStep = struct {
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
 
-        var timings: [15]StepTiming = undefined;
-        var count: usize = 0;
+        const b = step.owner;
+        var timings = std.ArrayList(StepTiming).empty;
+        defer timings.deinit(b.allocator);
         var wall_timer = Timer.start() catch @panic("no clock");
         var timer = Timer.start() catch @panic("no clock");
 
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
-        try runSubBuild(step, "fmt", "zig build fmt");
-        recordTiming(&timings, &count, "zig build fmt", &timer);
+        try runSubBuild(step, &.{"fmt"}, "zig build fmt");
+        try recordTiming(b.allocator, &timings, "zig build fmt", &timer);
 
         try runZigLints(step);
-        recordTiming(&timings, &count, "zig lints", &timer);
+        try recordTiming(b.allocator, &timings, "zig lints", &timer);
 
         try runSemanticAudit(step);
-        recordTiming(&timings, &count, "semantic audit", &timer);
+        try recordTiming(b.allocator, &timings, "semantic audit", &timer);
 
         try runTidy(step);
-        recordTiming(&timings, &count, "tidy checks", &timer);
+        try recordTiming(b.allocator, &timings, "tidy checks", &timer);
 
         try checkPostcheckArchitecture(step);
-        recordTiming(&timings, &count, "post-check architecture", &timer);
+        try recordTiming(b.allocator, &timings, "post-check architecture", &timer);
 
         try checkTestWiring(step);
-        recordTiming(&timings, &count, "test wiring", &timer);
+        try recordTiming(b.allocator, &timings, "test wiring", &timer);
 
-        try runSubBuild(step, null, "zig build");
-        recordTiming(&timings, &count, "zig build", &timer);
+        try runSubBuild(step, &.{}, "zig build");
+        try recordTiming(b.allocator, &timings, "zig build", &timer);
 
         try checkBuiltinRocFormatting(step);
-        recordTiming(&timings, &count, "Builtin.roc formatting", &timer);
+        try recordTiming(b.allocator, &timings, "Builtin.roc formatting", &timer);
 
-        try runSubBuild(step, "snapshot", "zig build snapshot");
-        recordTiming(&timings, &count, "zig build snapshot", &timer);
+        try runSubBuild(step, &.{"snapshot"}, "zig build snapshot");
+        try recordTiming(b.allocator, &timings, "zig build snapshot", &timer);
 
         try checkSnapshotChanges(step);
-        recordTiming(&timings, &count, "snapshot changes", &timer);
+        try recordTiming(b.allocator, &timings, "snapshot changes", &timer);
 
         try checkFxPlatformTestCoverage(step);
-        recordTiming(&timings, &count, "fx platform test coverage", &timer);
+        try recordTiming(b.allocator, &timings, "fx platform test coverage", &timer);
 
-        try runSubBuild(step, "test", "zig build test");
-        recordTiming(&timings, &count, "zig build test", &timer);
+        try runSubBuild(step, &.{"test"}, "zig build test");
+        try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
-        try runSubBuild(step, "test-playground", "zig build test-playground");
-        recordTiming(&timings, &count, "zig build test-playground", &timer);
+        try runSubBuild(
+            step,
+            &.{ "-Doptimize=ReleaseFast", "test-playground" },
+            "zig build -Doptimize=ReleaseFast test-playground",
+        );
+        try recordTiming(b.allocator, &timings, "zig build -Doptimize=ReleaseFast test-playground", &timer);
 
-        try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
-        recordTiming(&timings, &count, "zig build test-serialization-sizes", &timer);
+        try runSubBuild(step, &.{"test-serialization-sizes"}, "zig build test-serialization-sizes");
+        try recordTiming(b.allocator, &timings, "zig build test-serialization-sizes", &timer);
 
-        try runSubBuild(step, "test-cli", "zig build test-cli");
-        recordTiming(&timings, &count, "zig build test-cli", &timer);
+        try runSubBuild(step, &.{"test-cli"}, "zig build test-cli");
+        try recordTiming(b.allocator, &timings, "zig build test-cli", &timer);
 
-        try runSubBuild(step, "coverage", "zig build coverage");
-        recordTiming(&timings, &count, "zig build coverage", &timer);
+        try runSubBuild(step, &.{"coverage"}, "zig build coverage");
+        try recordTiming(b.allocator, &timings, "zig build coverage", &timer);
 
-        printTimingSummary(timings[0..count], wall_timer.read());
+        printTimingSummary(timings.items, wall_timer.read());
     }
 
     fn runZigLints(step: *Step) !void {
@@ -1742,7 +1751,7 @@ const MiniCiStep = struct {
 
     fn runSubBuild(
         step: *Step,
-        step_name: ?[]const u8,
+        args: []const []const u8,
         display: []const u8,
     ) !void {
         const b = step.owner;
@@ -1755,8 +1764,8 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, b.graph.zig_exe); // zig executable
         try child_argv.append(b.allocator, "build");
 
-        if (step_name) |name| {
-            try child_argv.append(b.allocator, name);
+        for (args) |arg| {
+            try child_argv.append(b.allocator, arg);
         }
 
         var child = std.process.Child.init(child_argv.items, b.allocator);

@@ -6557,7 +6557,7 @@ const ValueTransformFinalizer = struct {
                 const payload = self.resolvedSessionPayload(parent_endpoint.exec_ty.ty);
                 const owner: repr.ConsumerUseOwner = .{ .nominal_backing = .{
                     .parent = expr.value_info,
-                    .nominal = self.nominalKeyForReinterpretExpr(expr),
+                    .nominal = self.nominalKeyForReinterpretExpr(expr, backing),
                 } };
                 const backing_endpoint = switch (payload) {
                     .nominal => try self.nominalBackingConsumerEndpoint(parent_endpoint, owner),
@@ -7545,11 +7545,20 @@ const ValueTransformFinalizer = struct {
     fn nominalKeyForReinterpretExpr(
         self: *ValueTransformFinalizer,
         expr: Ast.Expr,
+        backing_expr_id: Ast.ExprId,
     ) canonical.NominalTypeKey {
         if (self.nominalKeyForLogicalType(expr.ty)) |nominal| return nominal;
 
         const value = self.valueStore().values.items[@intFromEnum(expr.value_info)];
         if (value.source_ty_payload) |source_payload| {
+            if (self.nominalKeyForSourcePayload(source_payload)) |nominal| return nominal;
+        }
+
+        const backing_expr = self.program.ast.exprs.items[@intFromEnum(backing_expr_id)];
+        if (self.nominalKeyForLogicalType(backing_expr.ty)) |nominal| return nominal;
+
+        const backing_value = self.valueStore().values.items[@intFromEnum(backing_expr.value_info)];
+        if (backing_value.source_ty_payload) |source_payload| {
             if (self.nominalKeyForSourcePayload(source_payload)) |nominal| return nominal;
         }
 

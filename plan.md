@@ -762,6 +762,95 @@ the `ColorDefault -> Str` helper emits the structural/default tag-union inspect
 body. No later stage is allowed to notice that `ColorDefault` is nominal and try
 to search for methods.
 
+Opaque nominals without `to_inspect` are different from transparent nominals.
+They are still represented at runtime by their backing layout, but default
+`Str.inspect` must not expose that backing. The checked artifact publishes the
+nominal's `is_opaque` bit; mono MIR must preserve that bit in the monomorphic
+type graph and the specialized `Builtin.Str.inspect : T -> Str` helper must read
+it before unwrapping the nominal backing for structural/default inspect. If
+`T` is an opaque nominal and no checked `to_inspect` target exists, the helper
+returns exactly `"<opaque>"`:
+
+```roc
+Secret :: { key : Str }.{
+    new : Str -> Secret
+    new = |key| { key }
+
+    unlock : Secret, Str -> Str
+    unlock = |secret, password|
+        if password == "open sesame" {
+            "The secret key is: ${secret.key}"
+        } else {
+            "Wrong password!"
+        }
+}
+
+main = {
+    secret = Secret.new("my_secret_key")
+
+    [
+        Str.inspect(secret),
+        secret.unlock("open sesame"),
+    ]
+}
+```
+
+The first element must be `"<opaque>"`; the second may use `secret.key` because
+`unlock` is inside the opaque type's method block. This is not a runtime layout
+rule and not a backend formatter rule. The value's backing record remains the
+runtime representation for ordinary codegen, equality, calls, and host ABI
+where the opaque type is otherwise permitted. Only typed inspect uses the
+published nominal opacity bit to choose the default rendered form.
+
+The required mono lowering shape is:
+
+```zig
+switch (mono_types.getTypePreservingNominal(arg_ty)) {
+    .nominal => |nominal| {
+        if (nominal.is_opaque) {
+            return str_lit("<opaque>");
+        }
+
+        return lower_default_inspect(
+            value = arg_value,
+            value_info = arg_info,
+            shape = mono_types.getType(nominal.backing),
+        );
+    },
+    else => lower_default_inspect(
+        value = arg_value,
+        value_info = arg_info,
+        shape = mono_types.getTypePreservingNominal(arg_ty),
+    ),
+}
+```
+
+`getTypePreservingNominal` is mandatory here. Using a type-store query that
+automatically unwraps nominal nodes loses the explicit `is_opaque` bit and is a
+compiler bug. Transparent nominals continue to use structural/default inspect
+through their backing when no `to_inspect` exists:
+
+Transparent default inspect must not insert a `nominal_reinterpret` solely to
+look through the wrapper. The inspected value remains the original
+nominal-typed value; only the selected outer inspect shape changes to the
+published backing shape. This matters for recursive transparent nominals such as
+`IntList := [Nil, Cons(I64, IntList)]`: the generated `IntList -> Str` helper
+must match the original `IntList` value using the backing tag-union shape, and
+recursive payloads must still call the already-reserved `IntList -> Str` helper.
+Injecting a backing reinterpret before the match creates unnecessary
+lambda-solved value-transform work and can turn recursive nominal identity into
+two incompatible executable payload endpoints.
+
+```roc
+ColorDefault := [Red, Green, Blue]
+
+main = Str.inspect(ColorDefault.Red)
+```
+
+This still renders `"Red"` because `ColorDefault` is transparent. The difference
+between `:=` and `::` is semantic data from checking, not a property recovered
+from the backing tag union or record layout.
+
 Nested inspect uses the same rule. In:
 
 ```roc
@@ -5880,6 +5969,16 @@ backing child before sealing the solve session. The existing
 same child slot of the same `nominal_reinterpret` node; it is not restricted to
 nominal construction. The endpoint selected for that owner depends on the
 consumer endpoint:
+
+The nominal identity for that owner is also direction-sensitive. For nominal
+construction, the `nominal_reinterpret` result type carries the nominal
+identity. For backing reinterpretation, the result type may intentionally be
+the structural backing; in that case the backing child expression must carry the
+nominal identity in its logical type or concrete source type. Lambda-solved MIR
+must read that published child type data. It must not infer the nominal from
+syntax, source names, or layout compatibility, and it must not drop the
+`nominal_backing` consumer-use edge just because the result endpoint is already
+structural.
 
 ```zig
 const NominalReinterpretBackingUse = struct {
@@ -20186,6 +20285,45 @@ Checking finalization order:
     sealed app artifact views named by the relation; compile-time callable
     promotion, dependency summaries, mono MIR, and runtime lowering all consume
     those views through `LoweringModuleView.relation_artifacts`.
+
+    Platform requirement type compatibility must compare transparent nominals
+    through their published backing when the app value has the backing shape
+    rather than the nominal name. This applies equally to user-defined
+    transparent nominals and builtin transparent nominals. For example, this
+    platform requirement:
+
+    ```roc
+    platform ""
+        requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        exposes [Echo]
+        packages {}
+        provides { main_for_host!: "main" }
+    ```
+
+    must accept an app that omits the type annotation and returns ordinary tags:
+
+    ```roc
+    main! = |_args| {
+        echo!("Hello, World!")
+        Ok({})
+    }
+    ```
+
+    The app value's inferred return type may be structurally printed as
+    `[Ok({}), .. _]` rather than nominally printed as
+    `Try({}, [Exit(I8), ..])`. That is valid. The relation finalizer must compare
+    the platform's transparent `Try` backing against the app's structural tag
+    union, including open-row tails and unbound type variables at the boundary.
+    It must not require the app source to spell `Try.Ok({})` or add an
+    annotation merely so the post-check relation has the same nominal name.
+
+    Opaque nominals still require nominal identity; the platform author owns
+    that ABI boundary. Transparent nominals do not. Builtin transparent nominals
+    such as `Try` and `Bool` must not get special cases in either direction:
+    they use the same transparent-nominal backing rule as any user-defined
+    transparent nominal. This is checked-artifact publication behavior, not MIR
+    or backend behavior, and failures here are user-facing check errors because
+    app/platform relation finalization is part of checking finalization.
 15. Verify that `TopLevelValueTable` has no `pending_callable_root` entries and
     that every referenced top-level binding maps to either a `ConstRef`-backed
     constant template or `procedure_binding`.
@@ -25586,9 +25724,12 @@ app-specific tags like `SomeCustomError(I64)`.
 
 If both sides are the same transparent nominal, the resolver may preserve the
 nominal only by recursively merging the nominal args and backing so they stay in
-agreement. Opaque nominals and builtin nominals do not use structural
-compatibility; if checking allowed an incompatible value through, that is a
-checked-artifact invariant violation.
+agreement. Opaque nominals do not use structural compatibility; if checking
+allowed an incompatible value through, that is a checked-artifact invariant
+violation. Builtin transparent nominals are not a separate category here:
+`Bool`, `Try`, and any other builtin transparent nominal use the same backing
+merge rule as user-defined transparent nominals, with no Bool-specific or
+Try-specific lowering behavior.
 
 For tag unions, this means:
 
@@ -25602,6 +25743,15 @@ For tag unions, this means:
 # executable relation payload
 [Exit(I8)]
 ```
+
+The compatibility check that runs before publishing the relation must use the
+same row-tail rule. If the app value has an unresolved record or tag row tail,
+that tail may close to the platform boundary after all explicit app labels have
+been compared. Explicit extra app labels still fail against a closed platform
+boundary; only the unresolved tail is allowed to instantiate to the missing
+platform labels or the empty row. For the echo example above, the app's inferred
+`[Ok({}), .. _]` return can satisfy the platform's `Try({}, [Exit(I8), ..])`
+because the `_` tail can provide the missing `Err(...)` case and then close.
 
 and:
 
@@ -26809,6 +26959,68 @@ same view-oriented contract: the embedded payload is made viewable as the LIR
 runtime image before interpretation, and the child/interpreter side still does
 not run semantic compiler stages, root discovery, or reconstruction from CIR.
 The embedded path must not dictate or slow down the shared-memory IPC path.
+
+In-process freestanding tools such as the WebAssembly playground follow the
+same semantic boundary even though there is no child process and no operating
+system shared-memory mapping. They must lower a temporary checked artifact with
+explicit REPL/dev roots through MIR, IR, LIR, and ARC, then publish the
+ARC-inserted LIR/runtime-layout arrays into a contiguous local runtime-image
+arena. The interpreter then creates the same offset-addressed
+`LirRuntimeImageView` over that arena and runs explicit root proc ids. This local
+arena is not a second semantic representation, not serialization, and not a
+shortcut around the public checked-artifact pipeline. It exists only because
+`wasm32-freestanding` cannot create an OS shared-memory mapping inside the
+browser/playground process.
+
+The freestanding local runtime-image arena has the same forbidden contents as
+the IPC shared-memory image. It may contain LIR statements, committed layouts,
+literal bytes, explicit root proc ids, and other already-lowered runtime-image
+data. It must not contain live or cached `ModuleEnv`, CIR, checked artifacts,
+MIR, IR, checker variables, source-definition ids, root lookup requests, or any
+semantic compiler state. A REPL expression such as:
+
+```roc
+x = 10
+y = x + 5
+y
+```
+
+is handled by building a temporary checked module for the current REPL session,
+publishing an explicit `.repl_expr` or equivalent tool root for the expression,
+lowering that artifact to an ARC-inserted LIR runtime image, and interpreting
+the resulting root. The playground must not evaluate `y` by scanning the session
+source, by keeping CIR in the interpreter, or by calling a helper that performs
+semantic lowering inside the interpreter step.
+
+The playground integration gate must test a coherent playground compiler
+artifact. In CI-style runs, this means invoking the playground gate as a
+ReleaseFast subbuild:
+
+```sh
+zig build -Doptimize=ReleaseFast test-playground
+```
+
+The playground WASM module embeds the compiler version and compiler artifact
+hash used by checked-artifact publication. Those values must describe the same
+compiler artifact that is actually executing inside the playground module. Do
+not build a ReleaseFast playground module inside a Debug parent build while
+leaving `build_options.compiler_artifact_hash` from the Debug parent module
+graph; that would make checked-artifact keys describe the wrong compiler. The
+correct choices are:
+
+- run a complete ReleaseFast subbuild for the playground integration gate, so
+  all imported compiler modules and `build_options` agree
+- or, if a future build target truly needs mixed optimization modes, construct a
+  separate compiler module graph with a matching `build_options` module for the
+  playground artifact
+
+Debug playground WASM interpreted through the bytecode test runner is not a
+semantic contract. The semantic contract is the checked-artifact boundary and
+the offset-addressed runtime image. Performance tests for the browser-facing
+playground should use the optimized playground artifact that users will run,
+because interpreting a Debug compiler WASM through the integration runner can
+spend most of its time in compiler-internal checked-artifact publication rather
+than exercising playground behavior.
 
 The LIR interpreter owns its runtime temporary allocation domain. Once an
 interpreter is initialized, proc frames, frame-local slots, join-point maps,
@@ -33775,7 +33987,24 @@ Artifact and tooling behavior:
 - app entrypoints lower only through explicit root requests
 - platform-required roots lower only through `PlatformRequiredBindingTable`
 - hosted exports lower only through `HostedProcTable`
-- REPL expressions lower as temporary checked artifacts with `.repl_expr` roots
+- REPL expressions lower as temporary checked artifacts with `.repl_expr` roots;
+  they must not be represented as top-level constants such as `main = expr`.
+  A playground or REPL expression can be compiled as a temporary root procedure:
+
+  ```roc
+  x = 10
+  y = x + 5
+
+  main = || Str.inspect((y))
+  ```
+
+  Here `x` and `y` remain ordinary session definitions, while `main` is a
+  tool-owned root procedure for evaluating the expression. The checked artifact
+  publishes `main` as the explicit REPL/dev root. It must not create a
+  top-level constant `main = y`, because that would force checking finalization
+  to treat the user's expression as a compile-time constant before the REPL
+  interpreter root runs. That is the wrong stage responsibility and can also
+  duplicate work in freestanding playground builds.
 - dev expressions lower as temporary checked artifacts with `.dev_expr` roots
 - tests that compile source to LIR call the same checked-artifact public
   pipeline as production tools
