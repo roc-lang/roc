@@ -274,13 +274,16 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 TYPE MISMATCH - fuzz_crash_023.md:146:15:146:18
 MISSING METHOD - fuzz_crash_023.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_023.md:178:42:178:45
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`

@@ -10,6 +10,7 @@ import u.R}g:r->R.a.E
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:11:1:12
 MODULE NOT IMPORTED - fuzz_crash_042.md:1:17:1:22
+DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`

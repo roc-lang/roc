@@ -5408,8 +5408,7 @@ const CallableEmissionAssigner = struct {
 
         const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
         switch (emission) {
-            .pending_proc_value => |construction_id| {
-                _ = construction_id;
+            .pending_proc_value => {
                 lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source");
             },
             .finite => |current_key| {
@@ -6833,7 +6832,7 @@ const ValueTransformFinalizer = struct {
                 }
             },
             .let_ => |let_| {
-                const bind_endpoint = try self.bindingEndpoint(let_.bind.binding_info);
+                const bind_endpoint = try self.bindingEndpointOrNull(let_.bind.binding_info);
                 try self.finalizeExprConstructionUsesAtEndpoint(let_.body, bind_endpoint);
                 try self.finalizeExprConstructionUsesAtEndpointWithProvenance(let_.rest, expected, provenance);
             },
@@ -7113,15 +7112,15 @@ const ValueTransformFinalizer = struct {
         switch (stmt) {
             .decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(
                 decl.body,
-                try self.bindingEndpoint(decl.bind.binding_info),
+                try self.bindingEndpointOrNull(decl.bind.binding_info),
             ),
             .var_decl => |decl| try self.finalizeExprConstructionUsesAtEndpoint(
                 decl.body,
-                try self.bindingEndpoint(decl.bind.binding_info),
+                try self.bindingEndpointOrNull(decl.bind.binding_info),
             ),
             .reassign => |reassign| try self.finalizeExprConstructionUsesAtEndpoint(
                 reassign.body,
-                try self.bindingEndpoint(reassign.version),
+                try self.bindingEndpointOrNull(reassign.version),
             ),
             .expr, .debug, .expect => |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null),
             .return_ => |ret| {
@@ -7141,15 +7140,17 @@ const ValueTransformFinalizer = struct {
         }
     }
 
-    fn bindingEndpoint(
+    fn bindingEndpointOrNull(
         self: *ValueTransformFinalizer,
         binding_info: repr.BindingInfoId,
-    ) Allocator.Error!repr.SessionExecutableValueEndpoint {
+    ) Allocator.Error!?repr.SessionExecutableValueEndpoint {
         const binding_index = @intFromEnum(binding_info);
         if (binding_index >= self.valueStore().bindings.items.len) {
             lambdaInvariant("lambda-solved consumer-use binding endpoint referenced missing binding");
         }
         const binding = self.valueStore().bindings.items[binding_index];
+        const value_info = self.valueStore().values.items[@intFromEnum(binding.value)];
+        if (value_info.pending_comptime_dependency_origin) return null;
         return try self.localEndpoint(binding.value);
     }
 

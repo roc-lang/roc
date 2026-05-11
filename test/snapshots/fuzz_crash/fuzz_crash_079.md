@@ -9,7 +9,7 @@ type=file
 b:r
 ~~~
 # EXPECTED
-NIL
+DECLARATION HAS NO VALUE - fuzz_crash_079.md:2:1:2:4
 # PROBLEMS
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.

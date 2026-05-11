@@ -16,6 +16,8 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
+DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
+DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.

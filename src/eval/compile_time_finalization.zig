@@ -2590,7 +2590,8 @@ fn publishCallableResult(
     result_plan_id: checked_artifact.CallableResultPlanId,
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!PublishedCallableResult {
-    if (selectedFiniteCallableRequiresPromotion(selected)) {
+    const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(checked_fn_root)].key;
+    if (selectedFiniteCallableRequiresPromotion(selected, requested_source_fn_ty)) {
         return try promoteFiniteCallableResult(allocator, artifact, lowered, context, checked_fn_root, result_plan_id, selected);
     }
     if (selected.descriptor_member.capture_slots.len != 0) {
@@ -2608,11 +2609,13 @@ fn publishCallableResult(
 
 fn selectedFiniteCallableRequiresPromotion(
     selected: SelectedFiniteCallableResult,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
 ) bool {
     if (selected.planned_member.capture_slots.len != 0) return true;
     if (selected.descriptor_member.capture_slots.len != 0) return true;
+    if (!repr.canonicalTypeKeyEql(selected.result_plan.source_fn_ty, requested_source_fn_ty)) return true;
     if (selected.descriptor_member.published_proc_value == null) return true;
-    if (!repr.canonicalTypeKeyEql(selected.descriptor_member.published_proc_value.?.source_fn_ty, selected.result_plan.source_fn_ty)) return true;
+    if (!repr.canonicalTypeKeyEql(selected.descriptor_member.published_proc_value.?.source_fn_ty, requested_source_fn_ty)) return true;
     if (selected.descriptor_member.published_source_proc == null) {
         compileTimeFinalizationInvariant("finite callable descriptor published procedure identity was not paired with published source procedure");
     }
@@ -2642,6 +2645,7 @@ fn promoteFiniteCallableResult(
     selected: SelectedFiniteCallableResult,
 ) Allocator.Error!PublishedCallableResult {
     const checked_fn_scheme = try artifact.checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
+    const requested_source_fn_ty = artifact.checked_types.roots[@intFromEnum(checked_fn_root)].key;
     const reserved = try artifact.reservePromotedCallableWrapper(
         allocator,
         context.source_binding,
@@ -2653,7 +2657,7 @@ fn promoteFiniteCallableResult(
     const params = try promotedWrapperParamsForFnRoot(allocator, artifact, checked_fn_root);
     const call_args = try promotedWrapperCallArgs(allocator, params.len);
     const captures = try allocator.alloc(checked_artifact.PrivateCaptureRef, selected.planned_member.capture_slots.len);
-    const member_target = try cloneCallableResultMemberTargetPlan(allocator, selected.planned_member.target);
+    const member_target = try cloneCallableResultMemberTargetPlanForSource(allocator, selected.planned_member.target, requested_source_fn_ty);
     var member_target_owned = true;
     errdefer if (member_target_owned) deinitCallableResultMemberTargetPlan(allocator, member_target);
 
@@ -2676,7 +2680,7 @@ fn promoteFiniteCallableResult(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("promoted callable selected member capture schema disagrees with result plan");
     }
-    const member_proc = try artifactOwnedCallableForSelectedMember(artifact, selected);
+    const member_proc = try artifactOwnedCallableForSelectedMember(artifact, selected, requested_source_fn_ty);
     const member_capture_slots = if (selected.descriptor_member.capture_slots.len == 0)
         &.{}
     else
@@ -2696,11 +2700,11 @@ fn promoteFiniteCallableResult(
     }
 
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .finite = .{
-        .source_fn_ty = selected.result_plan.source_fn_ty,
+        .source_fn_ty = requested_source_fn_ty,
         .callable_set_key = selected.result_plan.callable_set_key,
         .member = selected.planned_member.member,
         .member_proc = member_proc,
-        .member_proc_source_fn_ty_payload = selected.planned_member.member_proc_source_fn_ty_payload,
+        .member_proc_source_fn_ty_payload = checked_fn_root,
         .member_lifted_owner_source_fn_ty_payload = selected.planned_member.member_lifted_owner_source_fn_ty_payload,
         .member_target = member_target,
         .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
@@ -2717,7 +2721,7 @@ fn promoteFiniteCallableResult(
         allocator,
         artifact,
         reserved,
-        selected.result_plan.source_fn_ty,
+        requested_source_fn_ty,
     );
 
     const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .finite = .{
@@ -2727,7 +2731,7 @@ fn promoteFiniteCallableResult(
     } });
     const proc_value = canonical.ProcedureCallableRef{
         .template = .{ .synthetic = .{ .template = reserved.template } },
-        .source_fn_ty = selected.result_plan.source_fn_ty,
+        .source_fn_ty = requested_source_fn_ty,
     };
     return .{
         .proc_value = proc_value,
@@ -2741,14 +2745,22 @@ fn promoteFiniteCallableResult(
 fn artifactOwnedCallableForSelectedMember(
     artifact: *checked_artifact.CheckedModuleArtifact,
     selected: SelectedFiniteCallableResult,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
 ) Allocator.Error!canonical.ProcedureCallableRef {
     if (selected.descriptor_member.published_proc_value) |published| {
-        if (std.meta.eql(published.source_fn_ty.bytes, selected.result_plan.source_fn_ty.bytes)) return published;
+        if (std.meta.eql(published.source_fn_ty.bytes, requested_source_fn_ty.bytes)) return published;
+        return .{
+            .template = published.template,
+            .source_fn_ty = requested_source_fn_ty,
+        };
     }
 
     return switch (selected.planned_member.member_proc.template) {
         .lifted => |lifted| if (!std.meta.eql(lifted.owner_mono_specialization.template.artifact.bytes, artifact.key.bytes))
-            selected.planned_member.member_proc
+            .{
+                .template = selected.planned_member.member_proc.template,
+                .source_fn_ty = requested_source_fn_ty,
+            }
         else
             .{
                 .template = .{ .lifted = .{
@@ -2758,7 +2770,7 @@ fn artifactOwnedCallableForSelectedMember(
                     },
                     .site = lifted.site,
                 } },
-                .source_fn_ty = selected.result_plan.source_fn_ty,
+                .source_fn_ty = requested_source_fn_ty,
             },
         .checked,
         .synthetic,
@@ -3599,14 +3611,19 @@ fn cloneExecutableSpecializationKeySlice(
     return out;
 }
 
-fn cloneCallableResultMemberTargetPlan(
+fn cloneCallableResultMemberTargetPlanForSource(
     allocator: Allocator,
     target: checked_artifact.CallableResultMemberTargetPlan,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
 ) Allocator.Error!checked_artifact.CallableResultMemberTargetPlan {
     return switch (target) {
-        .artifact_owned => |key| .{ .artifact_owned = try repr.cloneExecutableSpecializationKey(allocator, key) },
+        .artifact_owned => |key| blk: {
+            var cloned = try repr.cloneExecutableSpecializationKey(allocator, key);
+            cloned.requested_fn_ty = requested_source_fn_ty;
+            break :blk .{ .artifact_owned = cloned };
+        },
         .member_proc_relative => |endpoint| .{ .member_proc_relative = .{
-            .requested_fn_ty = endpoint.requested_fn_ty,
+            .requested_fn_ty = requested_source_fn_ty,
             .exec_arg_tys = if (endpoint.exec_arg_tys.len == 0)
                 &.{}
             else
@@ -5580,7 +5597,7 @@ const ComptimeReifier = struct {
         result_plan: checked_artifact.CallableResultPlanId,
         selected: SelectedFiniteCallableResult,
     ) Allocator.Error!checked_artifact.CallableLeafInstance {
-        if (!selectedFiniteCallableRequiresPromotion(selected)) {
+        if (!selectedFiniteCallableRequiresPromotion(selected, selected.result_plan.source_fn_ty)) {
             return .{ .finite = .{ .proc_value = closedFiniteCallableLeafFromSelectedCallableResult(selected) } };
         }
 

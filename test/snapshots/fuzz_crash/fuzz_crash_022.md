@@ -26,6 +26,8 @@ PARSE ERROR - fuzz_crash_022.md:8:1:8:2
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
+DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
+DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`

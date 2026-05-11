@@ -10,7 +10,7 @@ MyType : Str
 hey : MyType
 ~~~
 # EXPECTED
-NIL
+DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.

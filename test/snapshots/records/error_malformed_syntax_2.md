@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
+DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **42** is not expected in a type annotation.

@@ -13,6 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
+DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS

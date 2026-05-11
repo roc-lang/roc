@@ -13,6 +13,7 @@ r : [
 ~~~
 # EXPECTED
 MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
+DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.

@@ -272,6 +272,7 @@ MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
+DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.

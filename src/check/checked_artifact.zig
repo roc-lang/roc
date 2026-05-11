@@ -19066,32 +19066,32 @@ test "compile-time finalization route is explicit and non-optional" {
     try std.testing.expect(@hasField(CompileTimeFinalizer, "finalize"));
     try std.testing.expect(@hasField(CompileTimeFinalizer, "context"));
 
-    _ = RootRequestKind.compile_time_constant;
-    _ = RootRequestKind.compile_time_callable;
-    _ = RootAbi.compile_time;
+    try std.testing.expect(std.meta.stringToEnum(RootRequestKind, "compile_time_constant") != null);
+    try std.testing.expect(std.meta.stringToEnum(RootRequestKind, "compile_time_callable") != null);
+    try std.testing.expect(std.meta.stringToEnum(RootAbi, "compile_time") != null);
 
-    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .local_root);
-    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .const_instance);
-    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .callable_binding_instance);
+    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "local_root"));
+    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "const_instance"));
+    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
 
-    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .local_root);
-    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .const_instance);
-    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .callable_binding_instance);
+    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "local_root"));
+    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "const_instance"));
+    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
 }
 
 test "compile-time roots and top-level values publish final artifacts only" {
-    _ = CompileTimeRootKind.constant;
-    _ = CompileTimeRootKind.callable_binding;
-    _ = CompileTimeRootKind.expect;
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "constant") != null);
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "callable_binding") != null);
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
 
-    _ = std.meta.fieldInfo(CompileTimeRootPayload, .pending);
-    _ = std.meta.fieldInfo(CompileTimeRootPayload, .const_graph);
-    _ = std.meta.fieldInfo(CompileTimeRootPayload, .callable_result);
-    _ = std.meta.fieldInfo(CompileTimeRootPayload, .expect);
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "const_graph"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "callable_result"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
-    _ = std.meta.fieldInfo(TopLevelValueKind, .const_ref);
-    _ = std.meta.fieldInfo(TopLevelValueKind, .procedure_binding);
+    try std.testing.expect(@hasField(TopLevelValueKind, "const_ref"));
+    try std.testing.expect(@hasField(TopLevelValueKind, "procedure_binding"));
     try std.testing.expect(!@hasField(TopLevelValueKind, "runtime_thunk"));
     try std.testing.expect(!@hasField(TopLevelValueKind, "global_initializer"));
     try std.testing.expect(!@hasField(TopLevelValueKind, "top_level_closure_object"));
@@ -19099,9 +19099,9 @@ test "compile-time roots and top-level values publish final artifacts only" {
 
 test "constant template states contain sealed value data but no runtime initializer concepts" {
     try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
-    _ = std.meta.fieldInfo(ConstTemplateState, .reserved);
-    _ = std.meta.fieldInfo(ConstTemplateState, .eval_template);
-    _ = std.meta.fieldInfo(ConstTemplateState, .value_graph_template);
+    try std.testing.expect(@hasField(ConstTemplateState, "reserved"));
+    try std.testing.expect(@hasField(ConstTemplateState, "eval_template"));
+    try std.testing.expect(@hasField(ConstTemplateState, "value_graph_template"));
 
     try std.testing.expect(!@hasField(ConstTemplateState, "runtime_thunk"));
     try std.testing.expect(!@hasField(ConstTemplateState, "global_initializer"));

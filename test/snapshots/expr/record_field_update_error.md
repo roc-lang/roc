@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
+DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.

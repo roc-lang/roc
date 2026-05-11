@@ -9,6 +9,8 @@ f=||{var c:[]}
 ~~~
 # EXPECTED
 UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
+DECLARATION HAS NO VALUE - fmt_var_in_record_field.md:1:6:1:14
+DECLARATION HAS NO VALUE - fmt_var_in_record_field.md:1:6:1:14
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `c` is not used anywhere in your code.

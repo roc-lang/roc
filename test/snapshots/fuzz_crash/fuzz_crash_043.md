@@ -14,6 +14,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_043.md:2:3:2:4
 PARSE ERROR - fuzz_crash_043.md:2:4:2:5
 PARSE ERROR - fuzz_crash_043.md:2:5:2:6
 MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
+DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`

@@ -17,6 +17,7 @@ processString : Str -> Str
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:46
+DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `processString` is exposed, but it is not defined anywhere in this module.

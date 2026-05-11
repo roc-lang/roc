@@ -13,6 +13,8 @@ b! : Str => Str
 # EXPECTED
 EXPOSED BUT NOT DEFINED - hosted.md:1:9:1:11
 EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
+DECLARATION HAS NO VALUE - hosted.md:3:1:3:16
+DECLARATION HAS NO VALUE - hosted.md:4:1:4:16
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `a!` is exposed, but it is not defined anywhere in this module.

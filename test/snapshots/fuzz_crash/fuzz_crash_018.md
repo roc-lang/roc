@@ -12,6 +12,7 @@ type=file
 PARSE ERROR - fuzz_crash_018.md:1:1:1:2
 PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
+DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`

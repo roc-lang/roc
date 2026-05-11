@@ -17,6 +17,7 @@ multiplyInts : I64, I64 -> I64
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:44
+DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `multiplyInts` is exposed, but it is not defined anywhere in this module.

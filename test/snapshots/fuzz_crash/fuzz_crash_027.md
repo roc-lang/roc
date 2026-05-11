@@ -223,6 +223,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
+DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
@@ -232,6 +233,7 @@ MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
+DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.

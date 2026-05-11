@@ -41,6 +41,7 @@ PARSE ERROR - fuzz_crash_029.md:16:1:16:3
 PARSE ERROR - fuzz_crash_029.md:16:3:16:4
 PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
+DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
 **EXPECTED OPENING BRACE**
 Platform headers must have a `packages` section that lists package dependencies.

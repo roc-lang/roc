@@ -18,6 +18,12 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_048.md:2:7:2:12
 UNDECLARED TYPE - fuzz_crash_048.md:6:14:6:20
 UNDECLARED TYPE - fuzz_crash_048.md:7:13:7:18
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:1:1:1:10
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:2:1:2:21
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:3:1:3:16
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
+DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

@@ -35,9 +35,12 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
+DECLARATION HAS NO VALUE - record_different_fields_error.md:2:5:2:21
+DECLARATION HAS NO VALUE - record_different_fields_error.md:3:5:3:14
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
 TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
 TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
+DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 **STRAY DOLLAR SIGN**

@@ -15,6 +15,7 @@ decode_things # After member name
 ~~~
 # EXPECTED
 UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
+DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _Decode_ is not supported:

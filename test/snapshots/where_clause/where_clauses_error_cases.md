@@ -26,6 +26,9 @@ WHERE CLAUSE ERROR - where_clauses_error_cases.md:7:3:7:10
 PARSE ERROR - where_clauses_error_cases.md:7:10:7:11
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:3:10:3:21
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:7:3:7:10
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.

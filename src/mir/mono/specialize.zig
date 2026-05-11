@@ -5726,8 +5726,10 @@ const BodyLowerer = struct {
         finite: checked_artifact.FinitePromotedWrapperBodyPlan,
         params: []const Ast.ExprId,
     ) Allocator.Error!Ast.ExprId {
-        if (!std.mem.eql(u8, &reserved.proc.specialization.requested_mono_fn_ty.bytes, &finite.source_fn_ty.bytes)) {
-            invariantViolation("promoted callable wrapper source function type disagrees with mono specialization request");
+        const wrapper_source_ref = try self.type_instantiator.concreteRefForTemplateType(self.template_lookup.template.checked_fn_root);
+        const wrapper_source_key = self.program.concrete_source_types.key(wrapper_source_ref);
+        if (!std.mem.eql(u8, &reserved.proc.specialization.requested_mono_fn_ty.bytes, &wrapper_source_key.bytes)) {
+            invariantViolation("promoted callable wrapper instantiated source function type disagrees with mono specialization request");
         }
         if (finite.member_capture_slots.len != finite.captures.len) {
             invariantViolation("promoted callable wrapper capture refs disagree with member capture slots");
@@ -5747,15 +5749,12 @@ const BodyLowerer = struct {
             };
         }
 
-        const member_proc = try self.reserveFinitePromotedWrapperMemberProcedure(
-            finite,
-            reserved.requested_fn_ty,
-            .{ .promoted_callable_wrapper = wrapper_id },
-        );
+        const member_source_ref = try self.type_instantiator.concreteRefForTemplateType(finite.member_proc_source_fn_ty_payload);
+        const member_proc = try self.reserveFinitePromotedWrapperMemberProcedure(finite, member_source_ref, .{ .promoted_callable_wrapper = wrapper_id });
         var member_target = try self.lowerPromotedMemberTarget(finite.member_target, finite.member_proc, member_proc);
         var member_target_owned = true;
         errdefer if (member_target_owned) deinitExecutableSpecializationKeyForMono(self.allocator, &member_target);
-        const proc_value = try self.program.ast.addExprWithSource(fn_ty, finite.source_fn_ty, .{ .proc_value = .{
+        const proc_value = try self.program.ast.addExprWithSource(fn_ty, wrapper_source_key, .{ .proc_value = .{
             .proc = member_proc,
             .published_proc = publishedMirProcedureRefForCallable(finite.member_proc),
             .captures = try self.program.ast.addCaptureArgSpan(capture_args),
@@ -5789,7 +5788,7 @@ const BodyLowerer = struct {
             .func = proc_value,
             .args = try self.program.ast.addExprSpan(call_args),
             .requested_fn_ty = fn_ty,
-            .requested_source_fn_ty = finite.source_fn_ty,
+            .requested_source_fn_ty = wrapper_source_key,
         } });
     }
 
@@ -5800,10 +5799,6 @@ const BodyLowerer = struct {
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
-        if (!std.mem.eql(u8, &requested_key.bytes, &finite.member_proc.source_fn_ty.bytes)) {
-            invariantViolation("promoted callable wrapper member source function type disagrees with requested mono type");
-        }
-
         const payload_key = checkedTypeKey(self.template_lookup.checked_types, finite.member_proc_source_fn_ty_payload);
         if (!std.mem.eql(u8, &payload_key.bytes, &finite.member_proc.source_fn_ty.bytes)) {
             invariantViolation("promoted callable wrapper member source type payload disagrees with member procedure");
@@ -5901,11 +5896,13 @@ const BodyLowerer = struct {
                 const member_target_artifact = checked_artifact.CheckedModuleArtifactKey{
                     .bytes = callableTemplateArtifact(member_proc_value.template).bytes,
                 };
-                break :blk try self.remapExecutableSpecializationKeyForArtifact(key, member_target_artifact);
+                var remapped = try self.remapExecutableSpecializationKeyForArtifact(key, member_target_artifact);
+                remapped.requested_fn_ty = reserved_member_proc.callable.source_fn_ty;
+                break :blk remapped;
             },
             .member_proc_relative => |endpoint| .{
                 .base = reserved_member_proc.proc.proc_base,
-                .requested_fn_ty = endpoint.requested_fn_ty,
+                .requested_fn_ty = reserved_member_proc.callable.source_fn_ty,
                 .exec_arg_tys = if (endpoint.exec_arg_tys.len == 0)
                     &.{}
                 else

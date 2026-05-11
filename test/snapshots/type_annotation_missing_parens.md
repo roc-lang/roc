@@ -10,6 +10,7 @@ nums : List U8
 # EXPECTED
 PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
 TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
+DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

@@ -20,6 +20,7 @@ PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
+DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **;** is not expected in a type annotation.

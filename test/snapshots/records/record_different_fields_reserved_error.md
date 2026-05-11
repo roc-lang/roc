@@ -32,6 +32,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
+DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
 TYPE MISMATCH - record_different_fields_reserved_error.md:4:13:4:29
 TYPE MISMATCH - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
