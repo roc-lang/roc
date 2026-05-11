@@ -9244,14 +9244,49 @@ nominal type can create a direct-call cycle among specialized inspect helpers.
 Those helpers must form one recursive representation graph for the current use
 context, not an infinite chain of call-site-owned clones.
 
-Lifted local procedures need one extra reservation rule. A `proc_value`
-occurrence for a lifted local procedure must not use the individual proc-value
-expression occurrence as the recursive member identity. Within one
-`RepresentationSolveSession`, a lifted local procedure template member is
-reserved once for the current executable use context, and later `proc_value`
-occurrences for that same lifted template reuse the reserved member instance.
-Those later occurrences still publish their own capture-value edges into the
-member's public capture roots; they do not allocate another member instance.
+Proc-value procedure targets need one extra reservation rule. A `proc_value`
+occurrence must not use the individual proc-value expression occurrence as the
+procedure-member identity. Within one `RepresentationSolveSession`, a
+`MirProcedureRef` selected by a proc-value occurrence is reserved once for the
+current executable use context when there is no explicit forced target. Later
+`proc_value` occurrences for that same selected procedure reuse the reserved
+member instance. Those later occurrences still own their own
+`CallableSetConstructionPlan`, their own `capture_values`, and their own
+capture-value transform boundaries; they do not allocate another target
+procedure member instance merely because the source expression occurrence is
+different.
+
+This is not a code-size optimization. It is required because
+`CanonicalCallableSetKey` is target-independent and artifact-stable: it cannot
+hash a session-local `ProcRepresentationInstanceId`. If two equivalent singleton
+proc-value occurrences reserve two separate target instances with the same
+source procedure, same callable type, and same capture-slot schema, they produce
+the same canonical callable-set key but different descriptor targets. That
+violates the descriptor invariant that duplicate keys carry identical
+descriptors. The correct construction is one shared target procedure member plus
+separate occurrence-local construction records.
+
+For example:
+
+```roc
+make_adder : I64 -> (I64 -> I64)
+make_adder = |n| |x| x + n
+
+add_one = make_adder(1)
+table = { f: add_one, nested: { g: add_one } }
+
+main = add_one(10) + (table.f)(20) + (table.nested.g)(9)
+```
+
+The three uses of `add_one` are three callable value occurrences, and each
+occurrence that constructs a finite callable value has its own
+`CallableSetConstructionPlan`. They all select the same target procedure member
+for the lifted closure body in the current solve session. Lambda-solved MIR must
+not allocate `add_one_closure#1`, `add_one_closure#2`, and
+`add_one_closure#3` when their selected `MirProcedureRef` and capture-slot schema
+are the same. Doing so would make the first occurrence publish a callable-set
+descriptor for key `K` whose member targets `#1`, while a later occurrence also
+uses key `K` but expects member target `#2`.
 
 This matters for mutually recursive local functions:
 
@@ -9271,14 +9306,18 @@ must find the already-reserved `is_even` member in the same solve session. It is
 a compiler bug to allocate `is_even#2`, then `is_odd#2`, and so on from the
 individual proc-value occurrence ids.
 
-`ProvisionalProcRepresentationInstanceKey` is intentionally owner-scoped. It
-prevents premature merging of two uses that have the same source procedure
-template and source function type but different callable arguments, capture
-representations, or Box-erasure requirements. After a session seals, instances
-may be deduplicated only by comparing the full canonical
-`ExecutableSpecializationKey`. Deduplication by source symbol, template id,
-source function type, argument count, display name, or layout compatibility is
-forbidden.
+`ProvisionalProcRepresentationInstanceKey` is intentionally owner-scoped for
+materialized direct-call instances, roots, adapter members, and other executable
+procedure demands. It prevents premature merging of two calls that have the same
+source procedure template and source function type but different callable
+arguments, capture representations, or Box-erasure requirements. Proc-value
+descriptor-member targets are the exception described above: the target
+procedure member is shared by selected `MirProcedureRef` inside one solve
+session, while occurrence-local construction data remains separate. After a
+session seals, materialized executable instances may be deduplicated only by
+comparing the full canonical `ExecutableSpecializationKey`. Deduplication by
+source symbol, template id, source function type, argument count, display name,
+or layout compatibility is forbidden.
 
 #### Use-Context Reservation, Fill, Solve, And Seal
 

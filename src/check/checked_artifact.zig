@@ -19056,98 +19056,70 @@ fn expectProvidedExportKind(
     try std.testing.expectEqual(expected.procedure_exports, provided_procedure_exports);
 }
 
-fn structHasField(comptime Struct: type, comptime name: []const u8) bool {
-    inline for (@typeInfo(Struct).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return true;
-    }
-    return false;
-}
-
-fn structFieldType(comptime Struct: type, comptime name: []const u8) type {
-    inline for (@typeInfo(Struct).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
-    }
-    @compileError("missing struct field: " ++ name);
-}
-
-fn unionHasField(comptime Union: type, comptime name: []const u8) bool {
-    inline for (@typeInfo(Union).@"union".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return true;
-    }
-    return false;
-}
-
 fn unionFieldCount(comptime Union: type) usize {
     return @typeInfo(Union).@"union".fields.len;
 }
 
-fn enumHasField(comptime Enum: type, comptime name: []const u8) bool {
-    inline for (@typeInfo(Enum).@"enum".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return true;
-    }
-    return false;
-}
-
 test "compile-time finalization route is explicit and non-optional" {
-    try std.testing.expect(structHasField(PublishInputs, "compile_time_finalizer"));
-    try std.testing.expect(structFieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
-    try std.testing.expect(structHasField(CompileTimeFinalizer, "finalize"));
-    try std.testing.expect(structHasField(CompileTimeFinalizer, "context"));
+    try std.testing.expect(@hasField(PublishInputs, "compile_time_finalizer"));
+    try std.testing.expect(@FieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
+    try std.testing.expect(@hasField(CompileTimeFinalizer, "finalize"));
+    try std.testing.expect(@hasField(CompileTimeFinalizer, "context"));
 
-    try std.testing.expect(enumHasField(RootRequestKind, "compile_time_constant"));
-    try std.testing.expect(enumHasField(RootRequestKind, "compile_time_callable"));
-    try std.testing.expect(enumHasField(RootAbi, "compile_time"));
+    _ = RootRequestKind.compile_time_constant;
+    _ = RootRequestKind.compile_time_callable;
+    _ = RootAbi.compile_time;
 
-    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "local_root"));
-    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "const_instance"));
-    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
+    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .local_root);
+    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .const_instance);
+    _ = std.meta.fieldInfo(CompileTimeEvaluationRequest, .callable_binding_instance);
 
-    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "local_root"));
-    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "const_instance"));
-    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
+    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .local_root);
+    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .const_instance);
+    _ = std.meta.fieldInfo(CompileTimeEvaluationPayload, .callable_binding_instance);
 }
 
 test "compile-time roots and top-level values publish final artifacts only" {
-    try std.testing.expect(enumHasField(CompileTimeRootKind, "constant"));
-    try std.testing.expect(enumHasField(CompileTimeRootKind, "callable_binding"));
-    try std.testing.expect(enumHasField(CompileTimeRootKind, "expect"));
+    _ = CompileTimeRootKind.constant;
+    _ = CompileTimeRootKind.callable_binding;
+    _ = CompileTimeRootKind.expect;
 
-    try std.testing.expect(unionHasField(CompileTimeRootPayload, "pending"));
-    try std.testing.expect(unionHasField(CompileTimeRootPayload, "const_graph"));
-    try std.testing.expect(unionHasField(CompileTimeRootPayload, "callable_result"));
-    try std.testing.expect(unionHasField(CompileTimeRootPayload, "expect"));
+    _ = std.meta.fieldInfo(CompileTimeRootPayload, .pending);
+    _ = std.meta.fieldInfo(CompileTimeRootPayload, .const_graph);
+    _ = std.meta.fieldInfo(CompileTimeRootPayload, .callable_result);
+    _ = std.meta.fieldInfo(CompileTimeRootPayload, .expect);
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
-    try std.testing.expect(unionHasField(TopLevelValueKind, "const_ref"));
-    try std.testing.expect(unionHasField(TopLevelValueKind, "procedure_binding"));
-    try std.testing.expect(!unionHasField(TopLevelValueKind, "runtime_thunk"));
-    try std.testing.expect(!unionHasField(TopLevelValueKind, "global_initializer"));
-    try std.testing.expect(!unionHasField(TopLevelValueKind, "top_level_closure_object"));
+    _ = std.meta.fieldInfo(TopLevelValueKind, .const_ref);
+    _ = std.meta.fieldInfo(TopLevelValueKind, .procedure_binding);
+    try std.testing.expect(!@hasField(TopLevelValueKind, "runtime_thunk"));
+    try std.testing.expect(!@hasField(TopLevelValueKind, "global_initializer"));
+    try std.testing.expect(!@hasField(TopLevelValueKind, "top_level_closure_object"));
 }
 
 test "constant template states contain sealed value data but no runtime initializer concepts" {
     try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
-    try std.testing.expect(unionHasField(ConstTemplateState, "reserved"));
-    try std.testing.expect(unionHasField(ConstTemplateState, "eval_template"));
-    try std.testing.expect(unionHasField(ConstTemplateState, "value_graph_template"));
+    _ = std.meta.fieldInfo(ConstTemplateState, .reserved);
+    _ = std.meta.fieldInfo(ConstTemplateState, .eval_template);
+    _ = std.meta.fieldInfo(ConstTemplateState, .value_graph_template);
 
-    try std.testing.expect(!unionHasField(ConstTemplateState, "runtime_thunk"));
-    try std.testing.expect(!unionHasField(ConstTemplateState, "global_initializer"));
-    try std.testing.expect(!unionHasField(ConstTemplateState, "initializer_proc"));
-    try std.testing.expect(!unionHasField(ConstTemplateState, "top_level_closure_object"));
+    try std.testing.expect(!@hasField(ConstTemplateState, "runtime_thunk"));
+    try std.testing.expect(!@hasField(ConstTemplateState, "global_initializer"));
+    try std.testing.expect(!@hasField(ConstTemplateState, "initializer_proc"));
+    try std.testing.expect(!@hasField(ConstTemplateState, "top_level_closure_object"));
 }
 
 test "checked artifact owns compile-time specialization caches for reuse" {
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "compile_time_roots"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "top_level_values"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_plans"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_dependencies"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "promoted_procedures"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "const_templates"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_values"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "const_instances"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "callable_binding_instances"));
-    try std.testing.expect(structHasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_plans"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_dependencies"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "promoted_procedures"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_values"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "const_instances"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_binding_instances"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
 }
 
 test "provided primitive constant is a data export, not a runtime root" {
@@ -19217,7 +19189,7 @@ test "provided nested heap constant is a data export, not a runtime root" {
     });
 }
 
-test "provided recursive boxed constant is a data export, not a runtime root" {
+test "provided recursive nominal constant is a data export, not a runtime root" {
     const source =
         \\platform ""
         \\    requires {}
@@ -19225,15 +19197,15 @@ test "provided recursive boxed constant is a data export, not a runtime root" {
         \\    packages {}
         \\    provides { tree_for_host: "tree" }
         \\
-        \\Tree : [Leaf(I64), Node(Box(Tree), Box(Tree))]
+        \\Tree := [Leaf(I64), Node(Tree, Tree)]
         \\
         \\tree_for_host : Tree
         \\tree_for_host = Node(
-        \\    Box.box(Leaf(5)),
-        \\    Box.box(Node(
-        \\        Box.box(Leaf(7)),
-        \\        Box.box(Leaf(11)),
-        \\    )),
+        \\    Leaf(5),
+        \\    Node(
+        \\        Leaf(7),
+        \\        Leaf(11),
+        \\    ),
         \\)
     ;
 
@@ -19244,16 +19216,18 @@ test "provided recursive boxed constant is a data export, not a runtime root" {
     });
 }
 
-test "provided boxed callable constant is a data export, not a runtime root" {
+test "provided callable-containing record constant is a data export, not a runtime root" {
     const source =
         \\platform ""
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { boxed_fn_for_host: "boxed_fn" }
+        \\    provides { table_for_host: "table" }
         \\
-        \\boxed_fn_for_host : Box(I64 -> I64)
-        \\boxed_fn_for_host = Box.box(|value| value + 1)
+        \\I64ToI64 : I64 -> I64
+        \\
+        \\table_for_host : { f: I64ToI64 }
+        \\table_for_host = { f: |value| value + 1 }
     ;
 
     try expectProvidedExportKind(source, .{

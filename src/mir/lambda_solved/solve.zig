@@ -594,7 +594,7 @@ const ProcedureInstanceRegistry = struct {
         const owner_record = self.procRecord(owner);
         if (forced_target == null) {
             if (self.activeInstanceForProc(owner_record.solve_session, proc)) |active| return active;
-            if (self.existingLiftedProcValueInstance(owner_record.solve_session, proc)) |existing| return existing;
+            if (self.existingProcValueInstance(owner_record.solve_session, proc)) |existing| return existing;
         }
         return try self.reserve(proc, owner_record.solve_session, .{ .proc_value = .{
             .owner = owner,
@@ -1069,12 +1069,11 @@ const ProcedureInstanceRegistry = struct {
         return b_info.recursive and a_info.group == b_info.group;
     }
 
-    fn existingLiftedProcValueInstance(
+    fn existingProcValueInstance(
         self: *const ProcedureInstanceRegistry,
         session_id: repr.RepresentationSolveSessionId,
         proc: canonical.MirProcedureRef,
     ) ?repr.ProcRepresentationInstanceId {
-        if (!isLiftedProcedure(proc)) return null;
         for (self.reservations.items) |reservation| {
             if (reservation.solve_session != session_id) continue;
             if (!canonical.mirProcedureRefEql(reservation.proc, proc)) continue;
@@ -1312,15 +1311,6 @@ fn cloneLocalFiniteSetEraseBranches(
         };
     }
     return cloned;
-}
-
-fn isLiftedProcedure(proc: canonical.MirProcedureRef) bool {
-    return switch (proc.callable.template) {
-        .lifted => true,
-        .checked,
-        .synthetic,
-        => false,
-    };
 }
 
 /// Public `run` function.
@@ -5408,32 +5398,19 @@ const CallableEmissionAssigner = struct {
         construction: repr.CallableSetConstructionPlan,
         group_set: *const CallableGroupSet,
     ) repr.CanonicalCallableSetMember {
+        switch (callable.source) {
+            .proc_value => return selectedMemberFromProcValueConstruction(callable, construction, group_set),
+            .finite_set,
+            .already_erased,
+            .erased_adapter,
+            => {},
+        }
+
         const emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
         switch (emission) {
             .pending_proc_value => |construction_id| {
-                const attached = callable.construction_plan orelse {
-                    lambdaInvariant("lambda-solved pending proc-value emission has no construction plan");
-                };
-                if (attached != construction_id) {
-                    lambdaInvariant("lambda-solved pending proc-value emission points at a different construction plan");
-                }
-                const source = switch (callable.source) {
-                    .proc_value => |source| source,
-                    else => lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source"),
-                };
-                if (source.target_instance != construction.target_instance) {
-                    lambdaInvariant("lambda-solved pending proc-value construction target differs from source target");
-                }
-                if (!repr.canonicalTypeKeyEql(source.fn_ty, construction.source_fn_ty)) {
-                    lambdaInvariant("lambda-solved pending proc-value construction function type differs from source type");
-                }
-                for (group_set.members.items) |member| {
-                    if (member.target_instance != source.target_instance) continue;
-                    if (!mirProcedureBodyIdentityEql(member.source_proc, source.proc)) continue;
-                    if (!canonical.procedureCallableRefEql(member.proc_value, source.proc.callable)) continue;
-                    return member;
-                }
-                lambdaInvariant("lambda-solved pending proc-value construction selected member missing from solved callable set");
+                _ = construction_id;
+                lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source");
             },
             .finite => |current_key| {
                 const member = self.representationStore().callableSetMember(current_key, construction.selected_member) orelse {
@@ -5451,6 +5428,33 @@ const CallableEmissionAssigner = struct {
             .already_erased,
             => lambdaInvariant("lambda-solved callable construction reached non-finite emission before assignment"),
         }
+    }
+
+    fn selectedMemberFromProcValueConstruction(
+        callable: repr.CallableValueInfo,
+        construction: repr.CallableSetConstructionPlan,
+        group_set: *const CallableGroupSet,
+    ) repr.CanonicalCallableSetMember {
+        const source = switch (callable.source) {
+            .proc_value => |source| source,
+            else => lambdaInvariant("lambda-solved proc-value construction has non-proc callable source"),
+        };
+        if (source.target_instance != construction.target_instance) {
+            lambdaInvariant("lambda-solved proc-value construction target differs from source target");
+        }
+        if (!repr.canonicalTypeKeyEql(source.fn_ty, construction.source_fn_ty)) {
+            lambdaInvariant("lambda-solved proc-value construction function type differs from source type");
+        }
+        if (callable.construction_plan == null) {
+            lambdaInvariant("lambda-solved proc-value construction source has no construction plan");
+        }
+        for (group_set.members.items) |member| {
+            if (member.target_instance != source.target_instance) continue;
+            if (!mirProcedureBodyIdentityEql(member.source_proc, source.proc)) continue;
+            if (!canonical.procedureCallableRefEql(member.proc_value, source.proc.callable)) continue;
+            return member;
+        }
+        lambdaInvariant("lambda-solved proc-value construction selected member missing from solved callable set");
     }
 
     fn memberInGroupSet(

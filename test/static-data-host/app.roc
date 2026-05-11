@@ -2,6 +2,7 @@ app [main!, answer, flag, flags, table, names, tree, boxed_add_one] { pf: platfo
 
 Branch : [BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]
 Tree : [Leaf(I64), Node(Box(Branch), Box(Branch))]
+I64ToI64 : I64 -> I64
 
 main! = || {}
 
@@ -54,5 +55,5 @@ tree =
         )),
     )
 
-boxed_add_one : Box(I64 -> I64)
+boxed_add_one : Box(I64ToI64)
 boxed_add_one = Box.box(|value| value + 1)

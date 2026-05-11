@@ -1036,14 +1036,15 @@ pub const tests = [_]TestCase{
     ),
     moduleTestWithLiveAllocations(
         "rc balance: recursive tag union with boxed children is fully released",
-        \\Tree : [Leaf(Str), Node(Box(Tree), Box(Tree))]
+        \\Tree := [Leaf(Str), Node(Box(Tree), Box(Tree))]
         \\
+        \\count : Tree -> I64
         \\count = |tree| match tree {
         \\    Leaf(_) => 1
         \\    Node(left, right) => count(Box.unbox(left)) + count(Box.unbox(right))
         \\}
         \\
-        \\main = {
+        \\main = || {
         \\    tree = Node(
         \\        Box.box(Leaf("left recursive string definitely long enough to allocate outside small-string storage")),
         \\        Box.box(Node(

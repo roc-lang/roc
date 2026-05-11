@@ -163,7 +163,7 @@ const core_tests = [_]TestCase{
         \\add_one = make_adder(1)
         \\table = { f: add_one, nested: { g: add_one } }
         \\
-        \\main = add_one(10) + table.f(20) + table.nested.g(9)
+        \\main = add_one(10) + (table.f)(20) + (table.nested.g)(9)
         ,
         .expected = .{ .inspect_str = "42.0" },
     },
