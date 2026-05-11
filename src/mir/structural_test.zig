@@ -40,6 +40,21 @@ fn structFieldType(comptime Struct: type, comptime name: []const u8) type {
     @compileError("missing struct field: " ++ name);
 }
 
+fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []const u8 {
+    const start_index = std.mem.indexOf(u8, source, start) orelse @panic("missing source slice start marker");
+    const after_start = source[start_index..];
+    const end_index = std.mem.indexOf(u8, after_start, end) orelse @panic("missing source slice end marker");
+    return after_start[0..end_index];
+}
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
+fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+}
+
 test "mono MIR output has resolved call/equality nodes and no dispatch survival nodes" {
     const ExprData = Mono.Ast.Expr.Data;
 
@@ -154,4 +169,52 @@ test "annotation-only checked expressions are not representable in post-check MI
         mono_specialize_source,
         "mono body lowering received a non-runtime checked expression form",
     ) != null);
+}
+
+test "stage-local expression maps only memoize context-independent leaves" {
+    const lambda_solved_source = @embedFile("lambda_solved/solve.zig");
+    const lambda_allowed = sourceSliceBetween(lambda_solved_source, "fn exprCanUseExprMap", "fn lowerExpr");
+
+    try expectContains(lambda_allowed, ".capture_ref");
+    try expectContains(lambda_allowed, ".int_lit");
+    try expectContains(lambda_allowed, ".const_instance");
+    try expectContains(lambda_allowed, ".const_ref");
+    try expectContains(lambda_allowed, ".pending_callable_instance");
+    try expectContains(lambda_allowed, ".pending_local_root");
+    try expectContains(lambda_allowed, "else => false");
+
+    try expectNotContains(lambda_allowed, ".var_");
+    try expectNotContains(lambda_allowed, ".let_");
+    try expectNotContains(lambda_allowed, ".call_value");
+    try expectNotContains(lambda_allowed, ".call_proc");
+    try expectNotContains(lambda_allowed, ".proc_value");
+    try expectNotContains(lambda_allowed, ".match_");
+    try expectNotContains(lambda_allowed, ".if_");
+    try expectNotContains(lambda_allowed, ".block");
+    try expectNotContains(lambda_allowed, ".record");
+    try expectNotContains(lambda_allowed, ".list");
+    try expectNotContains(lambda_allowed, ".tag");
+
+    const executable_source = @embedFile("executable/build.zig");
+    const executable_allowed = sourceSliceBetween(executable_source, "fn expressionCanUseExprMap", "fn lowerExpr");
+
+    try expectContains(executable_allowed, ".capture_ref");
+    try expectContains(executable_allowed, ".int_lit");
+    try expectContains(executable_allowed, ".const_instance");
+    try expectContains(executable_allowed, ".runtime_error");
+    try expectContains(executable_allowed, "else => false");
+
+    try expectNotContains(executable_allowed, ".var_");
+    try expectNotContains(executable_allowed, ".let_");
+    try expectNotContains(executable_allowed, ".call_direct");
+    try expectNotContains(executable_allowed, ".call_erased");
+    try expectNotContains(executable_allowed, ".callable_set_value");
+    try expectNotContains(executable_allowed, ".callable_match");
+    try expectNotContains(executable_allowed, ".packed_erased_fn");
+    try expectNotContains(executable_allowed, ".source_match");
+    try expectNotContains(executable_allowed, ".if_");
+    try expectNotContains(executable_allowed, ".block");
+    try expectNotContains(executable_allowed, ".record");
+    try expectNotContains(executable_allowed, ".list");
+    try expectNotContains(executable_allowed, ".tag");
 }

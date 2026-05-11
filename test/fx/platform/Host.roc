@@ -18,6 +18,9 @@ Host :: {
     ## Return a boxed host-provided function that captures a recursive tag union.
     boxed_recursive_tree! : Tree => Box(I64ToI64)
 
+    ## Return a boxed host-provided function whose capture owns another boxed function.
+    boxed_with_boxed_capture! : Box(I64ToI64), I64 => Box(I64ToI64)
+
     ## Call a boxed function from the host using the erased callable ABI.
     call_boxed! : Box(I64ToI64), I64 => I64
 

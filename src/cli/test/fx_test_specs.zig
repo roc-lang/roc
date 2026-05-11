@@ -29,7 +29,7 @@ pub const TestSpec = struct {
 /// host-boundary fixture independently for interpreter and dev backends.
 pub const host_boxed_fn_boundary_test = TestSpec{
     .roc_file = "test/fx/host_boxed_fn_boundary.roc",
-    .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4",
+    .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host returns boxed capture: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4 boxed_capture=1",
     .description = "Regression test: Boxed erased callables across the host boundary in both directions",
 };
 

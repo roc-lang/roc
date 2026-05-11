@@ -2,6 +2,8 @@ platform ""
     requires {} {
         main! : () => {},
         answer : I64,
+        flag : Bool,
+        flags : List(Bool),
         table : {
             counts: (I64, I64),
             status: [Err(Str), Ok(Str)],
@@ -18,15 +20,19 @@ platform ""
                 Box([BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]),
             ),
         ],
+        boxed_add_one : Box(I64 -> I64),
     }
     exposes []
     packages {}
     provides {
         main_for_host!: "main",
         answer_for_host: "answer",
+        flag_for_host: "flag",
+        flags_for_host: "flags",
         table_for_host: "table",
         names_for_host: "names",
         tree_for_host: "tree",
+        boxed_add_one_for_host: "boxed_add_one",
     }
     targets: {
         files: "targets/",
@@ -45,6 +51,12 @@ main_for_host! = main!
 
 answer_for_host : I64
 answer_for_host = answer
+
+flag_for_host : Bool
+flag_for_host = flag
+
+flags_for_host : List(Bool)
+flags_for_host = flags
 
 table_for_host : {
     counts: (I64, I64),
@@ -67,3 +79,6 @@ tree_for_host : [
     ),
 ]
 tree_for_host = tree
+
+boxed_add_one_for_host : Box(I64 -> I64)
+boxed_add_one_for_host = boxed_add_one

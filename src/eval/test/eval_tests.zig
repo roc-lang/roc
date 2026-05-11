@@ -155,6 +155,63 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        .name = "inspect: compile-time callable result reused through top-level data",
+        .source_kind = .module,
+        .source =
+        \\make_adder = |n| |x| x + n
+        \\
+        \\add_one = make_adder(1)
+        \\table = { f: add_one, nested: { g: add_one } }
+        \\
+        \\main = add_one(10) + table.f(20) + table.nested.g(9)
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: Bool stored boxed tagged and passed as ordinary Roc value",
+        .source_kind = .module,
+        .source =
+        \\choose : Bool, a, a -> a
+        \\choose = |flag, yes, no| if flag yes else no
+        \\
+        \\main = {
+        \\    boxed = Box.box(True)
+        \\    record = { first: Box.unbox(boxed), second: False }
+        \\    tagged = Ok(record.first)
+        \\
+        \\    match tagged {
+        \\        Ok(True) => choose(record.second, 0, 42)
+        \\        Ok(False) => 1
+        \\        Err(_) => 2
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: top-level Bool constants inside heap containers remain values",
+        .source_kind = .module,
+        .source =
+        \\flags = [False, True, False]
+        \\table = { boxed: Box.box(True), tagged: Ok(False) }
+        \\
+        \\main = {
+        \\    from_list = match List.get(flags, 1) {
+        \\        Ok(flag) => flag
+        \\        Err(_) => False
+        \\    }
+        \\
+        \\    from_tag = match table.tagged {
+        \\        Ok(flag) => flag
+        \\        Err(_) => True
+        \\    }
+        \\
+        \\    from_list == Box.unbox(table.boxed) and from_tag == False
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "inspect: Str.inspect uses nominal to_inspect",
         .source_kind = .module,
         .source =

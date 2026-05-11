@@ -1016,6 +1016,24 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    exprTestWithLiveAllocations(
+        "rc balance: boxed callable capture containing another boxed callable is released",
+        \\{
+        \\    inner = Box.box(|x| x + 1)
+        \\    outer = Box.box(|x| {
+        \\        f = Box.unbox(inner)
+        \\
+        \\        f(x) + 1
+        \\    })
+        \\    f = Box.unbox(outer)
+        \\    expect f(40) == 42
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
     moduleTestWithLiveAllocations(
         "rc balance: recursive tag union with boxed children is fully released",
         \\Tree : [Leaf(Str), Node(Box(Tree), Box(Tree))]

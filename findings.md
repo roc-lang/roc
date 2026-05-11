@@ -15,6 +15,7 @@ No Zig commands have been run after the latest coverage additions; these tests a
 - `can_field_access.md` now preserves the old undefined-variable diagnostic coverage using explicit snapshot metadata.
 - Deleted Rust ability-specialization inspect snapshots were restored, and the ignored `inspect_custom_type` fixture was repaired.
 - Boxed erased callable host-boundary coverage remains a clear improvement over `origin/main`.
+- Boxed erased callable host-boundary coverage now includes a host-created boxed callable whose capture owns another boxed callable, in addition to Roc-created boxed captures passed to and stored by the host.
 - Static data export host-linking coverage remains a clear improvement over `origin/main` for the dev/native object path.
 
 ## Additional Coverage Added For The Larger Gaps
@@ -34,7 +35,9 @@ New eval tests in `src/eval/test/eval_tests.zig` cover user-visible compile-time
 
 - top-level callable results produced by compile-time evaluation are callable at runtime.
 - boxed callable results produced by compile-time evaluation use the same callable path.
+- compile-time callable results can be reused through ordinary top-level data without becoming runtime thunks or global closure objects.
 - top-level records, nested records, tag payloads, and lists may contain callable values.
+- `Bool` values stored in records, lists, tag payloads, and boxes behave as ordinary Roc values.
 
 New provided-export structural tests in `src/check/checked_artifact.zig` cover recursive boxed constants and boxed callable constants as data exports rather than runtime roots.
 
@@ -55,6 +58,7 @@ New host-effects tests in `src/eval/test/host_effects_tests.zig` assert zero liv
 - boxed lists of heap strings
 - closure captures containing heap strings
 - boxed callable captures containing nested heap data
+- boxed callable captures containing another boxed callable
 - recursive tag unions with boxed children
 
 This complements value-oriented eval tests by asserting balanced runtime allocation/deallocation through the same interpreter/dev host-effects runner.
@@ -78,10 +82,12 @@ The native host-linking fixture remains the correct primary coverage for readonl
 Coverage now includes:
 
 - primitive exported constants
+- `Bool` and `List(Bool)` exported constants
 - nested records
 - strings
 - nested lists
 - recursive tag-union data with boxed children
+- exported `Box(I64 -> I64)` constants called by the host through the erased callable ABI
 - static refcount behavior for readonly data
 - checked-artifact publication of boxed callable constants as data exports
 

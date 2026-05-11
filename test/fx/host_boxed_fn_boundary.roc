@@ -45,6 +45,15 @@ run_recursive_tree! = || {
     f(19)
 }
 
+run_host_returns_boxed_capture! : () => I64
+run_host_returns_boxed_capture! = || {
+    inner = Box.box(|x| x + 4)
+    boxed = Host.boxed_with_boxed_capture!(inner, 5)
+    f = Box.unbox(boxed)
+
+    f(33)
+}
+
 run_host_consumes_primitive! : () => I64
 run_host_consumes_primitive! = || {
     boxed = Box.box(|x| x + 5)
@@ -117,6 +126,7 @@ main! = || {
     Stdout.line!("primitive: ${run_primitive!().to_str()}")
     Stdout.line!("nested record: ${run_nested_record!().to_str()}")
     Stdout.line!("recursive tree: ${run_recursive_tree!().to_str()}")
+    Stdout.line!("host returns boxed capture: ${run_host_returns_boxed_capture!().to_str()}")
     Stdout.line!("host consumes primitive: ${run_host_consumes_primitive!().to_str()}")
     Stdout.line!("host consumes nested record: ${run_host_consumes_nested_record!().to_str()}")
     Stdout.line!("host consumes recursive tree: ${run_host_consumes_recursive_tree!().to_str()}")

@@ -1,4 +1,4 @@
-app [main!, answer, table, names, tree] { pf: platform "./platform/main.roc" }
+app [main!, answer, flag, flags, table, names, tree, boxed_add_one] { pf: platform "./platform/main.roc" }
 
 Branch : [BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]
 Tree : [Leaf(I64), Node(Box(Branch), Box(Branch))]
@@ -7,6 +7,12 @@ main! = || {}
 
 answer : I64
 answer = 42
+
+flag : Bool
+flag = True
+
+flags : List(Bool)
+flags = [False, True, False]
 
 table : {
     counts: (I64, I64),
@@ -47,3 +53,6 @@ tree =
             Box.box(11),
         )),
     )
+
+boxed_add_one : Box(I64 -> I64)
+boxed_add_one = Box.box(|value| value + 1)

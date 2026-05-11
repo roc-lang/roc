@@ -71,9 +71,12 @@ const TreeNodePayload = extern struct {
 };
 
 extern const roc__answer: i64;
+extern const roc__flag: u8;
+extern const roc__flags: RocList;
 extern const roc__table: Table;
 extern const roc__names: RocList;
 extern const roc__tree: Tree;
+extern const roc__boxed_add_one: ?[*]u8;
 extern fn roc__main(ops: *RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 comptime {
@@ -124,6 +127,8 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) !void {
     try expectEqualI64(roc__answer, 42, "answer");
+    try expectEqualU8(roc__flag, 1, "flag True discriminant");
+    try expectListOfBool(roc__flags, &.{ 0, 1, 0 }, roc_ops, "flags");
 
     try expectEqualI64(roc__table.counts.@"0", 3, "table.counts.0");
     try expectEqualI64(roc__table.counts.@"1", 5, "table.counts.1");
@@ -152,6 +157,7 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) !void {
     );
 
     try expectTree(roc__tree, roc_ops);
+    try expectBoxedAddOne(roc__boxed_add_one, roc_ops);
 
     try expectEqualUsize(host_env.dealloc_count, 0, "static checks did not dealloc");
 }
@@ -205,6 +211,18 @@ fn expectListOfStr(list: RocList, expected: []const []const u8, roc_ops: *RocOps
         var item_label_buf: [128]u8 = undefined;
         const item_label = std.fmt.bufPrint(&item_label_buf, "{s}[{d}]", .{ label, i }) catch label;
         try expectStr(values[i], expected_str, roc_ops, item_label);
+    }
+}
+
+fn expectListOfBool(list: RocList, expected: []const u8, roc_ops: *RocOps, label: []const u8) !void {
+    try expectStaticList(list, @alignOf(u8), @sizeOf(u8), false, expected.len, roc_ops, label);
+
+    if (expected.len == 0) return;
+    const values = list.elements(u8) orelse return fail("expected non-empty bool list bytes");
+    for (expected, 0..) |expected_discriminant, i| {
+        var item_label_buf: [128]u8 = undefined;
+        const item_label = std.fmt.bufPrint(&item_label_buf, "{s}[{d}]", .{ label, i }) catch label;
+        try expectEqualU8(values[i], expected_discriminant, item_label);
     }
 }
 
@@ -265,6 +283,33 @@ fn expectStaticAllocationPtr(
     try expectEqualIsize(try readRefcount(data_ptr), before, label);
     builtins.utils.decrefDataPtrC(data_ptr, alignment, contains_refcounted, roc_ops);
     try expectEqualIsize(try readRefcount(data_ptr), before, label);
+}
+
+const I64ToI64Args = extern struct {
+    arg0: i64,
+};
+
+fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) !void {
+    const ptr = boxed orelse return fail("expected boxed_add_one static data pointer");
+    try expectStaticDataPtr(ptr, "boxed_add_one");
+
+    const before = try readRefcount(ptr);
+    builtins.erased_callable.incref(ptr, 1, roc_ops);
+    try expectEqualIsize(try readRefcount(ptr), before, "boxed_add_one incref keeps static refcount");
+
+    var args = I64ToI64Args{ .arg0 = 41 };
+    var result: i64 = undefined;
+    const payload = builtins.erased_callable.payloadPtr(ptr);
+    payload.callable_fn_ptr(
+        roc_ops,
+        @ptrCast(&result),
+        @ptrCast(&args),
+        builtins.erased_callable.capturePtr(ptr),
+    );
+    try expectEqualI64(result, 42, "boxed_add_one call");
+
+    builtins.erased_callable.decref(ptr, roc_ops);
+    try expectEqualIsize(try readRefcount(ptr), before, "boxed_add_one decref keeps static refcount");
 }
 
 fn expectStaticDataPtr(data_ptr: ?[*]u8, label: []const u8) !void {

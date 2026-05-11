@@ -660,9 +660,10 @@ test "source type keys normalize closed empty records to empty record" {
     var names = canonical.CanonicalNameStore.init(std.testing.allocator);
     defer names.deinit();
 
-    const empty: checked_artifact.CheckedTypeId = @enumFromInt(0);
-    const closed_empty_record: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const empty: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const closed_empty_record: checked_artifact.CheckedTypeId = @enumFromInt(2);
     const payloads = [_]checked_artifact.CheckedTypePayload{
+        .pending, // Deliberately unused: this test never relies on a zero-valued type id.
         .empty_record,
         .{ .record = .{
             .fields = &.{},
@@ -685,9 +686,10 @@ test "source type keys normalize closed empty tag unions to empty tag union" {
     var names = canonical.CanonicalNameStore.init(std.testing.allocator);
     defer names.deinit();
 
-    const empty: checked_artifact.CheckedTypeId = @enumFromInt(0);
-    const closed_empty_tag_union: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const empty: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const closed_empty_tag_union: checked_artifact.CheckedTypeId = @enumFromInt(2);
     const payloads = [_]checked_artifact.CheckedTypePayload{
+        .pending, // Deliberately unused: this test never relies on a zero-valued type id.
         .empty_tag_union,
         .{ .tag_union = .{
             .tags = &.{},
