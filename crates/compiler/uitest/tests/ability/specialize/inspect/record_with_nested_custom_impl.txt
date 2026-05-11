@@ -1,0 +1,9 @@
+app "test" provides [main] to "./platform"
+
+Op := U8 implements [Inspect { to_inspector: myToInspector }]
+
+myToInspector : Op -> Inspector f where f implements InspectFormatter
+myToInspector = \@Op num -> Inspect.u8 num
+
+main = Inspect.to_inspector { op: @Op 1u8 } |> Inspect.apply (Inspect.init {})
+#      ^^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.to_inspector(32): { op : Op } -[[#Derived.to_inspector_{op}(0)]]-> Inspector f where f implements InspectFormatter

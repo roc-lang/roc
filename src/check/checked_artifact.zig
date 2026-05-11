@@ -99,23 +99,62 @@ pub const CheckedModuleArtifactKey = struct {
         const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
         const direct_import_artifact_keys_hash = hashDirectImportArtifactKeys(direct_import_artifact_keys);
 
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&source_hash);
-        hasher.update(&compiler_artifact_hash);
-        hasher.update(&module_identity_hash);
-        hasher.update(&checking_context_identity_hash);
-        hasher.update(&direct_import_artifact_keys_hash);
-
         return .{
             .source_hash = source_hash,
             .compiler_artifact_hash = compiler_artifact_hash,
             .module_identity_hash = module_identity_hash,
             .checking_context_identity_hash = checking_context_identity_hash,
             .direct_import_artifact_keys_hash = direct_import_artifact_keys_hash,
-            .bytes = hasher.finalResult(),
+            .bytes = computeCheckedArtifactKeyBytes(
+                source_hash,
+                compiler_artifact_hash,
+                module_identity_hash,
+                checking_context_identity_hash,
+                direct_import_artifact_keys_hash,
+            ),
         };
     }
 };
+
+fn computeCheckedArtifactKeyBytes(
+    source_hash: [32]u8,
+    compiler_artifact_hash: [32]u8,
+    module_identity_hash: [32]u8,
+    checking_context_identity_hash: [32]u8,
+    direct_import_artifact_keys_hash: [32]u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&source_hash);
+    hasher.update(&compiler_artifact_hash);
+    hasher.update(&module_identity_hash);
+    hasher.update(&checking_context_identity_hash);
+    hasher.update(&direct_import_artifact_keys_hash);
+    return hasher.finalResult();
+}
+
+test "checked artifact key final bytes include compiler artifact hash" {
+    const source_hash = [_]u8{1} ** 32;
+    const module_identity_hash = [_]u8{2} ** 32;
+    const checking_context_identity_hash = [_]u8{3} ** 32;
+    const direct_import_artifact_keys_hash = [_]u8{4} ** 32;
+
+    const first = computeCheckedArtifactKeyBytes(
+        source_hash,
+        [_]u8{5} ** 32,
+        module_identity_hash,
+        checking_context_identity_hash,
+        direct_import_artifact_keys_hash,
+    );
+    const second = computeCheckedArtifactKeyBytes(
+        source_hash,
+        [_]u8{6} ** 32,
+        module_identity_hash,
+        checking_context_identity_hash,
+        direct_import_artifact_keys_hash,
+    );
+
+    try std.testing.expect(!std.meta.eql(first, second));
+}
 
 /// Public `ModuleIdentity` declaration.
 pub const ModuleIdentity = struct {
@@ -19017,6 +19056,100 @@ fn expectProvidedExportKind(
     try testing.expectEqual(expected.procedure_exports, provided_procedure_exports);
 }
 
+fn structHasField(comptime Struct: type, comptime name: []const u8) bool {
+    inline for (@typeInfo(Struct).@"struct".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
+    }
+    return false;
+}
+
+fn structFieldType(comptime Struct: type, comptime name: []const u8) type {
+    inline for (@typeInfo(Struct).@"struct".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return field.type;
+    }
+    @compileError("missing struct field: " ++ name);
+}
+
+fn unionHasField(comptime Union: type, comptime name: []const u8) bool {
+    inline for (@typeInfo(Union).@"union".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
+    }
+    return false;
+}
+
+fn unionFieldCount(comptime Union: type) usize {
+    return @typeInfo(Union).@"union".fields.len;
+}
+
+fn enumHasField(comptime Enum: type, comptime name: []const u8) bool {
+    inline for (@typeInfo(Enum).@"enum".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
+    }
+    return false;
+}
+
+test "compile-time finalization route is explicit and non-optional" {
+    try testing.expect(structHasField(PublishInputs, "compile_time_finalizer"));
+    try testing.expect(structFieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
+    try testing.expect(structHasField(CompileTimeFinalizer, "finalize"));
+    try testing.expect(structHasField(CompileTimeFinalizer, "context"));
+
+    try testing.expect(enumHasField(RootRequestKind, "compile_time_constant"));
+    try testing.expect(enumHasField(RootRequestKind, "compile_time_callable"));
+    try testing.expect(enumHasField(RootAbi, "compile_time"));
+
+    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "local_root"));
+    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "const_instance"));
+    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
+
+    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "local_root"));
+    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "const_instance"));
+    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
+}
+
+test "compile-time roots and top-level values publish final artifacts only" {
+    try testing.expect(enumHasField(CompileTimeRootKind, "constant"));
+    try testing.expect(enumHasField(CompileTimeRootKind, "callable_binding"));
+    try testing.expect(enumHasField(CompileTimeRootKind, "expect"));
+
+    try testing.expect(unionHasField(CompileTimeRootPayload, "pending"));
+    try testing.expect(unionHasField(CompileTimeRootPayload, "const_graph"));
+    try testing.expect(unionHasField(CompileTimeRootPayload, "callable_result"));
+    try testing.expect(unionHasField(CompileTimeRootPayload, "expect"));
+
+    try testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
+    try testing.expect(unionHasField(TopLevelValueKind, "const_ref"));
+    try testing.expect(unionHasField(TopLevelValueKind, "procedure_binding"));
+    try testing.expect(!unionHasField(TopLevelValueKind, "runtime_thunk"));
+    try testing.expect(!unionHasField(TopLevelValueKind, "global_initializer"));
+    try testing.expect(!unionHasField(TopLevelValueKind, "top_level_closure_object"));
+}
+
+test "constant template states contain sealed value data but no runtime initializer concepts" {
+    try testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
+    try testing.expect(unionHasField(ConstTemplateState, "reserved"));
+    try testing.expect(unionHasField(ConstTemplateState, "eval_template"));
+    try testing.expect(unionHasField(ConstTemplateState, "value_graph_template"));
+
+    try testing.expect(!unionHasField(ConstTemplateState, "runtime_thunk"));
+    try testing.expect(!unionHasField(ConstTemplateState, "global_initializer"));
+    try testing.expect(!unionHasField(ConstTemplateState, "initializer_proc"));
+    try testing.expect(!unionHasField(ConstTemplateState, "top_level_closure_object"));
+}
+
+test "checked artifact owns compile-time specialization caches for reuse" {
+    try testing.expect(structHasField(CheckedModuleArtifact, "compile_time_roots"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "top_level_values"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_plans"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_dependencies"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "promoted_procedures"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "const_templates"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_values"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "const_instances"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "callable_binding_instances"));
+    try testing.expect(structHasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
+}
+
 test "provided primitive constant is a data export, not a runtime root" {
     const source =
         \\platform ""
@@ -19075,6 +19208,52 @@ test "provided nested heap constant is a data export, not a runtime root" {
         \\    [],
         \\    ["gamma", "delta", "epsilon"],
         \\]
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 0,
+        .data_exports = 1,
+        .procedure_exports = 0,
+    });
+}
+
+test "provided recursive boxed constant is a data export, not a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { tree_for_host: "tree" }
+        \\
+        \\Tree : [Leaf(I64), Node(Box(Tree), Box(Tree))]
+        \\
+        \\tree_for_host : Tree
+        \\tree_for_host = Node(
+        \\    Box.box(Leaf(5)),
+        \\    Box.box(Node(
+        \\        Box.box(Leaf(7)),
+        \\        Box.box(Leaf(11)),
+        \\    )),
+        \\)
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 0,
+        .data_exports = 1,
+        .procedure_exports = 0,
+    });
+}
+
+test "provided boxed callable constant is a data export, not a runtime root" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { boxed_fn_for_host: "boxed_fn" }
+        \\
+        \\boxed_fn_for_host : Box(I64 -> I64)
+        \\boxed_fn_for_host = Box.box(|value| value + 1)
     ;
 
     try expectProvidedExportKind(source, .{

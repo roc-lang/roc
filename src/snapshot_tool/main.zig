@@ -1040,6 +1040,9 @@ fn processSnapshotContent(
                 },
                 else => unreachable,
             }
+            if (content.meta.include_canonicalize_diagnostics and can_ir.store.scratch != null) {
+                can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
+            }
         },
         .repl, .dev_object, .docs => unreachable, // Handled above
     }
@@ -1601,10 +1604,12 @@ const Meta = struct {
     node_type: NodeType,
     filename: ?[]const u8 = null,
     skip: bool = false,
+    include_canonicalize_diagnostics: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
     const SKIP_START: []const u8 = "skip=";
+    const CANONICALIZE_DIAGNOSTICS_START: []const u8 = "canonicalize_diagnostics=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -1612,6 +1617,7 @@ const Meta = struct {
         var node_type: NodeType = .file;
         var filename: ?[]const u8 = null;
         var skip: bool = false;
+        var include_canonicalize_diagnostics: bool = false;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
@@ -1627,6 +1633,8 @@ const Meta = struct {
                 }
             } else if (std.mem.startsWith(u8, line, SKIP_START)) {
                 skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, CANONICALIZE_DIAGNOSTICS_START)) {
+                include_canonicalize_diagnostics = std.mem.eql(u8, line[(CANONICALIZE_DIAGNOSTICS_START.len)..], "true");
             }
         }
 
@@ -1635,6 +1643,7 @@ const Meta = struct {
             .node_type = node_type,
             .filename = filename,
             .skip = skip,
+            .include_canonicalize_diagnostics = include_canonicalize_diagnostics,
         };
     }
 
@@ -1651,6 +1660,11 @@ const Meta = struct {
         if (self.skip) {
             try writer.writeAll("\n");
             try writer.writeAll(SKIP_START);
+            try writer.writeAll("true");
+        }
+        if (self.include_canonicalize_diagnostics) {
+            try writer.writeAll("\n");
+            try writer.writeAll(CANONICALIZE_DIAGNOSTICS_START);
             try writer.writeAll("true");
         }
     }

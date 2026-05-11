@@ -23,6 +23,26 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int times dec type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
     .{
+        .name = "problem: annotation-only top-level value is not a runtime value",
+        .source_kind = .module,
+        .source =
+        \\missing : Str
+        \\
+        \\main = missing
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "problem: annotation-only value in untaken branch is still not a runtime value",
+        .source_kind = .module,
+        .source =
+        \\missing : Str
+        \\
+        \\main = if False { missing } else { "ok" }
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
         .name = "problem: to_inspect must return Str",
         .source_kind = .module,
         .source =
@@ -52,6 +72,88 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: string literal", .source = "\"hello\"", .expected = .{ .inspect_str = "\"hello\"" } },
     .{ .name = "inspect: empty string literal", .source = "\"\"", .expected = .{ .inspect_str = "\"\"" } },
+    .{
+        .name = "inspect: top-level callable result from compile-time evaluation",
+        .source_kind = .module,
+        .source =
+        \\make_adder = |n| |x| x + n
+        \\
+        \\add_one = make_adder(1)
+        \\
+        \\main = add_one(41)
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: top-level boxed callable result from compile-time evaluation",
+        .source_kind = .module,
+        .source =
+        \\make_boxed_adder : I64 -> (I64 -> I64)
+        \\make_boxed_adder = |n| {
+        \\    boxed_n = Box.box(n)
+        \\
+        \\    |x| x + Box.unbox(boxed_n)
+        \\}
+        \\
+        \\add_one : I64 -> I64
+        \\add_one = make_boxed_adder(1)
+        \\
+        \\main = add_one(41)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "inspect: top-level record constant containing callable value",
+        .source_kind = .module,
+        .source =
+        \\table = { f: |x| x + 1 }
+        \\
+        \\main = {
+        \\    f = table.f
+        \\    f(41)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: nested top-level record constant containing callable value",
+        .source_kind = .module,
+        .source =
+        \\table = { nested: { f: |x| x + 1 } }
+        \\
+        \\main = {
+        \\    f = table.nested.f
+        \\    f(41)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: top-level tag payload constant containing callable value",
+        .source_kind = .module,
+        .source =
+        \\handler = Ok(|x| x + 1)
+        \\
+        \\main = match handler {
+        \\    Ok(f) => f(41)
+        \\    Err(_) => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: top-level list constant containing callable values",
+        .source_kind = .module,
+        .source =
+        \\fns = [|x| x + 1, |x| x + 2]
+        \\
+        \\main = match List.first(fns) {
+        \\    Ok(f) => f(41)
+        \\    Err(_) => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
     .{
         .name = "inspect: Str.inspect uses nominal to_inspect",
         .source_kind = .module,

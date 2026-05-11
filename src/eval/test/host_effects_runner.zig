@@ -33,6 +33,7 @@ pub const TestCase = struct {
     imports: []const helpers.ModuleSource = &.{},
     expected_events: []const ExpectedEvent,
     expected_termination: RuntimeHostEnv.Termination,
+    expected_live_allocations: ?u32 = null,
     skip: Skip = .{},
 
     pub const ExpectedEvent = union(enum) {
@@ -109,6 +110,7 @@ const TestResult = struct {
 const BackendRunHeader = extern struct {
     termination: u8,
     event_count: u32,
+    allocation_count: u32,
 };
 
 const EventHeader = extern struct {
@@ -153,6 +155,7 @@ fn appendEncodedRun(
     const header: BackendRunHeader = .{
         .termination = @intFromEnum(run.termination),
         .event_count = @intCast(run.events.len),
+        .allocation_count = run.allocation_count,
     };
     try out.appendSlice(allocator, std.mem.asBytes(&header));
     for (run.events) |event| {
@@ -212,6 +215,7 @@ fn decodeRun(buf: []const u8, gpa: std.mem.Allocator) ?RuntimeHostEnv.RecordedRu
     return .{
         .termination = @enumFromInt(header.termination),
         .events = events,
+        .allocation_count = header.allocation_count,
     };
 }
 
@@ -388,6 +392,9 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
 
 fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
     if (run.termination != tc.expected_termination) return false;
+    if (tc.expected_live_allocations) |expected| {
+        if (run.allocation_count != expected) return false;
+    }
     if (run.events.len != tc.expected_events.len) return false;
     for (run.events, tc.expected_events) |actual, expected| {
         switch (expected) {
@@ -722,6 +729,9 @@ fn printEscapedBytes(bytes: []const u8) void {
 
 fn printExpected(tc: TestCase) void {
     std.debug.print("        expected: {s} ", .{@tagName(tc.expected_termination)});
+    if (tc.expected_live_allocations) |expected_live_allocations| {
+        std.debug.print("live_allocations={d} ", .{expected_live_allocations});
+    }
     if (tc.expected_events.len == 0) {
         std.debug.print("[]\n", .{});
         return;
@@ -755,7 +765,7 @@ fn printExpected(tc: TestCase) void {
 }
 
 fn printRecordedRun(run: RuntimeHostEnv.RecordedRun) void {
-    std.debug.print("{s} ", .{@tagName(run.termination)});
+    std.debug.print("{s} live_allocations={d} ", .{ @tagName(run.termination), run.allocation_count });
     if (run.events.len == 0) {
         std.debug.print("[]", .{});
         return;

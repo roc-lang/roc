@@ -8,6 +8,7 @@ const collections = @import("collections");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
+const rc_helper = @import("./rc_helper.zig");
 
 const target = base.target;
 const Layout = layout_mod.Layout;
@@ -1841,42 +1842,34 @@ pub const Store = struct {
     }
 
     pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).plan(helper_key);
     }
 
     pub fn rcHelperStructFieldCount(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan) u32 {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).structFieldCount(struct_plan);
     }
 
     pub fn rcHelperStructFieldPlan(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan, field_index: u32) ?@import("./rc_helper.zig").FieldPlan {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).structFieldPlan(struct_plan, field_index);
     }
 
     pub fn rcHelperTagUnionVariantCount(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u32 {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).tagUnionVariantCount(tag_plan);
     }
 
     pub fn rcHelperTagUnionDiscriminantOffset(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u16 {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).tagUnionDiscriminantOffset(tag_plan);
     }
 
     pub fn rcHelperTagUnionDiscriminantSize(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u8 {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).tagUnionDiscriminantSize(tag_plan);
     }
 
     pub fn rcHelperTagUnionTotalSize(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan) u32 {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).tagUnionTotalSize(tag_plan);
     }
 
     pub fn rcHelperTagUnionVariantPlan(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
-        const rc_helper = @import("./rc_helper.zig");
         return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
@@ -2117,4 +2110,114 @@ test "ZST containers are refcounted layouts with no refcounted children" {
     try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
     try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
     try testing.expect(!box_abi.contains_refcounted);
+}
+
+test "RC helper plans recurse through only refcounted struct fields" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const list_str_idx = try store.insertList(.str);
+    const fields = [_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .str },
+        .{ .index = 2, .layout = list_str_idx },
+    };
+
+    const struct_idx = try store.putStructFields(&fields);
+    const plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = struct_idx });
+    try testing.expectEqual(std.meta.Tag(rc_helper.Plan).struct_, std.meta.activeTag(plan));
+
+    const struct_plan = plan.struct_;
+    try testing.expectEqual(@as(u32, 3), store.rcHelperStructFieldCount(struct_plan));
+
+    var refcounted_field_count: u32 = 0;
+    var saw_str = false;
+    var saw_list = false;
+    for (0..store.rcHelperStructFieldCount(struct_plan)) |field_index| {
+        const field_plan = store.rcHelperStructFieldPlan(struct_plan, @intCast(field_index)) orelse continue;
+        refcounted_field_count += 1;
+        try testing.expectEqual(rc_helper.RcOp.decref, field_plan.child.op);
+        if (field_plan.child.layout_idx == .str) {
+            saw_str = true;
+        } else if (field_plan.child.layout_idx == list_str_idx) {
+            saw_list = true;
+        } else {
+            return error.UnexpectedRefcountedStructField;
+        }
+    }
+
+    try testing.expectEqual(@as(u32, 2), refcounted_field_count);
+    try testing.expect(saw_str);
+    try testing.expect(saw_list);
+}
+
+test "RC helper plans publish nested list and box child helpers" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const list_str_idx = try store.insertList(.str);
+    const boxed_list_str_idx = try store.insertBox(list_str_idx);
+
+    const list_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = list_str_idx });
+    try testing.expectEqual(std.meta.Tag(rc_helper.Plan).list_decref, std.meta.activeTag(list_plan));
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref, .layout_idx = .str }, list_plan.list_decref.child.?);
+
+    const box_plan = store.rcHelperPlan(.{ .op = .free, .layout_idx = boxed_list_str_idx });
+    try testing.expectEqual(std.meta.Tag(rc_helper.Plan).box_free, std.meta.activeTag(box_plan));
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref, .layout_idx = list_str_idx }, box_plan.box_free.child.?);
+}
+
+test "RC helper plans recurse through tag-union payload variants" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const payload_record_idx = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const variants = [_]Idx{
+        try store.ensureZstLayout(),
+        payload_record_idx,
+    };
+    const tag_union_idx = try store.putTagUnion(&variants);
+
+    const plan = store.rcHelperPlan(.{ .op = .free, .layout_idx = tag_union_idx });
+    try testing.expectEqual(std.meta.Tag(rc_helper.Plan).tag_union, std.meta.activeTag(plan));
+
+    const tag_plan = plan.tag_union;
+    try testing.expectEqual(@as(u32, 2), store.rcHelperTagUnionVariantCount(tag_plan));
+    try testing.expectEqual(@as(?rc_helper.HelperKey, null), store.rcHelperTagUnionVariantPlan(tag_plan, 0));
+    try testing.expectEqual(
+        rc_helper.HelperKey{ .op = .decref, .layout_idx = payload_record_idx },
+        store.rcHelperTagUnionVariantPlan(tag_plan, 1).?,
+    );
+}
+
+test "erased callable layouts use explicit erased-callable RC helper plans" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const erased_callable_idx = try store.insertErasedCallable();
+    try testing.expect(store.layoutContainsRefcounted(store.getLayout(erased_callable_idx)));
+
+    try testing.expectEqual(
+        std.meta.Tag(rc_helper.Plan).erased_callable_incref,
+        std.meta.activeTag(store.rcHelperPlan(.{ .op = .incref, .layout_idx = erased_callable_idx })),
+    );
+    try testing.expectEqual(
+        std.meta.Tag(rc_helper.Plan).erased_callable_decref,
+        std.meta.activeTag(store.rcHelperPlan(.{ .op = .decref, .layout_idx = erased_callable_idx })),
+    );
+    try testing.expectEqual(
+        std.meta.Tag(rc_helper.Plan).erased_callable_free,
+        std.meta.activeTag(store.rcHelperPlan(.{ .op = .free, .layout_idx = erased_callable_idx })),
+    );
 }

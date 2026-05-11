@@ -38,6 +38,39 @@ fn exprTest(
     };
 }
 
+fn exprTestWithLiveAllocations(
+    name: []const u8,
+    source: []const u8,
+    expected_events: []const TestCase.ExpectedEvent,
+    expected_termination: Termination,
+    expected_live_allocations: u32,
+) TestCase {
+    return .{
+        .name = name,
+        .source = source,
+        .expected_events = expected_events,
+        .expected_termination = expected_termination,
+        .expected_live_allocations = expected_live_allocations,
+    };
+}
+
+fn moduleTestWithLiveAllocations(
+    name: []const u8,
+    source: []const u8,
+    expected_events: []const TestCase.ExpectedEvent,
+    expected_termination: Termination,
+    expected_live_allocations: u32,
+) TestCase {
+    return .{
+        .name = name,
+        .source = source,
+        .source_kind = .module,
+        .expected_events = expected_events,
+        .expected_termination = expected_termination,
+        .expected_live_allocations = expected_live_allocations,
+    };
+}
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     // Ported from origin/main:src/eval/test/interpreter_style_test.zig
@@ -894,5 +927,118 @@ pub const tests = [_]TestCase{
     ,
         &.{ dbg("10.0"), dbg("15.0") },
         .returned,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: nested list of heap strings is fully released",
+        \\{
+        \\    nested = [
+        \\        [
+        \\            "alpha string definitely long enough to allocate outside small-string storage",
+        \\            "beta string definitely long enough to allocate outside small-string storage",
+        \\        ],
+        \\        [],
+        \\        [
+        \\            "gamma string definitely long enough to allocate outside small-string storage",
+        \\        ],
+        \\    ]
+        \\    expect List.len(nested) == 3
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: aliased list inside record is released once per live reference",
+        \\{
+        \\    items = [
+        \\        "shared first string definitely long enough to allocate outside small-string storage",
+        \\        "shared second string definitely long enough to allocate outside small-string storage",
+        \\    ]
+        \\    record = { left: items, right: items }
+        \\    expect List.len(record.left) == 2
+        \\    expect List.len(record.right) == 2
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: boxed list of heap strings is released after unbox",
+        \\{
+        \\    boxed = Box.box([
+        \\        "boxed first string definitely long enough to allocate outside small-string storage",
+        \\        "boxed second string definitely long enough to allocate outside small-string storage",
+        \\    ])
+        \\    items = Box.unbox(boxed)
+        \\    expect List.len(items) == 2
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: closure capture containing heap data is released",
+        \\{
+        \\    prefix = "captured prefix string definitely long enough to allocate outside small-string storage"
+        \\    suffix = " captured suffix string definitely long enough to allocate outside small-string storage"
+        \\    f = |tail| Str.concat(Str.concat(prefix, suffix), tail)
+        \\    expect f("!") == "captured prefix string definitely long enough to allocate outside small-string storage captured suffix string definitely long enough to allocate outside small-string storage!"
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: boxed callable capture containing nested heap data is released",
+        \\{
+        \\    record = {
+        \\        label: "boxed callable captured label definitely long enough to allocate outside small-string storage",
+        \\        items: [
+        \\            "boxed callable first item definitely long enough to allocate outside small-string storage",
+        \\            "boxed callable second item definitely long enough to allocate outside small-string storage",
+        \\        ],
+        \\    }
+        \\    boxed = Box.box(|x| x + List.len(record.items).to_i64_wrap())
+        \\    f = Box.unbox(boxed)
+        \\    expect f(40) == 42
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "rc balance: recursive tag union with boxed children is fully released",
+        \\Tree : [Leaf(Str), Node(Box(Tree), Box(Tree))]
+        \\
+        \\count = |tree| match tree {
+        \\    Leaf(_) => 1
+        \\    Node(left, right) => count(Box.unbox(left)) + count(Box.unbox(right))
+        \\}
+        \\
+        \\main = {
+        \\    tree = Node(
+        \\        Box.box(Leaf("left recursive string definitely long enough to allocate outside small-string storage")),
+        \\        Box.box(Node(
+        \\            Box.box(Leaf("middle recursive string definitely long enough to allocate outside small-string storage")),
+        \\            Box.box(Leaf("right recursive string definitely long enough to allocate outside small-string storage")),
+        \\        )),
+        \\    )
+        \\    expect count(tree) == 3
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
     ),
 };

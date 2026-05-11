@@ -67,6 +67,7 @@ pub const HostEvent = union(enum) {
 pub const RecordedRun = struct {
     events: []HostEvent,
     termination: Termination,
+    allocation_count: u32,
 
     pub fn dupe(self: RecordedRun, allocator: std.mem.Allocator) !RecordedRun {
         var out = try allocator.alloc(HostEvent, self.events.len);
@@ -83,6 +84,7 @@ pub const RecordedRun = struct {
         return .{
             .events = out,
             .termination = self.termination,
+            .allocation_count = self.allocation_count,
         };
     }
 
@@ -180,6 +182,7 @@ pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) !Reco
     return RecordedRun.dupe(.{
         .events = self.events.items,
         .termination = self.termination,
+        .allocation_count = @intCast(self.allocation_tracker.count()),
     }, allocator);
 }
 

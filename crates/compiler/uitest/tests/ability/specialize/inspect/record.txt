@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = Inspect.to_inspector { a: "" } |> Inspect.apply (Inspect.init {})
+#      ^^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.to_inspector(32): { a : Str } -[[#Derived.to_inspector_{a}(0)]]-> Inspector f where f implements InspectFormatter
