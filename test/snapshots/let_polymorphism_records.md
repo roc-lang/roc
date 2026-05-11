@@ -300,21 +300,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 39)
+		(e-call (constraint-fn-var 165)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 43)
+		(e-call (constraint-fn-var 173)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 47)
+		(e-call (constraint-fn-var 181)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -335,7 +335,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 59)
+		(e-call (constraint-fn-var 198)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -343,7 +343,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 64)
+		(e-call (constraint-fn-var 210)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -352,7 +352,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 70)
+		(e-call (constraint-fn-var 226)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -370,20 +370,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 81)
+		(e-call (constraint-fn-var 242)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 85)
+		(e-call (constraint-fn-var 252)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 90)
+		(e-call (constraint-fn-var 288)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list

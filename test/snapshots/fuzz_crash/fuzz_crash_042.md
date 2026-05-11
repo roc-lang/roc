@@ -33,6 +33,17 @@ import u.R}g:r->R.a.E
                 ^^^^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_042.md:1:12:1:22:**
+```roc
+import u.R}g:r->R.a.E
+```
+           ^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,CloseCurly,LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceDotUpperIdent,

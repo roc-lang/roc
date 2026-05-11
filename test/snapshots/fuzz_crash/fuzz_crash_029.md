@@ -240,6 +240,17 @@ pkg: "..l", mmen		} # Cose
      ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_029.md:13:1:13:7:**
+```roc
+pkg: "..l", mmen		} # Cose
+```
+^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPlatform,

@@ -142,6 +142,28 @@ getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_022.md:1:16:1:27:**
+```roc
+app [main!] { |f: platform "c" }
+```
+               ^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_022.md:5:1:5:20:**
+```roc
+ser : UserId -> Str
+```
+^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -230,7 +252,7 @@ ain! = |_| getUser(900)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 26)
+			(e-call (constraint-fn-var 76)
 				(e-lookup-local
 					(p-assign (ident "getUser")))
 				(e-num (value "900")))))

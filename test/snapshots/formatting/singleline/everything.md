@@ -207,6 +207,17 @@ g : e -> e where [e.A, e.B]
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**everything.md:20:1:20:28:**
+```roc
+g : e -> e where [e.A, e.B]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:
 **everything.md:29:2:34:3:**
@@ -436,7 +447,7 @@ NO CHANGE
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 76)
+					(e-call (constraint-fn-var 167)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

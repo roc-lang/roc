@@ -89,7 +89,7 @@ match data {
 					(e-binop (op "add")
 						(e-lookup-local
 							(p-assign (ident "x")))
-						(e-call (constraint-fn-var 11)
+						(e-call (constraint-fn-var 66)
 							(e-lookup-external
 								(builtin))
 							(e-lookup-local

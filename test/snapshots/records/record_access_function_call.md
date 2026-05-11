@@ -31,7 +31,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 2)
+(e-call (constraint-fn-var 26)
 	(e-field-access (field "transform")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))

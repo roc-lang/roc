@@ -880,6 +880,19 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_027.md:28:1:31:2:**
+```roc
+line : ( # Cpen
+	Bar, #
+	Baz, #m
+) # Co
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_027.md:50:5:50:8:**
@@ -1091,6 +1104,17 @@ But the annotation say it should be:
     List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_027.md:153:1:153:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -2099,7 +2123,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 292)
+					(e-call (constraint-fn-var 1113)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2270,12 +2294,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1531)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1532)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 1498)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 1499)
 																			(receiver
 																				(e-match
 																					(match

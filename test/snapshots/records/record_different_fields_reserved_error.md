@@ -222,6 +222,17 @@ Expressions can be identifiers, literals, function calls, or operators.
                   ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_different_fields_reserved_error.md:3:5:3:12:**
+```roc
+    when: "pattern match",
+```
+    ^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_reserved_error.md:4:13:4:29:**

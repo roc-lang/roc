@@ -12,7 +12,17 @@ hey : MyType
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**type_alias_anno_only.md:3:1:3:13:**
+```roc
+hey : MyType
+```
+^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

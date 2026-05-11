@@ -77,7 +77,7 @@ EndOfFile,
 				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 11)
+		(e-call (constraint-fn-var 41)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-num (value "0")))))

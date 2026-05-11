@@ -66,14 +66,14 @@ NO CHANGE
 							(p-assign (ident "n")))))
 				(if-else
 					(e-binop (op "add")
-						(e-call (constraint-fn-var 8)
+						(e-call (constraint-fn-var 59)
 							(e-lookup-local
 								(p-assign (ident "fib")))
 							(e-binop (op "sub")
 								(e-lookup-local
 									(p-assign (ident "n")))
 								(e-num (value "1"))))
-						(e-call (constraint-fn-var 13)
+						(e-call (constraint-fn-var 74)
 							(e-lookup-local
 								(p-assign (ident "fib")))
 							(e-binop (op "sub")

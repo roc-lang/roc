@@ -123,17 +123,17 @@ EndOfFile,
 								(e-lookup-local
 									(p-assign (ident "y")))))))
 				(e-binop (op "add")
-					(e-call (constraint-fn-var 23)
+					(e-call (constraint-fn-var 60)
 						(e-lookup-local
 							(p-assign (ident "add_x")))
 						(e-num (value "5")))
-					(e-call (constraint-fn-var 26)
+					(e-call (constraint-fn-var 74)
 						(e-lookup-local
 							(p-assign (ident "add_y")))
 						(e-num (value "5")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 32)
+		(e-call (constraint-fn-var 103)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "10"))

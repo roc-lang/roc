@@ -259,6 +259,28 @@ Expressions can be identifiers, literals, function calls, or operators.
                              ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_different_fields_error.md:2:5:2:21:**
+```roc
+    _privateField: "leading underscore",
+```
+    ^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_different_fields_error.md:3:5:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+    ^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:5:4:15:**
@@ -303,6 +325,17 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_different_fields_error.md:6:5:6:21:**
+```roc
+    field$special: "dollar",
+```
+    ^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:

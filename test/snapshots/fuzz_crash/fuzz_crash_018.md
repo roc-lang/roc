@@ -46,6 +46,17 @@ This type is referenced here:
     ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_018.md:1:3:1:6:**
+```roc
+0 b:S
+```
+  ^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

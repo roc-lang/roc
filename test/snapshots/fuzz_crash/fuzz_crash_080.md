@@ -25,6 +25,20 @@ c : L
     ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_080.md:1:1:5:10:**
+```roc
+c : L
+        where [
+                o
+                .h : a,
+        ]
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

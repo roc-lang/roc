@@ -1314,6 +1314,17 @@ The unused variable is declared here:
 	^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**everything.md:56:1:56:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:
 **everything.md:84:2:107:3:**
@@ -1809,7 +1820,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 58)
+					(e-call (constraint-fn-var 144)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

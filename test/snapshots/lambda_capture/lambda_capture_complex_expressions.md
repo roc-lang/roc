@@ -45,8 +45,8 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 16)
-	(e-call (constraint-fn-var 1)
+(e-call (constraint-fn-var 66)
+	(e-call (constraint-fn-var 55)
 		(e-lambda
 			(args
 				(p-assign (ident "outer")))

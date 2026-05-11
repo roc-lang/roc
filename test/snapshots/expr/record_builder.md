@@ -72,6 +72,28 @@ Expressions can be identifiers, literals, function calls, or operators.
         ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_builder.md:2:5:2:9:**
+```roc
+    x: 5,
+```
+    ^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_builder.md:3:5:3:9:**
+```roc
+    y: 0,
+```
+    ^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

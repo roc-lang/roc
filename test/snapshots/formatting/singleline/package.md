@@ -35,6 +35,28 @@ package [a!, b!] { a: "a", b: "b" }
              ^^
 You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**package.md:3:1:3:16:**
+```roc
+a! : Str => Str
+```
+^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**package.md:5:1:5:16:**
+```roc
+b! : Str => Str
+```
+^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

@@ -16,6 +16,17 @@ type=expr
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**ann_effectful_fn.md:2:5:2:31:**
+```roc
+    launchTheNukes : {} => Try Bool LaunchNukeErr
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **ann_effectful_fn.md:2:32:2:36:**
@@ -103,7 +114,7 @@ EndOfFile,
 				(p-record-destructure
 					(destructs)))
 			(e-not-implemented)))
-	(e-call (constraint-fn-var 19)
+	(e-call (constraint-fn-var 56)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))

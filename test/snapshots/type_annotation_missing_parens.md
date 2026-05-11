@@ -43,6 +43,17 @@ nums : List U8
        ^^^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**type_annotation_missing_parens.md:1:1:1:12:**
+```roc
+nums : List U8
+```
+^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,UpperIdent,

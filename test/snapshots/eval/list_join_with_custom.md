@@ -310,7 +310,7 @@ expect output == "div | span | p"
 											(p-assign (ident "s")))))))))
 				(s-let
 					(p-assign (ident "joined"))
-					(e-call (constraint-fn-var 33)
+					(e-call (constraint-fn-var 290)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -356,10 +356,10 @@ expect output == "div | span | p"
 														(p-assign (ident "item_str"))))))
 										(if-else
 											(e-block
-												(e-call (constraint-fn-var 57)
+												(e-call (constraint-fn-var 289)
 													(e-lookup-external
 														(builtin))
-													(e-call (constraint-fn-var 58)
+													(e-call (constraint-fn-var 288)
 														(e-lookup-external
 															(builtin))
 														(e-lookup-local
@@ -435,7 +435,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 119)
+		(e-call (constraint-fn-var 435)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -446,7 +446,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-dispatch-call (method "to_str") (constraint-fn-var 439)
+		(e-dispatch-call (method "to_str") (constraint-fn-var 443)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))

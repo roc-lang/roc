@@ -33,6 +33,17 @@ Expressions can be identifiers, literals, function calls, or operators.
          ^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**error_malformed_syntax_2.md:1:3:1:10:**
+```roc
+{ age: 42, name = "Alice" }
+```
+  ^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,CloseCurly,

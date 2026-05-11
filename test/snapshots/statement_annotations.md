@@ -98,7 +98,7 @@ NO CHANGE
 									(p-assign (ident "c"))))
 							(e-lookup-local
 								(p-assign (ident "d"))))))
-				(e-call (constraint-fn-var 22)
+				(e-call (constraint-fn-var 43)
 					(e-lookup-local
 						(p-assign (ident "b")))
 					(e-lookup-local

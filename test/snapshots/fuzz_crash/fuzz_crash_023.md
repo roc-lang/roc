@@ -1031,6 +1031,17 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:178:47:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TOO FEW ARGS**
 The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -1112,6 +1123,17 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:178:47:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:144:9:196:2:**
@@ -1180,6 +1202,17 @@ But the annotation say it should be:
     List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:201:1:201:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -2401,7 +2434,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 355)
+					(e-call (constraint-fn-var 1315)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2573,12 +2606,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1728)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1729)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1695)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1696)
 																			(receiver
 																				(e-match
 																					(match

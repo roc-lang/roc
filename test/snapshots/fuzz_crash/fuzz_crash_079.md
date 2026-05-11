@@ -11,7 +11,17 @@ b:r
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_079.md:2:1:2:4:**
+```roc
+b:r
+```
+^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,

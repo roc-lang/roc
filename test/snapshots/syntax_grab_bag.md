@@ -1076,6 +1076,17 @@ But the annotation say it should be:
 
 **Hint:** This function is effectful, but a pure function is expected.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**syntax_grab_bag.md:201:1:201:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -2296,7 +2307,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 355)
+					(e-call (constraint-fn-var 1309)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2474,12 +2485,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1733)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1734)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1700)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1701)
 																			(receiver
 																				(e-match
 																					(match

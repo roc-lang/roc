@@ -245,12 +245,12 @@ main = (helper1(val), helper2(val))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 69)
+				(e-call (constraint-fn-var 199)
 					(e-lookup-local
 						(p-assign (ident "helper1")))
 					(e-lookup-local
 						(p-assign (ident "val"))))
-				(e-call (constraint-fn-var 72)
+				(e-call (constraint-fn-var 204)
 					(e-lookup-local
 						(p-assign (ident "helper2")))
 					(e-lookup-local

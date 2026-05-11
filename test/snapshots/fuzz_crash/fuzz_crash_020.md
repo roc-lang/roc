@@ -900,6 +900,28 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_020.md:22:1:23:2:**
+```roc
+line : ( # Cm
+) # Co
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_020.md:37:1:37:9:**
+```roc
+one : U6
+```
+^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **fuzz_crash_020.md:39:2:39:3:**
@@ -946,6 +968,17 @@ But the expression between the `match` parenthesis has the type:
     [Blue, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_020.md:74:1:74:22:**
+```roc
+main! : Listlt({}, _)
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -1019,6 +1052,28 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_020.md:113:1:113:7:**
+```roc
+y : {}
+```
+^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_020.md:116:1:116:13:**
+```roc
+t : V((a,c))
+```
+^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -1815,7 +1870,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 212)
+					(e-call (constraint-fn-var 790)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1961,12 +2016,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1191)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1192)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1158)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1159)
 																			(receiver
 																				(e-match
 																					(match

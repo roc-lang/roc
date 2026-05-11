@@ -33,6 +33,17 @@ Type annotations should contain types like _Str_, _Num a_, or _List U64_.
                 ^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**record_field_update_error.md:1:12:1:19:**
+```roc
+{ person & age: 31 }
+```
+           ^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

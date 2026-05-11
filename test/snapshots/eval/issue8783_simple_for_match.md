@@ -232,7 +232,7 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "count"))
-		(e-call (constraint-fn-var 70)
+		(e-call (constraint-fn-var 360)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local

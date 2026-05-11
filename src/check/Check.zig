@@ -4405,11 +4405,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
 
                         const published_constraint_args: []Var = @ptrCast(call_arg_expr_idxs);
-                        const published_constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                        const published_constraint_func = Func{
                             .args = try self.types.appendVars(published_constraint_args),
                             .ret = expr_var,
                             .needs_instantiation = false,
-                        } } }, env, expr_region);
+                        };
+                        const published_constraint_flat: FlatType = if (mb_func_info) |info|
+                            if (info.is_effectful)
+                                .{ .fn_effectful = published_constraint_func }
+                            else
+                                .{ .fn_pure = published_constraint_func }
+                        else
+                            .{ .fn_unbound = published_constraint_func };
+                        const published_constraint_fn_var = try self.freshFromContent(.{ .structure = published_constraint_flat }, env, expr_region);
 
                         self.cir.store.replaceExprWithCallConstraint(
                             expr_idx,

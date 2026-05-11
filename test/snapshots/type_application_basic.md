@@ -101,7 +101,7 @@ main! = |_| processList(["one", "two", "three"])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 15)
+			(e-call (constraint-fn-var 94)
 				(e-lookup-local
 					(p-assign (ident "processList")))
 				(e-list
