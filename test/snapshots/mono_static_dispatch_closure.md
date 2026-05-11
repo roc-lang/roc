@@ -11,6 +11,7 @@ make_adder = |x| |y| x + y
 
 # Use the closure maker
 add_five = make_adder(5.I64)
+
 result = add_five(10.I64)
 ~~~
 # MONO

@@ -27,6 +27,7 @@ A(a) : a
 			a,
 		) -> Str,
 	]
+
 B(b) : b
 	where [
 		b.b1 : (
@@ -46,6 +47,7 @@ C(
 	a,
 	b,
 )
+
 D(
 	a,
 	b,
@@ -53,10 +55,12 @@ D(
 	a,
 	b,
 )
+
 E : {
 	a : Str,
 	b : Str,
 }
+
 F : [
 	A,
 	B,
@@ -122,19 +126,19 @@ h = |x, y| {
 ~~~
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:22:3
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:23:1:33:3
-UNUSED VARIABLE - everything.md:94:5:94:6
-UNUSED VARIABLE - everything.md:99:4:99:5
-UNUSED VARIABLE - everything.md:104:5:104:6
-UNUSED VARIABLE - everything.md:110:5:110:6
-UNUSED VARIABLE - everything.md:65:2:65:4
-UNUSED VARIABLE - everything.md:73:2:73:4
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:24:1:34:3
+UNUSED VARIABLE - everything.md:98:5:98:6
+UNUSED VARIABLE - everything.md:103:4:103:5
+UNUSED VARIABLE - everything.md:108:5:108:6
+UNUSED VARIABLE - everything.md:114:5:114:6
+UNUSED VARIABLE - everything.md:69:2:69:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
-UNSUPPORTED WHERE CLAUSE - everything.md:60:3:60:6
-UNSUPPORTED WHERE CLAUSE - everything.md:61:3:61:6
-NON-EXHAUSTIVE MATCH - everything.md:90:2:113:3
+UNUSED VARIABLE - everything.md:89:2:89:4
+UNSUPPORTED WHERE CLAUSE - everything.md:64:3:64:6
+UNSUPPORTED WHERE CLAUSE - everything.md:65:3:65:6
+NON-EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -160,7 +164,7 @@ A(a) : a
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**everything.md:23:1:33:3:**
+**everything.md:24:1:34:3:**
 ```roc
 B(b) : b
 	where [
@@ -181,7 +185,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:94:5:94:6:**
+**everything.md:98:5:98:6:**
 ```roc
 				b,
 ```
@@ -193,7 +197,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:99:4:99:5:**
+**everything.md:103:4:103:5:**
 ```roc
 			b,
 ```
@@ -205,7 +209,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:104:5:104:6:**
+**everything.md:108:5:108:6:**
 ```roc
 				b,
 ```
@@ -217,7 +221,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:110:5:110:6:**
+**everything.md:114:5:114:6:**
 ```roc
 				b,
 ```
@@ -229,7 +233,7 @@ Variable `h1` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
 The unused variable is declared here:
-**everything.md:65:2:65:4:**
+**everything.md:69:2:69:4:**
 ```roc
 	h1 = {
 ```
@@ -241,7 +245,7 @@ Variable `h2` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
 The unused variable is declared here:
-**everything.md:73:2:73:4:**
+**everything.md:77:2:77:4:**
 ```roc
 	h2 = h(
 ```
@@ -253,7 +257,7 @@ Variable `h3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:77:2:77:4:**
+**everything.md:81:2:81:4:**
 ```roc
 	h3 = A(
 ```
@@ -265,7 +269,7 @@ Variable `h4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
 The unused variable is declared here:
-**everything.md:81:2:81:4:**
+**everything.md:85:2:85:4:**
 ```roc
 	h4 = [
 ```
@@ -277,7 +281,7 @@ Variable `h5` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
 The unused variable is declared here:
-**everything.md:85:2:85:4:**
+**everything.md:89:2:89:4:**
 ```roc
 	h5 = (
 ```
@@ -286,7 +290,7 @@ The unused variable is declared here:
 
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _A_ is not supported:
-**everything.md:60:3:60:6:**
+**everything.md:64:3:64:6:**
 ```roc
 		e.A,
 ```
@@ -296,7 +300,7 @@ This syntax was used for abilities, which have been removed from Roc. Use method
 
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _B_ is not supported:
-**everything.md:61:3:61:6:**
+**everything.md:65:3:65:6:**
 ```roc
 		e.B,
 ```
@@ -306,7 +310,7 @@ This syntax was used for abilities, which have been removed from Roc. Use method
 
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:
-**everything.md:90:2:113:3:**
+**everything.md:94:2:117:3:**
 ```roc
 	match x {
 		Z1(

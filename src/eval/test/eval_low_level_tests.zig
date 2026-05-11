@@ -1447,7 +1447,7 @@ pub const tests = [_]TestCase{
         \\x
         \\}
         ,
-        .expected = .{ .inspect_str = "\"3.140000104904175\"" },
+        .expected = .{ .inspect_str = "\"3.14\"" },
     },
     .{
         .name = "low_level - F64.to_str",

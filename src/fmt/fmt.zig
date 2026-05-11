@@ -361,13 +361,59 @@ const Formatter = struct {
         }
         try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
+        var prev_def_info: ?DefInfo = null;
         for (statement_slice) |s| {
             const region = fmt.nodeRegion(@intFromEnum(s));
-            try fmt.flushCommentsBeforeDiscard(region.start);
+            const curr_def_info = fmt.defInfo(s);
+            // Insert a blank line between two consecutive top-level defs unless
+            // the current decl is paired with the previous type_anno of the same name.
+            const min_newlines: u8 = if (prev_def_info != null and curr_def_info != null and !isPairedAnnoDecl(prev_def_info.?, curr_def_info.?))
+                2
+            else
+                0;
+            _ = try fmt.flushCommentsBeforeMin(region.start, min_newlines);
             try fmt.ensureNewline();
             try fmt.formatStatement(s);
+            prev_def_info = curr_def_info;
         }
         try fmt.flushCommentsEOF();
+    }
+
+    /// Information about a top-level def, used to decide whether to insert a blank line.
+    const DefInfo = struct {
+        kind: enum { type_anno, decl, type_decl },
+        /// Identifier name for `type_anno` or `decl` with an ident pattern, used
+        /// to detect anno+decl pairs that should stay grouped together.
+        name: ?[]const u8,
+    };
+
+    /// Returns def info for statements considered "defs" at file scope, or null
+    /// for statements that should not participate in def-separation logic.
+    fn defInfo(fmt: *const Formatter, si: AST.Statement.Idx) ?DefInfo {
+        const stmt = fmt.ast.store.getStatement(si);
+        return switch (stmt) {
+            .type_anno => |t| DefInfo{
+                .kind = .type_anno,
+                .name = fmt.ast.resolve(t.name),
+            },
+            .decl => |d| blk: {
+                const pattern = fmt.ast.store.getPattern(d.pattern);
+                const name: ?[]const u8 = switch (pattern) {
+                    .ident => |p| fmt.ast.resolve(p.ident_tok),
+                    else => null,
+                };
+                break :blk DefInfo{ .kind = .decl, .name = name };
+            },
+            .type_decl => DefInfo{ .kind = .type_decl, .name = null },
+            else => null,
+        };
+    }
+
+    fn isPairedAnnoDecl(prev: DefInfo, curr: DefInfo) bool {
+        if (prev.kind != .type_anno or curr.kind != .decl) return false;
+        const prev_name = prev.name orelse return false;
+        const curr_name = curr.name orelse return false;
+        return std.mem.eql(u8, prev_name, curr_name);
     }
 
     fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) !void {
@@ -2619,15 +2665,22 @@ const Formatter = struct {
     }
 
     fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
+        return fmt.flushCommentsBeforeMin(tokenIdx, 0);
+    }
+
+    /// Like `flushCommentsBefore`, but ensures at least `min_leading_newlines` newlines
+    /// are emitted before any comment or trailing content. Used to insert blank lines
+    /// between top-level defs.
+    fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) !bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source[start..end], min_leading_newlines);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source[start..end], 0);
     }
 
     fn flushCommentsEOF(fmt: *Formatter) !void {
@@ -2674,8 +2727,13 @@ const Formatter = struct {
         try fmt.ensureNewline();
     }
 
-    fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
+    fn flushComments(fmt: *Formatter, between_text: []const u8, min_leading_newlines: u8) !bool {
         var newline_count: usize = 0;
+        var prev_was_comment: bool = false;
+        // True once we've either upgraded a source newline into a blank line
+        // or padded up front to satisfy `min_leading_newlines`. Used to decide
+        // whether we still owe a trailing blank line at the end.
+        var leading_blank_satisfied: bool = (min_leading_newlines == 0);
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
@@ -2684,6 +2742,30 @@ const Formatter = struct {
                 var comment_end = comment_start;
                 while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
                     comment_end += 1;
+                }
+
+                // If this comment is "standalone" (preceded by at least one
+                // newline) AND we still owe the caller a leading blank line,
+                // emit it now so the comment sticks to the next statement.
+                // Inline comments (no preceding newline) are kept attached
+                // to the previous statement and the blank line is emitted
+                // afterwards.
+                const is_inline = newline_count == 0 and !fmt.has_newline;
+                if (!leading_blank_satisfied and !is_inline) {
+                    while (newline_count < min_leading_newlines) {
+                        try fmt.newline();
+                        newline_count += 1;
+                    }
+                    leading_blank_satisfied = true;
+                }
+
+                // Check if it's a doc comment
+                const is_doc_comment = comment_start < between_text.len and between_text[comment_start] == '#';
+                // If a doc comment directly follows code (only one \n between them,
+                // and the previous token wasn't another comment), add a blank line.
+                if (is_doc_comment and newline_count == 1 and !prev_was_comment) {
+                    try fmt.newline();
+                    newline_count += 1;
                 }
 
                 if (newline_count > 0 or fmt.has_newline) {
@@ -2700,15 +2782,33 @@ const Formatter = struct {
                 try fmt.pushAll(comment_text);
                 try fmt.newline();
                 newline_count = 1; // reset count to allow an additional newline after a comment
+                prev_was_comment = true;
                 i = comment_end + 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
                     try fmt.newline();
                 }
                 newline_count += 1;
+                // Upgrade the first source newline into a blank line if the
+                // caller asked for one and we haven't already satisfied it.
+                if (!leading_blank_satisfied and !prev_was_comment and newline_count == 1 and min_leading_newlines >= 2) {
+                    try fmt.newline();
+                    newline_count = 2;
+                    leading_blank_satisfied = true;
+                }
                 i += 1;
             } else {
                 i += 1;
+            }
+        }
+
+        // If we still owe a blank line (e.g., the only content was an inline
+        // comment, or the inter-statement region was empty), pad it on at the
+        // end so the next statement is preceded by the requested blank.
+        if (!leading_blank_satisfied) {
+            while (newline_count < min_leading_newlines) {
+                try fmt.newline();
+                newline_count += 1;
             }
         }
 
@@ -3161,4 +3261,130 @@ test "issue 8989: platform header targets section is preserved" {
     defer std.testing.allocator.free(result);
     // The targets section must be preserved in the output
     try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
+}
+
+test "blank line inserted between consecutive type annotations" {
+    const input =
+        \\to_f32 : U32 -> F32
+        \\to_f64 : U32 -> F64
+        \\to_dec : U32 -> Dec
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\to_f32 : U32 -> F32
+        \\
+        \\to_f64 : U32 -> F64
+        \\
+        \\to_dec : U32 -> Dec
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "no blank line between matching type anno and decl, blank between pairs" {
+    const input =
+        \\to_f64 : U32 -> F64
+        \\to_f64 = |x| x
+        \\to_dec : U32 -> Dec
+        \\to_dec = |x| x
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\to_f64 : U32 -> F64
+        \\to_f64 = |x| x
+        \\
+        \\to_dec : U32 -> Dec
+        \\to_dec = |x| x
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "blank line inserted between consecutive value defs" {
+    const input =
+        \\to_f64 = |x| x
+        \\to_dec = |x| x
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\to_f64 = |x| x
+        \\
+        \\to_dec = |x| x
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "blank line goes before comment that precedes the next def" {
+    const input =
+        \\foo : Str
+        \\foo = "f"
+        \\# comment for bar
+        \\bar : Str
+        \\bar = "b"
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\foo : Str
+        \\foo = "f"
+        \\
+        \\# comment for bar
+        \\bar : Str
+        \\bar = "b"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "type_anno followed by non-matching decl gets a blank line" {
+    const input =
+        \\foo : Str
+        \\bar = "b"
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\foo : Str
+        \\
+        \\bar = "b"
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "blank line inserted before doc comments following code" {
+    const input =
+        \\foo = 1
+        \\## doc
+        \\## doc
+        \\bar = 2
+        \\## doc
+        \\## doc
+        \\foobar = 12
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        \\foo = 1
+        \\
+        \\## doc
+        \\## doc
+        \\bar = 2
+        \\
+        \\## doc
+        \\## doc
+        \\foobar = 12
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
 }

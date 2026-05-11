@@ -6,7 +6,9 @@ type=mono
 # SOURCE
 ~~~roc
 x = ["hello"]
+
 f = |_| x
+
 y = f(0)
 ~~~
 # MONO

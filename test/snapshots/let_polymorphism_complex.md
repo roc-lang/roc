@@ -533,26 +533,35 @@ app [main] { pf: platform "../basic-cli/platform.roc" }
 
 # Basic polymorphic values
 num = 42
+
 frac = 4.2
+
 str = "hello"
+
 bool = True
 
 # Polymorphic empty collections
 empty_list = []
+
 empty_record = {}
 
 # Using empty list in multiple contexts
 int_list = [1, 2, 3]
+
 str_list = ["a", "b", "c"]
+
 bool_list = [True, False]
 
 # Nested empty lists
 nested_empty = [empty_list, empty_list, empty_list]
+
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
 
 # Polymorphic record with empty list
 poly_record = { items: empty_list, count: 0 }
+
 use_poly_record1 = { items: [1, 2, 3], count: 0 }
+
 use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
 
 # Complex nested structure with multiple polymorphic uses
@@ -588,8 +597,11 @@ config2 = { # Test comment 1
 
 # Polymorphic function-like structures
 make_container = |val| { value: val, wrapper: [val] }
+
 container1 = make_container(num)
+
 container2 = make_container(str)
+
 container3 = make_container(frac)
 
 # Deeply nested polymorphism
@@ -613,8 +625,11 @@ deep = {
 
 # Polymorphic values used in computations
 compute1 = num + 10
+
 compute2 = num * 2
+
 compute3 = [num, num]
+
 compute4 = { base: num, derived: [num, num + 1, num + 2] }
 
 # Mixed polymorphic structures

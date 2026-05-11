@@ -10,6 +10,7 @@ func = |x, y| {
 	add_y = |b| b + y
 	add_x(5) + add_y(5)
 }
+
 result = func(10, 20)
 ~~~
 # MONO

@@ -252,7 +252,9 @@ EndOfFile,
 ~~~roc
 # Built-in types should work
 MyU64 : U64
+
 MyString : Str
+
 MyBool : Bool
 
 # Simple user-defined type
@@ -278,6 +280,7 @@ BadType : SomeUndeclaredType
 
 # Using built-in types with parameters
 MyList : List(Str)
+
 MyDict : Dict(Str, U64)
 
 # Complex nested type using multiple declared types

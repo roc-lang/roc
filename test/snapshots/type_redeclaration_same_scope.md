@@ -6,16 +6,17 @@ type=snippet
 # SOURCE
 ~~~roc
 Maybe(a) : [Some(a), None]
+
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_redeclaration_same_scope.md:2:1:2:24
+TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Maybe_ is being redeclared.
 
 The redeclaration is here:
-**type_redeclaration_same_scope.md:2:1:2:24:**
+**type_redeclaration_same_scope.md:3:1:3:24:**
 ```roc
 Maybe(a) : [Ok(a), Err]
 ```

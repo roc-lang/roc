@@ -24,7 +24,22 @@
   --module-search-height: 56px;
   --module-search-padding-height: 16px;
   --module-search-form-padding-width: 20px;
+  /* Total vertical space occupied by #module-search-form (input + form padding + margin-bottom).
+     Used both as scroll-padding-top on desktop (sticky form) and padding-top on mobile (fixed form). */
+  --module-search-form-height: calc(var(--module-search-height) + 32px);
   --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.05) calc(l * 0.95));
+
+  /* Semantic size tokens */
+  --entry-anchor-offset: 28px; /* space reserved left of entry headings for the permalink anchor */
+  --icon-size: 48px;           /* logo, menu-toggle, entry-toggle tap targets */
+
+  /* Semi-transparent tints derived from palette colors */
+  --violet-border-subtle: rgb(from var(--violet) r g b / .40);
+  --violet-border-hover: rgb(from var(--violet) r g b / .60);
+  --gray-border-subtle: rgb(from var(--gray) r g b / .30);
+
+  /* Search input border — distinct from --violet-bg so it's visible on a white background */
+  --search-border-color: hsl(262 50% 72%);
 
   /* Type scale: 1.33x multiplier for clear hierarchy */
   --font-xs: 0.75rem;
@@ -56,8 +71,8 @@ table tr td {
 }
 
 .logo svg {
-  height: 48px;
-  width: 48px;
+  height: var(--icon-size);
+  width: var(--icon-size);
   fill: var(--violet);
 }
 
@@ -96,10 +111,15 @@ table tr td {
   overflow: visible;
 }
 
+
 .entry-signature-code {
   background: none;
   font-size: inherit;
   flex: 1;
+}
+
+.sig-arrow {
+  white-space: nowrap;
 }
 
 /* Type definition block shown below heading for nominal types (e.g. Try := ...) */
@@ -113,7 +133,12 @@ table tr td {
   white-space: pre-wrap;
   font-size: var(--font-base);
   line-height: 1.5;
-  margin-left: 28px;
+}
+
+/* Match the entry-anchor-offset left margin applied to entry headings (.entry h2-h6) so the
+   type definition aligns with the heading name above it. */
+.entry > .entry-type-def {
+  margin-left: var(--entry-anchor-offset);
 }
 
 .entry-signature-code strong {
@@ -126,9 +151,9 @@ table tr td {
   color: var(--violet);
   text-decoration: none;
   user-select: none;
-  transition: visibility 2s;
+  transition: visibility 6s;
   position: absolute;
-  left: -28px;
+  left: calc(-1 * var(--entry-anchor-offset));
   display: flex;
   align-items: center;
   height: 100%;
@@ -147,7 +172,7 @@ table tr td {
 .entry h4,
 .entry h5,
 .entry h6 {
-  margin-left: 28px;
+  margin-left: var(--entry-anchor-offset);
   position: relative;
 }
 
@@ -159,6 +184,12 @@ table tr td {
 .entry h6:hover .entry-anchor {
   visibility: visible;
 }
+
+.entry-name-link {
+  color: inherit;
+  text-decoration: none;
+}
+
 
 .entry-group-header {
     color: var(--violet);
@@ -174,8 +205,7 @@ table tr td {
     font-family: var(--font-sans);
     background-color: var(--violet-bg);
     color: var(--violet);
-    border: 1px solid rgb(from var(--violet) r g b / .40);
-    border-radius: 4px;
+    border: 1px solid var(--violet-border-subtle);
     padding: 2px 8px;
     vertical-align: middle;
     margin-left: 8px;
@@ -189,7 +219,7 @@ table tr td {
 
 .entry-children-container {
     margin-top: 16px;
-    margin-left: 28px;
+    margin-left: var(--entry-anchor-offset);
 }
 
 /* Entry type vs value styling */
@@ -225,6 +255,8 @@ a {
 a:hover,
 a:hover code {
   text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 5px;
 }
 
 .pkg-and-logo {
@@ -285,17 +317,19 @@ main {
   display: grid;
   --main-content-width: clamp(100px, calc(100% - 32px), 70ch);
   grid-template-columns: [main-start] minmax(16px,1fr) [main-content-start] var(--main-content-width) [main-content-end] minmax(16px,1fr) [main-end];
-  grid-template-rows: auto;
-  flex-direction: column;
+  grid-template-rows: auto 1fr auto;
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
-  scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
-  align-content: start;
+  scroll-padding-top: var(--module-search-form-height);
 }
 
 main > * {
     grid-column-start: main-content-start;
     grid-column-end: main-content-end;
+}
+
+.main-content {
+    min-width: 0;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -375,16 +409,15 @@ p {
 }
 
 footer {
-  max-width: var(--main-content-max-width);
   font-size: var(--font-sm);
   box-sizing: border-box;
-  padding: 16px;
+  padding: 16px 0px 0px;
 }
 
 footer p {
   display: inline-block;
   margin-top: 0;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .sidebar-entry ul {
@@ -418,17 +451,16 @@ footer p {
 }
 
 .sidebar-sub-entries a {
-  display: block;
+  display: flex;
+  align-items: center;
   line-height: 24px;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: 20px;
   padding-left: 16px;
-  border-left: 4px solid rgb(from var(--gray) r g b / .30);
+  border-left: 4px solid var(--gray-border-subtle);
   white-space: nowrap;
-  display: flex;
-  align-items: center;
 }
 
 .sidebar-sub-entries > li:first-child > a {
@@ -442,7 +474,7 @@ footer p {
 }
 
 .sidebar-sub-entries a:hover {
-    border-left-color: rgb(from var(--violet) r g b / .60);
+    border-left-color: var(--violet-border-hover);
     color: var(--violet);
     text-decoration: none;
 }
@@ -642,7 +674,7 @@ pre {
   word-wrap: normal;
 }
 
-pre>samp {
+pre>code {
     overflow-x: auto;
     display: block;
     scrollbar-color: var(--violet) var(--code-bg);
@@ -668,6 +700,7 @@ pre>samp {
   margin-bottom: 8px;
 }
 
+
 .menu-toggle {
     display: none;
     margin-right: 8px;
@@ -681,38 +714,42 @@ pre>samp {
 }
 
 .menu-toggle svg {
-    height: 48px;
-    width: 48px;
+    height: var(--icon-size);
+    width: var(--icon-size);
+    fill: var(--violet);
 }
 
 
 #module-search,
+#module-search-nojs,
 #module-search:focus {
   opacity: 1;
   padding: 12px 16px;
   height: var(--module-search-height);
 }
 
-#module-search {
+#module-search,
+#module-search-nojs {
   display: block;
   position: relative;
   box-sizing: border-box;
   width: 100%;
   font-size: var(--font-base);
   line-height: 18px;
-  color: var(--faded-color);
+  color: var(--text-color);
   background-color: var(--body-bg-color);
   font-family: var(--font-sans);
-  border: 2px solid var(--violet-bg);
+  border: 2px solid var(--search-border-color);
 }
 
-@media (prefers-color-scheme: light) {
-    #module-search {
-        outline: 1px solid var(--gray);
-    }
+/* Hidden when JS is enabled. The <noscript><style> in #module-search-form
+   re-enables it (and hides #module-search) when JS is disabled. */
+#module-search-nojs {
+  display: none;
 }
 
-#module-search::placeholder {
+#module-search::placeholder,
+#module-search-nojs::placeholder {
   color: var(--faded-color);
   opacity: 1;
 }
@@ -800,6 +837,7 @@ pre>samp {
       --logo-solid: #8f8f8f;
       --faded-color: #bbbbbb;
       --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.1) calc(l * 0.75));
+      --search-border-color: hsl(262 35% 40%);
   }
 
   html {
@@ -818,6 +856,10 @@ pre>samp {
         overflow-x: hidden;
     }
 
+    html {
+        scroll-padding-top: var(--module-search-form-height);
+    }
+
     #sidebar-nav {
         left: calc(-1 * var(--sidebar-width));
         top: 0;
@@ -828,8 +870,8 @@ pre>samp {
     }
 
     .entry-toggle {
-        height: 48px;
-        width: 48px;
+        height: var(--icon-size);
+        width: var(--icon-size);
     }
 
     body.sidebar-open #sidebar-nav {
@@ -837,9 +879,15 @@ pre>samp {
     }
 
     main {
-        display: block;
-        margin: 0 16px;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        min-height: 100dvh;
         --main-content-width: minmax(calc(100% - 32px), 60ch);
+    }
+
+    main > .main-content {
+        flex: 1;
     }
 
     #module-search-form {
@@ -849,24 +897,48 @@ pre>samp {
         grid-column-start: main-content-start;
         grid-column-end: main-content-end;
         position: fixed;
+        top: 0;
         left: 0;
         right: 0;
+        justify-content: flex-start;
+    }
+
+    #module-search-form:has(#module-search:focus) .menu-toggle {
+        max-width: 0;
+        margin-left: 0;
+        opacity: 0;
+    }
+
+    .entry-anchor {
+        display: none;
+    }
+
+    .entry-signature {
+        padding-left: 8px;
+        padding-right: 8px;
     }
 
     .menu-toggle {
-        display: inline-block;
-        margin-right: 8px;
+        display: block;
+        flex-shrink: 0;
+        max-width: var(--icon-size);
+        overflow: hidden;
+        margin-left: 16px;
         appearance: none;
         background-color: transparent;
         outline: none;
         border: none;
-        color: var(--text-color);
+        color: var(--violet);
         padding: 0;
+        cursor: pointer;
+        touch-action: manipulation;
+        transition: max-width 0.2s ease, margin-left 0.2s ease, opacity 0.2s ease;
     }
 
-    .menu-toggle svg {
-        height: 48px;
-        width: 48px;
+    #module-search,
+    #module-search-nojs {
+        flex: 1;
+        width: auto;
     }
 
     .pkg-full-name {
@@ -885,17 +957,45 @@ pre>samp {
     }
 
     .module-name {
-        font-size: 24px;
+        font-size: var(--font-2xl);
         margin-top: 8px;
         margin-bottom: 8px;
+        /* Align with the left border of #module-search-form's input.
+           main now has no margin and padding-left: 18px, so content starts at x=18;
+           the fixed search form's input border sits at x=16 (form padding-left). */
+        margin-left: -2px;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+
+    /* Reduce section's desktop 20px left padding on mobile. */
+    section {
+        padding-left: 7px;
+    }
+
+    /* Reduce var(--entry-anchor-offset) left margins that reserve space for .entry-anchor
+       (which is hidden on mobile). Applies to entry headings, the type-def
+       block aligned with them, and the children container nested below. */
+    .entry h2,
+    .entry h3,
+    .entry h4,
+    .entry h5,
+    .entry h6,
+    .entry > .entry-type-def,
+    .entry-children-container {
+        margin-left: 8px;
+    }
+
+    /* Full-bleed code blocks */
+    pre {
+        margin-left: -24px;
+        margin-right: -24px;
     }
 
     main {
         padding: 18px;
         font-size: var(--font-base);
-        padding-top: calc(16px + 16px + 1lh + 16px);
+        padding-top: var(--module-search-form-height);
     }
 
     #sidebar-nav {

@@ -19,9 +19,14 @@ pub const platform_main_source = @embedFile("platform/main.roc");
 /// Embedded source for the echo platform's Echo.roc module (hosted line! function).
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
-/// Static sentinel for RocOps.env — a valid non-null address that won't segfault
-/// if accidentally inspected in a debugger, unlike @ptrFromInt(1).
-const env_sentinel: u8 = 0;
+/// Mutable state attached to the default RocOps env pointer. Lets the host
+/// observe side effects from roc_ops callbacks (e.g. failed inline expects)
+/// after the Roc program returns.
+pub const DefaultRocOpsEnv = struct {
+    /// Set to true the first time roc_expect_failed is invoked. Allows the
+    /// host to exit with a non-zero status after running the program.
+    inline_expect_failed: bool = false,
+};
 
 /// Echo host function: reads a RocStr arg and prints it + newline to stdout.
 /// Arguments are borrowed — refcounting is handled by the caller (RC insertion pass).
@@ -57,7 +62,7 @@ fn handleStdoutError(err: anyerror) noreturn {
 }
 
 /// Create a minimal RocOps struct for default_app execution.
-pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
+pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
     const fns = struct {
         const size_prefix = @sizeOf(usize);
 
@@ -125,7 +130,9 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
                 stderr_file.writeAll("\n") catch {};
             }
         }
-        fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+        fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
+            const default_env: *DefaultRocOpsEnv = @ptrCast(@alignCast(env_ptr));
+            default_env.inline_expect_failed = true;
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
@@ -151,7 +158,7 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
     };
 
     return .{
-        .env = @constCast(&env_sentinel),
+        .env = @ptrCast(env),
         .roc_alloc = &fns.rocAlloc,
         .roc_dealloc = &fns.rocDealloc,
         .roc_realloc = &fns.rocRealloc,

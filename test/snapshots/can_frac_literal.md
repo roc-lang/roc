@@ -6,7 +6,9 @@ type=snippet
 # SOURCE
 ~~~roc
 x = 3.14
+
 y = 1.23e45
+
 z = 0.5
 ~~~
 # EXPECTED
@@ -47,7 +49,7 @@ NO CHANGE
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-frac-f64 (value "1230000000000000000000000000000000000000000000")))
+		(e-frac-f64 (value "1.23e45")))
 	(d-let
 		(p-assign (ident "z"))
 		(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))

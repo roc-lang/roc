@@ -142,7 +142,9 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Define some variables that would normally be used for type variables
 a = 1
+
 b = 2
+
 c = 3
 
 # This identity function should get type 'd -> d' since a, b, c are taken

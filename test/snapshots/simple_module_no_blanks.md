@@ -7,6 +7,7 @@ type=snippet
 ~~~roc
 import pf.Stdout
 hello! = Stdout.line!("Hello")
+
 world = "World"
 ~~~
 # EXPECTED

@@ -1242,15 +1242,7 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 /// pulling in std.fmt.float.formatDecimal which references isPowerOf10
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
-    var buf: [400]u8 = undefined;
-    const result = if (is_f32) blk: {
-        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
-        break :blk i128h.f64_to_str(&buf, @as(f64, @floatCast(f32_val)));
-    } else blk: {
-        const f64_val: f64 = @bitCast(val_bits);
-        break :blk i128h.f64_to_str(&buf, f64_val);
-    };
-    writeRocStrFromSlice(out, result, roc_ops);
+    out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);
 }
 
 test "direct float wrapper f32" {

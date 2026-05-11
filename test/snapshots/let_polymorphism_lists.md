@@ -275,7 +275,9 @@ my_empty_list = []
 
 # Empty list used in different contexts
 int_list = [1, 2, 3]
+
 str_list = ["hello", "world"]
+
 float_list = [1.1, 2.2, 3.3]
 
 # Append empty list (polymorphic use)
@@ -291,6 +293,7 @@ get_empty = |_| []
 
 # Used at different types
 empty_int_list = get_empty(42)
+
 empty_str_list = get_empty("test")
 
 main = |_| {

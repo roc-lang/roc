@@ -341,8 +341,11 @@ identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
+
 c = 3.14
+
 d = True
+
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
@@ -354,25 +357,45 @@ combine = |first, second| (first, second)
 
 # Use even more names to test wraparound behavior
 f = 1
+
 g = 2
+
 h = 3
+
 i = 4
+
 j = 5
+
 k = 6
+
 l = 7
+
 m = 8
+
 n = 9
+
 o = 10
+
 p = 11
+
 q = 12
+
 r = 13
+
 s = 14
+
 t = 15
+
 u = 16
+
 v = 17
+
 w = 18
+
 x = 19
+
 y = 20
+
 z = 21
 
 # This should get type 'aa -> aa' since a-z are taken
@@ -380,6 +403,7 @@ yetAnotherIdentity = |arg| arg
 
 # Test that we still avoid collisions even with two-letter names
 aa = 100
+
 ab = 200
 
 # This should skip 'aa' and 'ab' and use 'ac -> ac'

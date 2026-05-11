@@ -22,16 +22,28 @@ const NominalType = types_mod.NominalType;
 const DocType = DocModel.DocType;
 const TypeAnno = CIR.TypeAnno;
 
+/// A doc comment along with the 1-based source line where its first `##`
+/// line begins. Used so downstream consumers (e.g. the docs renderer's
+/// broken-link reporter) can tie each character of `text` back to a source
+/// position.
+pub const DocCommentExtract = struct {
+    text: []const u8,
+    start_line: u32,
+};
+
 /// Extract the module-level doc comment from the top of a source file.
 ///
 /// Module doc comments are consecutive `##` lines at the very beginning of the
 /// file, before any non-comment content. Returns null if none found.
-pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?[]const u8 {
+pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?DocCommentExtract {
     var lines = std.ArrayList([]const u8).empty;
     defer lines.deinit(gpa);
 
+    var first_line_byte: u32 = 0;
+
     var pos: usize = 0;
     while (pos < source.len) {
+        const line_start = pos;
         // Skip leading whitespace on the line (spaces/tabs only)
         while (pos < source.len and (source[pos] == ' ' or source[pos] == '\t')) {
             pos += 1;
@@ -39,6 +51,9 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?[]const u8 
 
         // Check for ## doc comment
         if (pos + 2 <= source.len and source[pos] == '#' and source[pos + 1] == '#') {
+            if (lines.items.len == 0) {
+                first_line_byte = @intCast(line_start);
+            }
             pos += 2;
             // Skip optional leading space after ##
             if (pos < source.len and source[pos] == ' ') {
@@ -74,19 +89,23 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?[]const u8 
 
     if (lines.items.len == 0) return null;
 
-    // Join lines with newlines
-    return try joinLines(gpa, lines.items);
+    return .{
+        .text = try joinLines(gpa, lines.items),
+        .start_line = byteOffsetToLine(source, first_line_byte),
+    };
 }
 
 /// Extract the doc comment immediately preceding a definition at the given byte offset.
 ///
 /// Scans backwards from `def_start_offset` to find consecutive `##` lines.
 /// Returns null if no doc comment is found.
-pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) !?[]const u8 {
+pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) !?DocCommentExtract {
     if (def_start_offset == 0 or def_start_offset > source.len) return null;
 
     var lines = std.ArrayList([]const u8).empty;
     defer lines.deinit(gpa);
+
+    var first_line_byte: u32 = 0;
 
     var pos: usize = def_start_offset;
 
@@ -112,6 +131,10 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
         const trimmed = trimLeft(line);
 
         if (trimmed.len >= 2 and trimmed[0] == '#' and trimmed[1] == '#') {
+            // Track the earliest doc-comment line we've seen so far. Since we
+            // scan bottom-up and lines are added in reverse, the most recent
+            // assignment to this is the topmost ## line of the block.
+            first_line_byte = @intCast(line_start);
             // It's a doc comment line
             var content = trimmed[2..];
             // Skip optional leading space after ##
@@ -142,7 +165,21 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
     // Reverse the lines (we collected them bottom-up)
     std.mem.reverse([]const u8, lines.items);
 
-    return try joinLines(gpa, lines.items);
+    return .{
+        .text = try joinLines(gpa, lines.items),
+        .start_line = byteOffsetToLine(source, first_line_byte),
+    };
+}
+
+/// Convert a byte offset within `source` into a 1-based source line number.
+fn byteOffsetToLine(source: []const u8, offset: u32) u32 {
+    var line: u32 = 1;
+    const end = @min(@as(usize, offset), source.len);
+    var i: usize = 0;
+    while (i < end) : (i += 1) {
+        if (source[i] == '\n') line += 1;
+    }
+    return line;
 }
 
 /// Extract documentation for all exported definitions in a module.
@@ -157,12 +194,19 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
 /// The Builtin module receives additional special handling: the `Builtin` opaque
 /// entry itself is removed, and its children are re-distributed under the
 /// proper parent types (Str, List, Bool, Num, etc.).
-pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_name: []const u8) !DocModel.ModuleDocs {
+pub fn extractModuleDocs(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    package_name: []const u8,
+    source_path: ?[]const u8,
+) !DocModel.ModuleDocs {
     const source = module_env.getSourceAll();
 
     // Extract module-level doc comment
-    const module_doc = try extractModuleDocComment(gpa, source);
-    errdefer if (module_doc) |d| gpa.free(d);
+    const module_doc_extract = try extractModuleDocComment(gpa, source);
+    errdefer if (module_doc_extract) |d| gpa.free(d.text);
+    const module_doc: ?[]const u8 = if (module_doc_extract) |d| d.text else null;
+    const module_doc_start_line: u32 = if (module_doc_extract) |d| d.start_line else 0;
 
     // Determine module kind
     const kind = convertModuleKind(module_env.module_kind);
@@ -224,8 +268,8 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_comment = try extractDocComment(gpa, source, region.start.offset);
-                errdefer if (doc_comment) |d| gpa.free(d);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
 
                 const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
                 errdefer if (type_sig) |s| {
@@ -243,8 +287,9 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
                     .name = duped_name,
                     .kind = .alias,
                     .type_signature = type_sig,
-                    .doc_comment = doc_comment,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
                     .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
             .s_nominal_decl => |decl| {
@@ -255,8 +300,8 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_comment = try extractDocComment(gpa, source, region.start.offset);
-                errdefer if (doc_comment) |d| gpa.free(d);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
 
                 const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
                 errdefer if (type_sig) |s| {
@@ -274,8 +319,9 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
                     .name = duped_name,
                     .kind = if (decl.is_opaque) .@"opaque" else .nominal,
                     .type_signature = type_sig,
-                    .doc_comment = doc_comment,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
                     .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
             else => {},
@@ -342,12 +388,17 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
 
     const entries = try entries_list.toOwnedSlice(gpa);
 
+    const duped_source_path: ?[]const u8 = if (source_path) |p| try gpa.dupe(u8, p) else null;
+    errdefer if (duped_source_path) |p| gpa.free(p);
+
     return DocModel.ModuleDocs{
         .name = name,
         .package_name = pkg_name,
         .kind = kind,
         .module_doc = module_doc,
         .entries = entries,
+        .source_path = duped_source_path,
+        .module_doc_start_line = module_doc_start_line,
     };
 }
 
@@ -642,8 +693,8 @@ fn extractDefEntry(
 
             // Get the byte offset for doc comment scanning
             const offset = getDefSourceOffset(module_env, def);
-            const doc_comment = try extractDocComment(gpa, source, offset);
-            errdefer if (doc_comment) |d| gpa.free(d);
+            const doc_extract = try extractDocComment(gpa, source, offset);
+            errdefer if (doc_extract) |d| gpa.free(d.text);
 
             // Extract structured type from inferred type
             const type_sig: ?*const DocType = blk: {
@@ -668,8 +719,9 @@ fn extractDefEntry(
                 .name = duped_name,
                 .kind = .value,
                 .type_signature = type_sig,
-                .doc_comment = doc_comment,
+                .doc_comment = if (doc_extract) |d| d.text else null,
                 .children = empty_children,
+                .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
             };
         },
         .nominal => |n| {
@@ -683,8 +735,8 @@ fn extractDefEntry(
 
                     // Use the statement region for doc comment scanning
                     const region = module_env.store.getStatementRegion(n.nominal_type_decl);
-                    const doc_comment = try extractDocComment(gpa, source, region.start.offset);
-                    errdefer if (doc_comment) |d| gpa.free(d);
+                    const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                    errdefer if (doc_extract) |d| gpa.free(d.text);
 
                     const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
                     errdefer if (type_sig) |s| {
@@ -703,8 +755,9 @@ fn extractDefEntry(
                         .name = duped_name,
                         .kind = if (decl.is_opaque) .@"opaque" else .nominal,
                         .type_signature = type_sig,
-                        .doc_comment = doc_comment,
+                        .doc_comment = if (doc_extract) |d| d.text else null,
                         .children = children,
+                        .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                     };
                 },
                 else => return null,
@@ -825,6 +878,16 @@ fn resolveModulePathFromBase(
     };
 }
 
+/// Returns true when the annotation is the synthetic `#others` rigid used for
+/// anonymous open extensions (`..`). Such extensions should be rendered as
+/// `..` with no trailing name, so the caller should skip extracting the ext.
+fn isAnonymousOpenExt(module_env: *const ModuleEnv, ext_idx: CIR.TypeAnno.Idx) bool {
+    const anno = module_env.store.getTypeAnno(ext_idx);
+    if (anno != .rigid_var) return false;
+    const name = module_env.getIdentText(anno.rigid_var.name);
+    return name.len > 0 and name[0] == '#';
+}
+
 /// Extract a CIR TypeAnno as a structured DocType.
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
@@ -918,13 +981,18 @@ fn extractTypeAnnoAsDocType(
             }
 
             var ext: ?*const DocType = null;
+            var is_open = false;
             if (tu.ext) |ext_idx| {
-                ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                is_open = true;
+                if (!isAnonymousOpenExt(module_env, ext_idx)) {
+                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                }
             }
 
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = tags,
                 .ext = ext,
+                .is_open = is_open,
             } });
         },
         .tag => |t| {
@@ -942,6 +1010,7 @@ fn extractTypeAnnoAsDocType(
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = tags,
                 .ext = null,
+                .is_open = false,
             } });
         },
         .tuple => |t| {
@@ -966,13 +1035,18 @@ fn extractTypeAnnoAsDocType(
             }
 
             var ext: ?*const DocType = null;
+            var is_open = false;
             if (r.ext) |ext_idx| {
-                ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                is_open = true;
+                if (!isAnonymousOpenExt(module_env, ext_idx)) {
+                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                }
             }
 
             return try allocDocType(gpa, .{ .record = .{
                 .fields = fields,
                 .ext = ext,
+                .is_open = is_open,
             } });
         },
         .@"fn" => |f| {
@@ -1331,12 +1405,14 @@ fn extractFlatType(
             return try allocDocType(gpa, .{ .record = .{
                 .fields = try gpa.alloc(DocType.Field, 0),
                 .ext = null,
+                .is_open = false,
             } });
         },
         .empty_tag_union => {
             return try allocDocType(gpa, .{ .tag_union = .{
                 .tags = try gpa.alloc(DocType.Tag, 0),
                 .ext = null,
+                .is_open = false,
             } });
         },
     }
@@ -1433,30 +1509,42 @@ fn extractRecord(
     // Follow the extension chain
     var ext = record.ext;
     var ext_doc_type: ?*const DocType = null;
+    var is_open = false;
     var guard_count: usize = 0;
     while (guard_count < 100) : (guard_count += 1) {
         const ext_resolved = types.resolveVar(ext);
         switch (ext_resolved.desc.content) {
             .flex => |flex| {
-                const var_name = if (flex.name) |ident_idx|
-                    try gpa.dupe(u8, idents.getText(ident_idx))
+                const ident_text: ?[]const u8 = if (flex.name) |ident_idx|
+                    idents.getText(ident_idx)
                 else
-                    try ctx.getFlexVarName(ext_resolved.var_);
+                    null;
 
                 // Collect constraints from the extension variable
                 const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
-                for (constraints) |constraint| {
-                    if (constraint.origin != .from_numeral) {
-                        const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
-                        try ctx.constraints_list.append(gpa, .{
-                            .dispatcher_name = dispatcher_name,
-                            .fn_name_text = idents.getText(constraint.fn_name),
-                            .fn_var = constraint.fn_var,
-                        });
+                if (constraints.len > 0) {
+                    const dispatcher_name = if (ident_text) |t| t else try ctx.getFlexVarName(ext_resolved.var_);
+                    for (constraints) |constraint| {
+                        if (constraint.origin != .from_numeral) {
+                            try ctx.constraints_list.append(gpa, .{
+                                .dispatcher_name = dispatcher_name,
+                                .fn_name_text = idents.getText(constraint.fn_name),
+                                .fn_var = constraint.fn_var,
+                            });
+                        }
                     }
                 }
 
-                ext_doc_type = try allocDocType(gpa, .{ .type_var = var_name });
+                is_open = true;
+                if (ident_text) |t| {
+                    if (t.len == 0 or t[0] == '#') {
+                        // Synthetic anonymous-open name — render as `..` with no name.
+                    } else {
+                        ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, t) });
+                    }
+                } else {
+                    ext_doc_type = try allocDocType(gpa, .{ .type_var = try ctx.getFlexVarName(ext_resolved.var_) });
+                }
                 break;
             },
             .rigid => |rigid| {
@@ -1471,7 +1559,10 @@ fn extractRecord(
                     });
                 }
 
-                ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
+                is_open = true;
+                if (var_name.len == 0 or var_name[0] != '#') {
+                    ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
+                }
                 break;
             },
             .alias => |alias| {
@@ -1517,6 +1608,7 @@ fn extractRecord(
     return try allocDocType(gpa, .{ .record = .{
         .fields = doc_fields,
         .ext = ext_doc_type,
+        .is_open = is_open,
     } });
 }
 
@@ -1530,6 +1622,7 @@ fn extractRecordUnbound(
         return try allocDocType(gpa, .{ .record = .{
             .fields = try gpa.alloc(DocType.Field, 0),
             .ext = null,
+            .is_open = false,
         } });
     }
 
@@ -1555,6 +1648,7 @@ fn extractRecordUnbound(
     return try allocDocType(gpa, .{ .record = .{
         .fields = fields,
         .ext = null,
+        .is_open = false,
     } });
 }
 
@@ -1607,11 +1701,16 @@ fn extractTagUnion(
 
     // Handle extension variable
     var ext_type: ?*const DocType = null;
+    var is_open = false;
     const ext_resolved = types.resolveVar(tag_union.ext);
     switch (ext_resolved.desc.content) {
         .flex => |flex| {
             if (flex.name) |ident_idx| {
-                ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(ident_idx)) });
+                const name = idents.getText(ident_idx);
+                is_open = true;
+                if (name.len > 0 and name[0] != '#') {
+                    ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, name) });
+                }
             }
             // unnamed flex with no constraints = closed union (no extension)
 
@@ -1626,12 +1725,16 @@ fn extractTagUnion(
             }
         },
         .rigid => |rigid| {
-            ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(rigid.name)) });
+            const name = idents.getText(rigid.name);
+            is_open = true;
+            if (name.len > 0 and name[0] != '#') {
+                ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, name) });
+            }
 
             const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = idents.getText(rigid.name),
+                    .dispatcher_name = name,
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });
@@ -1640,10 +1743,12 @@ fn extractTagUnion(
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
             else => {
+                is_open = true;
                 ext_type = try extractDocTypeInner(ctx, tag_union.ext);
             },
         },
         .alias => {
+            is_open = true;
             ext_type = try extractDocTypeInner(ctx, tag_union.ext);
         },
         .err => {},
@@ -1653,6 +1758,7 @@ fn extractTagUnion(
     return try allocDocType(gpa, .{ .tag_union = .{
         .tags = tags_slice,
         .ext = ext_type,
+        .is_open = is_open,
     } });
 }
 

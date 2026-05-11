@@ -6926,8 +6926,8 @@ const BodyLowerer = struct {
         const lowered = switch (expr.data) {
             .num => |num| try self.lowerIntegerLiteralExpr(ty, num.value),
             .typed_int => |num| try self.lowerIntegerLiteralExpr(ty, num.value),
-            .frac_f32 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f32_lit = frac.value }),
-            .frac_f64 => |frac| try self.program.ast.addExpr(ty, .{ .frac_f64_lit = frac.value }),
+            .frac_f32 => |frac| try self.lowerF32LiteralExpr(ty, frac.value),
+            .frac_f64 => |frac| try self.lowerF64LiteralExpr(ty, frac.value),
             .dec => |dec| try self.lowerScaledDecimalLiteralExpr(ty, dec.value.num),
             .dec_small => |dec| try self.lowerScaledDecimalLiteralExpr(ty, dec.value.toRocDec().num),
             .typed_frac => |frac| try self.lowerScaledDecimalLiteralExpr(ty, frac.value.toI128()),
@@ -7123,6 +7123,38 @@ const BodyLowerer = struct {
                 else => invariantViolation("mono body lowering reached decimal literal with non-fractional primitive type"),
             },
             else => invariantViolation("mono body lowering reached decimal literal with non-primitive result type"),
+        };
+    }
+
+    fn lowerF32LiteralExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: f32,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addExpr(ty, .{ .frac_f32_lit = value }),
+                .f64 => try self.program.ast.addExpr(ty, .{ .frac_f64_lit = @floatCast(value) }),
+                .dec => invariantViolation("mono body lowering reached binary fraction literal with Dec result type after type checking"),
+                else => invariantViolation("mono body lowering reached binary fraction literal with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached binary fraction literal with non-primitive result type"),
+        };
+    }
+
+    fn lowerF64LiteralExpr(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: f64,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addExpr(ty, .{ .frac_f32_lit = @floatCast(value) }),
+                .f64 => try self.program.ast.addExpr(ty, .{ .frac_f64_lit = value }),
+                .dec => invariantViolation("mono body lowering reached binary fraction literal with Dec result type after type checking"),
+                else => invariantViolation("mono body lowering reached binary fraction literal with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached binary fraction literal with non-primitive result type"),
         };
     }
 
@@ -9417,8 +9449,8 @@ const BodyLowerer = struct {
             .num_literal => |num| try self.lowerIntegerLiteralPattern(ty, num.value),
             .small_dec_literal => |dec| try self.lowerScaledDecimalLiteralPattern(ty, dec.value.toRocDec().num),
             .dec_literal => |dec| try self.lowerScaledDecimalLiteralPattern(ty, dec.value.num),
-            .frac_f32_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = value } }),
-            .frac_f64_literal => |value| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = value } }),
+            .frac_f32_literal => |value| try self.lowerF32LiteralPattern(ty, value),
+            .frac_f64_literal => |value| try self.lowerF64LiteralPattern(ty, value),
             .str_literal => |literal| try self.program.ast.addPat(.{ .ty = ty, .data = .{ .str_lit = try self.lowerCheckedStringLiteral(literal) } }),
             .underscore => try self.program.ast.addPat(.{ .ty = ty, .data = .wildcard }),
             .runtime_error => invariantViolation("mono body lowering reached runtime_error checked pattern"),
@@ -9468,6 +9500,38 @@ const BodyLowerer = struct {
                 else => invariantViolation("mono body lowering reached decimal literal pattern with non-fractional primitive type"),
             },
             else => invariantViolation("mono body lowering reached decimal literal pattern with non-primitive result type"),
+        };
+    }
+
+    fn lowerF32LiteralPattern(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: f32,
+    ) Allocator.Error!Ast.PatId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = value } }),
+                .f64 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = @floatCast(value) } }),
+                .dec => invariantViolation("mono body lowering reached binary fraction literal pattern with Dec result type after type checking"),
+                else => invariantViolation("mono body lowering reached binary fraction literal pattern with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached binary fraction literal pattern with non-primitive result type"),
+        };
+    }
+
+    fn lowerF64LiteralPattern(
+        self: *BodyLowerer,
+        ty: Type.TypeId,
+        value: f64,
+    ) Allocator.Error!Ast.PatId {
+        return switch (self.program.types.getType(ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f32_lit = @floatCast(value) } }),
+                .f64 => try self.program.ast.addPat(.{ .ty = ty, .data = .{ .frac_f64_lit = value } }),
+                .dec => invariantViolation("mono body lowering reached binary fraction literal pattern with Dec result type after type checking"),
+                else => invariantViolation("mono body lowering reached binary fraction literal pattern with non-fractional primitive type"),
+            },
+            else => invariantViolation("mono body lowering reached binary fraction literal pattern with non-primitive result type"),
         };
     }
 

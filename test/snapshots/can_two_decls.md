@@ -8,6 +8,7 @@ type=file
 app [] { pf: platform "../basic-cli/platform.roc" }
 
 a = 5
+
 b = a + 1
 ~~~
 # EXPECTED

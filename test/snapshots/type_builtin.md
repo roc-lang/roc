@@ -6,6 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 MyNumber : U64
+
 MyString : Str
 ~~~
 # EXPECTED

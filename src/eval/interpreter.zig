@@ -67,7 +67,6 @@ const Value = lir_value.Value;
 const LayoutHelper = lir_value.LayoutHelper;
 const RocDec = builtins.dec.RocDec;
 const dev_wrappers = builtins.dev_wrappers;
-const i128h = builtins.compiler_rt_128;
 
 // Builtin types for direct dispatch
 const RocStr = builtins.str.RocStr;
@@ -3595,14 +3594,14 @@ pub const Interpreter = struct {
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .f32_to_str => blk: {
-                var buf: [400]u8 = undefined;
-                const slice = i128h.f64_to_str(&buf, @as(f64, args[0].read(f32)));
-                break :blk self.makeRocStr(slice);
+                const bits: u64 = @as(u64, @as(u32, @bitCast(args[0].read(f32))));
+                const result = builtins.str.floatToStrFromBits(bits, true, &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .f64_to_str => blk: {
-                var buf: [400]u8 = undefined;
-                const slice = i128h.f64_to_str(&buf, args[0].read(f64));
-                break :blk self.makeRocStr(slice);
+                const bits: u64 = @bitCast(args[0].read(f64));
+                const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
@@ -3618,12 +3617,12 @@ pub const Interpreter = struct {
                     const result = builtins.dec.to_str(dec, &self.roc_ops);
                     break :blk self.rocStrToValue(result, ll.ret_layout);
                 } else if (is_float) {
-                    var buf: [400]u8 = undefined;
-                    const slice = switch (size) {
-                        4 => i128h.f64_to_str(&buf, @as(f64, args[0].read(f32))),
-                        else => i128h.f64_to_str(&buf, args[0].read(f64)),
+                    const bits: u64 = switch (size) {
+                        4 => @as(u64, @as(u32, @bitCast(args[0].read(f32)))),
+                        else => @bitCast(args[0].read(f64)),
                     };
-                    break :blk self.makeRocStr(slice);
+                    const result = builtins.str.floatToStrFromBits(bits, size == 4, &self.roc_ops);
+                    break :blk self.rocStrToValue(result, ll.ret_layout);
                 } else {
                     break :blk self.numToStrByLayout(args[0], arg_layout, ll.ret_layout);
                 }

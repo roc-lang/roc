@@ -46,6 +46,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 foo = |f| f(dbg 42)
+
 bar = |f| f(dbg (42))
 ~~~
 # CANONICALIZE

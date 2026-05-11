@@ -323,7 +323,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 6. Construct List(Types) using the exact committed LIR layout and invoke the LIR interpreter.
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
+    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
+    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, @constCast(&hosted_function_ptrs));
     const glue_writer = GlueRocValueWriter{
         .layouts = &lowered.lir_result.layouts,
         .schemas = &lowered.runtime_value_schemas,

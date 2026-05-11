@@ -118,7 +118,8 @@ fn argLayoutsForProc(
 
 fn runEchoLir(lowered: *const lir.CheckedPipeline.LoweredProgram) !u8 {
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
+    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
@@ -150,6 +151,7 @@ fn runEchoLir(lowered: *const lir.CheckedPipeline.LoweredProgram) !u8 {
         error.OutOfMemory => return error.OutOfMemory,
     };
 
+    if (default_roc_ops_env.inline_expect_failed) return 1;
     return result_buf[0];
 }
 

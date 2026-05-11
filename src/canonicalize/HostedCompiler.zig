@@ -28,8 +28,13 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Iterate through all defs and replace ALL anno-only defs with hosted implementations
-    const all_defs = env.store.sliceDefs(env.all_defs);
+    // Iterate through all defs and replace ALL anno-only defs with hosted implementations.
+    // Copy the def indices locally first: sliceDefs returns a slice backed by
+    // store.index_data, which patternSpanFrom appends to inside the loop. A reallocation
+    // there would invalidate a directly-held slice.
+    const defs_slice = env.store.sliceDefs(env.all_defs);
+    const all_defs = try gpa.dupe(CIR.Def.Idx, defs_slice);
+    defer gpa.free(all_defs);
     for (all_defs) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);

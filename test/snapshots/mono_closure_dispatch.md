@@ -10,6 +10,7 @@ func = |offset| {
 	f = if condition |x| x + offset else |x| x * 2
 	f(10)
 }
+
 result = func(1)
 ~~~
 # MONO

@@ -143,6 +143,13 @@ pub const ModuleDocs = struct {
     kind: ModuleKind,
     module_doc: ?[]const u8,
     entries: []DocEntry,
+    /// Filesystem path to the module's source `.roc` file. Used by the
+    /// renderer when reporting source-level diagnostics (e.g. broken
+    /// `[ref]` links). Owned by `gpa`.
+    source_path: ?[]const u8 = null,
+    /// 1-based source line where `module_doc`'s first `##` line begins.
+    /// Zero when there is no module doc or the line is unknown.
+    module_doc_start_line: u32 = 0,
 
     pub fn deinit(self: *ModuleDocs, gpa: Allocator) void {
         for (self.entries) |*entry| {
@@ -150,6 +157,7 @@ pub const ModuleDocs = struct {
         }
         gpa.free(self.entries);
         if (self.module_doc) |doc| gpa.free(doc);
+        if (self.source_path) |p| gpa.free(p);
         gpa.free(self.name);
         gpa.free(self.package_name);
     }
@@ -246,7 +254,11 @@ pub const DocType = union(enum) {
 
     pub const Record = struct {
         fields: []const Field,
-        ext: ?*const DocType, // extension var for open records { .., name: Str }
+        /// Named extension variable (e.g. `..a` produces `type_var("a")`).
+        /// Null when the record is closed or when it is anonymously open (`..`).
+        ext: ?*const DocType,
+        /// True when the record is open (`..` or `..name`).
+        is_open: bool,
     };
 
     pub const Field = struct {
@@ -256,7 +268,11 @@ pub const DocType = union(enum) {
 
     pub const TagUnion = struct {
         tags: []const Tag,
+        /// Named extension variable (e.g. `..a` produces `type_var("a")`).
+        /// Null when the union is closed or when it is anonymously open (`..`).
         ext: ?*const DocType,
+        /// True when the union is open (`..` or `..name`).
+        is_open: bool,
     };
 
     pub const Tag = struct {
@@ -319,6 +335,7 @@ pub const DocType = union(enum) {
             },
             .record => |rec| {
                 try writer.writeAll("(record");
+                if (rec.is_open) try writer.writeAll(" (open)");
                 if (rec.ext) |ext| {
                     try writer.writeAll(" (ext ");
                     try ext.writeToSExpr(writer, depth);
@@ -335,6 +352,7 @@ pub const DocType = union(enum) {
             },
             .tag_union => |tu| {
                 try writer.writeAll("(tag-union");
+                if (tu.is_open) try writer.writeAll(" (open)");
                 for (tu.tags) |tag| {
                     try writer.writeAll(" (tag \"");
                     try writeEscaped(writer, tag.name);
@@ -476,6 +494,9 @@ pub const DocEntry = struct {
     type_signature: ?*const DocType,
     doc_comment: ?[]const u8,
     children: []DocEntry,
+    /// 1-based source line where `doc_comment`'s first `##` line begins.
+    /// Zero when there is no doc comment or the line is unknown.
+    doc_comment_start_line: u32 = 0,
 
     pub fn deinit(self: *DocEntry, gpa: Allocator) void {
         for (self.children) |*child| {

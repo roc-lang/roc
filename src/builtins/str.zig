@@ -615,11 +615,31 @@ fn strFromFloatHelp(
     roc_ops: *RocOps,
 ) RocStr {
     var buf: [32]u8 = undefined;
-    const result = if (T == f32)
-        compiler_rt_128.f64_to_str(&buf, @as(f64, @floatCast(float)))
+    const val_bits: u64 = if (T == f32)
+        @as(u64, @as(u32, @bitCast(float)))
     else
-        compiler_rt_128.f64_to_str(&buf, float);
+        @bitCast(float);
+    const result = floatToStrBytes(&buf, val_bits, T == f32);
 
+    return RocStr.init(result.ptr, result.len, roc_ops);
+}
+
+/// Format a Roc float into caller-owned scratch bytes.
+pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
+    return if (is_f32) blk: {
+        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
+        break :blk compiler_rt_128.f32_to_str(buf, f32_val);
+    } else blk: {
+        const f64_val: f64 = @bitCast(val_bits);
+        break :blk compiler_rt_128.f64_to_str(buf, f64_val);
+    };
+}
+
+/// Format a Roc float into a RocStr using the same implementation used by
+/// generated builtin calls.
+pub fn floatToStrFromBits(val_bits: u64, is_f32: bool, roc_ops: *RocOps) RocStr {
+    var buf: [400]u8 = undefined;
+    const result = floatToStrBytes(&buf, val_bits, is_f32);
     return RocStr.init(result.ptr, result.len, roc_ops);
 }
 

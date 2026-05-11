@@ -126,15 +126,19 @@ EndOfFile,
 ~~~roc
 # Simple closure capturing outer variable
 outer = 42
+
 captureSimple = |_| outer
 
 # Closure capturing multiple variables
 x = 1
+
 y = 2
+
 captureMultiple = |_| x + y
 
 # Nested closures with multi-level capture
 level1 = 10
+
 outerFn = |_| {
 	level2 = 20
 	innerFn = |_| level1 + level2
@@ -143,6 +147,7 @@ outerFn = |_| {
 
 # Closure capturing closure
 makeClosure = |n| |_| n
+
 useClosure = makeClosure(100)
 
 main = (captureSimple, captureMultiple, outerFn, useClosure)

@@ -8,8 +8,11 @@ type=file
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 UserId : U64
+
 UserName : Str
+
 UserAge : U8
+
 User : { id : UserId, name : UserName, age : UserAge }
 
 create_user : UserId, UserName, UserAge -> User
