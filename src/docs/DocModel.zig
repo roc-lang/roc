@@ -143,6 +143,13 @@ pub const ModuleDocs = struct {
     kind: ModuleKind,
     module_doc: ?[]const u8,
     entries: []DocEntry,
+    /// Filesystem path to the module's source `.roc` file. Used by the
+    /// renderer when reporting source-level diagnostics (e.g. broken
+    /// `[ref]` links). Owned by `gpa`.
+    source_path: ?[]const u8 = null,
+    /// 1-based source line where `module_doc`'s first `##` line begins.
+    /// Zero when there is no module doc or the line is unknown.
+    module_doc_start_line: u32 = 0,
 
     pub fn deinit(self: *ModuleDocs, gpa: Allocator) void {
         for (self.entries) |*entry| {
@@ -150,6 +157,7 @@ pub const ModuleDocs = struct {
         }
         gpa.free(self.entries);
         if (self.module_doc) |doc| gpa.free(doc);
+        if (self.source_path) |p| gpa.free(p);
         gpa.free(self.name);
         gpa.free(self.package_name);
     }
@@ -486,6 +494,9 @@ pub const DocEntry = struct {
     type_signature: ?*const DocType,
     doc_comment: ?[]const u8,
     children: []DocEntry,
+    /// 1-based source line where `doc_comment`'s first `##` line begins.
+    /// Zero when there is no doc comment or the line is unknown.
+    doc_comment_start_line: u32 = 0,
 
     pub fn deinit(self: *DocEntry, gpa: Allocator) void {
         for (self.children) |*child| {

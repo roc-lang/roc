@@ -1243,10 +1243,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const final_result = try self.generateExpr(expr_id);
             const actual_ret_layout = result_layout;
 
-            // Store result to the saved result pointer
-            const ret_size = self.getLayoutSize(actual_ret_layout);
-            if (ret_size > 0) {
-                try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
+            // If the body never returns (e.g., a top-level expression that is
+            // entirely a runtime_error / crash), the trap has already been
+            // emitted and there is no value to store. Skip the result store.
+            if (final_result != .noreturn) {
+                // Store result to the saved result pointer
+                const ret_size = self.getLayoutSize(actual_ret_layout);
+                if (ret_size > 0) {
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
+                }
             }
 
             // Emit epilogue using DeferredFrameBuilder with actual stack usage

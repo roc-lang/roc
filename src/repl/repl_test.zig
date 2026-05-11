@@ -562,3 +562,19 @@ test "Repl - paste of two assignments processes both" {
     defer alloc.free(r1);
     try testing.expectEqualStrings("assigned `y`", r1);
 }
+
+test "issue 9364: F64.plus with integer literals" {
+    try expectAllNative("F64.plus(1, 1)", "2");
+}
+
+test "issue 9364: F64.plus with float literals" {
+    try expectAllNative("F64.plus(1.0, 1.0)", "2");
+}
+
+test "issue 9364: F64.to_str integer-valued float literal" {
+    try expectAllNative("F64.to_str(2.0)", "\"2\"");
+}
+
+test "issue 9364: F64.to_str non-integer float literal" {
+    try expectAllNative("F64.to_str(2.5)", "\"2.5\"");
+}

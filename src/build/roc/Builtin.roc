@@ -374,7 +374,7 @@ Builtin :: [].{
 
 		## Returns the length of the list, which is equal to the number of elements it contains.
 		##
-		## One [List] can store up to `Num.max_i64` (TODO update for current max function) elements on 64-bit targets and `Num.max_i32` (TODO update for current max function) on 32-bit targets like wasm.
+		## One [List] can store up to [I64.highest] elements on 64-bit targets and [I32.highest] on 32-bit targets like wasm.
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 
@@ -968,7 +968,7 @@ Builtin :: [].{
 
 		## If the result is `Ok`, transforms the value it holds by running a conversion
 		## function on it. Then returns a new `Ok` holding the transformed value. If the
-		## result is `Err`, this has no effect. Use [map_err] to transform an `Err`.
+		## result is `Err`, this has no effect. Use [Try.map_err] to transform an `Err`.
 		## ```roc
 		## expect Try.Ok(12.I64).map_ok(|n| -n) == Ok(-12)
 		##
@@ -985,7 +985,7 @@ Builtin :: [].{
 			Ok(a) => Ok(transform(a))
 		}
 
-		## Like [map_ok], but the transform function is effectful. If the argument is
+		## Like [Try.map_ok], but the transform function is effectful. If the argument is
 		## an `Ok`, the effect is run and its return value is wrapped in a new `Ok`. If
 		## the result is `Err`, the effect is not run and the `Err` is returned unchanged.
 		## ```roc
@@ -999,7 +999,7 @@ Builtin :: [].{
 
 		## If the result is `Err`, transforms the value it holds by running a conversion
 		## function on it. Then returns a new `Err` holding the transformed value. If
-		## the result is `Ok`, this has no effect. Use [map_ok] to transform an `Ok`.
+		## the result is `Ok`, this has no effect. Use [Try.map_ok] to transform an `Ok`.
 		## ```roc
 		## expect [].last().map_err(|_| ProvidedListIsEmpty) == Err(ProvidedListIsEmpty)
 		##
@@ -1011,7 +1011,7 @@ Builtin :: [].{
 			Ok(ok) => Ok(ok)
 		}
 
-		## Like [map_err], but the transform function is effectful. If the argument is
+		## Like [Try.map_err], but the transform function is effectful. If the argument is
 		## an `Err`, the effect is run and its return value is wrapped in a new `Err`. If
 		## the result is `Ok`, the effect is not run and the `Ok` is returned unchanged.
 		## ```roc
@@ -1431,7 +1431,7 @@ Builtin :: [].{
 			div_by : U8, U8 -> U8
 
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
-			## integers this behaves the same as [div_by].
+			## integers this behaves the same as [U8.div_by].
 			## ```roc
 			## expect U8.div_trunc_by(7, 2) == 3
 			## ```
@@ -1446,7 +1446,7 @@ Builtin :: [].{
 			## Return the modulus of the first [U8] by the second. The modulus is the
 			## remainder left after dividing one number by another, and is always in
 			## the range `0` up to (but not including) the divisor. For unsigned
-			## integers this behaves the same as [rem_by].
+			## integers this behaves the same as [U8.rem_by].
 			## ```roc
 			## expect U8.mod_by(7, 3) == 1
 			## ```
@@ -1475,7 +1475,7 @@ Builtin :: [].{
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [shift_right_zf_by].
+			## [U8.shift_right_zf_by].
 			## ```roc
 			## expect U8.shift_right_by(32, 2) == 8
 			##
@@ -1485,7 +1485,7 @@ Builtin :: [].{
 
 			## Shift the bits of a [U8] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [shift_right_by].
+			## integers this behaves the same as [U8.shift_right_by].
 			## ```roc
 			## expect U8.shift_right_zf_by(32, 2) == 8
 			##
@@ -1515,7 +1515,7 @@ Builtin :: [].{
 			from_str : Str -> Try(U8, [BadNumStr, ..])
 
 			## List of integers beginning with this `U8` and ending with the other `U8`.
-			## (Use [until] instead to end with the other `U8` minus one.)
+			## (Use [U8.until] instead to end with the other `U8` minus one.)
 			## Returns an empty list if this `U8` is greater than the other.
 			## ```roc
 			## expect U8.to(1, 4) == [1, 2, 3, 4]
@@ -1528,7 +1528,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
-			## (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
+			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
 			## Returns an empty list if this `U8` is greater than or equal to the other.
 			## ```roc
 			## expect U8.until(1, 4) == [1, 2, 3]
@@ -1781,7 +1781,7 @@ Builtin :: [].{
 			## Return the modulus of the first [I8] by the second. The modulus is
 			## the remainder left after dividing one number by another, and is
 			## always in the range `0` up to (but not including) the absolute value
-			## of the divisor. Unlike [rem_by], the sign of the result matches the
+			## of the divisor. Unlike [I8.rem_by], the sign of the result matches the
 			## sign of the divisor.
 			## ```roc
 			## expect I8.mod_by(7, 3) == 1
@@ -1832,7 +1832,7 @@ Builtin :: [].{
 			shift_right_zf_by : I8, U8 -> I8
 
 			## List of integers beginning with this `I8` and ending with the other `I8`.
-			## (Use [until] instead to end with the other `I8` minus one.)
+			## (Use [I8.until] instead to end with the other `I8` minus one.)
 			## Returns an empty list if this `I8` is greater than the other.
 			## ```roc
 			## expect I8.to(1, 4) == [1, 2, 3, 4]
@@ -1845,7 +1845,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `I8` and ending with the other `I8` minus one.
-			## (Use [to] instead to end with the other `I8` exactly, instead of minus one.)
+			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
 			## Returns an empty list if this `I8` is greater than or equal to the other.
 			## ```roc
 			## expect I8.until(1, 4) == [1, 2, 3]
@@ -1861,7 +1861,7 @@ Builtin :: [].{
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I8] (`-128` to `127`), or if any element is not a valid digit. The
-			## result is always non-negative; to build a negative value, [negate]
+			## result is always non-negative; to build a negative value, [I8.negate]
 			## the result.
 			## ```roc
 			## expect I8.from_int_digits([1, 2, 3]) == Ok(123)
@@ -2141,7 +2141,7 @@ Builtin :: [].{
 			div_by : U16, U16 -> U16
 
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
-			## integers this behaves the same as [div_by].
+			## integers this behaves the same as [U16.div_by].
 			## ```roc
 			## expect U16.div_trunc_by(7, 2) == 3
 			## ```
@@ -2156,7 +2156,7 @@ Builtin :: [].{
 			## Return the modulus of the first [U16] by the second. The modulus is the
 			## remainder left after dividing one number by another, and is always in
 			## the range `0` up to (but not including) the divisor. For unsigned
-			## integers this behaves the same as [rem_by].
+			## integers this behaves the same as [U16.rem_by].
 			## ```roc
 			## expect U16.mod_by(7, 3) == 1
 			## ```
@@ -2185,7 +2185,7 @@ Builtin :: [].{
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [shift_right_zf_by].
+			## [U16.shift_right_zf_by].
 			## ```roc
 			## expect U16.shift_right_by(32, 2) == 8
 			##
@@ -2195,7 +2195,7 @@ Builtin :: [].{
 
 			## Shift the bits of a [U16] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [shift_right_by].
+			## integers this behaves the same as [U16.shift_right_by].
 			## ```roc
 			## expect U16.shift_right_zf_by(32, 2) == 8
 			##
@@ -2204,7 +2204,7 @@ Builtin :: [].{
 			shift_right_zf_by : U16, U8 -> U16
 
 			## List of integers beginning with this `U16` and ending with the other `U16`.
-			## (Use [until] instead to end with the other `U16` minus one.)
+			## (Use [U16.until] instead to end with the other `U16` minus one.)
 			## Returns an empty list if this `U16` is greater than the other.
 			## ```roc
 			## expect U16.to(1, 4) == [1, 2, 3, 4]
@@ -2217,7 +2217,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U16` and ending with the other `U16` minus one.
-			## (Use [to] instead to end with the other `U16` exactly, instead of minus one.)
+			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
 			## Returns an empty list if this `U16` is greater than or equal to the other.
 			## ```roc
 			## expect U16.until(1, 4) == [1, 2, 3]
@@ -2529,7 +2529,7 @@ Builtin :: [].{
 			## Return the modulus of the first [I16] by the second. The modulus is
 			## the remainder left after dividing one number by another, and is
 			## always in the range `0` up to (but not including) the absolute value
-			## of the divisor. Unlike [rem_by], the sign of the result matches the
+			## of the divisor. Unlike [I16.rem_by], the sign of the result matches the
 			## sign of the divisor.
 			## ```roc
 			## expect I16.mod_by(7, 3) == 1
@@ -2580,7 +2580,7 @@ Builtin :: [].{
 			shift_right_zf_by : I16, U8 -> I16
 
 			## List of integers beginning with this `I16` and ending with the other `I16`.
-			## (Use [until] instead to end with the other `I16` minus one.)
+			## (Use [I16.until] instead to end with the other `I16` minus one.)
 			## Returns an empty list if this `I16` is greater than the other.
 			## ```roc
 			## expect I16.to(1, 4) == [1, 2, 3, 4]
@@ -2593,7 +2593,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `I16` and ending with the other `I16` minus one.
-			## (Use [to] instead to end with the other `I16` exactly, instead of minus one.)
+			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
 			## Returns an empty list if this `I16` is greater than or equal to the other.
 			## ```roc
 			## expect I16.until(1, 4) == [1, 2, 3]
@@ -2609,7 +2609,7 @@ Builtin :: [].{
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I16] (`-32768` to `32767`), or if any element is not a valid digit.
-			## The result is always non-negative; to build a negative value, [negate]
+			## The result is always non-negative; to build a negative value, [I16.negate]
 			## the result.
 			## ```roc
 			## expect I16.from_int_digits([1, 2, 3]) == Ok(123)
@@ -2906,7 +2906,7 @@ Builtin :: [].{
 			div_by : U32, U32 -> U32
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
-			## integers this behaves the same as [div_by].
+			## integers this behaves the same as [U32.div_by].
 			## ```roc
 			## expect U32.div_trunc_by(7, 2) == 3
 			## ```
@@ -2921,7 +2921,7 @@ Builtin :: [].{
 			## Return the modulus of the first [U32] by the second. The modulus is the
 			## remainder left after dividing one number by another, and is always in
 			## the range `0` up to (but not including) the divisor. For unsigned
-			## integers this behaves the same as [rem_by].
+			## integers this behaves the same as [U32.rem_by].
 			## ```roc
 			## expect U32.mod_by(7, 3) == 1
 			## ```
@@ -2950,7 +2950,7 @@ Builtin :: [].{
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [shift_right_zf_by].
+			## [U32.shift_right_zf_by].
 			## ```roc
 			## expect U32.shift_right_by(32, 2) == 8
 			##
@@ -2960,7 +2960,7 @@ Builtin :: [].{
 
 			## Shift the bits of a [U32] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [shift_right_by].
+			## integers this behaves the same as [U32.shift_right_by].
 			## ```roc
 			## expect U32.shift_right_zf_by(32, 2) == 8
 			##
@@ -2969,7 +2969,7 @@ Builtin :: [].{
 			shift_right_zf_by : U32, U8 -> U32
 
 			## List of integers beginning with this `U32` and ending with the other `U32`.
-			## (Use [until] instead to end with the other `U32` minus one.)
+			## (Use [U32.until] instead to end with the other `U32` minus one.)
 			## Returns an empty list if this `U32` is greater than the other.
 			## ```roc
 			## expect U32.to(1, 4) == [1, 2, 3, 4]
@@ -2982,7 +2982,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U32` and ending with the other `U32` minus one.
-			## (Use [to] instead to end with the other `U32` exactly, instead of minus one.)
+			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
 			## Returns an empty list if this `U32` is greater than or equal to the other.
 			## ```roc
 			## expect U32.until(1, 4) == [1, 2, 3]
@@ -3332,7 +3332,7 @@ Builtin :: [].{
 			## Return the modulus of the first [I32] by the second. The modulus is
 			## the remainder left after dividing one number by another, and is
 			## always in the range `0` up to (but not including) the absolute value
-			## of the divisor. Unlike [rem_by], the sign of the result matches the
+			## of the divisor. Unlike [I32.rem_by], the sign of the result matches the
 			## sign of the divisor.
 			## ```roc
 			## expect I32.mod_by(7, 3) == 1
@@ -3383,7 +3383,7 @@ Builtin :: [].{
 			shift_right_zf_by : I32, U8 -> I32
 
 			## List of integers beginning with this `I32` and ending with the other `I32`.
-			## (Use [until] instead to end with the other `I32` minus one.)
+			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty list if this `I32` is greater than the other.
 			## ```roc
 			## expect I32.to(1, 4) == [1, 2, 3, 4]
@@ -3396,7 +3396,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `I32` and ending with the other `I32` minus one.
-			## (Use [to] instead to end with the other `I32` exactly, instead of minus one.)
+			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
 			## Returns an empty list if this `I32` is greater than or equal to the other.
 			## ```roc
 			## expect I32.until(1, 4) == [1, 2, 3]
@@ -3412,7 +3412,7 @@ Builtin :: [].{
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I32] (`-2147483648` to `2147483647`), or if any element is not a valid digit.
-			## The result is always non-negative; to build a negative value, [negate]
+			## The result is always non-negative; to build a negative value, [I32.negate]
 			## the result.
 			## ```roc
 			## expect I32.from_int_digits([1, 2, 3]) == Ok(123)
@@ -3729,7 +3729,7 @@ Builtin :: [].{
 			div_by : U64, U64 -> U64
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
-			## integers this behaves the same as [div_by].
+			## integers this behaves the same as [U64.div_by].
 			## ```roc
 			## expect U64.div_trunc_by(7, 2) == 3
 			## ```
@@ -3744,7 +3744,7 @@ Builtin :: [].{
 			## Return the modulus of the first [U64] by the second. The modulus is the
 			## remainder left after dividing one number by another, and is always in
 			## the range `0` up to (but not including) the divisor. For unsigned
-			## integers this behaves the same as [rem_by].
+			## integers this behaves the same as [U64.rem_by].
 			## ```roc
 			## expect U64.mod_by(7, 3) == 1
 			## ```
@@ -3773,7 +3773,7 @@ Builtin :: [].{
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [shift_right_zf_by].
+			## [U64.shift_right_zf_by].
 			## ```roc
 			## expect U64.shift_right_by(32, 2) == 8
 			##
@@ -3783,7 +3783,7 @@ Builtin :: [].{
 
 			## Shift the bits of a [U64] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [shift_right_by].
+			## integers this behaves the same as [U64.shift_right_by].
 			## ```roc
 			## expect U64.shift_right_zf_by(32, 2) == 8
 			##
@@ -3792,7 +3792,7 @@ Builtin :: [].{
 			shift_right_zf_by : U64, U8 -> U64
 
 			## List of integers beginning with this `U64` and ending with the other `U64`.
-			## (Use [until] instead to end with the other `U64` minus one.)
+			## (Use [U64.until] instead to end with the other `U64` minus one.)
 			## Returns an empty list if this `U64` is greater than the other.
 			## ```roc
 			## expect U64.to(1, 4) == [1, 2, 3, 4]
@@ -3805,7 +3805,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U64` and ending with the other `U64` minus one.
-			## (Use [to] instead to end with the other `U64` exactly, instead of minus one.)
+			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
 			## Returns an empty list if this `U64` is greater than or equal to the other.
 			## ```roc
 			## expect U64.until(1, 4) == [1, 2, 3]
@@ -4197,7 +4197,7 @@ Builtin :: [].{
 			## Return the modulus of the first [I64] by the second. The modulus is
 			## the remainder left after dividing one number by another, and is
 			## always in the range `0` up to (but not including) the absolute value
-			## of the divisor. Unlike [rem_by], the sign of the result matches the
+			## of the divisor. Unlike [I64.rem_by], the sign of the result matches the
 			## sign of the divisor.
 			## ```roc
 			## expect I64.mod_by(7, 3) == 1
@@ -4248,7 +4248,7 @@ Builtin :: [].{
 			shift_right_zf_by : I64, U8 -> I64
 
 			## List of integers beginning with this `I64` and ending with the other `I64`.
-			## (Use [until] instead to end with the other `I64` minus one.)
+			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty list if this `I64` is greater than the other.
 			## ```roc
 			## expect I64.to(1, 4) == [1, 2, 3, 4]
@@ -4261,7 +4261,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `I64` and ending with the other `I64` minus one.
-			## (Use [to] instead to end with the other `I64` exactly, instead of minus one.)
+			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
 			## Returns an empty list if this `I64` is greater than or equal to the other.
 			## ```roc
 			## expect I64.until(1, 4) == [1, 2, 3]
@@ -4278,7 +4278,7 @@ Builtin :: [].{
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I64] (`-9223372036854775808` to `9223372036854775807`), or if any
 			## element is not a valid digit. The result is always non-negative; to
-			## build a negative value, [negate] the result.
+			## build a negative value, [I64.negate] the result.
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -4610,7 +4610,7 @@ Builtin :: [].{
 			div_by : U128, U128 -> U128
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
-			## integers this behaves the same as [div_by].
+			## integers this behaves the same as [U128.div_by].
 			## ```roc
 			## expect U128.div_trunc_by(7, 2) == 3
 			## ```
@@ -4625,7 +4625,7 @@ Builtin :: [].{
 			## Return the modulus of the first [U128] by the second. The modulus is the
 			## remainder left after dividing one number by another, and is always in
 			## the range `0` up to (but not including) the divisor. For unsigned
-			## integers this behaves the same as [rem_by].
+			## integers this behaves the same as [U128.rem_by].
 			## ```roc
 			## expect U128.mod_by(7, 3) == 1
 			## ```
@@ -4654,7 +4654,7 @@ Builtin :: [].{
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [shift_right_zf_by].
+			## [U128.shift_right_zf_by].
 			## ```roc
 			## expect U128.shift_right_by(32, 2) == 8
 			##
@@ -4664,7 +4664,7 @@ Builtin :: [].{
 
 			## Shift the bits of a [U128] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [shift_right_by].
+			## integers this behaves the same as [U128.shift_right_by].
 			## ```roc
 			## expect U128.shift_right_zf_by(32, 2) == 8
 			##
@@ -4673,7 +4673,7 @@ Builtin :: [].{
 			shift_right_zf_by : U128, U8 -> U128
 
 			## List of integers beginning with this `U128` and ending with the other `U128`.
-			## (Use [until] instead to end with the other `U128` minus one.)
+			## (Use [U128.until] instead to end with the other `U128` minus one.)
 			## Returns an empty list if this `U128` is greater than the other.
 			## ```roc
 			## expect U128.to(1, 4) == [1, 2, 3, 4]
@@ -4686,7 +4686,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U128` and ending with the other `U128` minus one.
-			## (Use [to] instead to end with the other `U128` exactly, instead of minus one.)
+			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
 			## Returns an empty list if this `U128` is greater than or equal to the other.
 			## ```roc
 			## expect U128.until(1, 4) == [1, 2, 3]
@@ -5116,7 +5116,7 @@ Builtin :: [].{
 			## Return the modulus of the first [I128] by the second. The modulus is
 			## the remainder left after dividing one number by another, and is
 			## always in the range `0` up to (but not including) the absolute value
-			## of the divisor. Unlike [rem_by], the sign of the result matches the
+			## of the divisor. Unlike [I128.rem_by], the sign of the result matches the
 			## sign of the divisor.
 			## ```roc
 			## expect I128.mod_by(7, 3) == 1
@@ -5168,7 +5168,7 @@ Builtin :: [].{
 			shift_right_zf_by : I128, U8 -> I128
 
 			## List of integers beginning with this `I128` and ending with the other `I128`.
-			## (Use [until] instead to end with the other `I128` minus one.)
+			## (Use [I128.until] instead to end with the other `I128` minus one.)
 			## Returns an empty list if this `I128` is greater than the other.
 			## ```roc
 			## expect I128.to(1, 4) == [1, 2, 3, 4]
@@ -5181,7 +5181,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `I128` and ending with the other `I128` minus one.
-			## (Use [to] instead to end with the other `I128` exactly, instead of minus one.)
+			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
 			## Returns an empty list if this `I128` is greater than or equal to the other.
 			## ```roc
 			## expect I128.until(1, 4) == [1, 2, 3]
@@ -5199,7 +5199,7 @@ Builtin :: [].{
 			## [I128] (`-170141183460469231731687303715884105728` to
 			## `170141183460469231731687303715884105727`), or if any element is not
 			## a valid digit. The result is always non-negative; to build a negative
-			## value, [negate] the result.
+			## value, [I128.negate] the result.
 			## ```roc
 			## expect I128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -5624,7 +5624,7 @@ Builtin :: [].{
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
 			## fit in a [Dec], or if any element is not a valid digit. The result is always
-			## non-negative; to build a negative value, [negate] the result.
+			## non-negative; to build a negative value, [Dec.negate] the result.
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
 			## ```
@@ -5635,7 +5635,7 @@ Builtin :: [].{
 			## element of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
 			## [Dec], or if any element is not a valid digit. The result is
-			## always non-negative; to build a negative value, [negate] the
+			## always non-negative; to build a negative value, [Dec.negate] the
 			## result.
 			## ```roc
 			## expect Dec.from_dec_digits(([1, 2], [5])) == Ok(12.5)
@@ -5891,7 +5891,7 @@ Builtin :: [].{
 			to_f64 : Dec -> F64
 
 			## List of decimals beginning with this `Dec` and ending with the
-			## other `Dec`, stepping by `1.0`. (Use [until] instead to end with
+			## other `Dec`, stepping by `1.0`. (Use [Dec.until] instead to end with
 			## the other `Dec` minus one.) Returns an empty list if this `Dec`
 			## is greater than the other.
 			## ```roc
@@ -5905,7 +5905,7 @@ Builtin :: [].{
 			to = |start, end| range_to(start, end)
 
 			## List of decimals beginning with this `Dec` and ending with the
-			## other `Dec` minus one, stepping by `1.0`. (Use [to] instead to
+			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
 			## end with the other `Dec` exactly, instead of minus one.) Returns
 			## an empty list if this `Dec` is greater than or equal to the
 			## other.
@@ -6141,7 +6141,7 @@ Builtin :: [].{
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
 			## fit in an [F32], or if any element is not a valid digit. The
-			## result is always non-negative; to build a negative value, [negate]
+			## result is always non-negative; to build a negative value, [F32.negate]
 			## the result.
 			## ```roc
 			## expect match F32.from_int_digits([1, 2, 3]) {
@@ -6156,7 +6156,7 @@ Builtin :: [].{
 			## element of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [F32], or if any element is not a valid digit. The result is
-			## always non-negative; to build a negative value, [negate] the
+			## always non-negative; to build a negative value, [F32.negate] the
 			## result.
 			## ```roc
 			## expect match F32.from_dec_digits(([1, 2], [5])) {
@@ -6606,7 +6606,7 @@ Builtin :: [].{
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
 			## fit in an [F64], or if any element is not a valid digit. The
-			## result is always non-negative; to build a negative value, [negate]
+			## result is always non-negative; to build a negative value, [F64.negate]
 			## the result.
 			## ```roc
 			## expect match F64.from_int_digits([1, 2, 3]) {
@@ -6621,7 +6621,7 @@ Builtin :: [].{
 			## element of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [F64], or if any element is not a valid digit. The result is
-			## always non-negative; to build a negative value, [negate] the
+			## always non-negative; to build a negative value, [F64.negate] the
 			## result.
 			## ```roc
 			## expect match F64.from_dec_digits(([1, 2], [5])) {

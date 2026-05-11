@@ -118,9 +118,13 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 x = Ok("hello")
+
 y = Validate(|n| n > 0)
+
 z = Transform(|s| s)
+
 w = Err("error")
+
 result = if True {
 	x
 } else if True {

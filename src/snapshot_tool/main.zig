@@ -3701,7 +3701,7 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.env, mod.package_name) catch |err| {
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.env, mod.package_name, null) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };

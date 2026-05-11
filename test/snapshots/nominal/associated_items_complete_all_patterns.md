@@ -9556,6 +9556,7 @@ EndOfFile,
 
 
 first = second
+
 second = 100
 
 d1_1 = d1_forward.first
@@ -9573,6 +9574,7 @@ Inner := [D].{
 outer_val = 300
 
 d2_1 = d2_inner_first.outer_val
+
 d2_2 = d2_inner_first
 
 
@@ -9629,6 +9631,7 @@ L2 := [Q].{
 val1 = 10
 
 d3_1 = d3_types_then_vals.val1
+
 d3_2 = d3_types_then_vals
 
 d3_3 = d3_types_then_vals
@@ -9646,6 +9649,7 @@ L2 := [T].{
 }
 
 d3_4 = d3_vals_then_types.val1
+
 d3_5 = d3_vals_then_types
 
 d3_6 = d3_vals_then_types
@@ -9683,6 +9687,7 @@ L2 := [AC].{
 val1 = 5
 
 d3_7 = d3_val_after_nested.val1
+
 d3_8 = d3_val_after_nested
 
 d3_9 = d3_val_after_nested
@@ -9963,6 +9968,7 @@ L2 := [DD].{
 val1 = 5
 
 d5_6 = d5_l1_val_last.val1
+
 d5_7 = d5_l1_val_last
 
 d5_8 = d5_l1_val_last

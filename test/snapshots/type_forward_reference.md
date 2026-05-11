@@ -7,15 +7,19 @@ type=snippet
 ~~~roc
 # Simple forward reference - A references B before B is defined
 A : B
+
 B : Str
 
 # Multiple forward references in a chain
 First : Second
+
 Second : Third
+
 Third : U64
 
 # Forward reference with type parameters
 Wrapper(a) : Inner(a)
+
 Inner(a) : List(a)
 ~~~
 # EXPECTED

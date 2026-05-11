@@ -99,6 +99,7 @@ printName = |person| {
 	Stdout.line!(person.name)
 	person.name
 }
+
 main! = |_| {}
 ~~~
 # CANONICALIZE

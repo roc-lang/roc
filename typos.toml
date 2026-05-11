@@ -6,7 +6,6 @@ extend-exclude = [
     "authors",
     "crates",
     "examples/static-site-gen/input/",
-    "crates/compiler/checkmate/www/package-lock.json",
     "src/build/zig_llvm.h",
     "test/snapshots/",
     "build.zig.zon",

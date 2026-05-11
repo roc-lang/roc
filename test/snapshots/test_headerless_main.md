@@ -6,6 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 x = 5
+
 main! = |_| x
 ~~~
 # EXPECTED

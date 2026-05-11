@@ -8,6 +8,7 @@ type=file
 hosted [a!, b!]
 
 a! : Str => Str
+
 b! : Str => Str
 ~~~
 # EXPECTED

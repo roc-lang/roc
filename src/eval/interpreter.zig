@@ -13250,22 +13250,45 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, give it a concrete Dec type for method dispatch to work.
         // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        var final_rt_var = layout_rt_var;
+        if (is_flex_or_rigid) {
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            break :blk try self.runtime_types.freshFromContent(dec_content);
-        } else layout_rt_var;
-
-        const value = try self.pushRaw(layout_val, 0, final_rt_var);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(RocDec, ptr, dec_lit.value, @src());
+            final_rt_var = try self.runtime_types.freshFromContent(dec_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
         }
+
+        // The literal carries an exact Dec value, but the unified layout may be F32 or F64
+        // (e.g. when the surrounding context constrains the type to a float). Dispatch on
+        // the layout's precision so the slot size and stored bytes always agree.
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
+                        ptr.* = @floatCast(dec_lit.value.toF64());
+                    },
+                    .f64 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
+                        ptr.* = dec_lit.value.toF64();
+                    },
+                    .dec => {
+                        builtins.utils.writeAs(RocDec, value.ptr.?, dec_lit.value, @src());
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
         return value;
     }
 
@@ -13282,14 +13305,11 @@ pub const Interpreter = struct {
         };
         var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        // Dec literals require Dec-compatible layout. If we reach here with a different layout
-        // (e.g., function type from calling a literal like 0.0()), the type is incompatible.
-        // Return an error instead of crashing - the type checker will report the actual error.
-        const is_dec_layout = layout_val.tag == .scalar and
-            layout_val.data.scalar.tag == .frac and
-            layout_val.data.scalar.data.frac == .dec;
-        if (!is_dec_layout) {
-            // Fall back to Dec layout for the literal itself
+        // If the layout isn't a numeric float type (e.g., function type from calling a
+        // literal like 0.0()), fall back to Dec - the type checker will surface the
+        // actual error.
+        const is_frac_layout = layout_val.tag == .scalar and layout_val.data.scalar.tag == .frac;
+        if (!is_frac_layout) {
             layout_val = layout.Layout.frac(types.Frac.Precision.dec);
         }
 
@@ -13298,18 +13318,41 @@ pub const Interpreter = struct {
         // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        var final_rt_var = layout_rt_var;
+        if (is_flex_or_rigid) {
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-            break :blk try self.runtime_types.freshFromContent(dec_content);
-        } else layout_rt_var;
-
-        const value = try self.pushRaw(layout_val, 0, final_rt_var);
-        if (value.ptr) |ptr| {
-            const typed_ptr = builtins.utils.alignedPtrCast(*RocDec, ptr, @src());
-            const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
-            const scaled = @as(i128, small.value.numerator) * scale_factor;
-            typed_ptr.* = RocDec{ .num = scaled };
+            final_rt_var = try self.runtime_types.freshFromContent(dec_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
         }
+
+        // The literal is rational (numerator / 10^denominator_power_of_ten), but the
+        // unified layout may be Dec, F32, or F64. Dispatch on the layout's precision
+        // so the slot size and stored bytes always agree.
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
+                        ptr.* = @floatCast(small.value.toF64());
+                    },
+                    .f64 => {
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
+                        ptr.* = small.value.toF64();
+                    },
+                    .dec => {
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
+                        const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
+                        const scaled = @as(i128, small.value.numerator) * scale_factor;
+                        ptr.* = RocDec{ .num = scaled };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
         return value;
     }
 

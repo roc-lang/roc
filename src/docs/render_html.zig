@@ -58,12 +58,42 @@ const SidebarNode = struct {
 /// part of the package being documented.
 const builtins_docs_url_prefix = "https://roc-lang.org/builtins/main/#Builtin.";
 
+/// A `[Name]` shorthand reference that resolved to an HTML anchor that does
+/// not correspond to any `id="…"` in the rendered docs site.
+pub const BrokenLink = struct {
+    /// Module whose doc comment contained the bad reference.
+    source_module: []const u8,
+    /// Filesystem path to the source `.roc` file the doc comment was
+    /// extracted from, when known. Empty when the source isn't tracked
+    /// (e.g. in unit tests that build a `PackageDocs` in memory).
+    source_path: []const u8,
+    /// 1-based source line number of the line containing the `[Name]`.
+    /// Zero when the source line couldn't be determined.
+    source_line: u32,
+    /// Label as written by the user, e.g. `div_by` or `Str.foo`. Slice is
+    /// owned by the caller-provided allocator (see `renderPackageDocs`).
+    label: []const u8,
+    /// Anchor we resolved the label to. For same-page or relative refs this
+    /// is the bare fragment (e.g. `Builtin.div_by`); for cross-module refs
+    /// it is the anchor expected to exist on the target module's page.
+    /// Slice is owned by the caller-provided allocator.
+    resolved_anchor: []const u8,
+};
+
 /// Context for rendering, shared across all pages.
 const RenderContext = struct {
     package_docs: *const DocModel.PackageDocs,
     known_modules: std.StringHashMapUnmanaged(void),
     current_module: ?[]const u8,
     current_module_entries: ?[]const DocModel.DocEntry = null,
+    /// Maps a short type name (e.g. "U8", "Utf8Problem") to its module-relative
+    /// dotted path (e.g. "Num.U8", "Str.Utf8Problem") within `current_module`.
+    /// HTML anchors are built as `<module>.<relative_path>`, so without this
+    /// table a reference to `U8` inside Builtin would link to `#Builtin.U8` even
+    /// though the actual entry id is `#Builtin.Num.U8`. Type-name keys collide
+    /// only across different sub-namespaces with the same final segment; the
+    /// first-seen entry wins (matching source order).
+    current_module_anchors: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// When true, the single module's page is rendered at the root (index.html),
     /// so links to the module should point to the root instead of a subdirectory.
     single_module_at_root: bool = false,
@@ -73,34 +103,272 @@ const RenderContext = struct {
     /// True when the package being documented is Builtin itself, so references
     /// to builtin types stay local instead of pointing at roc-lang.org.
     documenting_builtin: bool = false,
+    /// Every `id="…"` value that will be emitted across all module pages,
+    /// computed up front so `writeDocRefHref` can verify each `[Name]`
+    /// shorthand resolves to a real anchor. Keys are slices into
+    /// `anchor_arena`.
+    all_anchors: std.StringHashMapUnmanaged(void) = .empty,
+    /// Backing storage for `all_anchors` keys.
+    anchor_arena: std.heap.ArenaAllocator,
+    /// When non-null, broken `[Name]` references are appended here as they
+    /// are encountered. The list and its strings are allocated with
+    /// `broken_links_gpa`; the caller owns and must free them.
+    broken_links: ?*std.ArrayListUnmanaged(BrokenLink) = null,
+    broken_links_gpa: ?Allocator = null,
+    /// Source path of the module currently being rendered, if known.
+    /// Mutated as we move between modules, so it lives behind a pointer
+    /// to keep `*const RenderContext` callers able to update it.
+    current_source_path: *[]const u8,
+    /// Tracks the doc comment currently being rendered (set by
+    /// `renderDocComment`). Behind a pointer for the same reason as
+    /// `current_source_path`. Used to translate a byte offset within
+    /// the doc into a 1-based source line for broken-link diagnostics.
+    active_doc: *ActiveDoc,
 
-    fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) RenderContext {
+    pub const ActiveDoc = struct {
+        /// Full doc-comment string currently being walked.
+        doc: []const u8 = "",
+        /// 1-based source line of the first character of `doc`. Zero
+        /// when unknown — broken-link reports then get `source_line = 0`.
+        start_line: u32 = 0,
+    };
+
+    fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) !RenderContext {
         var known = std.StringHashMapUnmanaged(void){};
+        errdefer known.deinit(gpa);
         var documenting_builtin = false;
         for (package_docs.modules) |mod| {
-            known.put(gpa, mod.name, {}) catch {};
+            try known.put(gpa, mod.name, {});
             if (std.mem.eql(u8, mod.name, "Builtin")) documenting_builtin = true;
         }
+
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+        var anchors = std.StringHashMapUnmanaged(void).empty;
+        errdefer anchors.deinit(gpa);
+        for (package_docs.modules) |mod| {
+            // The bare module name on its own is a valid link target: a
+            // same-module `[Foo]` writes `#Foo` and a cross-module `[Foo]`
+            // navigates to the module page (no fragment).
+            try addAnchor(&anchors, gpa, arena.allocator(), mod.name);
+            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.entries, "");
+        }
+
+        const active_doc = try arena.allocator().create(ActiveDoc);
+        active_doc.* = .{};
+        const current_source_path = try arena.allocator().create([]const u8);
+        current_source_path.* = "";
+
         return .{
             .package_docs = package_docs,
             .known_modules = known,
             .current_module = null,
             .current_module_entries = null,
             .documenting_builtin = documenting_builtin,
+            .all_anchors = anchors,
+            .anchor_arena = arena,
+            .current_source_path = current_source_path,
+            .active_doc = active_doc,
         };
     }
 
     fn deinit(self: *RenderContext, gpa: Allocator) void {
+        self.current_module_anchors.deinit(gpa);
         self.known_modules.deinit(gpa);
+        self.all_anchors.deinit(gpa);
+        self.anchor_arena.deinit();
+    }
+
+    /// Record a broken `[Name]` reference. `bracket_offset` is the byte
+    /// offset of the `[` within the active doc comment; together with
+    /// `active_doc.start_line` it pins the report to a source line.
+    /// No-op when collection is disabled.
+    fn reportBrokenLink(
+        self: *const RenderContext,
+        label: []const u8,
+        resolved_anchor: []const u8,
+        bracket_offset: usize,
+    ) void {
+        const list = self.broken_links orelse return;
+        const gpa = self.broken_links_gpa orelse return;
+        const source_module = self.current_module orelse "";
+
+        const active = self.active_doc.*;
+        const source_line: u32 = if (active.start_line == 0)
+            0
+        else blk: {
+            const end = @min(bracket_offset, active.doc.len);
+            var newlines: u32 = 0;
+            for (active.doc[0..end]) |c| {
+                if (c == '\n') newlines += 1;
+            }
+            break :blk active.start_line + newlines;
+        };
+
+        const label_dup = gpa.dupe(u8, label) catch return;
+        const anchor_dup = gpa.dupe(u8, resolved_anchor) catch {
+            gpa.free(label_dup);
+            return;
+        };
+        list.append(gpa, .{
+            .source_module = source_module,
+            .source_path = self.current_source_path.*,
+            .source_line = source_line,
+            .label = label_dup,
+            .resolved_anchor = anchor_dup,
+        }) catch {
+            gpa.free(label_dup);
+            gpa.free(anchor_dup);
+        };
+    }
+
+    /// Replace `current_module` and `current_module_entries`, then rebuild the
+    /// anchor map from the new module's entries. Anchor map keys and values
+    /// are slices into entry names owned by `PackageDocs`, so clearing the map
+    /// retains the storage but invalidates no memory we own.
+    fn enterModule(self: *RenderContext, gpa: Allocator, mod: *const DocModel.ModuleDocs) !void {
+        self.current_module = mod.name;
+        self.current_module_entries = mod.entries;
+        self.current_source_path.* = mod.source_path orelse "";
+        self.current_module_anchors.clearRetainingCapacity();
+        try populateAnchorMap(&self.current_module_anchors, gpa, mod.name, mod.entries);
+    }
+
+    fn leaveModule(self: *RenderContext) void {
+        self.current_module = null;
+        self.current_module_entries = null;
+        self.current_source_path.* = "";
+        self.current_module_anchors.clearRetainingCapacity();
+    }
+
+    /// Look up the head segment of `name` in the anchor map. Returns the
+    /// remapped path (e.g. `Num.U8` for `U8`) when the head is mapped, or
+    /// null otherwise. The optional `tail` is the dotted suffix to append
+    /// after the remapped head (e.g. `.default`); callers handle writing it.
+    fn lookupAnchorHead(self: *const RenderContext, head: []const u8) ?[]const u8 {
+        return self.current_module_anchors.get(head);
     }
 };
 
+/// Build the anchor map for a module by walking every entry name. The
+/// extractor produces flat entries whose `name` is the fully-qualified dotted
+/// path (e.g. `Builtin.Num.U8.default`); intermediate path components like
+/// `Num` and `U8` are not standalone entries but become group nodes in the
+/// rendered tree (so anchors `id="Builtin.Num.U8"` exist on the page). For
+/// each entry we walk its prefixes — minus the leaf component for value
+/// entries — and record `short_name → module_relative_path` so a reference to
+/// a bare `U8` can be linked to `Builtin.Num.U8`. Keys and values are slices
+/// into `entry.name`, which is owned by the PackageDocs and lives for the
+/// duration of rendering.
+fn populateAnchorMap(
+    map: *std.StringHashMapUnmanaged([]const u8),
+    gpa: Allocator,
+    module_name: []const u8,
+    entries: []const DocModel.DocEntry,
+) !void {
+    for (entries) |entry| {
+        // Skip the leading `<module_name>.` if present so the recorded path is
+        // module-relative (matching how anchors are written: `<module>.<rel>`).
+        var rel_start: usize = 0;
+        if (std.mem.startsWith(u8, entry.name, module_name) and
+            entry.name.len > module_name.len and
+            entry.name[module_name.len] == '.')
+        {
+            rel_start = module_name.len + 1;
+        }
+
+        // For value entries, the final dotted segment is the value's own name
+        // (e.g. `default` in `Builtin.Num.U8.default`) — exclude it so we only
+        // map type-like prefixes (`Num`, `Num.U8`).
+        var rel_end: usize = entry.name.len;
+        if (entry.kind == .value) {
+            const last_dot = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
+            if (last_dot < rel_start) continue;
+            rel_end = last_dot;
+        }
+
+        // Walk each `.`-separated prefix of the relative path.
+        var seg_start = rel_start;
+        while (seg_start < rel_end) {
+            const next_dot = std.mem.indexOfScalarPos(u8, entry.name[0..rel_end], seg_start, '.');
+            const seg_end = next_dot orelse rel_end;
+            const short_name = entry.name[seg_start..seg_end];
+            const prefix_path = entry.name[rel_start..seg_end];
+
+            const result = try map.getOrPut(gpa, short_name);
+            if (!result.found_existing) {
+                result.value_ptr.* = prefix_path;
+            }
+
+            seg_start = if (next_dot) |d| d + 1 else rel_end;
+        }
+
+        try populateAnchorMap(map, gpa, module_name, entry.children);
+    }
+}
+
+/// Add `name` to the anchor set, duplicating the slice into `arena` so the
+/// stored key outlives any caller-owned input. No-op when already present.
+fn addAnchor(
+    set: *std.StringHashMapUnmanaged(void),
+    gpa: Allocator,
+    arena: Allocator,
+    name: []const u8,
+) !void {
+    const result = try set.getOrPut(gpa, name);
+    if (!result.found_existing) {
+        result.key_ptr.* = try arena.dupe(u8, name);
+    }
+}
+
+/// Walk every entry recursively and add each dotted prefix of its full path
+/// (including the leaf segment, even for value entries) to `set`. Mirrors the
+/// shape of `buildEntryTree` so every `id="…"` value emitted by the renderer
+/// — both leaf entry ids and intermediate group-node ids — has a matching
+/// entry here. `parent_path` is the full path of the entry whose `children`
+/// we are walking, or empty for top-level entries (whose own `name` already
+/// contains the module prefix).
+fn collectAnchorsForEntries(
+    set: *std.StringHashMapUnmanaged(void),
+    gpa: Allocator,
+    arena: Allocator,
+    entries: []const DocModel.DocEntry,
+    parent_path: []const u8,
+) !void {
+    for (entries) |entry| {
+        const full_path = if (parent_path.len == 0)
+            try arena.dupe(u8, entry.name)
+        else
+            try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
+
+        // Add every dotted prefix of `full_path` as a valid anchor.
+        var i: usize = 0;
+        while (i <= full_path.len) : (i += 1) {
+            if (i == full_path.len or full_path[i] == '.') {
+                const result = try set.getOrPut(gpa, full_path[0..i]);
+                if (!result.found_existing) {
+                    // Key slice points into `full_path`, which lives in `arena`.
+                    result.key_ptr.* = full_path[0..i];
+                }
+            }
+        }
+
+        try collectAnchorsForEntries(set, gpa, arena, entry.children, full_path);
+    }
+}
+
 /// Generate the complete HTML documentation site from PackageDocs.
 /// Creates directories and writes all files under `output_dir_path`.
+///
+/// When `broken_links_out` is non-null, every `[Name]` shorthand reference
+/// that resolves to a non-existent anchor is appended to it. The entries
+/// (including their `label` and `resolved_anchor` strings) are allocated
+/// with `gpa` and become the caller's responsibility.
 pub fn renderPackageDocs(
     gpa: Allocator,
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
+    broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
 ) !void {
     // Ensure the output directory exists
     std.fs.cwd().makePath(output_dir_path) catch |err| switch (err) {
@@ -111,8 +379,10 @@ pub fn renderPackageDocs(
     var output_dir = try std.fs.cwd().openDir(output_dir_path, .{});
     defer output_dir.close();
 
-    var ctx = RenderContext.init(package_docs, gpa);
+    var ctx = try RenderContext.init(package_docs, gpa);
     defer ctx.deinit(gpa);
+    ctx.broken_links = broken_links_out;
+    ctx.broken_links_gpa = if (broken_links_out != null) gpa else null;
 
     // Write static assets
     try writeStaticAssets(output_dir);
@@ -121,22 +391,18 @@ pub fn renderPackageDocs(
         // Single module: write module content directly to root index.html
         ctx.single_module_at_root = true;
         const mod = &package_docs.modules[0];
-        ctx.current_module = mod.name;
-        ctx.current_module_entries = mod.entries;
+        try ctx.enterModule(gpa, mod);
         try writeModulePageToDir(&ctx, gpa, output_dir, mod, "");
-        ctx.current_module = null;
-        ctx.current_module_entries = null;
+        ctx.leaveModule();
     } else {
         // Multiple modules: write package index and per-module pages
         try writePackageIndex(&ctx, gpa, output_dir);
 
         for (package_docs.modules) |*mod| {
-            ctx.current_module = mod.name;
-            ctx.current_module_entries = mod.entries;
+            try ctx.enterModule(gpa, mod);
             try writeModulePage(&ctx, gpa, output_dir, mod);
         }
-        ctx.current_module = null;
-        ctx.current_module_entries = null;
+        ctx.leaveModule();
     }
 }
 
@@ -237,11 +503,15 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
     }
 
     // Module doc comment (fall back to collapsed entry's doc if module has none)
-    const doc_comment = mod.module_doc orelse
-        if (entry_tree.collapsed_entry) |entry| entry.doc_comment else null;
-    if (doc_comment) |doc| {
+    const doc_with_line: ?struct { doc: []const u8, start_line: u32 } = if (mod.module_doc) |doc|
+        .{ .doc = doc, .start_line = mod.module_doc_start_line }
+    else if (entry_tree.collapsed_entry) |entry|
+        if (entry.doc_comment) |doc| .{ .doc = doc, .start_line = entry.doc_comment_start_line } else null
+    else
+        null;
+    if (doc_with_line) |dwl| {
         try w.writeAll("        <div class=\"module-doc\">\n");
-        try renderDocComment(w, ctx, doc);
+        try renderDocComment(w, ctx, dwl.doc, dwl.start_line);
         try w.writeAll("        </div>\n");
     }
 
@@ -600,7 +870,7 @@ fn renderEntryTree(
             if (entry.doc_comment) |doc| {
                 try writeIndent(w, base + 1);
                 try w.writeAll("<div class=\"entry-doc\">\n");
-                try renderDocComment(w, ctx, doc);
+                try renderDocComment(w, ctx, doc, entry.doc_comment_start_line);
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
             }
@@ -954,7 +1224,14 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
     }
 }
 
-fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8) !void {
+fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8, start_line: u32) !void {
+    // Track the active doc so writeDocRefHref can resolve a `[label]` byte
+    // offset within `doc` back to a 1-based source line. Restored on exit
+    // to support nested rendering (e.g. a module doc above an entry doc).
+    const previous = ctx.active_doc.*;
+    defer ctx.active_doc.* = previous;
+    ctx.active_doc.* = .{ .doc = doc, .start_line = start_line };
+
     var pos: usize = 0;
 
     while (true) {
@@ -1096,7 +1373,8 @@ fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
             } else if (parseDocRef(text, i)) |ref| {
                 try writeHtmlEscaped(w, text[plain_start..i]);
                 try w.writeAll("<a href=\"");
-                try writeDocRefHref(w, ctx, ref.label);
+                const bracket_offset = bracketOffsetInActiveDoc(ctx, text, i);
+                try writeDocRefHref(w, ctx, ref.label, bracket_offset);
                 try w.writeAll("\">");
                 try writeHtmlEscaped(w, ref.label);
                 try w.writeAll("</a>");
@@ -1111,6 +1389,20 @@ fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
     }
     // Flush any remaining plain text
     try writeHtmlEscaped(w, text[plain_start..]);
+}
+
+/// Compute the byte offset of `text[i]` within `active_doc.doc`, when `text`
+/// is a slice into that doc. Returns the offset, or 0 if the slice is not
+/// inside the active doc (e.g. unit tests that bypass `renderDocComment`).
+fn bracketOffsetInActiveDoc(ctx: *const RenderContext, text: []const u8, i: usize) usize {
+    const doc = ctx.active_doc.doc;
+    if (doc.len == 0 or text.len == 0) return 0;
+    const text_addr = @intFromPtr(text.ptr);
+    const doc_addr = @intFromPtr(doc.ptr);
+    if (text_addr < doc_addr) return 0;
+    const text_offset = text_addr - doc_addr;
+    if (text_offset >= doc.len) return 0;
+    return text_offset + i;
 }
 
 const MarkdownLink = struct {
@@ -1200,9 +1492,33 @@ fn isIdentCont(c: u8) bool {
 /// Writes the href for a shorthand doc reference like `Str` or `Str.reserve`.
 /// If the label's first segment names a known module, the link points at that
 /// module's page; otherwise it falls back to an anchor on the current page.
-fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8) !void {
+///
+/// As a side effect, when the resolved fragment (`#…`) does not correspond
+/// to any `id="…"` in the rendered site, the reference is reported via
+/// `ctx.reportBrokenLink` (with the source line derived from
+/// `bracket_offset`). The href is still written so output is unchanged —
+/// broken-link collection is observational.
+fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, bracket_offset: usize) !void {
     const first_dot = std.mem.indexOfScalar(u8, label, '.');
     const head = if (first_dot) |d| label[0..d] else label;
+
+    // Build the anchor we are about to write into a small stack buffer so we
+    // can both emit it and validate it against `all_anchors`. The buffer is
+    // sized for the longest realistic label (module + dotted path).
+    var anchor_buf: [512]u8 = undefined;
+    var anchor_len: usize = 0;
+    var anchor_overflow = false;
+    const append = struct {
+        fn run(buf: *[512]u8, len: *usize, overflow: *bool, s: []const u8) void {
+            if (overflow.*) return;
+            if (len.* + s.len > buf.len) {
+                overflow.* = true;
+                return;
+            }
+            @memcpy(buf[len.* .. len.* + s.len], s);
+            len.* += s.len;
+        }
+    }.run;
 
     if (ctx.known_modules.contains(head)) {
         const is_same_module = if (ctx.current_module) |cur|
@@ -1214,9 +1530,12 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8) !voi
             // Same-page anchor. Entry ids are prefixed with the module name.
             try w.writeAll("#");
             try writeHtmlEscaped(w, head);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, head);
             if (first_dot) |d| {
                 try writeHtmlEscaped(w, label[d..]);
+                append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
             }
+            validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
             return;
         }
 
@@ -1229,18 +1548,50 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8) !voi
         if (first_dot != null) {
             try w.writeAll("#");
             try writeHtmlEscaped(w, label);
+            append(&anchor_buf, &anchor_len, &anchor_overflow, label);
+            validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
         }
+        // No fragment — the link points at the module's index page, which is
+        // guaranteed to exist by the `known_modules.contains` check above.
         return;
     }
 
     // Not a known module — treat as a reference relative to the current
-    // module. Entry ids are `<module>.<label>`.
+    // module. Entry ids are `<module>.<label>`. Substitute the first segment
+    // through the anchor map so a label like `U8` resolves to `Num.U8` and
+    // `U8.default` resolves to `Num.U8.default`.
     try w.writeAll("#");
     if (ctx.current_module) |cur| {
         try writeHtmlEscaped(w, cur);
         try w.writeAll(".");
+        append(&anchor_buf, &anchor_len, &anchor_overflow, cur);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, ".");
     }
-    try writeHtmlEscaped(w, label);
+    const resolved_head = ctx.lookupAnchorHead(head) orelse head;
+    try writeHtmlEscaped(w, resolved_head);
+    append(&anchor_buf, &anchor_len, &anchor_overflow, resolved_head);
+    if (first_dot) |d| {
+        try writeHtmlEscaped(w, label[d..]);
+        append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
+    }
+    validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+}
+
+/// Report `label` as broken when its resolved anchor isn't in `all_anchors`.
+/// Anchors longer than the stack buffer (`overflow`) are skipped — those are
+/// far longer than any real Roc identifier path, so a false negative there
+/// is preferable to truncating and reporting a phantom mismatch.
+fn validateAnchor(
+    ctx: *const RenderContext,
+    label: []const u8,
+    anchor: []const u8,
+    overflow: bool,
+    bracket_offset: usize,
+) void {
+    if (overflow) return;
+    if (anchor.len == 0) return;
+    if (ctx.all_anchors.contains(anchor)) return;
+    ctx.reportBrokenLink(label, anchor, bracket_offset);
 }
 
 fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocType, needs_parens: bool) !void {
@@ -1418,12 +1769,23 @@ fn writeTypeLink(
     else
         false;
 
+    // The compiler reports types by their short name (e.g. "U8"), but the HTML
+    // anchor for a type nested under a sub-namespace is built from its full
+    // path within the module (e.g. "Builtin.Num.U8"). When linking inside the
+    // current module, look the head segment up in the anchor map so the link
+    // resolves to the actual entry id.
+    const first_dot = std.mem.indexOfScalar(u8, type_name, '.');
+    const head = if (first_dot) |d| type_name[0..d] else type_name;
+    const tail: []const u8 = if (first_dot) |d| type_name[d..] else "";
+    const remapped_head: ?[]const u8 = if (is_same_module) ctx.lookupAnchorHead(head) else null;
+    const effective_head = remapped_head orelse head;
+
     // HTML anchors use module-qualified dotted paths (e.g. "Builtin.Str.Utf8Problem").
     // The compiler may provide a bare type_name ("Str") or a partial path
     // ("Str.Utf8Problem"); prepend the module name unless it's already there.
-    const already_qualified = std.mem.startsWith(u8, type_name, target_module) and
-        type_name.len > target_module.len and
-        type_name[target_module.len] == '.';
+    const already_qualified = std.mem.startsWith(u8, effective_head, target_module) and
+        effective_head.len > target_module.len and
+        effective_head[target_module.len] == '.';
 
     if (is_same_module) {
         try w.writeAll("#");
@@ -1439,7 +1801,8 @@ fn writeTypeLink(
         try writeHtmlEscaped(w, target_module);
         try w.writeAll(".");
     }
-    try writeHtmlEscaped(w, type_name);
+    try writeHtmlEscaped(w, effective_head);
+    try writeHtmlEscaped(w, tail);
 }
 
 fn writeHtmlEscaped(w: Writer, text: []const u8) !void {
@@ -1453,4 +1816,96 @@ fn writeHtmlEscaped(w: Writer, text: []const u8) !void {
             else => try w.writeAll(&[_]u8{c}),
         }
     }
+}
+
+test "writeDocRefHref reports broken shorthand refs" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Build a minimal PackageDocs whose Builtin module exposes
+    // `Builtin.Num.U8` with a child `div_by`. The doc comment on `div_by`
+    // contains a `[div_by]` reference that, per the existing resolver,
+    // produces `#Builtin.div_by` — a fragment that does not exist on the
+    // page. The renderer should report exactly that ref as broken, while
+    // leaving correct refs (`[U8]`, `[U8.div_by]`) alone.
+    // Doc spans three lines so we can verify the reported source line equals
+    // `doc_comment_start_line + offset_of_line_with_ref`.
+    const doc_with_refs = try gpa.dupe(u8,
+        \\First line, no refs.
+        \\Second line: [U8] is valid.
+        \\Third line: [div_by] is broken.
+    );
+    const div_by_name = try gpa.dupe(u8, "div_by");
+    const div_by_entry = DocModel.DocEntry{
+        .name = div_by_name,
+        .kind = .value,
+        .type_signature = null,
+        .doc_comment = doc_with_refs,
+        .children = try gpa.alloc(DocModel.DocEntry, 0),
+        // Pretend the first ## line of this doc lives on source line 41.
+        .doc_comment_start_line = 41,
+    };
+
+    const u8_children = try gpa.alloc(DocModel.DocEntry, 1);
+    u8_children[0] = div_by_entry;
+    const u8_name = try gpa.dupe(u8, "Builtin.Num.U8");
+    const u8_entry = DocModel.DocEntry{
+        .name = u8_name,
+        .kind = .nominal,
+        .type_signature = null,
+        .doc_comment = null,
+        .children = u8_children,
+    };
+
+    const entries = try gpa.alloc(DocModel.DocEntry, 1);
+    entries[0] = u8_entry;
+    var module = DocModel.ModuleDocs{
+        .name = try gpa.dupe(u8, "Builtin"),
+        .package_name = try gpa.dupe(u8, "Builtin"),
+        .kind = .package,
+        .module_doc = null,
+        .entries = entries,
+        .source_path = try gpa.dupe(u8, "/fake/Builtin.roc"),
+    };
+    defer module.deinit(gpa);
+
+    const modules = try gpa.alloc(DocModel.ModuleDocs, 1);
+    modules[0] = module;
+    // Leak the outer modules slice intentionally — `module.deinit` already
+    // freed everything inside, and we want the module struct itself to
+    // remain valid for that deinit call. Free the slice here to balance.
+    defer gpa.free(modules);
+
+    const package_docs = DocModel.PackageDocs{
+        .name = try gpa.dupe(u8, "Builtin"),
+        .modules = modules,
+    };
+    defer gpa.free(package_docs.name);
+
+    // Render to a tmp dir so we exercise the full pipeline.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    var broken_links: std.ArrayListUnmanaged(BrokenLink) = .empty;
+    defer {
+        for (broken_links.items) |bl| {
+            gpa.free(bl.label);
+            gpa.free(bl.resolved_anchor);
+        }
+        broken_links.deinit(gpa);
+    }
+
+    try renderPackageDocs(gpa, &package_docs, tmp_path, &broken_links);
+
+    // Exactly the `[div_by]` ref should be flagged. It sits on the third
+    // line of the doc, which started at source line 41 → expected line 43.
+    try testing.expectEqual(@as(usize, 1), broken_links.items.len);
+    const bl = broken_links.items[0];
+    try testing.expectEqualStrings("Builtin", bl.source_module);
+    try testing.expectEqualStrings("/fake/Builtin.roc", bl.source_path);
+    try testing.expectEqual(@as(u32, 43), bl.source_line);
+    try testing.expectEqualStrings("div_by", bl.label);
+    try testing.expectEqualStrings("Builtin.div_by", bl.resolved_anchor);
 }

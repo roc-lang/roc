@@ -68,6 +68,7 @@ hosted [
 ]
 
 a! : Str => Str
+
 b! : Str => Str
 ~~~
 # CANONICALIZE

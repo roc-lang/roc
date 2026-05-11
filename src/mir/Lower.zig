@@ -2825,10 +2825,68 @@ fn lowerExprWithMonotypeOverride(
         .e_num => |num| try self.store.addExpr(self.allocator, .{ .int = .{ .value = num.value } }, monotype, region),
         .e_frac_f32 => |frac| try self.lowerFracLiteral(@floatCast(frac.value), monotype, region),
         .e_frac_f64 => |frac| try self.lowerFracLiteral(frac.value, monotype, region),
-        .e_dec => |dec| try self.store.addExpr(self.allocator, .{ .dec = dec.value }, monotype, region),
+        .e_dec => |dec| {
+            // The literal carries an exact Dec value, but the unified monotype may be
+            // F32 or F64 (e.g. when the surrounding context constrains the type to a
+            // float). Dispatch on the monotype's precision so the emitted MIR literal
+            // matches the resolved type.
+            const mono = self.store.monotype_store.getMonotype(monotype);
+            return switch (mono) {
+                .prim => |p| switch (p) {
+                    .f64 => try self.store.addExpr(self.allocator, .{ .frac_f64 = dec.value.toF64() }, monotype, region),
+                    .f32 => try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(dec.value.toF64()) }, monotype, region),
+                    .dec => try self.store.addExpr(self.allocator, .{ .dec = dec.value }, monotype, region),
+                    else => {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "lowerExpr(e_dec): unsupported prim monotype {s} (checker/lowering invariant broken)",
+                                .{@tagName(p)},
+                            );
+                        }
+                        unreachable;
+                    },
+                },
+                else => {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "lowerExpr(e_dec): non-prim monotype {s} (checker/lowering invariant broken)",
+                            .{@tagName(mono)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+        },
         .e_dec_small => |dec_small| {
-            const roc_dec = dec_small.value.toRocDec();
-            return try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region);
+            // Dispatch on the unified monotype: a small dec literal is rational
+            // (numerator / 10^denominator_power_of_ten), so we can produce an exact
+            // Dec or a converted F32/F64 depending on the resolved type.
+            const mono = self.store.monotype_store.getMonotype(monotype);
+            return switch (mono) {
+                .prim => |p| switch (p) {
+                    .f64 => try self.store.addExpr(self.allocator, .{ .frac_f64 = dec_small.value.toF64() }, monotype, region),
+                    .f32 => try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(dec_small.value.toF64()) }, monotype, region),
+                    .dec => try self.store.addExpr(self.allocator, .{ .dec = dec_small.value.toRocDec() }, monotype, region),
+                    else => {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "lowerExpr(e_dec_small): unsupported prim monotype {s} (checker/lowering invariant broken)",
+                                .{@tagName(p)},
+                            );
+                        }
+                        unreachable;
+                    },
+                },
+                else => {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "lowerExpr(e_dec_small): non-prim monotype {s} (checker/lowering invariant broken)",
+                            .{@tagName(mono)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
         },
         .e_typed_int => |ti| try self.store.addExpr(self.allocator, .{ .int = .{ .value = ti.value } }, monotype, region),
         .e_typed_frac => |tf| {

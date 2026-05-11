@@ -7171,7 +7171,7 @@ fn generateDocs(
                     continue;
                 }
 
-                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name) catch |err| {
+                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name, module_state.path) catch |err| {
                     std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
                     continue;
                 };
@@ -7217,10 +7217,31 @@ fn generateDocs(
     // Generate HTML documentation site
     // TODO: support --format md and --format json output formats
     const render_html = docs.render_html;
-    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir) catch |err| {
+    var broken_links: std.ArrayListUnmanaged(render_html.BrokenLink) = .empty;
+    defer {
+        for (broken_links.items) |bl| {
+            ctx.gpa.free(bl.label);
+            ctx.gpa.free(bl.resolved_anchor);
+        }
+        broken_links.deinit(ctx.gpa);
+    }
+    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir, &broken_links) catch |err| {
         std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
         return err;
     };
+
+    if (broken_links.items.len > 0) {
+        std.debug.print("Error: {d} doc reference(s) point at non-existent anchors:\n", .{broken_links.items.len});
+        for (broken_links.items) |bl| {
+            const path = if (bl.source_path.len > 0) bl.source_path else bl.source_module;
+            if (bl.source_line > 0) {
+                std.debug.print("  {s}:{d}: [{s}] -> #{s}\n", .{ path, bl.source_line, bl.label, bl.resolved_anchor });
+            } else {
+                std.debug.print("  {s}: [{s}] -> #{s}\n", .{ path, bl.label, bl.resolved_anchor });
+            }
+        }
+        return error.BrokenDocLinks;
+    }
 }
 
 test "appendWindowsQuotedArg" {

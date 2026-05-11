@@ -736,7 +736,7 @@ pre>code {
   width: 100%;
   font-size: var(--font-base);
   line-height: 18px;
-  color: var(--faded-color);
+  color: var(--text-color);
   background-color: var(--body-bg-color);
   font-family: var(--font-sans);
   border: 2px solid var(--search-border-color);

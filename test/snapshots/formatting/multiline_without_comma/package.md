@@ -96,6 +96,7 @@ package
 	}
 
 a! : Str => Str
+
 b! : Str => Str
 ~~~
 # CANONICALIZE
