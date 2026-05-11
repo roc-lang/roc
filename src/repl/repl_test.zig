@@ -463,3 +463,76 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
     try expectStateful(.llvm, steps);
 }
+
+fn expectSplit(input: []const u8, expected: []const []const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
+    defer repl.deinit();
+
+    const slices = try repl.splitInputIntoStatements(input);
+    defer repl.freeStatementSlices(slices);
+
+    try testing.expectEqual(expected.len, slices.len);
+    for (expected, slices) |want, got| {
+        try testing.expectEqualStrings(want, got);
+    }
+}
+
+test "splitInputIntoStatements - single line passes through" {
+    try expectSplit("x = 5", &.{"x = 5"});
+}
+
+test "splitInputIntoStatements - special command passes through" {
+    try expectSplit(":help", &.{":help"});
+}
+
+test "splitInputIntoStatements - two assignments split into two slices" {
+    try expectSplit("z = 5\ny = 6", &.{ "z = 5", "y = 6" });
+}
+
+test "splitInputIntoStatements - multi-line single statement stays whole" {
+    // A function body spans many lines. The whole assignment must remain a
+    // single statement; splitting it would break the parse.
+    const input =
+        \\simple_match = |color| {
+        \\    match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\        Blue => "blue"
+        \\    }
+        \\}
+    ;
+    try expectSplit(input, &.{input});
+}
+
+test "splitInputIntoStatements - definition followed by expression" {
+    try expectSplit("f = |x| x + 1\nf(5)", &.{ "f = |x| x + 1", "f(5)" });
+}
+
+test "splitInputIntoStatements - blank lines between statements are dropped" {
+    try expectSplit("a = 1\n\nb = 2", &.{ "a = 1", "b = 2" });
+}
+
+test "Repl - paste of two assignments processes both" {
+    // The end-to-end behavior: when a multi-statement input is fed in as
+    // one string (as happens with a bracketed paste), the CLI driver iterates
+    // `splitInputIntoStatements` and calls `step` on each. Mirror that here.
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
+    defer repl.deinit();
+
+    const slices = try repl.splitInputIntoStatements("z = 5\ny = 6");
+    defer repl.freeStatementSlices(slices);
+
+    try testing.expectEqual(@as(usize, 2), slices.len);
+
+    const r0 = try repl.step(slices[0]);
+    defer alloc.free(r0);
+    try testing.expectEqualStrings("assigned `z`", r0);
+
+    const r1 = try repl.step(slices[1]);
+    defer alloc.free(r1);
+    try testing.expectEqualStrings("assigned `y`", r1);
+}

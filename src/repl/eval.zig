@@ -36,6 +36,28 @@ const ExecutionBackend = enum {
 const CommonEnv = base.CommonEnv;
 const RocStr = builtins.str.RocStr;
 
+/// Extract the source region from any `AST.Statement` variant. All variants
+/// carry a `region` field but the union is not flat, so a switch is required.
+fn statementRegion(stmt: AST.Statement) AST.TokenizedRegion {
+    return switch (stmt) {
+        .decl => |s| s.region,
+        .@"var" => |s| s.region,
+        .expr => |s| s.region,
+        .crash => |s| s.region,
+        .dbg => |s| s.region,
+        .expect => |s| s.region,
+        .@"for" => |s| s.region,
+        .@"while" => |s| s.region,
+        .@"return" => |s| s.region,
+        .@"break" => |s| s.region,
+        .import => |s| s.region,
+        .file_import => |s| s.region,
+        .type_decl => |s| s.region,
+        .type_anno => |s| s.region,
+        .malformed => |s| s.region,
+    };
+}
+
 /// Render a parse diagnostic for REPL output (without source context for cleaner display).
 /// The REPL already shows the input, so we don't need to repeat it in error messages.
 fn renderParseDiagnosticForRepl(
@@ -308,6 +330,106 @@ pub const Repl = struct {
 
         // Process the input
         return try self.processInputStructured(trimmed);
+    }
+
+    /// Split a possibly multi-statement input into a list of single-statement
+    /// source slices, using the parser to determine real statement boundaries.
+    ///
+    /// A multi-line paste is delivered to the REPL as a single read with
+    /// embedded newlines. Splitting on newlines breaks any statement that
+    /// spans multiple lines (function bodies, `match` expressions, blocks),
+    /// so we instead parse the whole input as a block expression and recover
+    /// each statement's source range from the AST.
+    ///
+    /// The returned slice and its elements borrow from `input` and remain
+    /// valid for as long as `input` does. The caller frees the outer slice
+    /// with `freeStatementSlices`.
+    pub fn splitInputIntoStatements(self: *Repl, input: []const u8) ![][]const u8 {
+        const trimmed = std.mem.trim(u8, input, " \t\n\r");
+
+        // Single-line or empty inputs are passed through unchanged. Special
+        // commands (`:help`, `:exit`, …) start with `:` and are not Roc
+        // syntax, so don't try to parse them.
+        const is_multiline = std.mem.indexOfAny(u8, trimmed, "\n\r") != null;
+        if (!is_multiline or trimmed.len == 0 or trimmed[0] == ':') {
+            return try singleSlice(self.allocator, trimmed);
+        }
+
+        // Wrap the input in a block expression so the parser handles it as a
+        // sequence of statements (with expression-as-last-statement semantics).
+        // The leading `{\n` is two bytes; subtract this from statement offsets
+        // to map back to the original source.
+        const wrapped = try std.fmt.allocPrint(self.allocator, "{{\n{s}\n}}", .{trimmed});
+        defer self.allocator.free(wrapped);
+        const offset_shift: usize = 2;
+
+        var module_env = ModuleEnv.init(self.allocator, wrapped) catch {
+            return try singleSlice(self.allocator, trimmed);
+        };
+        defer module_env.deinit();
+
+        var allocators: single_module.Allocators = undefined;
+        allocators.initInPlace(self.allocator);
+        defer allocators.deinit();
+
+        const ast = single_module.parseSingleModule(
+            &allocators,
+            &module_env,
+            .expr,
+            .{ .module_name = "REPL", .init_cir_fields = false },
+        ) catch {
+            return try singleSlice(self.allocator, trimmed);
+        };
+        defer ast.deinit();
+
+        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root_expr = ast.store.getExpr(root_idx);
+        const block = switch (root_expr) {
+            .block => |b| b,
+            else => return try singleSlice(self.allocator, trimmed),
+        };
+
+        const stmt_ids = ast.store.statementSlice(block.statements);
+        if (stmt_ids.len == 0) {
+            return try singleSlice(self.allocator, trimmed);
+        }
+
+        var slices = try std.ArrayList([]const u8).initCapacity(self.allocator, stmt_ids.len);
+        errdefer slices.deinit(self.allocator);
+
+        for (stmt_ids) |stmt_idx| {
+            const stmt = ast.store.getStatement(stmt_idx);
+            const region = ast.tokenizedRegionToRegion(statementRegion(stmt));
+            const wrapped_start: usize = region.start.offset;
+            const wrapped_end: usize = region.end.offset;
+            if (wrapped_start < offset_shift or wrapped_end < wrapped_start) continue;
+            const start = wrapped_start - offset_shift;
+            const raw_end = wrapped_end - offset_shift;
+            const end = @min(raw_end, trimmed.len);
+            if (start >= trimmed.len or end <= start) continue;
+            const slice = std.mem.trim(u8, trimmed[start..end], " \t\n\r");
+            if (slice.len == 0) continue;
+            try slices.append(self.allocator, slice);
+        }
+
+        if (slices.items.len == 0) {
+            slices.deinit(self.allocator);
+            return try singleSlice(self.allocator, trimmed);
+        }
+
+        return try slices.toOwnedSlice(self.allocator);
+    }
+
+    /// Free the outer slice returned by `splitInputIntoStatements`. The inner
+    /// slices borrow from the caller's input and are not freed.
+    pub fn freeStatementSlices(self: *Repl, slices: [][]const u8) void {
+        self.allocator.free(slices);
+    }
+
+    fn singleSlice(allocator: Allocator, slice: []const u8) ![][]const u8 {
+        const out = try allocator.alloc([]const u8, 1);
+        out[0] = slice;
+        return out;
     }
 
     /// Process a line of input and return the result as a string.

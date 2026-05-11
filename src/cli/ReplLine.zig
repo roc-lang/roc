@@ -161,6 +161,26 @@ pub const InputParser = struct {
     }
 };
 
+/// Write `buf` to `out`, inserting `indent` spaces after every newline so that
+/// each continuation line begins under column `indent`. Original whitespace in
+/// `buf` is preserved verbatim, so an indented source line stays indented
+/// relative to the prompt-aligned baseline.
+///
+/// Both `\n` and standalone `\r` trigger indentation; the `\r` of a `\r\n`
+/// pair is left unindented to avoid double-padding.
+fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) !void {
+    var i: usize = 0;
+    while (i < buf.len) : (i += 1) {
+        const b = buf[i];
+        try out.writeByte(b);
+        const is_lf = b == '\n';
+        const is_lone_cr = b == '\r' and (i + 1 >= buf.len or buf[i + 1] != '\n');
+        if (is_lf or is_lone_cr) {
+            try out.splatByteAll(' ', indent);
+        }
+    }
+}
+
 // struct to manage REPL history
 const History = struct {
     allocator: Allocator,
@@ -512,6 +532,15 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
                     const has_newline = std.mem.indexOfAny(u8, paste_buffer.items, "\n\r") != null;
                     paste_buffer.clearRetainingCapacity();
 
+                    // Redraw so the user sees the pasted text. For a multi-line
+                    // paste the embedded newlines are translated by the terminal
+                    // (OPOST/ONLCR) so each pasted line lands on its own row;
+                    // indent each continuation line by `prompt_width` so it
+                    // aligns under the first character past the prompt.
+                    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+                    try writeAlignedToPrompt(state.out, state.line_buffer.items, state.prompt_width);
+                    try ansi_term.clearFromCursorToLineEnd(state.out);
+
                     if (has_newline) {
                         // A multi-line paste is treated as a complete
                         // input — submit it as a single REPL entry.
@@ -519,11 +548,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
                         break;
                     }
 
-                    // Single-line paste: redraw so the user sees the
-                    // inserted text and can keep editing.
-                    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-                    try state.out.writeAll(state.line_buffer.items);
-                    try ansi_term.clearFromCursorToLineEnd(state.out);
+                    // Single-line paste: position the cursor for further editing.
                     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
                     continue;
                 },
@@ -868,4 +893,37 @@ test "InputParser: bytes around a paste in the same chunk" {
         .paste_end,
         .{ .byte = 'y' },
     }, events.items);
+}
+
+fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) !void {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try writeAlignedToPrompt(&aw.writer, input, indent);
+    try testing.expectEqualStrings(expected, aw.writer.buffered());
+}
+
+test "writeAlignedToPrompt: no newlines passes bytes through" {
+    try expectAlignedOutput("x = 5", 2, "x = 5");
+}
+
+test "writeAlignedToPrompt: LF gets indent on the next line" {
+    try expectAlignedOutput("z = 5\ny = 6", 2, "z = 5\n  y = 6");
+}
+
+test "writeAlignedToPrompt: CRLF only indents once" {
+    try expectAlignedOutput("z = 5\r\ny = 6", 2, "z = 5\r\n  y = 6");
+}
+
+test "writeAlignedToPrompt: lone CR indents the next line" {
+    try expectAlignedOutput("z = 5\ry = 6", 2, "z = 5\r  y = 6");
+}
+
+test "writeAlignedToPrompt: original indentation is preserved on top of prompt indent" {
+    // First line at column 0 (under prompt baseline), second line indented
+    // four spaces relative to baseline must stay four spaces relative to it.
+    try expectAlignedOutput("z = 5\n    y = 6", 2, "z = 5\n      y = 6");
+}
+
+test "writeAlignedToPrompt: trailing newline still emits indent for empty next line" {
+    try expectAlignedOutput("z = 5\n", 2, "z = 5\n  ");
 }
