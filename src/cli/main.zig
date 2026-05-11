@@ -69,6 +69,7 @@ comptime {
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(@import("stack_probe.zig"));
+        std.testing.refAllDecls(@import("ReplLine.zig"));
     }
 }
 const bench = @import("bench.zig");

@@ -193,20 +193,31 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
         // add line to history
         try repl_line.history.append(line);
 
-        // Evaluate and print result
-        const result = repl_instance.step(line) catch |err| {
-            ctx.io.stderr().print("Error: {}\n", .{err}) catch {};
-            continue;
-        };
-        defer ctx.gpa.free(result);
+        // A multi-line paste is delivered as a single read with embedded
+        // newlines. The parser determines real statement boundaries so a
+        // statement that spans several lines (function body, `match`, block)
+        // stays together while back-to-back assignments split apart.
+        const stmts = try repl_instance.splitInputIntoStatements(line);
+        defer repl_instance.freeStatementSlices(stmts);
 
-        if (result.len > 0) {
-            stdout.print("{s}\n", .{result}) catch {};
-        }
+        var quit = false;
+        for (stmts) |stmt| {
+            const result = repl_instance.step(stmt) catch |err| {
+                ctx.io.stderr().print("Error: {}\n", .{err}) catch {};
+                continue;
+            };
+            defer ctx.gpa.free(result);
 
-        // Check for quit command (handled internally by step returning "Goodbye!")
-        if (std.mem.eql(u8, result, "Goodbye!")) {
-            break;
+            if (result.len > 0) {
+                stdout.print("{s}\n", .{result}) catch {};
+            }
+
+            // Check for quit command (handled internally by step returning "Goodbye!")
+            if (std.mem.eql(u8, result, "Goodbye!")) {
+                quit = true;
+                break;
+            }
         }
+        if (quit) break;
     }
 }

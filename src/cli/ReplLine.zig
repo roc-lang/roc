@@ -25,6 +25,162 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
     .windows => "\r\n",
 };
 
+/// One unit of meaning produced by `InputParser` from a raw byte stream.
+pub const InputEvent = union(enum) {
+    /// A single byte to be processed normally (typed character, control key, etc.).
+    byte: u8,
+    /// A 3-byte CSI sequence (ESC [ X) — typically arrow keys.
+    csi3: [3]u8,
+    /// A bracketed paste began (consumed an `ESC[200~` marker).
+    paste_start,
+    /// A byte inside an active bracketed paste. May be any value, including
+    /// `\n`, `\r`, or a literal `ESC` that wasn't part of the end marker.
+    paste_byte: u8,
+    /// A bracketed paste ended (consumed an `ESC[201~` marker).
+    paste_end,
+};
+
+/// Parses the raw byte stream coming from the terminal. Holds enough state
+/// across `feed` calls to reassemble escape sequences split across reads,
+/// and tracks whether we are currently inside a bracketed paste.
+pub const InputParser = struct {
+    /// Scratch space for the tail of the previous chunk when it ended on an
+    /// incomplete escape sequence. The longest sequence we track is the
+    /// 6-byte `ESC[200~` / `ESC[201~` marker, so 5 trailing bytes suffice.
+    carry: [5]u8 = undefined,
+    carry_len: usize = 0,
+    in_paste: bool = false,
+
+    /// Consume `chunk` (concatenated with any carried tail from the previous
+    /// call) and append events for the bytes that fully parsed. Any partial
+    /// trailing escape sequence is retained in `self.carry` for the next call.
+    pub fn feed(
+        self: *InputParser,
+        chunk: []const u8,
+        events: *std.ArrayList(InputEvent),
+        gpa: Allocator,
+    ) Allocator.Error!void {
+        // Working buffer holds carry + chunk. Its size is bounded by the
+        // typical 256-byte read buffer in helper(); for tests we accept
+        // arbitrarily large chunks via heap allocation.
+        var stack_buf: [288]u8 = undefined;
+        const total = self.carry_len + chunk.len;
+        var heap_buf: ?[]u8 = null;
+        defer if (heap_buf) |h| gpa.free(h);
+        const buf: []u8 = if (total <= stack_buf.len)
+            stack_buf[0..total]
+        else blk: {
+            const h = try gpa.alloc(u8, total);
+            heap_buf = h;
+            break :blk h;
+        };
+        @memcpy(buf[0..self.carry_len], self.carry[0..self.carry_len]);
+        @memcpy(buf[self.carry_len..total], chunk);
+        self.carry_len = 0;
+
+        var i: usize = 0;
+        while (i < total) {
+            if (self.in_paste) {
+                if (buf[i] == control_code.esc) {
+                    if (total - i < ansi_term.PASTE_END.len) {
+                        self.saveCarry(buf[i..total]);
+                        return;
+                    }
+                    if (std.mem.eql(u8, buf[i .. i + ansi_term.PASTE_END.len], ansi_term.PASTE_END)) {
+                        try events.append(gpa, .paste_end);
+                        self.in_paste = false;
+                        i += ansi_term.PASTE_END.len;
+                        continue;
+                    }
+                    // Literal ESC inside the paste content.
+                    try events.append(gpa, .{ .paste_byte = buf[i] });
+                    i += 1;
+                } else {
+                    try events.append(gpa, .{ .paste_byte = buf[i] });
+                    i += 1;
+                }
+                continue;
+            }
+
+            const key = buf[i];
+            if (key == control_code.esc and i + 1 < total and buf[i + 1] == '[') {
+                // Default: 3-byte CSI sequence (ESC [ X). The exception is the
+                // 6-byte bracketed-paste markers, which are disambiguated from
+                // other ESC[2... sequences (e.g. Insert is ESC[2~) by the 4th
+                // byte: '0' or '1' means paste marker, anything else is just a
+                // 3-byte CSI.
+                if (total - i < 3) {
+                    self.saveCarry(buf[i..total]);
+                    return;
+                }
+                if (buf[i + 2] == '2') {
+                    if (total - i < 4) {
+                        self.saveCarry(buf[i..total]);
+                        return;
+                    }
+                    const fourth = buf[i + 3];
+                    if (fourth == '0' or fourth == '1') {
+                        if (total - i < ansi_term.PASTE_START.len) {
+                            self.saveCarry(buf[i..total]);
+                            return;
+                        }
+                        if (std.mem.eql(u8, buf[i .. i + ansi_term.PASTE_START.len], ansi_term.PASTE_START)) {
+                            try events.append(gpa, .paste_start);
+                            self.in_paste = true;
+                            i += ansi_term.PASTE_START.len;
+                            continue;
+                        }
+                        if (std.mem.eql(u8, buf[i .. i + ansi_term.PASTE_END.len], ansi_term.PASTE_END)) {
+                            // Stray paste-end outside paste mode; ignore.
+                            i += ansi_term.PASTE_END.len;
+                            continue;
+                        }
+                        // Doesn't match a known paste marker; fall through to
+                        // the generic 3-byte CSI handling below.
+                    }
+                }
+
+                try events.append(gpa, .{ .csi3 = .{ buf[i], buf[i + 1], buf[i + 2] } });
+                i += 3;
+            } else if (key == control_code.esc and i + 1 >= total) {
+                // Lone ESC at the end of the buffer — could be the start of a
+                // longer sequence whose tail is in the next chunk.
+                self.saveCarry(buf[i..total]);
+                return;
+            } else {
+                try events.append(gpa, .{ .byte = key });
+                i += 1;
+            }
+        }
+    }
+
+    fn saveCarry(self: *InputParser, tail: []const u8) void {
+        std.debug.assert(tail.len <= self.carry.len);
+        @memcpy(self.carry[0..tail.len], tail);
+        self.carry_len = tail.len;
+    }
+};
+
+/// Write `buf` to `out`, inserting `indent` spaces after every newline so that
+/// each continuation line begins under column `indent`. Original whitespace in
+/// `buf` is preserved verbatim, so an indented source line stays indented
+/// relative to the prompt-aligned baseline.
+///
+/// Both `\n` and standalone `\r` trigger indentation; the `\r` of a `\r\n`
+/// pair is left unindented to avoid double-padding.
+fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) !void {
+    var i: usize = 0;
+    while (i < buf.len) : (i += 1) {
+        const b = buf[i];
+        try out.writeByte(b);
+        const is_lf = b == '\n';
+        const is_lone_cr = b == '\r' and (i + 1 >= buf.len or buf[i + 1] != '\n');
+        if (is_lf or is_lone_cr) {
+            try out.splatByteAll(' ', indent);
+        }
+    }
+}
+
 // struct to manage REPL history
 const History = struct {
     allocator: Allocator,
@@ -318,33 +474,84 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
         try ansi_term.setCursorColumn(out, 0);
         try ansi_term.clearFromCursorToLineEnd(out);
     }
+
+    // Enable bracketed paste so we can distinguish a multi-line paste from
+    // multiple individually typed Enter presses.
+    try out.writeAll(ansi_term.BRACKETED_PASTE_ENABLE);
+    defer {
+        out.writeAll(ansi_term.BRACKETED_PASTE_DISABLE) catch {};
+        out.flush() catch {};
+    }
+
     try out.writeAll(prompt);
     try out.flush();
 
     var read_buf: [256]u8 = undefined;
+    var parser = InputParser{};
+    var events = std.ArrayList(InputEvent).empty;
+    defer events.deinit(temp);
+    var paste_buffer = std.ArrayList(u8).empty;
+    defer paste_buffer.deinit(temp);
 
     while (true) : ({
         try out.flush();
     }) {
-        const total = try in.read(&read_buf);
-        if (total == 0) continue;
+        const new_bytes = try in.read(&read_buf);
+        if (new_bytes == 0) continue;
+
+        events.clearRetainingCapacity();
+        try parser.feed(read_buf[0..new_bytes], &events, temp);
 
         var done = false;
-        var i: usize = 0;
-        while (i < total) {
-            const key = read_buf[i];
+        for (events.items) |event| {
+            switch (event) {
+                .byte => |b| {
+                    state.in_buffer[0] = b;
+                    state.bytes_read = 1;
+                },
+                .csi3 => |seq| {
+                    state.in_buffer[0] = seq[0];
+                    state.in_buffer[1] = seq[1];
+                    state.in_buffer[2] = seq[2];
+                    state.bytes_read = 3;
+                },
+                .paste_start => {
+                    paste_buffer.clearRetainingCapacity();
+                    continue;
+                },
+                .paste_byte => |b| {
+                    try paste_buffer.append(state.temp, b);
+                    continue;
+                },
+                .paste_end => {
+                    // Insert pasted content at the current cursor position.
+                    try state.line_buffer.insertSlice(state.temp, state.col_offset, paste_buffer.items);
+                    state.col_offset += paste_buffer.items.len;
+                    state.history_index = null;
 
-            if (key == control_code.esc and i + 2 < total and read_buf[i + 1] == '[') {
-                // Escape sequence: copy 3 bytes into in_buffer for findCommandFn
-                state.in_buffer[0] = read_buf[i];
-                state.in_buffer[1] = read_buf[i + 1];
-                state.in_buffer[2] = read_buf[i + 2];
-                state.bytes_read = 3;
-                i += 3;
-            } else {
-                state.in_buffer[0] = key;
-                state.bytes_read = 1;
-                i += 1;
+                    const has_newline = std.mem.indexOfAny(u8, paste_buffer.items, "\n\r") != null;
+                    paste_buffer.clearRetainingCapacity();
+
+                    // Redraw so the user sees the pasted text. For a multi-line
+                    // paste the embedded newlines are translated by the terminal
+                    // (OPOST/ONLCR) so each pasted line lands on its own row;
+                    // indent each continuation line by `prompt_width` so it
+                    // aligns under the first character past the prompt.
+                    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+                    try writeAlignedToPrompt(state.out, state.line_buffer.items, state.prompt_width);
+                    try ansi_term.clearFromCursorToLineEnd(state.out);
+
+                    if (has_newline) {
+                        // A multi-line paste is treated as a complete
+                        // input — submit it as a single REPL entry.
+                        done = true;
+                        break;
+                    }
+
+                    // Single-line paste: position the cursor for further editing.
+                    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+                    continue;
+                },
             }
 
             const cmd = ReplLine.findCommandFn(&state);
@@ -364,4 +571,359 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     try out.writeAll(NEW_LINE);
     try out.flush();
     return try outlive.dupe(u8, state.line_buffer.items);
+}
+
+const testing = std.testing;
+
+/// Run `parser.feed` for each chunk in `chunks` against a fresh event list and
+/// return the accumulated events. Caller owns the returned ArrayList.
+fn collectEvents(parser: *InputParser, chunks: []const []const u8) !std.ArrayList(InputEvent) {
+    var events = std.ArrayList(InputEvent).empty;
+    errdefer events.deinit(testing.allocator);
+    for (chunks) |chunk| {
+        try parser.feed(chunk, &events, testing.allocator);
+    }
+    return events;
+}
+
+fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) !void {
+    try testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |e, a| {
+        try testing.expectEqualDeep(e, a);
+    }
+}
+
+test "InputParser: plain bytes pass through" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"hello"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .byte = 'h' },
+        .{ .byte = 'e' },
+        .{ .byte = 'l' },
+        .{ .byte = 'l' },
+        .{ .byte = 'o' },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: 3-byte CSI arrow key in one chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[A"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi3 = .{ 0x1b, '[', 'A' } },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: 3-byte CSI split as ESC then [A" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b", "[A" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi3 = .{ 0x1b, '[', 'A' } },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: bare ESC followed by non-[ bytes is flushed as bytes" {
+    // Once a non-`[` byte appears after ESC, ESC and the trailing bytes are
+    // emitted as plain `byte` events (the existing 3-byte CSI path is the
+    // only one that consumes ESC specially).
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1bOP"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .byte = 0x1b },
+        .{ .byte = 'O' },
+        .{ .byte = 'P' },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: full multi-line paste in one chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[200~hello\nworld\x1b[201~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'e' },
+        .{ .paste_byte = 'l' },
+        .{ .paste_byte = 'l' },
+        .{ .paste_byte = 'o' },
+        .{ .paste_byte = '\n' },
+        .{ .paste_byte = 'w' },
+        .{ .paste_byte = 'o' },
+        .{ .paste_byte = 'r' },
+        .{ .paste_byte = 'l' },
+        .{ .paste_byte = 'd' },
+        .paste_end,
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: empty paste" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[200~\x1b[201~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{ .paste_start, .paste_end }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: two pastes back-to-back in one chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[200~a\nb\x1b[201~\x1b[200~c\nd\x1b[201~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'a' },
+        .{ .paste_byte = '\n' },
+        .{ .paste_byte = 'b' },
+        .paste_end,
+        .paste_start,
+        .{ .paste_byte = 'c' },
+        .{ .paste_byte = '\n' },
+        .{ .paste_byte = 'd' },
+        .paste_end,
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: paste preserves both \\r and \\n" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[200~a\r\nb\x1b[201~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'a' },
+        .{ .paste_byte = '\r' },
+        .{ .paste_byte = '\n' },
+        .{ .paste_byte = 'b' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: paste-start split after ESC" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b", "[200~hi\x1b[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: paste-start split after ESC[" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[", "200~hi\x1b[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: paste-start split after ESC[2 (4-byte boundary)" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[2", "00~hi\x1b[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: paste-start split after ESC[20 (5-byte boundary)" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[20", "0~hi\x1b[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: paste-end with trailing ~ in next chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[200~ab\x1b[201", "~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'a' },
+        .{ .paste_byte = 'b' },
+        .paste_end,
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: paste-end split after ESC mid-paste does not leak ESC" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[200~ab\x1b", "[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'a' },
+        .{ .paste_byte = 'b' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: ESC[2~ (Insert) is not a paste marker" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[2~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi3 = .{ 0x1b, '[', '2' } },
+        .{ .byte = '~' },
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: ESC[2~ split with ~ in next chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[2", "~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi3 = .{ 0x1b, '[', '2' } },
+        .{ .byte = '~' },
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: malformed paste-start (ESC[200X) falls through" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[200X"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi3 = .{ 0x1b, '[', '2' } },
+        .{ .byte = '0' },
+        .{ .byte = '0' },
+        .{ .byte = 'X' },
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: stray paste-end outside paste mode is silently consumed" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[201~abc"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .byte = 'a' },
+        .{ .byte = 'b' },
+        .{ .byte = 'c' },
+    }, events.items);
+}
+
+test "InputParser: ESC bytes inside paste content are preserved" {
+    var parser = InputParser{};
+    // Paste containing an ANSI color escape: ESC[31m
+    var events = try collectEvents(&parser, &.{"\x1b[200~\x1b[31mred\x1b[201~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 0x1b },
+        .{ .paste_byte = '[' },
+        .{ .paste_byte = '3' },
+        .{ .paste_byte = '1' },
+        .{ .paste_byte = 'm' },
+        .{ .paste_byte = 'r' },
+        .{ .paste_byte = 'e' },
+        .{ .paste_byte = 'd' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: 5-byte carry survives across feeds" {
+    // Send the maximum-length partial prefix the parser tracks (5 bytes of
+    // a paste-start: ESC [ 2 0 0) and then the final `~` plus content. This
+    // exercises the boundary where carry equals the carry-buffer capacity.
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[200", "~hi\x1b[201~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+    }, events.items);
+}
+
+test "InputParser: byte-by-byte feed of full paste sequence" {
+    // Feed every byte of a paste sequence one at a time. Exercises every
+    // carry-boundary the parser might encounter, including paste-end.
+    const seq = "\x1b[200~ok\x1b[201~";
+    var parser = InputParser{};
+    var events = std.ArrayList(InputEvent).empty;
+    defer events.deinit(testing.allocator);
+    for (seq) |b| {
+        try parser.feed(&[_]u8{b}, &events, testing.allocator);
+    }
+    try expectEventsEqual(&.{
+        .paste_start,
+        .{ .paste_byte = 'o' },
+        .{ .paste_byte = 'k' },
+        .paste_end,
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: bytes around a paste in the same chunk" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"x\x1b[200~hi\x1b[201~y"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .byte = 'x' },
+        .paste_start,
+        .{ .paste_byte = 'h' },
+        .{ .paste_byte = 'i' },
+        .paste_end,
+        .{ .byte = 'y' },
+    }, events.items);
+}
+
+fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) !void {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try writeAlignedToPrompt(&aw.writer, input, indent);
+    try testing.expectEqualStrings(expected, aw.writer.buffered());
+}
+
+test "writeAlignedToPrompt: no newlines passes bytes through" {
+    try expectAlignedOutput("x = 5", 2, "x = 5");
+}
+
+test "writeAlignedToPrompt: LF gets indent on the next line" {
+    try expectAlignedOutput("z = 5\ny = 6", 2, "z = 5\n  y = 6");
+}
+
+test "writeAlignedToPrompt: CRLF only indents once" {
+    try expectAlignedOutput("z = 5\r\ny = 6", 2, "z = 5\r\n  y = 6");
+}
+
+test "writeAlignedToPrompt: lone CR indents the next line" {
+    try expectAlignedOutput("z = 5\ry = 6", 2, "z = 5\r  y = 6");
+}
+
+test "writeAlignedToPrompt: original indentation is preserved on top of prompt indent" {
+    // First line at column 0 (under prompt baseline), second line indented
+    // four spaces relative to baseline must stay four spaces relative to it.
+    try expectAlignedOutput("z = 5\n    y = 6", 2, "z = 5\n      y = 6");
+}
+
+test "writeAlignedToPrompt: trailing newline still emits indent for empty next line" {
+    try expectAlignedOutput("z = 5\n", 2, "z = 5\n  ");
 }
