@@ -22760,13 +22760,16 @@ numeric defaults by themselves. If such a non-defaultable constrained value must
 be materialized without a concrete demand, checking must have reported the
 ambiguity before artifact publication; if it reaches mono, it is a compiler bug.
 
-There is one non-numeric constrained-flex closure rule: an otherwise unsolved
-flex variable whose remaining constraints are all `is_eq` constraints may close
-to `{}` when mono is forced to materialize a concrete runtime type. This is not a
-numeric default, not a heuristic, and not a recovery path. It is the checked
-semantic meaning of equality over an unknown value that is never otherwise
-constrained: the zero-field record is the smallest concrete Roc type that
-satisfies structural equality.
+There is one non-numeric constrained-variable closure rule: an otherwise
+unsolved flex or rigid variable whose remaining constraints are all `is_eq`
+constraints may close to `{}` when mono graph finalization is forced to
+materialize a concrete runtime type. An otherwise unsolved flex or rigid
+variable with no constraints also closes to `{}` at this same boundary. This is
+not a numeric default, not a heuristic, and not a recovery path. It is the
+checked semantic meaning of an unknown value that is never otherwise
+constrained: the zero-field record is the smallest concrete Roc type that has no
+observable payload, and it satisfies structural equality when equality is the
+only remaining requirement.
 
 For example:
 
@@ -22783,14 +22786,65 @@ unused `Ok` payload closes to `{}`. This matches the checker rule that flex and
 rigid variables are accepted for `is_eq` unless they later unify with a type that
 does not support equality.
 
+The same closure rule is required for ordinary unused rigid parameters in
+monomorphic specializations. Type annotations publish named parameters as rigid
+variables, but rigidity is a checking-time guarantee: after checking has
+finished, mono graph finalization must decide whether each rigid variable has a
+runtime payload in this concrete specialization. If all explicit graph edges
+have been connected and a rigid variable is still unconstrained, no source value
+can observe its payload. Closing it to `{}` is therefore the concrete
+specialization of "unused type parameter," not a fallback.
+
+For example:
+
+```roc
+keep_oks : List(a), (a -> Try(ok, _err)) -> List(ok)
+keep_oks = |list, fun| {
+    list.fold(
+        [],
+        |out_list, elem| {
+            match fun(elem) {
+                Ok(result) => out_list.append(result)
+                Err(_) => out_list
+            }
+        },
+    )
+}
+
+always_ok_n = |_| Ok(1)
+keep_oks([10], always_ok_n)
+```
+
+The callback argument connects `a = I64` and `ok = Dec`. The callback never
+produces an `Err` payload, and the `Err(_)` branch does not observe one. After
+all call, match, branch, and tag-union row edges have been connected, `_err`
+remains an unconstrained rigid variable. Mono graph finalization must close that
+payload to `{}` and lower the scrutinee as `Try(Dec, {})`. The branch is still
+lowered from the finalized `Try(Dec, {})` scrutinee and the published `Err({})`
+payload slot; mono must not invent a singleton `Ok` source type from the
+callback syntax.
+
+The mirror image is also valid:
+
+```roc
+always_err = |_| Err("bad")
+keep_oks([10], always_err)
+```
+
+Here the callback connects `_err = Str`. The unused `ok` parameter has no
+remaining payload evidence in this specialization, so it closes to `{}`. Mono
+lowers the scrutinee as `Try({}, Str)` and the `Err(_)` payload slot as `Str`.
+
 Mono must verify the rule precisely:
 
-- if a flex has no constraints, closing it to `{}` is ordinary unconstrained
-  closure;
-- if a flex has only `is_eq` constraints, closing it to `{}` is equality-only
-  closure;
-- if a flex has any non-`is_eq` constraint and is not a
-  `mono_specialization` numeric variable, materializing it is a compiler bug;
+- if a flex or rigid variable has no constraints, closing it to `{}` is ordinary
+  unconstrained closure;
+- if a flex or rigid variable has only `is_eq` constraints, closing it to `{}`
+  is equality-only closure;
+- if a flex or rigid variable has any non-`is_eq` constraint and is not a
+  `mono_specialization` numeric variable, materializing it is a compiler bug
+  unless it has already been resolved through the published static-dispatch
+  constraint and method-registry path described below;
 - the method-name check uses the published canonical method id/text from the
   checked artifact, not source syntax or string matching in expressions.
 
@@ -23041,6 +23095,22 @@ least:
   source evaluation-order temporary
 - every local procedure instance, keyed by the owning mono specialization,
   local procedure binder/site, and finalized requested source function type
+
+Call-result prediction and call emission must consume the same finalized graph
+edges. In particular, predicting the concrete result type of `fun(elem)` for a
+match scrutinee must connect both:
+
+- the known callee function value type, when `fun` is a parameter, local binder,
+  local procedure value, top-level procedure value, imported procedure value, or
+  promoted procedure value whose concrete source type is already published in
+  the current specialization; and
+- the known argument slots.
+
+It is a compiler bug for prediction to ignore the callee edge and then close an
+unused return payload to `{}` while later call emission sees a more precise
+callee type. For `keep_oks([10], always_err)`, prediction must see that the
+local `fun` parameter is the concrete callback type whose `Err` payload is
+`Str`; it must therefore predict `Try({}, Str)`, not `Try({}, {})`.
 
 Value MIR emission consumes this finalized graph. It must be a lookup-oriented
 operation: given a checked expression id, binder id, pattern id, call edge, field

@@ -3930,7 +3930,6 @@ fn finalizeSourceMatchBranchReachability(
             .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
             .session = session,
         };
-        defer finalizer.deinit();
         try finalizer.finalize();
     }
 }
@@ -3991,10 +3990,6 @@ const SourceMatchReachabilityFinalizer = struct {
         list_elem,
         nominal_backing,
     };
-
-    fn deinit(self: *SourceMatchReachabilityFinalizer) void {
-        _ = self;
-    }
 
     fn finalize(self: *SourceMatchReachabilityFinalizer) Allocator.Error!void {
         for (self.session.members) |instance| {

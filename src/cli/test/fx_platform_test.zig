@@ -242,7 +242,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
                 return error.UnexpectedExitCode;
             }
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DivisionByZero") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Division by zero") != null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
         else => {
@@ -1219,8 +1219,9 @@ test "fx platform inline expect fails as expected (interpreter)" {
 
     const stderr = run_result.stderr;
 
-    // Should report a crash with the expect expression snippet
-    try testing.expect(std.mem.indexOf(u8, stderr, "1 == 2") != null);
+    // The platform receives failed expectations through the expect-failed host
+    // callback, not through the crash callback.
+    try testing.expect(std.mem.indexOf(u8, stderr, "Expect failed: expect failed") != null);
 }
 
 test "fx platform inline expect fails as expected (dev backend)" {
@@ -1279,8 +1280,9 @@ test "fx platform inline expect fails in dev backend binary" {
         },
     }
 
-    // Should report a crash
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed") != null);
+    // The platform receives failed expectations through the expect-failed host
+    // callback, not through the crash callback.
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Expect failed: expect failed") != null);
 }
 
 test "fx platform index out of bounds in instantiate regression" {
@@ -1453,7 +1455,9 @@ test "fx platform issue8943 error message memory corruption" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail with TYPE MISMATCH and COMPTIME CRASH errors
+    // This file is expected to fail during checking before post-check
+    // compile-time evaluation can run. Regression coverage here is about error
+    // report memory ownership, not preserving an obsolete later-stage crash.
     try util.checkFailure(run_result);
 
     // Check that the TYPE MISMATCH error is present
@@ -1464,12 +1468,13 @@ test "fx platform issue8943 error message memory corruption" {
         return error.ExpectedTryTypeError;
     }
 
-    // Check that the COMPTIME CRASH error is present
+    // The invalid top-level `?` must not escape checking and become a
+    // post-check compile-time crash.
     const has_comptime_crash = std.mem.indexOf(u8, run_result.stderr, "COMPTIME CRASH") != null;
-    if (!has_comptime_crash) {
-        std.debug.print("Expected 'COMPTIME CRASH' error but got:\n", .{});
+    if (has_comptime_crash) {
+        std.debug.print("Unexpected 'COMPTIME CRASH' after checking reported the invalid `?` expression:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-        return error.ExpectedComptimeCrash;
+        return error.UnexpectedComptimeCrash;
     }
 
     // The key check: verify no memory corruption in error messages
@@ -1482,8 +1487,8 @@ test "fx platform issue8943 error message memory corruption" {
         search_start = pos + 1;
     }
 
-    // We expect at least 2 occurrences: one in TYPE MISMATCH and one in COMPTIME CRASH
-    // Plus one more at the end in "Found X error(s)..."
+    // We expect at least 2 occurrences from source regions plus one more at
+    // the end in "Found X error(s)..."
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});

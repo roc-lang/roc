@@ -2407,11 +2407,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
-            .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
-                try self.materializeDefaultDecPayload()
-            else
-                invariantViolation("mono specialization reached an unmapped rigid type variable while materializing a concrete source type"),
+            .flex => |flex| try self.materializeClosableVariableType(flex),
+            .rigid => |rigid| try self.materializeClosableVariableType(rigid),
             .alias => |alias| .{ .alias = .{
                 .name = try self.name_resolver.typeName(self.template_artifact, alias.name),
                 .origin_module = try self.name_resolver.moduleName(self.template_artifact, alias.origin_module),
@@ -2584,11 +2581,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex => |flex| try self.lowerUnconstrainedFlexType(flex),
-            .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
-                .{ .primitive = .dec }
-            else
-                invariantViolation("mono specialization reached an unmapped rigid type variable"),
+            .flex => |flex| try self.lowerClosableVariableType(flex),
+            .rigid => |rigid| try self.lowerClosableVariableType(rigid),
             .alias => |alias| .{ .link = try self.lowerTemplateType(alias.backing) },
             .record_unbound => |fields| .{ .record = .{ .fields = try self.lowerTemplateRecordFieldsOnly(fields) } },
             .record => |record| .{ .record = .{ .fields = try self.lowerTemplateRecord(record) } },
@@ -4300,21 +4294,21 @@ const TypeInstantiator = struct {
         return try self.materializeSyntheticPayload(.empty_tag_union);
     }
 
-    fn materializeUnconstrainedFlexType(
+    fn materializeClosableVariableType(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
-        if (self.isMonoSpecializationNumericFlex(flex)) return try self.materializeDefaultDecPayload();
-        try self.verifyUnconstrainedFlex(flex);
+        if (self.isMonoSpecializationNumericFlex(variable)) return try self.materializeDefaultDecPayload();
+        try self.verifyClosableVariable(variable);
         return .empty_record;
     }
 
-    fn lowerUnconstrainedFlexType(
+    fn lowerClosableVariableType(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!Type.Content {
-        if (self.isMonoSpecializationNumericFlex(flex)) return .{ .primitive = .dec };
-        try self.verifyUnconstrainedFlex(flex);
+        if (self.isMonoSpecializationNumericFlex(variable)) return .{ .primitive = .dec };
+        try self.verifyClosableVariable(variable);
         return .{ .record = .{ .fields = &.{} } };
     }
 
@@ -4354,17 +4348,17 @@ const TypeInstantiator = struct {
         self: *TypeInstantiator,
         variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!void {
-        try self.verifyUnconstrainedFlex(variable);
+        try self.verifyClosableVariable(variable);
     }
 
-    fn verifyUnconstrainedFlex(
+    fn verifyClosableVariable(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!void {
-        if (flex.constraints.len == 0) return;
-        if (self.isMonoSpecializationNumericFlex(flex)) return;
-        if (try self.isEqualityOnlyFlex(flex)) return;
-        invariantViolation("mono specialization reached a constrained flex variable where a concrete runtime type was required");
+        if (variable.constraints.len == 0) return;
+        if (self.isMonoSpecializationNumericFlex(variable)) return;
+        if (try self.isEqualityOnlyVariable(variable)) return;
+        invariantViolation("mono specialization reached a constrained type variable where a concrete runtime type was required");
     }
 
     fn resolveConstrainedTemplateVariableFromRegistry(
@@ -4378,7 +4372,7 @@ const TypeInstantiator = struct {
         };
         if (variable.constraints.len == 0) return null;
         if (self.isMonoSpecializationNumericFlex(variable)) return null;
-        if (try self.isEqualityOnlyFlex(variable)) return null;
+        if (try self.isEqualityOnlyVariable(variable)) return null;
 
         const owner = (try self.uniqueStaticDispatchOwnerForConstraints(variable.constraints)) orelse {
             invariantViolation("mono specialization could not resolve constrained variable to one checked method owner");
@@ -4505,13 +4499,13 @@ const TypeInstantiator = struct {
         );
     }
 
-    fn isEqualityOnlyFlex(
+    fn isEqualityOnlyVariable(
         self: *TypeInstantiator,
-        flex: checked_artifact.CheckedTypeVariable,
+        variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!bool {
-        if (flex.constraints.len == 0) return false;
+        if (variable.constraints.len == 0) return false;
         const is_eq = try self.program.canonical_names.internMethodName("is_eq");
-        for (flex.constraints) |constraint| {
+        for (variable.constraints) |constraint| {
             const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
             if (method != is_eq) return false;
         }
@@ -4533,11 +4527,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
-            .flex => |flex| try self.materializeUnconstrainedFlexType(flex),
-            .rigid => |rigid| if (self.isMonoSpecializationNumericFlex(rigid))
-                try self.materializeDefaultDecPayload()
-            else
-                invariantViolation("mono specialization reached an unsolved rigid type variable in a concrete source type"),
+            .flex => |flex| try self.materializeClosableVariableType(flex),
+            .rigid => |rigid| try self.materializeClosableVariableType(rigid),
             .alias => |alias| .{ .alias = .{
                 .name = try self.typeNameForConcreteRef(ref, alias.name),
                 .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
@@ -6640,6 +6631,7 @@ const BodyLowerer = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultTypeInFreshInstantiation(
                 self.callSourceFnPayload(call.func, call.source_fn_ty_payload),
+                call.func,
                 call.args,
                 null,
             ),
@@ -8325,6 +8317,7 @@ const BodyLowerer = struct {
     fn callResultTypeInFreshInstantiation(
         self: *BodyLowerer,
         source_fn_ty: checked_artifact.CheckedTypeId,
+        func: checked_artifact.CheckedExprId,
         args: []const checked_artifact.CheckedExprId,
         expected_ret: ?ConcreteTypeInfo,
     ) Allocator.Error!ConcreteTypeInfo {
@@ -8335,6 +8328,7 @@ const BodyLowerer = struct {
         self.type_instantiator = &call_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
+        try self.bindKnownCallCalleeType(source_fn_ty, func);
         return (try self.instantiateCallType(source_fn_ty, args, expected_ret)).ret_ty;
     }
 

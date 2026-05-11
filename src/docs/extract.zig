@@ -814,13 +814,13 @@ fn resolveModulePathFromBase(
             const idx = @intFromEnum(ext.module_idx);
             if (idx >= module_env.imports.imports.items.items.len) break :blk "";
             const str_idx = module_env.imports.imports.items.items[idx];
-            break :blk module_env.common.getString(str_idx);
+            break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .pending => |pend| blk: {
             const idx = @intFromEnum(pend.module_idx);
             if (idx >= module_env.imports.imports.items.items.len) break :blk "";
             const str_idx = module_env.imports.imports.items.items[idx];
-            break :blk module_env.common.getString(str_idx);
+            break :blk getModulePath(module_env.common.getString(str_idx));
         },
     };
 }

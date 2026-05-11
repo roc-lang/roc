@@ -3796,6 +3796,52 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "8" },
     },
     .{
+        .name = "low_level - polymorphic Try callback keeps inactive Err branch",
+        .source =
+        \\{
+        \\keep_oks : List(a), (a -> Try(ok, _err)) -> List(ok)
+        \\keep_oks = |list, fun| {
+        \\    list.fold(
+        \\        [],
+        \\        |out_list, elem| {
+        \\            match fun(elem) {
+        \\                Ok(result) => out_list.append(result)
+        \\                Err(_) => out_list
+        \\            }
+        \\        },
+        \\    )
+        \\}
+        \\
+        \\always_ok_n = |_| Ok(1)
+        \\keep_oks([10], always_ok_n)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1.0]" },
+    },
+    .{
+        .name = "low_level - polymorphic Try callback keeps active Err payload",
+        .source =
+        \\{
+        \\keep_oks : List(a), (a -> Try(ok, _err)) -> List(ok)
+        \\keep_oks = |list, fun| {
+        \\    list.fold(
+        \\        [],
+        \\        |out_list, elem| {
+        \\            match fun(elem) {
+        \\                Ok(result) => out_list.append(result)
+        \\                Err(_) => out_list
+        \\            }
+        \\        },
+        \\    )
+        \\}
+        \\
+        \\always_err = |_| Err("bad")
+        \\keep_oks([10], always_err)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
         .name = "issue 8750: List.fold render value",
         .source =
         \\{

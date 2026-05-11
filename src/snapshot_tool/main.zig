@@ -753,27 +753,8 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     }
     try collectWorkItems(gpa, snapshots_dir, &work_list);
 
-    var fail_count: usize = 0;
-
-    for (work_list.items) |work_item| {
-        // A signal-handler longjmp poisoned the GPA — we cannot allocate or
-        // free through it without deadlocking.  Stop processing immediately.
-        if (gpa_poisoned) break;
-
-        const success = switch (work_item.kind) {
-            .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
-            .multi_file_snapshot => blk: {
-                const res = processMultiFileSnapshot(gpa, work_item.path, &config) catch {
-                    break :blk false;
-                };
-                break :blk res;
-            },
-        };
-        if (!success) {
-            fail_count += 1;
-        }
-    }
-    return fail_count == 0;
+    const result = try processWorkItems(gpa, work_list, 0, false, &config);
+    return result.failed == 0;
 }
 
 /// Check if a file has a valid snapshot extension
@@ -4284,7 +4265,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AS
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn classifySnapshotReplInput(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4418,7 +4399,7 @@ fn renderSnapshotReplTypeProblems(
     defer allocators.deinit();
 
     const parse_mode: single_module.ParseMode = switch (source_kind) {
-        // REPL expression lines are classified through the statement parser once
+        // REPL expression lines are identified through the statement parser once
         // they are known not to be definitions. The diagnostic renderer must use
         // that same shape instead of reparsing through expression-only or file
         // mode, both of which accept different syntax at their roots.
@@ -4645,7 +4626,7 @@ fn snapshotReplStep(
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
-    const maybe_input_kind = try classifySnapshotReplInput(allocator, trimmed);
+    const maybe_input_kind = try resolveSnapshotReplInputKind(allocator, trimmed);
     const input_kind = maybe_input_kind orelse
         return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
