@@ -89,6 +89,27 @@ pub const ReservedMonoProc = struct {
     state: ReservedState,
 };
 
+const ConcreteConstProducer = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    payload: checked_artifact.CheckedTypeId,
+    key: canonical.CanonicalTypeKey,
+};
+
+const ConcreteDependencyTypeProjection = union(enum) {
+    producer: ConcreteConstProducer,
+    concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+};
+
+const InputDependencyViews = struct {
+    views: []const checked_artifact.ImportedModuleView,
+    owned: []checked_artifact.ImportedModuleView = &.{},
+
+    fn deinit(self: *InputDependencyViews, allocator: Allocator) void {
+        if (self.owned.len > 0) allocator.free(self.owned);
+        self.* = .{ .views = &.{} };
+    }
+};
+
 fn mirProcedureRefFromReserved(reserved: ReservedMonoProc) canonical.MirProcedureRef {
     return .{
         .proc = reserved.proc.proc,
@@ -123,6 +144,7 @@ pub const Program = struct {
     root_procs: std.ArrayList(canonical.MirProcedureRef),
     root_metadata: std.ArrayList(mir_ids.RootMetadata),
     nominal_backing_instantiations: std.StringHashMap(checked_artifact.CheckedTypeId),
+    concrete_dependency_type_projections: std.ArrayList(ConcreteDependencyTypeProjection),
     bool_source_ty: ?canonical.CanonicalTypeKey,
 
     pub fn init(allocator: Allocator) Program {
@@ -140,11 +162,13 @@ pub const Program = struct {
             .root_procs = .empty,
             .root_metadata = .empty,
             .nominal_backing_instantiations = std.StringHashMap(checked_artifact.CheckedTypeId).init(allocator),
+            .concrete_dependency_type_projections = .empty,
             .bool_source_ty = null,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.concrete_dependency_type_projections.deinit(self.allocator);
         var nominal_keys = self.nominal_backing_instantiations.keyIterator();
         while (nominal_keys.next()) |stored_key| self.allocator.free(stored_key.*);
         self.nominal_backing_instantiations.deinit();
@@ -404,8 +428,136 @@ pub fn run(
         queue.markLowered(key);
     }
 
+    try publishConcreteDependencyTypeProjections(allocator, input, &program);
+
     if (@import("builtin").mode == .Debug) verifyProgram(&program);
     return program;
+}
+
+fn publishConcreteDependencyTypeProjections(
+    allocator: Allocator,
+    input: Input,
+    program: *Program,
+) Allocator.Error!void {
+    if (program.concrete_dependency_type_projections.items.len == 0) return;
+
+    const artifact_sink = input.checking_artifact_sink orelse {
+        invariantViolation("compile-time dependency summary recorded concrete dependency types without a mutable checked artifact sink");
+    };
+
+    var dependency_views = try inputDependencyViews(allocator, input);
+    defer dependency_views.deinit(allocator);
+
+    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, dependency_views.views);
+    defer projector.deinit();
+
+    for (program.concrete_dependency_type_projections.items) |projection| {
+        switch (projection) {
+            .producer => |producer| try publishConcreteConstProducerType(
+                artifact_sink,
+                dependency_views.views,
+                &projector,
+                producer,
+            ),
+            .concrete_ref => |concrete_ref| try publishConcreteConstDependencyType(
+                artifact_sink,
+                dependency_views.views,
+                &projector,
+                program,
+                concrete_ref,
+            ),
+        }
+    }
+}
+
+fn publishConcreteConstProducerType(
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    projector: *checked_artifact.CheckedTypeProjector,
+    producer: ConcreteConstProducer,
+) Allocator.Error!void {
+    if (artifact_sink.checked_types.rootForKey(producer.key) != null) return;
+
+    if (std.mem.eql(u8, &producer.artifact.bytes, &artifact_sink.key.bytes)) {
+        _ = try projector.projectCheckedTypeViewRoot(artifact_sink.checked_types.view(), producer.payload);
+        return;
+    }
+
+    for (dependency_views) |imported| {
+        if (!std.mem.eql(u8, &imported.key.bytes, &producer.artifact.bytes)) continue;
+        if (try projector.projectImportedCheckedTypeForKey(imported, producer.key)) |_| return;
+        invariantViolation("compile-time dependency summary concrete const producer type was missing from the imported artifact");
+    }
+    if (@import("builtin").mode == .Debug) {
+        const import0 = if (dependency_views.len > 0) dependency_views[0].key.bytes else [_]u8{0} ** 32;
+        const import1 = if (dependency_views.len > 1) dependency_views[1].key.bytes else [_]u8{0} ** 32;
+        const import2 = if (dependency_views.len > 2) dependency_views[2].key.bytes else [_]u8{0} ** 32;
+        std.debug.panic(
+            "compile-time dependency summary concrete const producer referenced an unknown import: producer={any} root={any} imports={d} import0={any} import1={any} import2={any}",
+            .{
+                producer.artifact.bytes,
+                artifact_sink.key.bytes,
+                dependency_views.len,
+                import0,
+                import1,
+                import2,
+            },
+        );
+    }
+    invariantViolation("compile-time dependency summary concrete const producer referenced an unknown import");
+}
+
+fn publishConcreteConstDependencyType(
+    artifact_sink: *checked_artifact.CheckedModuleArtifact,
+    dependency_views: []const checked_artifact.ImportedModuleView,
+    projector: *checked_artifact.CheckedTypeProjector,
+    program: *Program,
+    concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+) Allocator.Error!void {
+    const root = program.concrete_source_types.root(concrete_ref);
+    if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
+
+    switch (root.source) {
+        .local => |local| {
+            _ = try projector.projectCheckedTypeViewRootWithNames(
+                program.concrete_source_types.localView(),
+                &program.canonical_names,
+                local,
+            );
+        },
+        .artifact => |artifact_ref| {
+            if (std.mem.eql(u8, &artifact_ref.artifact.bytes, &artifact_sink.key.bytes)) {
+                if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
+                invariantViolation("compile-time dependency summary concrete artifact type was missing from the artifact sink");
+            }
+            for (dependency_views) |imported| {
+                if (!std.mem.eql(u8, &imported.key.bytes, &artifact_ref.artifact.bytes)) continue;
+                if (try projector.projectImportedCheckedTypeForKey(imported, root.key)) |_| return;
+                invariantViolation("compile-time dependency summary concrete imported type was missing from the imported artifact");
+            }
+            invariantViolation("compile-time dependency summary concrete artifact type referenced an unknown import");
+        },
+    }
+}
+
+fn inputDependencyViews(
+    allocator: Allocator,
+    input: Input,
+) Allocator.Error!InputDependencyViews {
+    if (input.root.relation_artifacts.len == 0) {
+        return .{ .views = input.imports };
+    }
+
+    const views = try allocator.alloc(
+        checked_artifact.ImportedModuleView,
+        input.imports.len + input.root.relation_artifacts.len,
+    );
+    @memcpy(views[0..input.imports.len], input.imports);
+    @memcpy(views[input.imports.len..], input.root.relation_artifacts);
+    return .{
+        .views = views,
+        .owned = views,
+    };
 }
 
 const CheckedTemplateLookup = struct {
@@ -1215,6 +1367,20 @@ fn remapDependencyCallable(
     return try name_resolver.procedureCallableRef(callable);
 }
 
+fn remapDependencyProcedureValue(
+    input: Input,
+    program: *Program,
+    proc: canonical.ProcedureValueRef,
+) Allocator.Error!canonical.ProcedureValueRef {
+    var name_resolver = ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        input.root.artifact,
+        input.imports,
+        input.root.relation_artifacts,
+    );
+    return try name_resolver.procedureValueRef(proc);
+}
+
 fn remapDependencyMirProcedure(
     input: Input,
     program: *Program,
@@ -1690,7 +1856,8 @@ fn reserveSemanticInstantiationProcedureDependency(
         .source_fn_ty = semanticInstantiationProcedureSourceTy(record.key),
     };
     const reserved = try reserveProcedureCallableDependency(input, program, queue, callable, .{ .semantic_instantiation_procedure = procedure_id });
-    if (!canonical.procedureValueRefEql(reserved.proc, procedure.proc_value)) {
+    const lowered_proc_value = try remapDependencyProcedureValue(input, program, procedure.proc_value);
+    if (!canonical.procedureValueRefEql(reserved.proc, lowered_proc_value)) {
         debug.invariant(false, "mono dependency reservation invariant violated: semantic procedure proc value disagreed with reserved procedure");
         unreachable;
     }
@@ -7438,12 +7605,12 @@ const BodyLowerer = struct {
             switch (self.input.mode) {
                 .comptime_dependency_summary => {
                     if (concrete_producer) |producer| {
-                        try self.publishConcreteConstProducerType(producer);
+                        try self.recordConcreteConstProducerType(producer);
                         if (!std.mem.eql(u8, &producer.key.bytes, &requested_key.bytes)) {
-                            try self.publishConcreteConstDependencyType(concrete_ref);
+                            try self.recordConcreteConstDependencyType(concrete_ref);
                         }
                     } else {
-                        try self.publishConcreteConstDependencyType(concrete_ref);
+                        try self.recordConcreteConstDependencyType(concrete_ref);
                     }
                     return try self.program.ast.addExpr(expected.ty, .{ .const_ref = key });
                 },
@@ -7458,12 +7625,6 @@ const BodyLowerer = struct {
         try reserveConstInstanceRefDependencies(self.input, self.program, self.queue, &dependency_state, instance);
         return try self.program.ast.addExpr(expected.ty, .{ .const_instance = instance });
     }
-
-    const ConcreteConstProducer = struct {
-        artifact: checked_artifact.CheckedModuleArtifactKey,
-        payload: checked_artifact.CheckedTypeId,
-        key: canonical.CanonicalTypeKey,
-    };
 
     fn concreteConstProducer(
         self: *BodyLowerer,
@@ -7488,115 +7649,24 @@ const BodyLowerer = struct {
         };
     }
 
-    fn publishConcreteConstProducerType(
+    fn recordConcreteConstProducerType(
         self: *BodyLowerer,
         producer: ConcreteConstProducer,
     ) Allocator.Error!void {
-        const artifact_sink = self.input.checking_artifact_sink orelse {
+        _ = self.input.checking_artifact_sink orelse {
             invariantViolation("compile-time dependency summary constant use had no mutable checked artifact sink");
         };
-        if (artifact_sink.checked_types.rootForKey(producer.key) != null) return;
-
-        var dependency_views = try self.inputDependencyViews();
-        defer dependency_views.deinit(self.allocator);
-
-        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, dependency_views.views);
-        defer projector.deinit();
-
-        if (std.mem.eql(u8, &producer.artifact.bytes, &artifact_sink.key.bytes)) {
-            _ = try projector.projectCheckedTypeViewRoot(artifact_sink.checked_types.view(), producer.payload);
-            return;
-        }
-
-        for (dependency_views.views) |imported| {
-            if (!std.mem.eql(u8, &imported.key.bytes, &producer.artifact.bytes)) continue;
-            if (try projector.projectImportedCheckedTypeForKey(imported, producer.key)) |_| return;
-            invariantViolation("compile-time dependency summary concrete const producer type was missing from the imported artifact");
-        }
-        if (@import("builtin").mode == .Debug) {
-            const import0 = if (dependency_views.views.len > 0) dependency_views.views[0].key.bytes else [_]u8{0} ** 32;
-            const import1 = if (dependency_views.views.len > 1) dependency_views.views[1].key.bytes else [_]u8{0} ** 32;
-            const import2 = if (dependency_views.views.len > 2) dependency_views.views[2].key.bytes else [_]u8{0} ** 32;
-            std.debug.panic(
-                "compile-time dependency summary concrete const producer referenced an unknown import: producer={any} root={any} imports={d} import0={any} import1={any} import2={any}",
-                .{
-                    producer.artifact.bytes,
-                    artifact_sink.key.bytes,
-                    dependency_views.views.len,
-                    import0,
-                    import1,
-                    import2,
-                },
-            );
-        }
-        invariantViolation("compile-time dependency summary concrete const producer referenced an unknown import");
+        try self.program.concrete_dependency_type_projections.append(self.allocator, .{ .producer = producer });
     }
 
-    fn publishConcreteConstDependencyType(
+    fn recordConcreteConstDependencyType(
         self: *BodyLowerer,
         concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
-        const artifact_sink = self.input.checking_artifact_sink orelse {
+        _ = self.input.checking_artifact_sink orelse {
             invariantViolation("compile-time dependency summary constant use had no mutable checked artifact sink");
         };
-
-        const root = self.program.concrete_source_types.root(concrete_ref);
-        if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
-
-        var dependency_views = try self.inputDependencyViews();
-        defer dependency_views.deinit(self.allocator);
-
-        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, dependency_views.views);
-        defer projector.deinit();
-
-        switch (root.source) {
-            .local => |local| {
-                _ = try projector.projectCheckedTypeViewRootWithNames(
-                    self.program.concrete_source_types.localView(),
-                    &self.program.canonical_names,
-                    local,
-                );
-            },
-            .artifact => |artifact_ref| {
-                if (std.mem.eql(u8, &artifact_ref.artifact.bytes, &artifact_sink.key.bytes)) {
-                    if (artifact_sink.checked_types.rootForKey(root.key) != null) return;
-                    invariantViolation("compile-time dependency summary concrete artifact type was missing from the artifact sink");
-                }
-                for (dependency_views.views) |imported| {
-                    if (!std.mem.eql(u8, &imported.key.bytes, &artifact_ref.artifact.bytes)) continue;
-                    if (try projector.projectImportedCheckedTypeForKey(imported, root.key)) |_| return;
-                    invariantViolation("compile-time dependency summary concrete imported type was missing from the imported artifact");
-                }
-                invariantViolation("compile-time dependency summary concrete artifact type referenced an unknown import");
-            },
-        }
-    }
-
-    const InputDependencyViews = struct {
-        views: []const checked_artifact.ImportedModuleView,
-        owned: []checked_artifact.ImportedModuleView = &.{},
-
-        fn deinit(self: *InputDependencyViews, allocator: Allocator) void {
-            if (self.owned.len > 0) allocator.free(self.owned);
-            self.* = .{ .views = &.{} };
-        }
-    };
-
-    fn inputDependencyViews(self: *BodyLowerer) Allocator.Error!InputDependencyViews {
-        if (self.input.root.relation_artifacts.len == 0) {
-            return .{ .views = self.input.imports };
-        }
-
-        const views = try self.allocator.alloc(
-            checked_artifact.ImportedModuleView,
-            self.input.imports.len + self.input.root.relation_artifacts.len,
-        );
-        @memcpy(views[0..self.input.imports.len], self.input.imports);
-        @memcpy(views[self.input.imports.len..], self.input.root.relation_artifacts);
-        return .{
-            .views = views,
-            .owned = views,
-        };
+        try self.program.concrete_dependency_type_projections.append(self.allocator, .{ .concrete_ref = concrete_ref });
     }
 
     fn lowerList(
@@ -10052,7 +10122,9 @@ const BodyLowerer = struct {
             return null;
         }
 
-        return self.localCallableRootForBinding(binding_ref.binding);
+        const root = self.localCallableRootForBinding(binding_ref.binding);
+        if (!self.localCompileTimeRootHasRequest(root, .compile_time_callable)) return null;
+        return root;
     }
 
     fn summaryPendingCallableBindingInstanceForProcedureUse(
@@ -10143,6 +10215,30 @@ const BodyLowerer = struct {
 
         debug.invariant(false, "mono dependency-summary lowering found a callable-eval binding with no top-level value entry");
         unreachable;
+    }
+
+    fn localCompileTimeRootHasRequest(
+        self: *const BodyLowerer,
+        root_id: checked_artifact.ComptimeRootId,
+        kind: checked_artifact.RootRequestKind,
+    ) bool {
+        const root = self.input.root.artifact.compile_time_roots.root(root_id);
+        for (self.input.root.artifact.root_requests.requests) |request| {
+            if (request.abi != .compile_time) continue;
+            if (request.kind != kind) continue;
+            if (rootSourcesEqual(root.source, request.source)) return true;
+        }
+        return false;
+    }
+
+    fn rootSourcesEqual(a: checked_artifact.RootSource, b: checked_artifact.RootSource) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .def => |left| left == b.def,
+            .expr => |left| left == b.expr,
+            .statement => |left| left == b.statement,
+            .required_binding => |left| left == b.required_binding,
+        };
     }
 
     fn lowerPendingLocalRootCall(

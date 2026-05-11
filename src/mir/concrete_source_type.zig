@@ -334,10 +334,7 @@ pub const PayloadKeyBuilder = struct {
                 self.writeTag("record_unbound");
                 try self.writeNormalizedRecordFields(fields, null);
             },
-            .record => |record| {
-                self.writeTag("record");
-                try self.writeNormalizedRecordFields(record.fields, record.ext);
-            },
+            .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
                 self.writeTag("tuple");
                 self.writeU32(@intCast(tuple.len));
@@ -363,10 +360,7 @@ pub const PayloadKeyBuilder = struct {
                 try self.writeType(func.ret);
             },
             .empty_record => self.writeTag("empty_record"),
-            .tag_union => |tag_union| {
-                self.writeTag("tag_union");
-                try self.writeNormalizedTags(tag_union.tags, tag_union.ext);
-            },
+            .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
             .empty_tag_union => self.writeTag("empty_tag_union"),
         }
     }
@@ -439,6 +433,67 @@ pub const PayloadKeyBuilder = struct {
         }
     }
 
+    fn writeNormalizedRecordPayload(
+        self: *PayloadKeyBuilder,
+        head: []const checked_artifact.CheckedRecordField,
+        ext: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        var fields = std.ArrayList(RecordFieldForKey).empty;
+        defer fields.deinit(self.allocator);
+        try self.appendRecordFieldsForKey(&fields, head);
+
+        var tail: ?checked_artifact.CheckedTypeId = ext;
+        var seen = std.AutoHashMap(checked_artifact.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (self.active.contains(tail_id)) break;
+            if (seen.contains(tail_id)) {
+                invariantViolation("concrete source type key row normalization reached a cyclic record row");
+            }
+            try seen.put(tail_id, {});
+            const raw = @intFromEnum(tail_id);
+            if (raw >= self.payloads.len) {
+                invariantViolation("concrete source type key row normalization referenced missing record tail");
+            }
+            switch (self.payloads[raw]) {
+                .empty_record => {
+                    tail = null;
+                    break;
+                },
+                .record => |record| {
+                    try self.appendRecordFieldsForKey(&fields, record.fields);
+                    tail = record.ext;
+                },
+                .record_unbound => |record_fields| {
+                    try self.appendRecordFieldsForKey(&fields, record_fields);
+                    tail = null;
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (tail == null and fields.items.len == 0) {
+            self.writeTag("empty_record");
+            return;
+        }
+
+        self.writeTag("record");
+        self.writeU32(@intCast(fields.items.len));
+        for (fields.items, 0..) |field, index| {
+            if (index > 0 and std.mem.eql(u8, self.names.recordFieldLabelText(fields.items[index - 1].name), self.names.recordFieldLabelText(field.name))) {
+                invariantViolation("concrete source type key row normalization found duplicate record fields");
+            }
+            self.writeBytes(self.names.recordFieldLabelText(field.name));
+            try self.writeType(field.ty);
+        }
+        if (tail) |tail_id| {
+            try self.writeType(tail_id);
+        } else {
+            self.writeTag("empty_record");
+        }
+    }
+
     fn appendTagsForKey(
         self: *PayloadKeyBuilder,
         tags: *std.ArrayList(TagForKey),
@@ -452,7 +507,7 @@ pub const PayloadKeyBuilder = struct {
         }
     }
 
-    fn writeNormalizedTags(
+    fn writeNormalizedTagUnionPayload(
         self: *PayloadKeyBuilder,
         head: []const checked_artifact.CheckedTag,
         ext: checked_artifact.CheckedTypeId,
@@ -488,6 +543,12 @@ pub const PayloadKeyBuilder = struct {
         }
 
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        if (tail == null and tags.items.len == 0) {
+            self.writeTag("empty_tag_union");
+            return;
+        }
+
+        self.writeTag("tag_union");
         self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
             if (index > 0 and std.mem.eql(u8, self.names.tagLabelText(tags.items[index - 1].name), self.names.tagLabelText(tag.name))) {
@@ -593,6 +654,56 @@ fn invariantViolation(comptime message: []const u8) noreturn {
         std.debug.panic(message, .{});
     }
     unreachable;
+}
+
+test "source type keys normalize closed empty records to empty record" {
+    var names = canonical.CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+
+    const empty: checked_artifact.CheckedTypeId = @enumFromInt(0);
+    const closed_empty_record: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const payloads = [_]checked_artifact.CheckedTypePayload{
+        .empty_record,
+        .{ .record = .{
+            .fields = &.{},
+            .ext = empty,
+        } },
+    };
+
+    var empty_builder = PayloadKeyBuilder.init(std.testing.allocator, &names, &payloads);
+    defer empty_builder.deinit();
+    const empty_key = try empty_builder.keyForRoot(empty);
+
+    var record_builder = PayloadKeyBuilder.init(std.testing.allocator, &names, &payloads);
+    defer record_builder.deinit();
+    const record_key = try record_builder.keyForRoot(closed_empty_record);
+
+    try std.testing.expectEqualSlices(u8, &empty_key.bytes, &record_key.bytes);
+}
+
+test "source type keys normalize closed empty tag unions to empty tag union" {
+    var names = canonical.CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+
+    const empty: checked_artifact.CheckedTypeId = @enumFromInt(0);
+    const closed_empty_tag_union: checked_artifact.CheckedTypeId = @enumFromInt(1);
+    const payloads = [_]checked_artifact.CheckedTypePayload{
+        .empty_tag_union,
+        .{ .tag_union = .{
+            .tags = &.{},
+            .ext = empty,
+        } },
+    };
+
+    var empty_builder = PayloadKeyBuilder.init(std.testing.allocator, &names, &payloads);
+    defer empty_builder.deinit();
+    const empty_key = try empty_builder.keyForRoot(empty);
+
+    var tag_union_builder = PayloadKeyBuilder.init(std.testing.allocator, &names, &payloads);
+    defer tag_union_builder.deinit();
+    const tag_union_key = try tag_union_builder.keyForRoot(closed_empty_tag_union);
+
+    try std.testing.expectEqualSlices(u8, &empty_key.bytes, &tag_union_key.bytes);
 }
 
 test "concrete source type store declarations are referenced" {

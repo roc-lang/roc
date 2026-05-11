@@ -928,7 +928,37 @@ const PublishedCallableResult = struct {
 const PromotedCallablePublicationContext = struct {
     source_binding: ?checked_artifact.CheckedPatternId,
     base: PromotedCallableProvenanceBase,
+    path: ReificationPathKey = .{},
 };
+
+const ReificationPathKey = struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
+fn reificationPathWithU32(parent: ReificationPathKey, tag: []const u8, value: u32) ReificationPathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&parent.bytes);
+    hashPathTag(&hasher, tag);
+    hashPathU32(&hasher, value);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn reificationPathWithU64(parent: ReificationPathKey, tag: []const u8, value: u64) ReificationPathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&parent.bytes);
+    hashPathTag(&hasher, tag);
+    hashPathU64(&hasher, value);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn reificationPathWithNominal(parent: ReificationPathKey, tag: []const u8, nominal: canonical.NominalTypeKey) ReificationPathKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&parent.bytes);
+    hashPathTag(&hasher, tag);
+    hashPathU32(&hasher, @intFromEnum(nominal.module_name));
+    hashPathU32(&hasher, @intFromEnum(nominal.type_name));
+    return .{ .bytes = hasher.finalResult() };
+}
 
 const PromotedCallableProvenanceBase = union(enum) {
     local_callable_root: checked_artifact.ComptimeRootId,
@@ -960,22 +990,22 @@ fn promotedProcedureProvenance(
             .root = local.root,
             .instance = local.instance,
             .result_plan = result_plan,
-            .value_path = comptimeValuePathKeyForCallableResult(result_plan),
+            .value_path = comptimeValuePathKeyForCallableResult(context.path, result_plan),
         } },
         .callable_binding_instance => |instance| .{ .callable_binding_instance_result = .{
             .instance = instance,
             .result_plan = result_plan,
-            .callable_path = promotedCallablePathKeyForCallableResult(result_plan),
+            .callable_path = promotedCallablePathKeyForCallableResult(context.path, result_plan),
         } },
         .const_instance => |instance| .{ .const_instance_callable_leaf = .{
             .instance = instance,
             .result_plan = result_plan,
-            .value_path = comptimeValuePathKeyForCallableResult(result_plan),
+            .value_path = comptimeValuePathKeyForCallableResult(context.path, result_plan),
         } },
         .private_capture => |owner| .{ .private_capture_callable_leaf = .{
             .promoted_proc = owner.promoted_ref,
             .result_plan = result_plan,
-            .capture_path = privateCapturePathKeyForCallableResult(result_plan),
+            .capture_path = privateCapturePathKeyForCallableResult(context.path, result_plan),
         } },
     };
 }
@@ -4332,6 +4362,7 @@ const PrivateCaptureBuilder = struct {
     promotion_context: ?PromotedCallablePublicationContext,
     dependencies: ?*ConcreteDependencyCollector = null,
     next_private_const: u32 = 0,
+    path: ReificationPathKey = .{},
     active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.PrivateCaptureNodeId),
     erased_active: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, checked_artifact.ErasedCaptureExecutableMaterializationNodeId),
 
@@ -4426,6 +4457,18 @@ const PrivateCaptureBuilder = struct {
         return node_id;
     }
 
+    fn captureNodeAtPath(
+        self: *PrivateCaptureBuilder,
+        path: ReificationPathKey,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.PrivateCaptureNodeId {
+        const previous = self.path;
+        self.path = path;
+        defer self.path = previous;
+        return try self.captureNode(plan_id, physical);
+    }
+
     fn buildNode(
         self: *PrivateCaptureBuilder,
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
@@ -4444,7 +4487,11 @@ const PrivateCaptureBuilder = struct {
             .box => |payload| .{ .box = try self.box(payload, physical) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
-                .backing = try self.captureNode(nominal.backing, physical),
+                .backing = try self.captureNodeAtPath(
+                    reificationPathWithNominal(self.path, "nominal", nominal.nominal),
+                    nominal.backing,
+                    physical,
+                ),
             } },
             .recursive_ref => |target| .{ .recursive_ref = try self.captureNode(target, physical) },
         };
@@ -4456,6 +4503,18 @@ const PrivateCaptureBuilder = struct {
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
         return .{ .node = try self.executableNode(plan_id, physical) };
+    }
+
+    fn executablePlanAtPath(
+        self: *PrivateCaptureBuilder,
+        path: ReificationPathKey,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        physical: PhysicalValue,
+    ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationPlan {
+        const previous = self.path;
+        self.path = path;
+        defer self.path = previous;
+        return try self.executablePlan(plan_id, physical);
     }
 
     fn executableNode(
@@ -4495,7 +4554,11 @@ const PrivateCaptureBuilder = struct {
             .box => |payload| .{ .box = try self.executableBox(payload, physical) },
             .nominal => |nominal| .{ .nominal = .{
                 .nominal = nominal.nominal,
-                .backing = try self.executablePlan(nominal.backing, physical),
+                .backing = try self.executablePlanAtPath(
+                    reificationPathWithNominal(self.path, "nominal", nominal.nominal),
+                    nominal.backing,
+                    physical,
+                ),
             } },
             .recursive_ref => |target| .{ .recursive_ref = try self.executableNode(target, physical) },
         };
@@ -4555,6 +4618,7 @@ const PrivateCaptureBuilder = struct {
             .callable_set_descriptors = self.callable_set_descriptors,
             .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(self.allocator),
             .promotion_context = self.promotion_context,
+            .path = self.path,
             .dependencies = &leaf_dependencies,
         };
         defer reifier.deinit();
@@ -4627,6 +4691,7 @@ const PrivateCaptureBuilder = struct {
             .callable_set_descriptors = self.callable_set_descriptors,
             .active_schemas = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId).init(self.allocator),
             .promotion_context = self.promotion_context,
+            .path = self.path,
             .dependencies = &leaf_dependencies,
         };
         defer reifier.deinit();
@@ -4686,7 +4751,8 @@ const PrivateCaptureBuilder = struct {
         result_plan: checked_artifact.CallableResultPlanId,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.FiniteCallableLeafInstance {
-        const context = self.promotion_context orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires explicit promoted procedure provenance");
+        var context = self.promotion_context orelse compileTimeFinalizationInvariant("captured callable leaf promotion requires explicit promoted procedure provenance");
+        context.path = self.path;
         const published = switch (self.artifact.comptime_plans.callableResult(result_plan)) {
             .finite => blk: {
                 const selected = selectFiniteCallableResult(
@@ -4745,7 +4811,11 @@ const PrivateCaptureBuilder = struct {
         for (fields, 0..) |field, i| {
             out[i] = .{
                 .field = field.field,
-                .value = try self.captureNode(field.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i))),
+                .value = try self.captureNodeAtPath(
+                    reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
+                    field.value,
+                    structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)),
+                ),
             };
         }
         return out;
@@ -4766,7 +4836,11 @@ const PrivateCaptureBuilder = struct {
             if (item.index != @as(u32, @intCast(i))) {
                 compileTimeFinalizationInvariant("private tuple capture plan indices are not canonical");
             }
-            out[i] = try self.captureNode(item.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)));
+            out[i] = try self.captureNodeAtPath(
+                reificationPathWithU32(self.path, "tuple-elem", item.index),
+                item.value,
+                structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)),
+            );
         }
         return out;
     }
@@ -4788,10 +4862,12 @@ const PrivateCaptureBuilder = struct {
         const active = variants[discriminant];
         const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
         const payloads = try self.allocator.alloc(checked_artifact.PrivateCaptureTagPayload, active.payloads.len);
+        const variant_path = reificationPathWithU32(self.path, "tag-variant", @intFromEnum(active.tag));
         for (active.payloads, 0..) |payload, i| {
             payloads[i] = .{
                 .index = payload.index,
-                .value = try self.captureNode(
+                .value = try self.captureNodeAtPath(
+                    reificationPathWithU32(variant_path, "tag-payload", payload.index),
                     payload.value,
                     tagPayloadValue(self.layouts, active_payload_layout, aggregate.value, active.payloads.len, @intCast(i)),
                 ),
@@ -4827,10 +4903,14 @@ const PrivateCaptureBuilder = struct {
                 Value.zst
             else
                 Value{ .ptr = (roc_list.bytes orelse compileTimeFinalizationInvariant("non-empty private list capture had null bytes")) + i * elem_size };
-            out[i] = try self.captureNode(elem_plan, .{
-                .layout_idx = elem_layout_idx,
-                .value = elem_value,
-            });
+            out[i] = try self.captureNodeAtPath(
+                reificationPathWithU64(self.path, "list-elem", @intCast(i)),
+                elem_plan,
+                .{
+                    .layout_idx = elem_layout_idx,
+                    .value = elem_value,
+                },
+            );
         }
         return out;
     }
@@ -4849,7 +4929,11 @@ const PrivateCaptureBuilder = struct {
             .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
             else => compileTimeFinalizationInvariant("private Box(T) capture did not lower to box layout"),
         };
-        return try self.captureNode(payload_plan, payload);
+        return try self.captureNodeAtPath(
+            reificationPathWithU32(self.path, "box-payload", 0),
+            payload_plan,
+            payload,
+        );
     }
 
     fn executableRecord(
@@ -4866,7 +4950,11 @@ const PrivateCaptureBuilder = struct {
         for (fields, 0..) |field, i| {
             out[i] = .{
                 .field = field.field,
-                .value = try self.executablePlan(field.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i))),
+                .value = try self.executablePlanAtPath(
+                    reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
+                    field.value,
+                    structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)),
+                ),
             };
         }
         return out;
@@ -4887,7 +4975,11 @@ const PrivateCaptureBuilder = struct {
             if (item.index != @as(u32, @intCast(i))) {
                 compileTimeFinalizationInvariant("erased capture tuple materialization plan indices are not canonical");
             }
-            out[i] = try self.executablePlan(item.value, structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)));
+            out[i] = try self.executablePlanAtPath(
+                reificationPathWithU32(self.path, "tuple-elem", item.index),
+                item.value,
+                structFieldValue(self.layouts, layout, aggregate.value, @intCast(i)),
+            );
         }
         return out;
     }
@@ -4909,10 +5001,12 @@ const PrivateCaptureBuilder = struct {
         const active = variants[discriminant];
         const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
         const payloads = try self.allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationTagPayload, active.payloads.len);
+        const variant_path = reificationPathWithU32(self.path, "tag-variant", @intFromEnum(active.tag));
         for (active.payloads, 0..) |payload, i| {
             payloads[i] = .{
                 .index = payload.index,
-                .value = try self.executablePlan(
+                .value = try self.executablePlanAtPath(
+                    reificationPathWithU32(variant_path, "tag-payload", payload.index),
                     payload.value,
                     tagPayloadValue(self.layouts, active_payload_layout, aggregate.value, active.payloads.len, @intCast(i)),
                 ),
@@ -4948,10 +5042,14 @@ const PrivateCaptureBuilder = struct {
                 Value.zst
             else
                 Value{ .ptr = (roc_list.bytes orelse compileTimeFinalizationInvariant("non-empty erased capture list had null bytes")) + i * elem_size };
-            out[i] = try self.executablePlan(elem_plan, .{
-                .layout_idx = elem_layout_idx,
-                .value = elem_value,
-            });
+            out[i] = try self.executablePlanAtPath(
+                reificationPathWithU64(self.path, "list-elem", @intCast(i)),
+                elem_plan,
+                .{
+                    .layout_idx = elem_layout_idx,
+                    .value = elem_value,
+                },
+            );
         }
         return out;
     }
@@ -4970,7 +5068,11 @@ const PrivateCaptureBuilder = struct {
             .box_of_zst => PhysicalValue{ .layout_idx = .zst, .value = Value.zst },
             else => compileTimeFinalizationInvariant("erased capture Box(T) materialization did not lower to box layout"),
         };
-        return try self.executablePlan(payload_plan, payload);
+        return try self.executablePlanAtPath(
+            reificationPathWithU32(self.path, "box-payload", 0),
+            payload_plan,
+            payload,
+        );
     }
 
     fn logicalAggregateValue(
@@ -5117,28 +5219,34 @@ fn persistedCallableSetMember(
 }
 
 fn comptimeValuePathKeyForCallableResult(
+    path: ReificationPathKey,
     result_plan: checked_artifact.CallableResultPlanId,
 ) checked_artifact.ComptimeValuePathKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hashPathTag(&hasher, "comptime-value-callable-result");
+    hasher.update(&path.bytes);
     hashPathU32(&hasher, @intFromEnum(result_plan));
     return .{ .bytes = hasher.finalResult() };
 }
 
 fn promotedCallablePathKeyForCallableResult(
+    path: ReificationPathKey,
     result_plan: checked_artifact.CallableResultPlanId,
 ) checked_artifact.PromotedCallablePathKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hashPathTag(&hasher, "promoted-callable-result");
+    hasher.update(&path.bytes);
     hashPathU32(&hasher, @intFromEnum(result_plan));
     return .{ .bytes = hasher.finalResult() };
 }
 
 fn privateCapturePathKeyForCallableResult(
+    path: ReificationPathKey,
     result_plan: checked_artifact.CallableResultPlanId,
 ) checked_artifact.PrivateCapturePathKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hashPathTag(&hasher, "private-capture-callable-result");
+    hasher.update(&path.bytes);
     hashPathU32(&hasher, @intFromEnum(result_plan));
     return .{ .bytes = hasher.finalResult() };
 }
@@ -5155,6 +5263,21 @@ fn hashPathU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
+    };
+    hasher.update(&bytes);
+}
+
+fn hashPathU64(hasher: *std.crypto.hash.sha2.Sha256, value: u64) void {
+    var bytes: [8]u8 = undefined;
+    bytes = .{
+        @as(u8, @truncate(value)),
+        @as(u8, @truncate(value >> 8)),
+        @as(u8, @truncate(value >> 16)),
+        @as(u8, @truncate(value >> 24)),
+        @as(u8, @truncate(value >> 32)),
+        @as(u8, @truncate(value >> 40)),
+        @as(u8, @truncate(value >> 48)),
+        @as(u8, @truncate(value >> 56)),
     };
     hasher.update(&bytes);
 }
@@ -5213,10 +5336,24 @@ const ComptimeReifier = struct {
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     active_schemas: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId),
     promotion_context: ?PromotedCallablePublicationContext = null,
+    path: ReificationPathKey = .{},
     dependencies: ?*ConcreteDependencyCollector = null,
 
     fn deinit(self: *ComptimeReifier) void {
         self.active_schemas.deinit();
+    }
+
+    fn reifyPlanAtPath(
+        self: *ComptimeReifier,
+        path: ReificationPathKey,
+        plan_id: checked_artifact.ConstGraphReificationPlanId,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!ReifiedValue {
+        const previous = self.path;
+        self.path = path;
+        defer self.path = previous;
+        return try self.reifyPlan(plan_id, layout_idx, value);
     }
 
     fn reifyPlan(
@@ -5449,7 +5586,8 @@ const ComptimeReifier = struct {
 
         const artifact = self.artifact orelse reifierInvariant("captured callable leaf reification requires mutable checked artifact");
         const lowered = self.lowered orelse reifierInvariant("captured callable leaf reification requires lowered LIR context");
-        const context = self.promotion_context orelse reifierInvariant("captured callable leaf reification requires explicit promoted procedure provenance");
+        var context = self.promotion_context orelse reifierInvariant("captured callable leaf reification requires explicit promoted procedure provenance");
+        context.path = self.path;
         const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
             reifierInvariant("captured callable leaf source function type was not published in checked type store");
         };
@@ -5473,7 +5611,12 @@ const ComptimeReifier = struct {
         value: Value,
         comptime wrapper: enum { alias, nominal },
     ) Allocator.Error!ReifiedValue {
-        const backing = try self.reifyPlan(backing_plan, layout_idx, value);
+        const backing = try self.reifyPlanAtPath(
+            reificationPathWithNominal(self.path, @tagName(wrapper), type_name),
+            backing_plan,
+            layout_idx,
+            value,
+        );
         const schema = switch (wrapper) {
             .alias => try self.values.addSchema(.{ .alias = .{
                 .type_name = type_name,
@@ -5520,7 +5663,12 @@ const ComptimeReifier = struct {
                 Value.zst
             else
                 Value{ .ptr = (roc_list.bytes orelse reifierInvariant("non-empty list had null bytes pointer")) + i * elem_size };
-            items[i] = (try self.reifyPlan(elem_plan, elem_layout_idx, elem_value)).value;
+            items[i] = (try self.reifyPlanAtPath(
+                reificationPathWithU64(self.path, "list-elem", @intCast(i)),
+                elem_plan,
+                elem_layout_idx,
+                elem_value,
+            )).value;
         }
 
         return .{
@@ -5542,10 +5690,20 @@ const ComptimeReifier = struct {
             else => reifierInvariant("Box(T) const graph plan did not lower to box layout"),
         };
         const child = if (layout.tag == .box_of_zst)
-            try self.reifyPlan(payload_plan, elem_layout_idx, Value.zst)
+            try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "box-payload", 0),
+                payload_plan,
+                elem_layout_idx,
+                Value.zst,
+            )
         else blk: {
             const payload = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer");
-            break :blk try self.reifyPlan(payload_plan, elem_layout_idx, .{ .ptr = payload });
+            break :blk try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "box-payload", 0),
+                payload_plan,
+                elem_layout_idx,
+                .{ .ptr = payload },
+            );
         };
         return .{
             .schema = try self.values.addSchema(.{ .box = child.schema }),
@@ -5576,7 +5734,12 @@ const ComptimeReifier = struct {
             const field_layout = self.layouts.getLayout(field_layout_idx);
             const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
             const field_value = if (self.layouts.layoutSize(field_layout) == 0) Value.zst else physical.value.offset(offset);
-            const reified = try self.reifyPlan(field.value, field_layout_idx, field_value);
+            const reified = try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
+                field.value,
+                field_layout_idx,
+                field_value,
+            );
             schema_fields[i] = .{ .name = field.field, .schema = reified.schema };
             value_fields[i] = reified.value;
         }
@@ -5597,7 +5760,12 @@ const ComptimeReifier = struct {
         errdefer self.allocator.free(value_fields);
 
         for (fields, 0..) |field, i| {
-            const reified = try self.reifyPlan(field.value, .zst, Value.zst);
+            const reified = try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
+                field.value,
+                .zst,
+                Value.zst,
+            );
             schema_fields[i] = .{ .name = field.field, .schema = reified.schema };
             value_fields[i] = reified.value;
         }
@@ -5614,7 +5782,12 @@ const ComptimeReifier = struct {
         layout_idx: layout_mod.Idx,
         value: Value,
     ) Allocator.Error!ReifiedValue {
-        const reified = try self.reifyPlan(field.value, layout_idx, value);
+        const reified = try self.reifyPlanAtPath(
+            reificationPathWithU32(self.path, "record-field", @intFromEnum(field.field)),
+            field.value,
+            layout_idx,
+            value,
+        );
 
         const schema_fields = try self.allocator.alloc(checked_artifact.ComptimeFieldSchema, 1);
         errdefer self.allocator.free(schema_fields);
@@ -5669,7 +5842,12 @@ const ComptimeReifier = struct {
             const item_layout = self.layouts.getLayout(item_layout_idx);
             const offset = self.layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(i));
             const item_value = if (self.layouts.layoutSize(item_layout) == 0) Value.zst else physical.value.offset(offset);
-            const reified = try self.reifyPlan(item.value, item_layout_idx, item_value);
+            const reified = try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "tuple-elem", item.index),
+                item.value,
+                item_layout_idx,
+                item_value,
+            );
             schemas[i] = reified.schema;
             values[i] = reified.value;
         }
@@ -5690,7 +5868,12 @@ const ComptimeReifier = struct {
         errdefer self.allocator.free(values);
 
         for (items, 0..) |item, i| {
-            const reified = try self.reifyPlan(item.value, .zst, Value.zst);
+            const reified = try self.reifyPlanAtPath(
+                reificationPathWithU32(self.path, "tuple-elem", item.index),
+                item.value,
+                .zst,
+                Value.zst,
+            );
             schemas[i] = reified.schema;
             values[i] = reified.value;
         }
@@ -5707,7 +5890,12 @@ const ComptimeReifier = struct {
         layout_idx: layout_mod.Idx,
         value: Value,
     ) Allocator.Error!ReifiedValue {
-        const reified = try self.reifyPlan(item.value, layout_idx, value);
+        const reified = try self.reifyPlanAtPath(
+            reificationPathWithU32(self.path, "tuple-elem", item.index),
+            item.value,
+            layout_idx,
+            value,
+        );
 
         const schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, 1);
         errdefer self.allocator.free(schemas);
@@ -5769,12 +5957,18 @@ const ComptimeReifier = struct {
         const active_payload_layout = info.variants.get(@intCast(discriminant)).payload_layout;
         const payload_values = try self.allocator.alloc(checked_artifact.ComptimeValueId, active_variant.payloads.len);
         errdefer self.allocator.free(payload_values);
+        const variant_path = reificationPathWithU32(self.path, "tag-variant", @intFromEnum(active_variant.tag));
         for (active_variant.payloads, 0..) |payload_plan, payload_i| {
             const arg_layout_idx = payloadLayoutForTagArg(self.layouts, active_payload_layout, active_variant.payloads.len, @intCast(payload_i));
             const arg_layout = self.layouts.getLayout(arg_layout_idx);
             const offset = payloadOffsetForTagArg(self.layouts, active_payload_layout, active_variant.payloads.len, @intCast(payload_i));
             const arg_value = if (self.layouts.layoutSize(arg_layout) == 0) Value.zst else physical.value.offset(offset);
-            payload_values[payload_i] = (try self.reifyPlan(payload_plan.value, arg_layout_idx, arg_value)).value;
+            payload_values[payload_i] = (try self.reifyPlanAtPath(
+                reificationPathWithU32(variant_path, "tag-payload", payload_plan.index),
+                payload_plan.value,
+                arg_layout_idx,
+                arg_value,
+            )).value;
         }
 
         return .{
@@ -5805,8 +5999,14 @@ const ComptimeReifier = struct {
         {
             const payload_schemas = try self.allocator.alloc(checked_artifact.ComptimeSchemaId, active_variant.payloads.len);
             errdefer self.allocator.free(payload_schemas);
+            const variant_path = reificationPathWithU32(self.path, "tag-variant", @intFromEnum(active_variant.tag));
             for (active_variant.payloads, 0..) |payload_plan, payload_i| {
-                const reified = try self.reifyPlan(payload_plan.value, .zst, Value.zst);
+                const reified = try self.reifyPlanAtPath(
+                    reificationPathWithU32(variant_path, "tag-payload", payload_plan.index),
+                    payload_plan.value,
+                    .zst,
+                    Value.zst,
+                );
                 payload_schemas[payload_i] = reified.schema;
                 payload_values[payload_i] = reified.value;
             }

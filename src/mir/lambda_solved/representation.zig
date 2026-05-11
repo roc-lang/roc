@@ -1578,7 +1578,7 @@ pub const ValueInfo = struct {
     const_backing: ?ConstBackedValueInfo = null,
     nominal_backing_consumer_use: ?ConsumerUsePlanId = null,
     source_match_branch: ?SourceMatchBranchRef = null,
-    pending_local_root_origin: bool = false,
+    pending_comptime_dependency_origin: bool = false,
 };
 
 /// Public `BindingInfo` declaration.
@@ -1610,7 +1610,7 @@ pub const CallSiteDispatch = union(enum) {
     call_proc: ProcRepresentationInstanceId,
     call_value_finite: CallValueFiniteDispatchPlanId,
     call_value_erased: ErasedFnSigKey,
-    pending_local_root_call,
+    pending_comptime_dependency_call,
 };
 
 /// Public `CallValueFiniteDispatchBranch` declaration.

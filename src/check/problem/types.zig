@@ -39,6 +39,7 @@ pub const Problem = union(enum) {
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
     platform_alias_not_found: PlatformAliasNotFound,
@@ -69,6 +70,11 @@ pub const PlatformDefNotFound = struct {
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// A standalone type annotation without an implementation cannot be used as a runtime value.
+pub const AnnotationOnlyValue = struct {
     region: base.Region,
 };
 

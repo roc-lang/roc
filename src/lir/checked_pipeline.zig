@@ -1691,7 +1691,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                     .provenance = provenance,
                 } });
             },
-            .pending_local_root_call => {},
+            .pending_comptime_dependency_call => {},
         }
     }
 
@@ -3748,7 +3748,7 @@ const CaptureSlotPlanBuilder = struct {
     ) Allocator.Error!checked_artifact.CaptureSlotReificationPlan {
         const payload = self.executablePayloadForKey(exec_ty);
         return switch (payload) {
-            .callable_set => |callable_set| .{ .callable_leaf = try self.finiteCallableResultPlanForExecutableKey(source_ty, source_ty_payload, callable_set.key) },
+            .callable_set => |callable_set| .{ .callable_leaf = try self.finiteCallableResultPlanForExecutableKey(source_ty_payload, callable_set.key) },
             .vacant_callable_slot => .{ .callable_schema = source_ty },
             .erased_fn => checkedPipelineInvariant("capture slot executable schema reached erased function without explicit value metadata"),
             .recursive_ref => |ref| try self.callablePlanForExecutablePayloadRef(source_ty, source_ty_payload, ref),
@@ -3768,10 +3768,10 @@ const CaptureSlotPlanBuilder = struct {
 
     fn finiteCallableResultPlanForExecutableKey(
         self: *CaptureSlotPlanBuilder,
-        source_fn_ty: canonical.CanonicalTypeKey,
         source_fn_ty_payload: checked_artifact.CheckedTypeId,
         key: repr.CanonicalCallableSetKey,
     ) Allocator.Error!checked_artifact.CallableResultPlanId {
+        const source_fn_ty = self.checkedRootKey(source_fn_ty_payload);
         const descriptor = self.value_context.representation_store.callableSetDescriptor(key) orelse {
             checkedPipelineInvariant("finite executable callable result has no descriptor");
         };
@@ -3887,6 +3887,17 @@ const CaptureSlotPlanBuilder = struct {
             checkedPipelineInvariant("callable result boundary source type payload key disagrees with published callable type");
         }
         return payload;
+    }
+
+    fn checkedRootKey(
+        self: *CaptureSlotPlanBuilder,
+        payload: checked_artifact.CheckedTypeId,
+    ) canonical.CanonicalTypeKey {
+        const index = @intFromEnum(payload);
+        if (index >= self.artifact.checked_types.roots.len) {
+            checkedPipelineInvariant("callable result boundary source type payload referenced a missing checked root");
+        }
+        return self.artifact.checked_types.roots[index].key;
     }
 
     fn checkedPayloadForArtifactSource(
@@ -4906,15 +4917,15 @@ const ConstGraphPlanBuilder = struct {
             .nominal => |nominal| try self.nominalPlan(checked_ty, nominal, value_context, value_info, expected_exec_key),
             .function => if (value_info) |info|
                 .{ .callable_leaf = try self.callableLeafPlan(value_context, info) }
-            else if (expected_exec_key) |key|
-                try self.callablePlanForExecutableKey(
-                    self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key,
+            else if (expected_exec_key) |key| blk: {
+                const source_key = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key;
+                break :blk try self.callablePlanForExecutableKey(
+                    source_key,
                     checked_ty,
                     value_context,
                     key,
-                )
-            else
-                .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
+                );
+            } else .{ .callable_schema = self.artifact.checked_types.roots[@intFromEnum(checked_ty)].key },
             .flex, .rigid => checkedPipelineInvariant("compile-time constant planning reached unresolved type variable"),
             .pending => checkedPipelineInvariant("compile-time constant planning reached pending checked type"),
         };
@@ -4942,7 +4953,7 @@ const ConstGraphPlanBuilder = struct {
                     .active = std.AutoHashMap(CapturePlanKey, checked_artifact.CaptureSlotReificationPlanId).init(self.allocator),
                 };
                 defer capture_builder.deinit();
-                break :blk .{ .callable_leaf = .{ .finite = try capture_builder.finiteCallableResultPlanForExecutableKey(source_ty, source_ty_payload, callable_set.key) } };
+                break :blk .{ .callable_leaf = .{ .finite = try capture_builder.finiteCallableResultPlanForExecutableKey(source_ty_payload, callable_set.key) } };
             },
             .vacant_callable_slot => .{ .callable_schema = source_ty },
             .erased_fn => checkedPipelineInvariant("const graph executable schema reached erased function without explicit value metadata"),

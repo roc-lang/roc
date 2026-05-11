@@ -9,6 +9,7 @@ const symbol_mod = @import("symbol");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
 const LambdaSolved = @import("../lambda_solved/mod.zig");
 const MonoRow = @import("../mono_row/mod.zig");
+const ArtifactNames = @import("../artifact_names.zig");
 const debug = @import("../debug_verify.zig");
 const ids = @import("../ids.zig");
 
@@ -4680,7 +4681,7 @@ fn lowerComptimeCallableLeafExpr(
     leaf: checked_artifact.CallableLeafInstance,
 ) Allocator.Error!Ast.ExprId {
     return switch (leaf) {
-        .finite => |finite| try lowerComptimeFiniteCallableLeafExpr(program, expected_ty, finite),
+        .finite => |finite| try lowerComptimeFiniteCallableLeafExpr(program, materialization, expected_ty, finite),
         .erased_boxed => |erased| try lowerMaterializedErasedCallableValue(
             allocator,
             program,
@@ -4699,6 +4700,7 @@ fn lowerComptimeCallableLeafExpr(
 
 fn lowerComptimeFiniteCallableLeafExpr(
     program: *Program,
+    materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     finite: checked_artifact.FiniteCallableLeafInstance,
 ) Allocator.Error!Ast.ExprId {
@@ -4706,9 +4708,9 @@ fn lowerComptimeFiniteCallableLeafExpr(
         .callable_set => |callable_set| callable_set,
         else => executableInvariant("executable compile-time finite callable leaf expected callable-set type"),
     };
-    const member = findCallableSetMemberForProc(program, callable_set.key, finite.proc_value) orelse {
+    const proc_value = try materializationProcedureCallableRef(program, materialization, finite.proc_value);
+    const member = findCallableSetMemberForProc(program, callable_set.key, proc_value) orelse
         executableInvariant("executable compile-time finite callable leaf missing callable-set member");
-    };
     if (member.capture_slots.len != 0) {
         executableInvariant("executable compile-time finite callable leaf must be a closed procedure value");
     }
@@ -4738,6 +4740,9 @@ fn findCallableSetMemberForProc(
     const descriptor = programCallableSetDescriptor(program, key) orelse return null;
     for (descriptor.members) |*member| {
         if (canonical.procedureCallableRefEql(member.proc_value, proc_value)) return member;
+        if (member.published_proc_value) |published| {
+            if (canonical.procedureCallableRefEql(published, proc_value)) return member;
+        }
     }
     return null;
 }
@@ -5116,6 +5121,50 @@ fn materializationNominalTypeKey(
         .module_name = try program.canonical_names.internModuleName(sourceModuleNameText(materialization.canonical_names, nominal.module_name)),
         .type_name = try program.canonical_names.internTypeName(sourceTypeNameText(materialization.canonical_names, nominal.type_name)),
     };
+}
+
+fn materializationNameResolver(
+    program: *Program,
+    materialization: MaterializationStores,
+) ArtifactNames.ArtifactNameResolver {
+    const root = program.artifact_views.root orelse {
+        executableInvariant("executable materialization name remapping requires a root artifact view");
+    };
+    if (!artifactKeyEql(root.artifact.key, materialization.owner)) {
+        var found = false;
+        for (root.relation_artifacts) |related| {
+            if (artifactKeyEql(related.key, materialization.owner)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (program.artifact_views.imports) |imported| {
+                if (artifactKeyEql(imported.key, materialization.owner)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            executableInvariant("executable materialization name remapping referenced an unavailable artifact");
+        }
+    }
+    return ArtifactNames.ArtifactNameResolver.init(
+        &program.canonical_names,
+        root.artifact,
+        program.artifact_views.imports,
+        root.relation_artifacts,
+    );
+}
+
+fn materializationProcedureCallableRef(
+    program: *Program,
+    materialization: MaterializationStores,
+    ref: canonical.ProcedureCallableRef,
+) Allocator.Error!canonical.ProcedureCallableRef {
+    var resolver = materializationNameResolver(program, materialization);
+    return try resolver.procedureCallableRef(ref);
 }
 
 fn sourceModuleNameText(names: *const canonical.CanonicalNameStore, id: canonical.ModuleNameId) []const u8 {
@@ -6584,6 +6633,12 @@ const BodyBuilder = struct {
                 );
             },
             .access => |access| blk: {
+                if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
+                    break :blk try self.lowerConstBackedValueExpr(
+                        try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        backing,
+                    );
+                }
                 const record_ty = try self.projectionSourceType(access.projection_info, expr.value_info, .{ .record_field = access.field });
                 const endpoint_field = switch (self.projectionEndpointKind(access.projection_info, expr.value_info, .{ .record_field = access.field })) {
                     .record_field => |field| field,
@@ -6660,6 +6715,12 @@ const BodyBuilder = struct {
                 );
             },
             .tag_payload => |payload| blk: {
+                if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
+                    break :blk try self.lowerConstBackedValueExpr(
+                        try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        backing,
+                    );
+                }
                 const source_ty = try self.projectionSourceType(payload.projection_info, expr.value_info, .{ .tag_payload = payload.payload });
                 const endpoint_payload = switch (self.projectionEndpointKind(payload.projection_info, expr.value_info, .{ .tag_payload = payload.payload })) {
                     .tag_payload => |endpoint| endpoint,
@@ -6680,6 +6741,12 @@ const BodyBuilder = struct {
                 break :blk try self.finishProjectionExpr(payload.projection_info, expr.value_info, projected_ty, raw_value, raw_expr);
             },
             .tuple_access => |access| blk: {
+                if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
+                    break :blk try self.lowerConstBackedValueExpr(
+                        try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        backing,
+                    );
+                }
                 const tuple_ty = try self.projectionSourceType(access.projection_info, expr.value_info, .{ .tuple_elem = access.elem_index });
                 const endpoint_index = switch (self.projectionEndpointKind(access.projection_info, expr.value_info, .{ .tuple_elem = access.elem_index })) {
                     .tuple_elem => |index| index,
@@ -6803,12 +6870,32 @@ const BodyBuilder = struct {
         return lowered;
     }
 
+    fn lowerConstBackedValueExpr(
+        self: *BodyBuilder,
+        expected_ty: Type.TypeId,
+        backing: repr.ConstBackedValueInfo,
+    ) Allocator.Error!Ast.ExprId {
+        const resolved = resolveConstInstanceForExecutable(self.program, backing.const_instance);
+        return try lowerComptimeValueExpr(
+            self.allocator,
+            self.program,
+            resolved.materialization,
+            expected_ty,
+            backing.schema,
+            backing.value,
+            true,
+        );
+    }
+
     fn lowerExprAtType(
         self: *BodyBuilder,
         expr_id: LambdaSolved.Ast.ExprId,
         expected_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const expr = self.input.exprs.items[@intFromEnum(expr_id)];
+        if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
+            return try self.lowerConstBackedValueExpr(expected_ty, backing);
+        }
         return switch (expr.data) {
             .record => |record| blk: {
                 const fields = try self.lowerRecordFieldsForType(expr.value_info, record.eval_order, record.assembly_order, expected_ty);
@@ -9541,7 +9628,7 @@ const BodyBuilder = struct {
             .call_proc => |target| target,
             .call_value_finite,
             .call_value_erased,
-            .pending_local_root_call,
+            .pending_comptime_dependency_call,
             => executableInvariant("executable call_proc reached non-procedure call-site dispatch"),
         };
         const target_proc = self.proc_exec_map.get(target_instance_id) orelse executableInvariant("executable call_proc target was not reserved before body lowering");
@@ -10020,7 +10107,7 @@ const BodyBuilder = struct {
             .call_value_finite => |plan| self.value_store.callValueFiniteDispatchPlan(plan),
             .call_value_erased => |sig_key| return try self.lowerCallValueErased(source_ty, call, func, call.call_site, call_site, sig_key),
             .call_proc => executableInvariant("executable call_value reached procedure call-site dispatch"),
-            .pending_local_root_call => executableInvariant("executable call_value reached summary-only pending local root dispatch"),
+            .pending_comptime_dependency_call => executableInvariant("executable call_value reached summary-only pending compile-time dependency dispatch"),
         };
         const callable_set_key = finite_dispatch.callable_set_key;
         const finite_branches = self.value_store.sliceCallValueFiniteDispatchBranches(finite_dispatch.branches);

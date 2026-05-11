@@ -56,6 +56,7 @@ pub const NominalTypeResolutionFailed = types.NominalTypeResolutionFailed;
 pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;

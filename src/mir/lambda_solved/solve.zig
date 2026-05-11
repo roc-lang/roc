@@ -1389,6 +1389,7 @@ pub fn run(
     _ = try appendCrossProcedureRepresentationEdges(&program, proc_build_records.items, true);
     while (true) {
         try solveRepresentationSessions(&program, proc_build_records.items);
+        try propagatePendingComptimeDependencyOrigins(&program, proc_build_records.items);
         try assignCallableEmissionPlans(&program, proc_build_records.items, artifact_views, .allow_pending_call_values);
         const proc_value_requirements_changed = try appendProcValueOwnerErasureRequirements(&program, proc_build_records.items);
         const call_boundary_requirements_changed = try appendCallBoundaryErasureRequirements(&program, proc_build_records.items);
@@ -1415,6 +1416,7 @@ pub fn run(
     while (true) {
         try solveRepresentationSessions(&program, proc_build_records.items);
         try finalizeSourceMatchBranchReachability(&program, proc_build_records.items);
+        try propagatePendingComptimeDependencyOrigins(&program, proc_build_records.items);
         try assignCallableEmissionPlans(&program, proc_build_records.items, artifact_views, .strict);
         const proc_value_requirements_changed = try appendProcValueOwnerErasureRequirements(&program, proc_build_records.items);
         const call_boundary_requirements_changed = try appendCallBoundaryErasureRequirements(&program, proc_build_records.items);
@@ -1502,7 +1504,7 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
                 lambdaInvariant("lambda-solved sealed program contains a value without a solved representation group");
             }
             if (!value_store.valueSourceMatchBranchReachable(value)) continue;
-            if (value.pending_local_root_origin) continue;
+            if (value.pending_comptime_dependency_origin) continue;
             if (require_exec_ty and value.exec_ty == null) {
                 lambdaInvariant("lambda-solved sealed program contains a value without a published executable type endpoint");
             }
@@ -1732,7 +1734,7 @@ const SessionExecutablePayloadPublisher = struct {
             if (!instance.materialized) continue;
             for (value_store.values.items, 0..) |value_info, raw_value| {
                 if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
-                if (value_info.pending_local_root_origin) continue;
+                if (value_info.pending_comptime_dependency_origin) continue;
                 if (value_info.exec_ty != null) continue;
                 const value: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
                 const endpoint = try repr.sessionExecutableTypeEndpointForValue(
@@ -2336,7 +2338,7 @@ fn appendCallBoundaryErasureRequirements(
                         sig_key,
                     )) or changed;
                 },
-                .pending_local_root_call,
+                .pending_comptime_dependency_call,
                 => {},
             }
         }
@@ -3426,7 +3428,7 @@ const CrossProcedureRepresentationLinker = struct {
                     changed = true;
                 },
                 .call_value_erased => call_site.representation_edges_resolved = true,
-                .pending_local_root_call => call_site.representation_edges_resolved = true,
+                .pending_comptime_dependency_call => call_site.representation_edges_resolved = true,
             }
         }
         return changed;
@@ -3915,6 +3917,245 @@ const RepresentationGroupSolver = struct {
         const group = self.session.representation_store.reserveGroup();
         try self.groups.put(representative, group);
         return group;
+    }
+};
+
+fn propagatePendingComptimeDependencyOrigins(
+    program: *Program,
+    records: []const ProcBuildRecord,
+) Allocator.Error!void {
+    for (program.solve_sessions.items, 0..) |*session, raw_session| {
+        if (session.representation_store.root_groups.len == 0) continue;
+        {
+            var propagator = PendingComptimeDependencyPropagator{
+                .allocator = program.allocator,
+                .program = program,
+                .records = records,
+                .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+                .session = session,
+                .pending_groups = &.{},
+            };
+            defer propagator.deinit();
+            try propagator.propagate();
+        }
+    }
+}
+
+const PendingComptimeDependencyPropagator = struct {
+    allocator: Allocator,
+    program: *Program,
+    records: []const ProcBuildRecord,
+    session_id: repr.RepresentationSolveSessionId,
+    session: *repr.RepresentationSolveSession,
+    pending_groups: []bool,
+
+    fn deinit(self: *PendingComptimeDependencyPropagator) void {
+        if (self.pending_groups.len > 0) self.allocator.free(self.pending_groups);
+    }
+
+    fn propagate(self: *PendingComptimeDependencyPropagator) Allocator.Error!void {
+        const group_count: usize = @intCast(self.session.representation_store.groups_len);
+        self.pending_groups = if (group_count == 0) &.{} else try self.allocator.alloc(bool, group_count);
+        @memset(self.pending_groups, false);
+
+        var changed = self.seedGroupsFromPendingValues();
+        while (changed) {
+            changed = false;
+            if (self.propagateAcrossRepresentationEdges()) changed = true;
+            if (try self.propagateAcrossPendingCallValues()) changed = true;
+        }
+        self.publishPendingValuesFromGroups();
+    }
+
+    fn seedGroupsFromPendingValues(self: *PendingComptimeDependencyPropagator) bool {
+        var changed = false;
+        for (self.session.members) |instance_id| {
+            const record = self.recordForInstance(instance_id);
+            if (!record.materialized) continue;
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items) |value| {
+                if (!value.pending_comptime_dependency_origin) continue;
+                const group = value.solved_group orelse {
+                    lambdaInvariant("lambda-solved pending compile-time dependency value had no solved group");
+                };
+                changed = self.markGroup(group) or changed;
+            }
+        }
+        return changed;
+    }
+
+    fn propagateAcrossRepresentationEdges(self: *PendingComptimeDependencyPropagator) bool {
+        var changed = false;
+        for (self.session.representation_store.representation_edges.items) |edge| {
+            if (!self.edgePropagatesPendingComptimeDependency(edge)) continue;
+            const from = self.endpointRootInSession(edge.from) orelse continue;
+            const to = self.endpointRootInSession(edge.to) orelse continue;
+            const from_group = self.session.representation_store.groupForRoot(from);
+            if (!self.groupPending(from_group)) continue;
+            const to_group = self.session.representation_store.groupForRoot(to);
+            changed = self.markGroup(to_group) or changed;
+        }
+        return changed;
+    }
+
+    fn propagateAcrossPendingCallValues(self: *PendingComptimeDependencyPropagator) Allocator.Error!bool {
+        var changed = false;
+        for (self.session.members) |instance_id| {
+            const record = self.recordForInstance(instance_id);
+            if (!record.materialized) continue;
+            const value_store = self.mutableValueStoreFor(record);
+            for (value_store.call_sites.items) |*call_site| {
+                if (!value_store.callSiteSourceMatchBranchReachable(call_site.*)) continue;
+                const callee = call_site.callee orelse continue;
+                const callee_info = value_store.values.items[@intFromEnum(callee)];
+                const callee_group = callee_info.solved_group orelse {
+                    lambdaInvariant("lambda-solved call_value callee had no solved group");
+                };
+                if (!self.groupPending(callee_group)) continue;
+
+                if (call_site.dispatch) |dispatch| {
+                    switch (dispatch) {
+                        .pending_comptime_dependency_call => {},
+                        .call_proc,
+                        .call_value_finite,
+                        .call_value_erased,
+                        => lambdaInvariant("lambda-solved pending compile-time dependency call_value already had executable dispatch"),
+                    }
+                }
+                call_site.dispatch = .pending_comptime_dependency_call;
+
+                const result_info = value_store.values.items[@intFromEnum(call_site.result)];
+                const result_group = result_info.solved_group orelse {
+                    lambdaInvariant("lambda-solved call_value result had no solved group");
+                };
+                changed = self.markGroup(result_group) or changed;
+            }
+        }
+        return changed;
+    }
+
+    fn publishPendingValuesFromGroups(self: *PendingComptimeDependencyPropagator) void {
+        for (self.session.members) |instance_id| {
+            const record = self.recordForInstance(instance_id);
+            if (!record.materialized) continue;
+            const value_store = self.mutableValueStoreFor(record);
+            for (value_store.values.items) |*value| {
+                const group = value.solved_group orelse {
+                    lambdaInvariant("lambda-solved value had no solved group while publishing pending compile-time dependency origins");
+                };
+                if (self.groupPending(group)) {
+                    value.pending_comptime_dependency_origin = true;
+                }
+            }
+        }
+    }
+
+    fn groupPending(self: *const PendingComptimeDependencyPropagator, group: repr.RepresentationGroupId) bool {
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= self.pending_groups.len) {
+            lambdaInvariant("lambda-solved pending compile-time dependency group was out of range");
+        }
+        return self.pending_groups[group_index];
+    }
+
+    fn markGroup(self: *PendingComptimeDependencyPropagator, group: repr.RepresentationGroupId) bool {
+        const group_index: usize = @intFromEnum(group);
+        if (group_index >= self.pending_groups.len) {
+            lambdaInvariant("lambda-solved pending compile-time dependency group was out of range");
+        }
+        if (self.pending_groups[group_index]) return false;
+        self.pending_groups[group_index] = true;
+        return true;
+    }
+
+    fn endpointRootInSession(
+        self: *PendingComptimeDependencyPropagator,
+        endpoint: repr.RepresentationEndpoint,
+    ) ?repr.RepRootId {
+        return switch (endpoint) {
+            .local => |root| root,
+            .procedure_public => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
+            .procedure_function_root => |public| blk: {
+                const record = self.recordForInstance(public.instance);
+                if (record.solve_session != self.session_id) break :blk null;
+                break :blk public.rep_root;
+            },
+        };
+    }
+
+    fn edgePropagatesPendingComptimeDependency(
+        self: *PendingComptimeDependencyPropagator,
+        edge: repr.RepresentationEdge,
+    ) bool {
+        return switch (edge.kind) {
+            .value_alias,
+            .value_move,
+            .record_field,
+            .tuple_elem,
+            .tag_payload,
+            .list_elem,
+            .box_payload,
+            .nominal_backing,
+            .branch_join,
+            .loop_phi,
+            .mutable_version,
+            => true,
+            .function_arg,
+            .function_return,
+            => !self.edgeTouchesFunctionShapeRoot(edge),
+            .function_callable => false,
+        };
+    }
+
+    fn edgeTouchesFunctionShapeRoot(
+        self: *PendingComptimeDependencyPropagator,
+        edge: repr.RepresentationEdge,
+    ) bool {
+        if (self.endpointIsFunctionShapeRoot(edge.from)) return true;
+        return self.endpointIsFunctionShapeRoot(edge.to);
+    }
+
+    fn endpointIsFunctionShapeRoot(
+        self: *PendingComptimeDependencyPropagator,
+        endpoint: repr.RepresentationEndpoint,
+    ) bool {
+        const root = self.endpointRootInSession(endpoint) orelse return false;
+        return switch (self.session.representation_store.rootKind(root)) {
+            .call_value_requested_fn,
+            .call_proc_requested_fn,
+            .proc_value_fn,
+            => true,
+            else => false,
+        };
+    }
+
+    fn recordForInstance(
+        self: *const PendingComptimeDependencyPropagator,
+        instance: repr.ProcRepresentationInstanceId,
+    ) *const ProcBuildRecord {
+        const index = @intFromEnum(instance);
+        if (index >= self.records.len) {
+            lambdaInvariant("lambda-solved pending compile-time dependency propagation referenced out-of-range procedure instance");
+        }
+        return &self.records[index];
+    }
+
+    fn valueStoreFor(
+        self: *const PendingComptimeDependencyPropagator,
+        record: *const ProcBuildRecord,
+    ) *const repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(record.value_store)];
+    }
+
+    fn mutableValueStoreFor(
+        self: *PendingComptimeDependencyPropagator,
+        record: *const ProcBuildRecord,
+    ) *repr.ValueInfoStore {
+        return &self.program.value_stores.items[@intFromEnum(record.value_store)];
     }
 };
 
@@ -4948,7 +5189,7 @@ const CallableEmissionAssigner = struct {
                         }
                     }
                     if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
-                    if (value_info.pending_local_root_origin) continue;
+                    if (value_info.pending_comptime_dependency_origin) continue;
                     if (self.mode == .allow_pending_call_values and value_info.callable == null) continue;
                     if (value_info.projection_info) |projection_id| {
                         const projection = value_store.projections.items[@intFromEnum(projection_id)];
@@ -6257,6 +6498,12 @@ const ValueTransformFinalizer = struct {
                 }
                 continue;
             }
+            if (value.pending_comptime_dependency_origin) {
+                if (value.value_alias_transform != null) {
+                    lambdaInvariant("lambda-solved pending compile-time dependency value alias has an executable transform");
+                }
+                continue;
+            }
             if (!value.value_alias_needs_executable_transform) {
                 if (value.value_alias_transform != null) {
                     lambdaInvariant("lambda-solved non-materialized value alias has an executable transform");
@@ -6306,6 +6553,12 @@ const ValueTransformFinalizer = struct {
                 }
                 continue;
             }
+            if (result_info.pending_comptime_dependency_origin) {
+                if (projection.result_transform != null) {
+                    lambdaInvariant("lambda-solved pending compile-time dependency projection has an executable transform");
+                }
+                continue;
+            }
             if (projection.result_transform != null) {
                 lambdaInvariant("lambda-solved projection transform was finalized twice");
             }
@@ -6351,7 +6604,7 @@ const ValueTransformFinalizer = struct {
                 .call_proc => |target| try self.finalizeCallProc(call_site_id, call_site, target),
                 .call_value_finite => |plan| try self.verifyFinalizedCallValueFinite(call_site_id, call_site, plan),
                 .call_value_erased => |sig_key| try self.finalizeCallValueErased(call_site_id, call_site, sig_key),
-                .pending_local_root_call => {},
+                .pending_comptime_dependency_call => {},
             }
         }
     }
@@ -6414,7 +6667,7 @@ const ValueTransformFinalizer = struct {
         for (value_store.returns.items) |ret| {
             const value = value_store.values.items[@intFromEnum(ret.value)];
             if (!value_store.valueSourceMatchBranchReachable(value)) continue;
-            if (value.pending_local_root_origin) continue;
+            if (value.pending_comptime_dependency_origin) continue;
             if (ret.consumer_use == null) {
                 lambdaInvariant("lambda-solved value transform finalization reached a return with no consumer-use plan");
             }
@@ -6485,7 +6738,7 @@ const ValueTransformFinalizer = struct {
         const expr = self.program.ast.exprs.items[@intFromEnum(expr_id)];
         const value_info = self.valueStore().values.items[@intFromEnum(expr.value_info)];
         if (!self.valueStore().valueSourceMatchBranchReachable(value_info)) return;
-        if (value_info.pending_local_root_origin) return;
+        if (value_info.pending_comptime_dependency_origin) return;
         const parent_endpoint = expected orelse try self.localEndpoint(expr.value_info);
         switch (expr.data) {
             .record => |record| {
@@ -6638,7 +6891,7 @@ const ValueTransformFinalizer = struct {
                     lambdaInvariant("lambda-solved consumer-use finalization reached unresolved call_value dispatch");
                 };
                 switch (dispatch) {
-                    .pending_local_root_call => {
+                    .pending_comptime_dependency_call => {
                         try self.finalizeExprSpanConstructionUses(call.args);
                         return;
                     },
@@ -6650,7 +6903,7 @@ const ValueTransformFinalizer = struct {
                     .call_value_finite,
                     .call_proc,
                     => try self.finalizeExprSpanConstructionUses(call.args),
-                    .pending_local_root_call => unreachable,
+                    .pending_comptime_dependency_call => unreachable,
                 }
             },
             .call_proc => |call| try self.finalizeCallArgConsumerUses(call.call_site, call.args),
@@ -7155,7 +7408,7 @@ const ValueTransformFinalizer = struct {
                 }
             },
             .call_value_finite,
-            .pending_local_root_call,
+            .pending_comptime_dependency_call,
             => lambdaInvariant("lambda-solved call argument consumer-use reached call form without a single argument endpoint"),
         }
         self.valueStore().call_sites.items[call_site_index].arg_consumer_uses =
@@ -10857,7 +11110,7 @@ const BodySolver = struct {
             .to = .{ .local = self.valueRoot(public_ret) },
             .kind = .function_return,
         });
-        try self.propagatePendingLocalRootOrigin(value, public_ret);
+        try self.propagatePendingComptimeDependencyOrigin(value, public_ret);
         return try self.value_store.addReturn(.{
             .value = value,
         });
@@ -11220,13 +11473,16 @@ const BodySolver = struct {
                 try self.publishConstBackedValueMetadata(value, self.constBackedRoot(const_instance));
                 break :blk .{ .const_instance = const_instance };
             },
-            .const_ref => |key| .{ .const_ref = key },
+            .const_ref => |key| blk: {
+                self.value_store.values.items[@intFromEnum(value)].pending_comptime_dependency_origin = true;
+                break :blk .{ .const_ref = key };
+            },
             .pending_callable_instance => |key| blk: {
-                self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                self.value_store.values.items[@intFromEnum(value)].pending_comptime_dependency_origin = true;
                 break :blk .{ .pending_callable_instance = key };
             },
             .pending_local_root => |root| blk: {
-                self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                self.value_store.values.items[@intFromEnum(value)].pending_comptime_dependency_origin = true;
                 break :blk .{ .pending_local_root = root };
             },
             .tag => |tag| blk: {
@@ -11286,9 +11542,9 @@ const BodySolver = struct {
                     .dispatch = null,
                     .source_match_branch = self.active_source_match_branch,
                 });
-                if (self.value_store.values.items[@intFromEnum(callee_value)].pending_local_root_origin) {
-                    self.value_store.call_sites.items[@intFromEnum(call_site)].dispatch = .pending_local_root_call;
-                    self.value_store.values.items[@intFromEnum(value)].pending_local_root_origin = true;
+                if (self.value_store.values.items[@intFromEnum(callee_value)].pending_comptime_dependency_origin) {
+                    self.value_store.call_sites.items[@intFromEnum(call_site)].dispatch = .pending_comptime_dependency_call;
+                    self.value_store.values.items[@intFromEnum(value)].pending_comptime_dependency_origin = true;
                 } else {
                     try self.publishCallValueRequestedFunctionEdges(
                         call_site,
@@ -11414,8 +11670,7 @@ const BodySolver = struct {
             .match_ => |match_| blk: {
                 const match_id = self.freshSourceMatchId();
                 const cond = try self.lowerExpr(match_.cond);
-                const lowered_branches = try self.lowerSourceMatchBranchSpan(match_id, match_.branches);
-                try self.publishSourceMatchPatternRepresentationEdges(self.exprValue(cond), lowered_branches);
+                const lowered_branches = try self.lowerSourceMatchBranchSpan(match_id, self.exprValue(cond), match_.branches);
                 const branch_inputs = try self.joinInputsForBranches(match_id, lowered_branches);
                 const join_info = try self.value_store.addJoin(.{
                     .result = value,
@@ -11620,6 +11875,7 @@ const BodySolver = struct {
 
     fn lowerSourceMatchBranch(
         self: *BodySolver,
+        scrutinee: repr.ValueInfoId,
         branch_id: Lifted.Ast.BranchId,
         branch_ref: repr.SourceMatchBranchRef,
     ) Allocator.Error!Ast.BranchId {
@@ -11632,6 +11888,7 @@ const BodySolver = struct {
         var saved = std.ArrayList(SavedBinding).empty;
         defer saved.deinit(self.allocator);
         const pat = try self.lowerPatScoped(branch.pat, &saved);
+        try self.publishSourceMatchPatternRepresentationEdges(scrutinee, pat);
         defer self.restoreBindings(&saved, 0);
         const guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null;
         const body = try self.lowerExpr(branch.body);
@@ -12004,10 +12261,7 @@ const BodySolver = struct {
                     .result_projection = .whole_value,
                 } });
             },
-            .list_get_unsafe,
-            .list_first,
-            .list_last,
-            => {
+            .list_get_unsafe => {
                 if (arg_values.len < 1) lambdaInvariant("lambda-solved list element low-level reached without a list argument");
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(arg_values[0]) },
@@ -12017,6 +12271,23 @@ const BodySolver = struct {
                 try value_flow_edges.append(self.allocator, .{ .arg_to_result = .{
                     .arg = 0,
                     .projection = .list_elem,
+                } });
+            },
+            .list_first,
+            .list_last,
+            => {
+                if (arg_values.len < 1) lambdaInvariant("lambda-solved list optional element low-level reached without a list argument");
+                const ok_payload = try self.singlePayloadForTagLabel(result_value, "Ok");
+                const ok_payload_root = self.structuralChildRoot(self.valueRoot(result_value), .{ .tag_payload = ok_payload });
+                _ = try self.representation_store.appendRepresentationEdge(.{
+                    .from = .{ .local = self.valueRoot(arg_values[0]) },
+                    .to = .{ .local = ok_payload_root },
+                    .kind = .list_elem,
+                });
+                try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
+                    .arg = 0,
+                    .arg_projection = .list_elem,
+                    .result_projection = .{ .tag_payload = ok_payload },
                 } });
             },
             .list_append_unsafe,
@@ -12191,6 +12462,7 @@ const BodySolver = struct {
     fn lowerSourceMatchBranchSpan(
         self: *BodySolver,
         match_id: repr.SourceMatchId,
+        scrutinee: repr.ValueInfoId,
         span: Lifted.Ast.Span(Lifted.Ast.BranchId),
     ) Allocator.Error!Ast.Span(Ast.BranchId) {
         const input_items = self.input.sliceBranchSpan(span);
@@ -12203,7 +12475,7 @@ const BodySolver = struct {
                 .branch = @enumFromInt(@as(u32, @intCast(i))),
                 .alternative = @enumFromInt(@as(u32, @intCast(i))),
             };
-            output_items[i] = try self.lowerSourceMatchBranch(branch, branch_ref);
+            output_items[i] = try self.lowerSourceMatchBranch(scrutinee, branch, branch_ref);
         }
         return try self.output.addBranchSpan(output_items);
     }
@@ -12211,13 +12483,17 @@ const BodySolver = struct {
     fn publishSourceMatchPatternRepresentationEdges(
         self: *BodySolver,
         scrutinee: repr.ValueInfoId,
-        branches: Ast.Span(Ast.BranchId),
+        pat_id: Ast.PatId,
     ) Allocator.Error!void {
-        const branch_ids = self.output.branch_ids.items[branches.start..][0..branches.len];
         const scrutinee_root = self.valueRoot(scrutinee);
-        for (branch_ids) |branch_id| {
-            const branch = self.output.branches.items[@intFromEnum(branch_id)];
-            try self.publishPatternRepresentationEdges(scrutinee_root, branch.pat);
+        const scrutinee_info = self.value_store.values.items[@intFromEnum(scrutinee)];
+        const scrutinee_const_backing = self.constBackedForProjection(scrutinee);
+        try self.publishPatternRepresentationEdges(scrutinee_root, pat_id);
+        if (scrutinee_info.pending_comptime_dependency_origin) {
+            self.markPatternPendingComptimeDependencyOrigin(pat_id);
+        }
+        if (scrutinee_const_backing) |backing| {
+            try self.publishConstBackedPatternValues(backing, pat_id);
         }
     }
 
@@ -12285,6 +12561,147 @@ const BodySolver = struct {
                     }
                 }
             },
+        }
+    }
+
+    fn markPatternPendingComptimeDependencyOrigin(
+        self: *BodySolver,
+        pat_id: Ast.PatId,
+    ) void {
+        const pat = self.output.pats.items[@intFromEnum(pat_id)];
+        self.value_store.values.items[@intFromEnum(pat.value_info)].pending_comptime_dependency_origin = true;
+        switch (pat.data) {
+            .as => |as| self.markPatternPendingComptimeDependencyOrigin(as.pattern),
+            .nominal => |child| self.markPatternPendingComptimeDependencyOrigin(child),
+            .tuple => |items| {
+                const child_ids = self.output.pat_ids.items[items.start..][0..items.len];
+                for (child_ids) |child_id| self.markPatternPendingComptimeDependencyOrigin(child_id);
+            },
+            .record => |record| {
+                const fields = self.output.record_field_patterns.items[record.fields.start..][0..record.fields.len];
+                for (fields) |field| self.markPatternPendingComptimeDependencyOrigin(field.pattern);
+                if (record.rest) |rest| self.markPatternPendingComptimeDependencyOrigin(rest);
+            },
+            .tag => |tag| {
+                const payloads = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
+                for (payloads) |payload| self.markPatternPendingComptimeDependencyOrigin(payload.pattern);
+            },
+            .list => |list| {
+                const items = self.output.pat_ids.items[list.items.start..][0..list.items.len];
+                for (items) |item| self.markPatternPendingComptimeDependencyOrigin(item);
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pat| self.markPatternPendingComptimeDependencyOrigin(rest_pat);
+                }
+            },
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .wildcard,
+            .var_,
+            => {},
+        }
+    }
+
+    fn publishConstBackedPatternValues(
+        self: *BodySolver,
+        backing: repr.ConstBackedValueInfo,
+        pat_id: Ast.PatId,
+    ) Allocator.Error!void {
+        const pat = self.output.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .tag => |tag| {
+                if (!self.constBackedTagMatches(backing, tag.tag)) return;
+            },
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            => {},
+            .wildcard,
+            .var_,
+            .as,
+            .nominal,
+            .tuple,
+            .record,
+            .list,
+            => {},
+        }
+
+        try self.publishConstBackedValueMetadata(pat.value_info, backing);
+
+        switch (pat.data) {
+            .as => |as| try self.publishConstBackedPatternValues(backing, as.pattern),
+            .nominal => |child| try self.publishConstBackedPatternValues(try self.constBackedNominalBacking(backing), child),
+            .tuple => |items| {
+                const child_ids = self.output.pat_ids.items[items.start..][0..items.len];
+                for (child_ids, 0..) |child_id, i| {
+                    try self.publishConstBackedPatternValues(
+                        self.constBackedTupleElem(
+                            self.unwrapConstBackedValue(self.resolveConstBackedValue(backing)),
+                            @intCast(i),
+                            backing.const_instance,
+                        ),
+                        child_id,
+                    );
+                }
+            },
+            .record => |record| {
+                const fields = self.output.record_field_patterns.items[record.fields.start..][0..record.fields.len];
+                for (fields) |field| {
+                    try self.publishConstBackedPatternValues(
+                        try self.constBackedRecordField(
+                            self.unwrapConstBackedValue(self.resolveConstBackedValue(backing)),
+                            field.field,
+                            backing.const_instance,
+                        ),
+                        field.pattern,
+                    );
+                }
+                if (record.rest) |rest| {
+                    try self.publishConstBackedPatternValues(backing, rest);
+                }
+            },
+            .tag => |tag| {
+                const payloads = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
+                for (payloads) |payload| {
+                    try self.publishConstBackedPatternValues(
+                        self.constBackedTagPayload(
+                            self.unwrapConstBackedValue(self.resolveConstBackedValue(backing)),
+                            payload.payload,
+                            backing.const_instance,
+                        ),
+                        payload.pattern,
+                    );
+                }
+            },
+            .list => |list| {
+                const items = self.output.pat_ids.items[list.items.start..][0..list.items.len];
+                for (items, 0..) |item, i| {
+                    try self.publishConstBackedPatternValues(
+                        try self.constBackedListElemAt(backing, @intCast(i)),
+                        item,
+                    );
+                }
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pat| {
+                        try self.publishConstBackedPatternValues(backing, rest_pat);
+                    }
+                }
+            },
+            .bool_lit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .wildcard,
+            .var_,
+            => {},
         }
     }
 
@@ -12363,7 +12780,7 @@ const BodySolver = struct {
         }
         const join = self.value_store.joins.items[@intFromEnum(join_info)];
         for (self.value_store.sliceJoinInputSpan(join.inputs)) |input| {
-            try self.propagatePendingLocalRootOrigin(input.value, result);
+            try self.propagatePendingComptimeDependencyOrigin(input.value, result);
         }
     }
 
@@ -12965,6 +13382,65 @@ const BodySolver = struct {
         };
     }
 
+    fn constBackedNominalBacking(
+        self: *BodySolver,
+        backing: repr.ConstBackedValueInfo,
+    ) Allocator.Error!repr.ConstBackedValueInfo {
+        const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
+        return .{
+            .const_instance = backing.const_instance,
+            .schema = resolved.schema,
+            .value = resolved.value,
+        };
+    }
+
+    fn constBackedListElemAt(
+        self: *BodySolver,
+        backing: repr.ConstBackedValueInfo,
+        index: u32,
+    ) Allocator.Error!repr.ConstBackedValueInfo {
+        const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
+        const elem_schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .list => |elem| elem,
+            else => lambdaInvariant("lambda-solved const-backed list pattern reached non-list schema"),
+        };
+        const values = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .list => |items| items,
+            else => lambdaInvariant("lambda-solved const-backed list pattern reached non-list value"),
+        };
+        const raw_index: usize = @intCast(index);
+        if (raw_index >= values.len) {
+            lambdaInvariant("lambda-solved const-backed list pattern item index out of range");
+        }
+        return .{
+            .const_instance = backing.const_instance,
+            .schema = elem_schema,
+            .value = values[raw_index],
+        };
+    }
+
+    fn constBackedTagMatches(
+        self: *BodySolver,
+        backing: repr.ConstBackedValueInfo,
+        tag_id: MonoRow.TagId,
+    ) bool {
+        const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
+        const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
+            .tag_union => |variants| variants,
+            else => return false,
+        };
+        const tag_value = switch (self.constValue(resolved.materialization, resolved.value)) {
+            .tag_union => |tag| tag,
+            else => lambdaInvariant("lambda-solved const-backed tag schema had non-tag value"),
+        };
+        const variant_index: usize = @intCast(tag_value.variant_index);
+        if (variant_index >= schema.len) {
+            lambdaInvariant("lambda-solved const-backed tag pattern variant index out of range");
+        }
+        const tag_info = self.row_shapes.tag(tag_id);
+        return self.constTagMatches(resolved.materialization, schema[variant_index].name, tag_info.label);
+    }
+
     fn constBackedRoot(
         self: *const BodySolver,
         ref: checked_artifact.ConstInstanceRef,
@@ -13552,7 +14028,7 @@ const BodySolver = struct {
         } else {
             result_info.value_alias_source = source;
         }
-        try self.propagatePendingLocalRootOrigin(source, result);
+        try self.propagatePendingComptimeDependencyOrigin(source, result);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(source) },
             .to = .{ .local = self.valueRoot(result) },
@@ -13560,13 +14036,13 @@ const BodySolver = struct {
         });
     }
 
-    fn propagatePendingLocalRootOrigin(
+    fn propagatePendingComptimeDependencyOrigin(
         self: *BodySolver,
         source: repr.ValueInfoId,
         result: repr.ValueInfoId,
     ) Allocator.Error!void {
-        if (!self.value_store.values.items[@intFromEnum(source)].pending_local_root_origin) return;
-        self.value_store.values.items[@intFromEnum(result)].pending_local_root_origin = true;
+        if (!self.value_store.values.items[@intFromEnum(source)].pending_comptime_dependency_origin) return;
+        self.value_store.values.items[@intFromEnum(result)].pending_comptime_dependency_origin = true;
     }
 
     fn publishProjectionRepresentationEdge(
@@ -13655,7 +14131,7 @@ const BodySolver = struct {
         } else {
             result_info.projection_info = projection;
         }
-        try self.propagatePendingLocalRootOrigin(source, result);
+        try self.propagatePendingComptimeDependencyOrigin(source, result);
         try self.publishProjectionRepresentationEdge(source, result, kind);
         return projection;
     }
@@ -13901,6 +14377,29 @@ const BodySolver = struct {
             },
             else => lambdaInvariant("lambda-solved list structural root attached to unresolved type"),
         };
+    }
+
+    fn singlePayloadForTagLabel(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        expected_label_text: []const u8,
+    ) Allocator.Error!MonoRow.TagPayloadId {
+        const info = self.value_store.values.items[@intFromEnum(value)];
+        const tags = try self.logicalTagUnionTags(info.logical_ty);
+        const shape = try self.tagUnionShapeForTypeTags(tags);
+        const shape_tags = self.row_shapes.tagUnionTags(shape);
+        if (shape_tags.len != tags.len) {
+            lambdaInvariant("lambda-solved tag-union shape arity disagreed with logical type");
+        }
+        for (tags, shape_tags) |tag, tag_id| {
+            if (!std.mem.eql(u8, self.canonical_names.tagLabelText(tag.name), expected_label_text)) continue;
+            const payloads = self.row_shapes.tagPayloads(tag_id);
+            if (payloads.len != 1) {
+                lambdaInvariant("lambda-solved low-level result tag had unexpected payload arity");
+            }
+            return payloads[0];
+        }
+        lambdaInvariant("lambda-solved low-level result type did not contain the expected tag");
     }
 
     fn logicalBoxPayloadType(self: *BodySolver, logical_ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {

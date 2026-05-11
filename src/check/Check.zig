@@ -4213,7 +4213,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             break :blk_instantiate call_func_expr_var;
                         }
                     };
-
                     // Resolve the func var
                     const resolved_func = self.types.resolveVar(func_var).desc.content;
                     var did_err = resolved_func == .err;
@@ -4405,12 +4404,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             _ = try self.unify(expr_var, call_func_ret, env);
                         }
 
+                        const published_constraint_args: []Var = @ptrCast(call_arg_expr_idxs);
+                        const published_constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                            .args = try self.types.appendVars(published_constraint_args),
+                            .ret = expr_var,
+                            .needs_instantiation = false,
+                        } } }, env, expr_region);
+
                         self.cir.store.replaceExprWithCallConstraint(
                             expr_idx,
                             call.func,
                             call.args,
                             call.called_via,
-                            func_var,
+                            published_constraint_fn_var,
                         );
                     }
                 },
@@ -4649,15 +4655,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_anno_only => {
-            // For annotation-only expressions, the type comes from the annotation.
-            // This case should only occur when the expression has an annotation (which is
-            // enforced during canonicalization), so the expected type should be set.
-            if (expected.annotation == null) {
-                // This shouldn't happen since we always create e_anno_only with an annotation
-                try self.unifyWith(expr_var, .err, env);
+            if (self.builtin_ctx.builtin_module == null) {
+                // Builtin.roc uses annotation-only declarations for compiler-owned
+                // intrinsics whose implementations are supplied below Roc source.
+                if (expected.annotation == null) try self.unifyWith(expr_var, .err, env);
             } else {
-                // The expr will be unified with the expected type below
-                // expr_var is a flex var by default, so no action is need here
+                _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
+                    .region = if (expected.annotation) |annotation_idx|
+                        self.cir.store.getAnnotationRegion(annotation_idx)
+                    else
+                        expr_region,
+                } });
+                try self.unifyWith(expr_var, .err, env);
             }
         },
         .e_return => |ret| {

@@ -19051,9 +19051,9 @@ fn expectProvidedExportKind(
         }
     }
 
-    try testing.expectEqual(expected.procedure_roots, provided_runtime_roots);
-    try testing.expectEqual(expected.data_exports, provided_data_exports);
-    try testing.expectEqual(expected.procedure_exports, provided_procedure_exports);
+    try std.testing.expectEqual(expected.procedure_roots, provided_runtime_roots);
+    try std.testing.expectEqual(expected.data_exports, provided_data_exports);
+    try std.testing.expectEqual(expected.procedure_exports, provided_procedure_exports);
 }
 
 fn structHasField(comptime Struct: type, comptime name: []const u8) bool {
@@ -19089,65 +19089,65 @@ fn enumHasField(comptime Enum: type, comptime name: []const u8) bool {
 }
 
 test "compile-time finalization route is explicit and non-optional" {
-    try testing.expect(structHasField(PublishInputs, "compile_time_finalizer"));
-    try testing.expect(structFieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
-    try testing.expect(structHasField(CompileTimeFinalizer, "finalize"));
-    try testing.expect(structHasField(CompileTimeFinalizer, "context"));
+    try std.testing.expect(structHasField(PublishInputs, "compile_time_finalizer"));
+    try std.testing.expect(structFieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
+    try std.testing.expect(structHasField(CompileTimeFinalizer, "finalize"));
+    try std.testing.expect(structHasField(CompileTimeFinalizer, "context"));
 
-    try testing.expect(enumHasField(RootRequestKind, "compile_time_constant"));
-    try testing.expect(enumHasField(RootRequestKind, "compile_time_callable"));
-    try testing.expect(enumHasField(RootAbi, "compile_time"));
+    try std.testing.expect(enumHasField(RootRequestKind, "compile_time_constant"));
+    try std.testing.expect(enumHasField(RootRequestKind, "compile_time_callable"));
+    try std.testing.expect(enumHasField(RootAbi, "compile_time"));
 
-    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "local_root"));
-    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "const_instance"));
-    try testing.expect(unionHasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "local_root"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "const_instance"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
 
-    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "local_root"));
-    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "const_instance"));
-    try testing.expect(unionHasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "local_root"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "const_instance"));
+    try std.testing.expect(unionHasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
 }
 
 test "compile-time roots and top-level values publish final artifacts only" {
-    try testing.expect(enumHasField(CompileTimeRootKind, "constant"));
-    try testing.expect(enumHasField(CompileTimeRootKind, "callable_binding"));
-    try testing.expect(enumHasField(CompileTimeRootKind, "expect"));
+    try std.testing.expect(enumHasField(CompileTimeRootKind, "constant"));
+    try std.testing.expect(enumHasField(CompileTimeRootKind, "callable_binding"));
+    try std.testing.expect(enumHasField(CompileTimeRootKind, "expect"));
 
-    try testing.expect(unionHasField(CompileTimeRootPayload, "pending"));
-    try testing.expect(unionHasField(CompileTimeRootPayload, "const_graph"));
-    try testing.expect(unionHasField(CompileTimeRootPayload, "callable_result"));
-    try testing.expect(unionHasField(CompileTimeRootPayload, "expect"));
+    try std.testing.expect(unionHasField(CompileTimeRootPayload, "pending"));
+    try std.testing.expect(unionHasField(CompileTimeRootPayload, "const_graph"));
+    try std.testing.expect(unionHasField(CompileTimeRootPayload, "callable_result"));
+    try std.testing.expect(unionHasField(CompileTimeRootPayload, "expect"));
 
-    try testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
-    try testing.expect(unionHasField(TopLevelValueKind, "const_ref"));
-    try testing.expect(unionHasField(TopLevelValueKind, "procedure_binding"));
-    try testing.expect(!unionHasField(TopLevelValueKind, "runtime_thunk"));
-    try testing.expect(!unionHasField(TopLevelValueKind, "global_initializer"));
-    try testing.expect(!unionHasField(TopLevelValueKind, "top_level_closure_object"));
+    try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
+    try std.testing.expect(unionHasField(TopLevelValueKind, "const_ref"));
+    try std.testing.expect(unionHasField(TopLevelValueKind, "procedure_binding"));
+    try std.testing.expect(!unionHasField(TopLevelValueKind, "runtime_thunk"));
+    try std.testing.expect(!unionHasField(TopLevelValueKind, "global_initializer"));
+    try std.testing.expect(!unionHasField(TopLevelValueKind, "top_level_closure_object"));
 }
 
 test "constant template states contain sealed value data but no runtime initializer concepts" {
-    try testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
-    try testing.expect(unionHasField(ConstTemplateState, "reserved"));
-    try testing.expect(unionHasField(ConstTemplateState, "eval_template"));
-    try testing.expect(unionHasField(ConstTemplateState, "value_graph_template"));
+    try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
+    try std.testing.expect(unionHasField(ConstTemplateState, "reserved"));
+    try std.testing.expect(unionHasField(ConstTemplateState, "eval_template"));
+    try std.testing.expect(unionHasField(ConstTemplateState, "value_graph_template"));
 
-    try testing.expect(!unionHasField(ConstTemplateState, "runtime_thunk"));
-    try testing.expect(!unionHasField(ConstTemplateState, "global_initializer"));
-    try testing.expect(!unionHasField(ConstTemplateState, "initializer_proc"));
-    try testing.expect(!unionHasField(ConstTemplateState, "top_level_closure_object"));
+    try std.testing.expect(!unionHasField(ConstTemplateState, "runtime_thunk"));
+    try std.testing.expect(!unionHasField(ConstTemplateState, "global_initializer"));
+    try std.testing.expect(!unionHasField(ConstTemplateState, "initializer_proc"));
+    try std.testing.expect(!unionHasField(ConstTemplateState, "top_level_closure_object"));
 }
 
 test "checked artifact owns compile-time specialization caches for reuse" {
-    try testing.expect(structHasField(CheckedModuleArtifact, "compile_time_roots"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "top_level_values"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_plans"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_dependencies"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "promoted_procedures"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "const_templates"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "comptime_values"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "const_instances"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "callable_binding_instances"));
-    try testing.expect(structHasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "compile_time_roots"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "top_level_values"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_plans"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_dependencies"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "promoted_procedures"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "const_templates"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "comptime_values"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "const_instances"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "callable_binding_instances"));
+    try std.testing.expect(structHasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
 }
 
 test "provided primitive constant is a data export, not a runtime root" {
