@@ -986,7 +986,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Select target: if --target is provided, use that; otherwise try native then fallback
+            // Select target: if --target is provided, use that; otherwise try native then the next supported linker path.
             if (args.target) |target_str| {
                 // User explicitly specified a target
                 const parsed_target = RocTarget.fromString(target_str) orelse {
@@ -1126,7 +1126,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
-        // Try LLD first, fallback to clang if LLVM is not available
+        // Try LLD first, then clang if LLVM is not available.
         var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
             return error.OutOfMemory;
         };

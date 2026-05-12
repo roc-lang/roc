@@ -6840,7 +6840,7 @@ const BodyLowerer = struct {
     fn concreteResultTypeForExpr(
         self: *BodyLowerer,
         expr_id: checked_artifact.CheckedExprId,
-        fallback_checked_ty: checked_artifact.CheckedTypeId,
+        checked_expr_ty: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteTypeInfo {
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
         const expr = self.checkedExpr(expr_id);
@@ -6869,9 +6869,9 @@ const BodyLowerer = struct {
             .match_ => |match| if (match.is_try_suffix)
                 try self.trySuffixResultType(match.cond)
             else
-                try self.concreteTypeInfoForChecked(fallback_checked_ty),
-            .list => |items| try self.listResultTypeFromKnownItems(fallback_checked_ty, items),
-            else => try self.concreteTypeInfoForChecked(fallback_checked_ty),
+                try self.concreteTypeInfoForChecked(checked_expr_ty),
+            .list => |items| try self.listResultTypeFromKnownItems(checked_expr_ty, items),
+            else => try self.concreteTypeInfoForChecked(checked_expr_ty),
         };
     }
 
@@ -10083,9 +10083,9 @@ const BodyLowerer = struct {
     fn callSourceFnPayload(
         self: *const BodyLowerer,
         func_expr: checked_artifact.CheckedExprId,
-        fallback: checked_artifact.CheckedTypeId,
+        checked_call_fn_ty: checked_artifact.CheckedTypeId,
     ) checked_artifact.CheckedTypeId {
-        const proc_use = self.procedureUseForExpr(func_expr) orelse return fallback;
+        const proc_use = self.procedureUseForExpr(func_expr) orelse return checked_call_fn_ty;
         return proc_use.source_fn_ty_payload orelse invariantViolation("mono body lowering reached a procedure call without a published source function payload");
     }
 

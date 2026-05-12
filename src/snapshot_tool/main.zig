@@ -772,7 +772,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     if (std.mem.endsWith(u8, path, "_package")) return .package;
     if (std.mem.endsWith(u8, path, "_platform")) return .platform;
     if (std.mem.endsWith(u8, path, "_app")) return .app;
-    return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
+    return .file; // unreachable if isMultiFileSnapshot was checked first
 }
 
 fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) !bool {
