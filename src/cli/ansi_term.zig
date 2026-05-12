@@ -10,6 +10,17 @@ pub const red = "\x1B[31m";
 /// ANSI escape sequence to reset all text attributes.
 pub const reset = "\x1B[0m";
 
+/// ANSI escape sequence to enable bracketed paste mode.
+/// While enabled, the terminal wraps pasted text with PASTE_START and PASTE_END
+/// so applications can distinguish typed input from pasted input.
+pub const BRACKETED_PASTE_ENABLE = "\x1B[?2004h";
+/// ANSI escape sequence to disable bracketed paste mode.
+pub const BRACKETED_PASTE_DISABLE = "\x1B[?2004l";
+/// Marker the terminal sends before pasted content when bracketed paste is enabled.
+pub const PASTE_START = "\x1B[200~";
+/// Marker the terminal sends after pasted content when bracketed paste is enabled.
+pub const PASTE_END = "\x1B[201~";
+
 /// ASCII DEL character, used as backspace in terminals.
 pub const BACKSPACE: u8 = 127;
 /// ANSI escape sequence identifier for the up arrow key.
